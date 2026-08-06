@@ -21,7 +21,7 @@ export const bookingAgentInput: CreateRuntimeAgentInput = {
   name: "Booking",
   description: "Books clinic appointments: identify patient, collect details, schedule meetings.",
   systemPrompt: BOOKING_SYSTEM_PROMPT,
-  capabilityIds: [ESPOCRM_BOOKING_CAPABILITY_ID],
+  capabilityIds: [ESPOCRM_READ_CAPABILITY_ID, ESPOCRM_BOOKING_CAPABILITY_ID],
   modelKey: "generic",
   maxSteps: 10,
   enabled: true,

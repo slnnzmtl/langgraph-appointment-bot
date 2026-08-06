@@ -4,7 +4,25 @@ import {
   computeFreeSlots,
   extractMeetingsFromSearchResult,
   localIso,
+  normalizeLocalIsoDatetime,
 } from "./availability-slots.js";
+
+describe("normalizeLocalIsoDatetime", () => {
+  it("converts EspoCRM space-separated wall times to ISO", () => {
+    expect(normalizeLocalIsoDatetime("2026-08-07 09:00:00")).toBe("2026-08-07T09:00:00");
+    expect(normalizeLocalIsoDatetime("2026-08-07 09:30:00")).toBe("2026-08-07T09:30:00");
+  });
+
+  it("keeps ISO datetimes and pads missing seconds", () => {
+    expect(normalizeLocalIsoDatetime("2026-08-07T09:00:00")).toBe("2026-08-07T09:00:00");
+    expect(normalizeLocalIsoDatetime("2026-08-07T09:00")).toBe("2026-08-07T09:00:00");
+  });
+
+  it("strips trailing offset or Z", () => {
+    expect(normalizeLocalIsoDatetime("2026-08-07T09:00:00Z")).toBe("2026-08-07T09:00:00");
+    expect(normalizeLocalIsoDatetime("2026-08-07T09:00:00+03:00")).toBe("2026-08-07T09:00:00");
+  });
+});
 
 describe("computeFreeSlots", () => {
   it("returns open-hour candidates when no meetings", () => {

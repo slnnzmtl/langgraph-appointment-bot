@@ -7,6 +7,7 @@ import {
   CLINIC_SLOT_MINUTES,
   computeFreeSlots,
   extractMeetingsFromSearchResult,
+  normalizeLocalIsoDatetime,
 } from "./availability-slots.js";
 import { getTelegramUserId } from "./telegram-user-context.js";
 
@@ -224,16 +225,20 @@ export const createBookingTools = (options: BookingToolsOptions): StructuredTool
       dateStart: string;
       dateEnd: string;
       contactId: string;
-      serviceId?: string;
+      confirmMessage: string;
+      serviceId: string;
       description?: string;
       location?: string;
     }) => {
+      const dateStart = normalizeLocalIsoDatetime(input.dateStart);
+      const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
       const draft = {
         name: input.name,
-        dateStart: input.dateStart,
-        dateEnd: input.dateEnd,
+        dateStart,
+        dateEnd,
         contactId: input.contactId,
-        ...(input.serviceId ? { serviceId: input.serviceId } : {}),
+        confirmMessage: input.confirmMessage.trim(),
+        serviceId: input.serviceId,
         ...(input.description ? { description: input.description } : {}),
         ...(input.location ? { location: input.location } : {}),
       };
@@ -246,13 +251,13 @@ export const createBookingTools = (options: BookingToolsOptions): StructuredTool
       try {
         const result = await callTool("create_meeting", {
           name: input.name,
-          dateStart: input.dateStart,
-          dateEnd: input.dateEnd,
+          dateStart,
+          dateEnd,
           assignedUserId,
           parentType: "Contact",
           parentId: input.contactId,
           contactsIds: [input.contactId],
-          ...(input.serviceId ? { cServicesIds: [input.serviceId] } : {}),
+          cServicesIds: [input.serviceId],
           ...(input.description ? { description: input.description } : {}),
           ...(input.location ? { location: input.location } : {}),
           status: "Planned",
@@ -266,13 +271,19 @@ export const createBookingTools = (options: BookingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment in EspoCRM. Pauses for human confirmation before writing. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). Pauses for Yes/No before writing; injects assignedUserId and Contact parent fields.",
       schema: z.object({
-        name: z.string().min(1).describe("Meeting title"),
-        dateStart: z.string().describe("Start datetime in Kyiv local ISO format"),
-        dateEnd: z.string().describe("End datetime in Kyiv local ISO format"),
+        name: z.string().min(1).describe("Meeting title in the patient's chat language"),
+        dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
+        dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         contactId: z.string().min(1).describe("Patient Contact id"),
-        serviceId: z.string().optional().describe("cService id to link"),
+        confirmMessage: z
+          .string()
+          .min(1)
+          .describe(
+            "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). Ignore supervisor prompt language.",
+          ),
+        serviceId: z.string().min(1).describe("Required cService entity id (resolve via list_services)"),
         description: z.string().optional(),
         location: z.string().optional(),
       }),

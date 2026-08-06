@@ -178,7 +178,7 @@ describe("create_meeting HITL interrupt", () => {
     return { success: true, id: "meeting-1" };
   };
 
-  const buildGraph = () => {
+  const buildGraph = (dates?: { dateStart: string; dateEnd: string }) => {
     const [createMeeting] = createBookingTools({
       callTool,
       assignedUserId: "assigned-99",
@@ -192,10 +192,11 @@ describe("create_meeting HITL interrupt", () => {
       .addNode("book", async () => {
         const result = await createMeeting.invoke({
           name: "Consult",
-          dateStart: "2026-08-07T10:00:00",
-          dateEnd: "2026-08-07T10:30:00",
+          dateStart: dates?.dateStart ?? "2026-08-07T10:00:00",
+          dateEnd: dates?.dateEnd ?? "2026-08-07T10:30:00",
           contactId: "contact-1",
           serviceId: "svc-1",
+          confirmMessage: "Confirm this booking?",
         });
         return { result: String(result) };
       })
@@ -245,5 +246,20 @@ describe("create_meeting HITL interrupt", () => {
       status: "Planned",
     });
     expect(JSON.parse(second.result)).toMatchObject({ success: true, id: "meeting-1" });
+  });
+
+  it("normalizes space-separated datetimes before MCP create_meeting", async () => {
+    const graph = buildGraph({
+      dateStart: "2026-08-07 09:00:00",
+      dateEnd: "2026-08-07 09:30:00",
+    });
+    const config = { configurable: { thread_id: "hitl-normalize-dates" } };
+    await graph.invoke({ result: "" }, config);
+    await graph.invoke(new Command({ resume: { confirmed: true } }), config);
+
+    expect(calls[0]?.args).toMatchObject({
+      dateStart: "2026-08-07T09:00:00",
+      dateEnd: "2026-08-07T09:30:00",
+    });
   });
 });

@@ -36,14 +36,25 @@ const pad2 = (n: number): string => String(n).padStart(2, "0");
 export const localIso = (day: string, hour: number, minute: number): string =>
   `${day}T${pad2(hour)}:${pad2(minute)}:00`;
 
-/** Normalize EspoCRM wall times (`YYYY-MM-DD HH:mm:ss` or ISO) for Date.parse. */
+/** Normalize wall times to `YYYY-MM-DDTHH:mm:ss` for EspoCRM MCP meeting tools. */
+export const normalizeLocalIsoDatetime = (value: string): string => {
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})(?::(\d{2}))?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/,
+  );
+  if (!match) {
+    throw new Error(`Invalid datetime: ${value}`);
+  }
+  const seconds = match[3] ?? "00";
+  return `${match[1]}T${match[2]}:${seconds}`;
+};
+
+/** Normalize EspoCRM wall times (`YYYY-MM-DD HH:mm:ss`, ISO, or date-only) for Date.parse. */
 const toMillis = (iso: string): number => {
   const trimmed = iso.trim();
-  const withT = trimmed.includes("T")
-    ? trimmed
-    : /^\d{4}-\d{2}-\d{2} \d/.test(trimmed)
-      ? trimmed.replace(" ", "T")
-      : `${trimmed}T00:00:00`;
+  const withT = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? `${trimmed}T00:00:00`
+    : normalizeLocalIsoDatetime(trimmed);
   const ms = Date.parse(withT);
   if (Number.isNaN(ms)) {
     throw new Error(`Invalid datetime: ${iso}`);

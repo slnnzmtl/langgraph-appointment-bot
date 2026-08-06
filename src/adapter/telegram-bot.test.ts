@@ -37,12 +37,6 @@ describe("interpretInvokeResult reply selection", () => {
                 dateStart: "2026-08-08T09:00:00",
                 dateEnd: "2026-08-08T09:30:00",
               },
-              {
-                id: "2026-08-08T0930",
-                label: "09:30",
-                dateStart: "2026-08-08T09:30:00",
-                dateEnd: "2026-08-08T10:00:00",
-              },
             ],
           }),
         }),
@@ -51,5 +45,33 @@ describe("interpretInvokeResult reply selection", () => {
 
     expect(result.text).toContain("09:00");
     expect(result.reply_markup).toBeUndefined();
+  });
+
+  it("uses create_meeting confirmMessage from interrupt draft as the title", () => {
+    const result = interpretInvokeResult({
+      messages: [new HumanMessage("9:00 консультація")],
+      __interrupt__: [
+        {
+          value: {
+            type: "confirm_booking",
+            draft: {
+              name: "Консультація - Daniel",
+              dateStart: "2026-08-07T09:00:00",
+              dateEnd: "2026-08-07T09:30:00",
+              confirmMessage: "Підтвердити запис?",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result.text).toBe(
+      "Підтвердити запис?\nКонсультація - Daniel\n7 Aug 2026, 09:00–09:30",
+    );
+    expect(result.text).not.toContain("Confirm booking?");
+    expect(result.reply_markup?.inline_keyboard.flat().map((b) => b.text)).toEqual([
+      "Yes",
+      "No",
+    ]);
   });
 });
