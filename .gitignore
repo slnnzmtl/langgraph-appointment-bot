@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.log
+.tmp/
+tsconfig.tsbuildinfo
+.env
+.DS_Store
+dependency-*.dot
+dependency-*.svg
+.pnpm-store/
