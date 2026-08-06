@@ -7,21 +7,22 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm --filter @personal-assistant/supervisor-framework build && tsc -p tsconfig.json",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "dev": "pnpm --filter @personal-assistant/supervisor-framework build && tsx src/index.ts",
-    "smoke": "pnpm --filter @personal-assistant/supervisor-framework build && tsx src/smoke.ts",
+    "build": "pnpm --filter @personal-assistant/llm-gemini build && tsc -p tsconfig.json",
+    "check": "pnpm --filter @personal-assistant/llm-gemini build && tsc --noEmit -p tsconfig.json",
+    "dev": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/index.ts",
+    "smoke": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/smoke.ts",
     "test": "vitest run",
     "test:all": "pnpm -r test",
     "start": "node dist/index.js"
   },
   "dependencies": {
     "@langchain/core": "1.2.1",
-    "@langchain/google-genai": "^2.2.0",
     "@langchain/langgraph": "^1.4.8",
     "@modelcontextprotocol/sdk": "^1.12.1",
+    "@personal-assistant/llm-gemini": "workspace:*",
     "@personal-assistant/supervisor-framework": "workspace:*",
     "dotenv": "^16.6.1",
+    "telegraf": "^4.16.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {

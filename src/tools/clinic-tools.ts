@@ -3,6 +3,11 @@ import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 
 import type { McpCallTool } from "../composition/clinic-adapters.js";
+import {
+  CLINIC_SLOT_MINUTES,
+  computeFreeSlots,
+  extractMeetingsFromSearchResult,
+} from "./availability-slots.js";
 import { getTelegramUserId } from "./telegram-user-context.js";
 
 export type ReadToolsOptions = {
@@ -174,6 +179,45 @@ export const createBookingTools = (options: BookingToolsOptions): StructuredTool
     },
   );
 
+  const presentAvailabilitySlots = tool(
+    async (input: { date: string; durationMinutes?: number }) => {
+      try {
+        const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
+        const raw = await callTool("search_meetings", {
+          dateFrom: input.date,
+          dateTo: input.date,
+          assignedUserId,
+          limit: 100,
+        });
+        const meetings = extractMeetingsFromSearchResult(raw);
+        const slots = computeFreeSlots({
+          day: input.date,
+          meetings,
+          stepMinutes,
+        });
+        return JSON.stringify({ slots, date: input.date, stepMinutes });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return JSON.stringify({ error: message, slots: [] });
+      }
+    },
+    {
+      name: "present_availability_slots",
+      description:
+        "Compute free appointment slots for a calendar day from CRM meetings (search_meetings). Returns JSON { slots: [{ id, label, dateStart, dateEnd }, ...] }. List the slot labels in your reply and ask the user to type one — do not invent times.",
+      schema: z.object({
+        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Calendar day YYYY-MM-DD"),
+        durationMinutes: z
+          .number()
+          .int()
+          .min(15)
+          .max(180)
+          .optional()
+          .describe("Slot length in minutes (default 30)"),
+      }),
+    },
+  );
+
   const createMeeting = tool(
     async (input: {
       name: string;
@@ -240,6 +284,7 @@ export const createBookingTools = (options: BookingToolsOptions): StructuredTool
     findContactByPhone,
     createContact,
     linkTelegramToContact,
+    presentAvailabilitySlots,
     createMeeting,
   ];
 };

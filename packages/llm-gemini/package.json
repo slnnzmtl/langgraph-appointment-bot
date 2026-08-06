@@ -1,0 +1,30 @@
+{
+  "name": "@personal-assistant/llm-gemini",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "pnpm --filter @personal-assistant/supervisor-framework build && tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "pnpm test:unit",
+    "test:unit": "vitest run"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/core": "^1.2.1",
+    "@langchain/google-genai": "^2.2.0",
+    "@personal-assistant/supervisor-framework": "workspace:*"
+  },
+  "peerDependencies": {
+    "@langchain/core": "^1.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.13",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "zod": "^4.4.3"
+  }
+}

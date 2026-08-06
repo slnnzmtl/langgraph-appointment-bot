@@ -121,6 +121,43 @@ describe("clinic-tools identity", () => {
     expect(names).not.toContain("list_services");
     expect(names).not.toContain("get_service");
     expect(names).toContain("create_meeting");
+    expect(names).toContain("present_availability_slots");
+  });
+
+  it("present_availability_slots searches meetings and returns free slots", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "search_meetings") {
+        return {
+          meetings: [
+            {
+              status: "Planned",
+              dateStart: "2026-08-10T09:00:00",
+              dateEnd: "2026-08-10T09:30:00",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createBookingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    const raw = await tool!.invoke({ date: "2026-08-10" });
+    const parsed = JSON.parse(raw as string) as { slots: Array<{ label: string }> };
+    expect(calls[0]).toMatchObject({
+      name: "search_meetings",
+      args: {
+        dateFrom: "2026-08-10",
+        dateTo: "2026-08-10",
+        assignedUserId: "user-1",
+      },
+    });
+    expect(parsed.slots[0]?.label).not.toBe("09:00");
+    expect(parsed.slots.some((s) => s.label === "09:30")).toBe(true);
   });
 });
 

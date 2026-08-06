@@ -33,7 +33,7 @@ export const buildClinicCapabilityProviders = ({
       descriptor: {
         id: ESPOCRM_BOOKING_CAPABILITY_ID,
         description:
-          "Find/create contacts (cTelegram identity), and create meetings with HITL confirm.",
+          "Find/create contacts (cTelegram identity), present free slots, create meetings with HITL confirm.",
         grantable: false,
         reservedForAgentIds: ["booking"],
       },

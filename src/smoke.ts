@@ -31,6 +31,7 @@ const BOOKING_TOOL_NAMES = [
   "find_contact_by_phone",
   "create_contact",
   "link_telegram_to_contact",
+  "present_availability_slots",
   "create_meeting",
 ] as const;
 

@@ -1,8 +1,7 @@
 import path from "node:path";
 
+import { DEFAULT_GEMINI_MODEL } from "@personal-assistant/llm-gemini";
 import { getMessageHistoryMaxTokens } from "@personal-assistant/supervisor-framework";
-
-import { DEFAULT_GEMINI_MODEL } from "./llm/gemini-connector.js";
 
 export interface AppConfig {
   googleApiKey: string;
@@ -20,6 +19,8 @@ export interface AppConfig {
   espocrmSecretKey?: string;
   /** Injected into every create_meeting MCP call. */
   assignedUserId: string;
+  /** Optional; required only when launching the Telegram bot. */
+  telegramBotToken?: string;
 }
 
 const getRequiredEnv = (name: string): string => {
@@ -68,5 +69,8 @@ export const loadConfig = (): AppConfig => {
       ? { espocrmSecretKey: process.env.ESPOCRM_SECRET_KEY }
       : {}),
     assignedUserId: getRequiredEnv("ESPOCRM_ASSIGNED_USER_ID"),
+    ...(process.env.TELEGRAM_BOT_TOKEN?.trim()
+      ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN.trim() }
+      : {}),
   };
 };
