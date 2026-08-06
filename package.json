@@ -1,5 +1,5 @@
 {
-  "name": "appointment-bot-monorepo",
+  "name": "appointment-bot",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -7,16 +7,28 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r build",
-    "check": "pnpm -r check",
-    "dev": "pnpm --filter appointment-bot dev",
-    "smoke": "pnpm --filter appointment-bot smoke",
-    "start": "pnpm --filter appointment-bot start",
-    "test": "pnpm -r test"
+    "build": "pnpm --filter @personal-assistant/supervisor-framework build && tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "dev": "pnpm --filter @personal-assistant/supervisor-framework build && tsx src/index.ts",
+    "smoke": "pnpm --filter @personal-assistant/supervisor-framework build && tsx src/smoke.ts",
+    "test": "vitest run",
+    "test:all": "pnpm -r test",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@langchain/core": "1.2.1",
+    "@langchain/google-genai": "^2.2.0",
+    "@langchain/langgraph": "^1.4.8",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@personal-assistant/supervisor-framework": "workspace:*",
+    "dotenv": "^16.6.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^24.0.13",
-    "typescript": "^5.8.3"
+    "@types/node": "^24.13.3",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "pnpm": {
     "overrides": {

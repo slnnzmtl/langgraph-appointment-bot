@@ -8,3 +8,4 @@ tsconfig.tsbuildinfo
 dependency-*.dot
 dependency-*.svg
 .pnpm-store/
+.cursor/plans
