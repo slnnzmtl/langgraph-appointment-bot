@@ -16,11 +16,8 @@ export const buildClinicCapabilityProviders = ({
   config,
   adapters,
 }: BuildClinicCapabilityProvidersInput): CapabilityProvider<Record<string, unknown>>[] => {
-  const readToolOptions = { callTool: adapters.callTool };
-  const bookingToolOptions = {
-    callTool: adapters.callTool,
-    assignedUserId: config.assignedUserId,
-  };
+  // Delegate through adapters.callTool each invoke so smoke can wrap the property.
+  const callTool: typeof adapters.callTool = (name, args) => adapters.callTool(name, args);
 
   return [
     {
@@ -30,7 +27,7 @@ export const buildClinicCapabilityProviders = ({
         grantable: true,
       },
       isAvailable: () => true,
-      resolveTools: () => createReadTools(readToolOptions),
+      resolveTools: () => createReadTools({ callTool }),
     },
     {
       descriptor: {
@@ -41,7 +38,11 @@ export const buildClinicCapabilityProviders = ({
         reservedForAgentIds: ["booking"],
       },
       isAvailable: () => true,
-      resolveTools: () => createBookingTools(bookingToolOptions),
+      resolveTools: () =>
+        createBookingTools({
+          callTool,
+          assignedUserId: config.assignedUserId,
+        }),
     },
   ];
 };

@@ -1,14 +1,22 @@
 import "dotenv/config";
+import { randomUUID } from "node:crypto";
 
 import { HumanMessage } from "@langchain/core/messages";
 
 import { loadConfig } from "./config.js";
+import type { ClinicAdapters, McpCallTool } from "./composition/clinic-adapters.js";
 import {
   buildClinicCapabilityProviders,
   ESPOCRM_BOOKING_CAPABILITY_ID,
   ESPOCRM_READ_CAPABILITY_ID,
 } from "./composition/clinic-capability-providers.js";
-import { createClinicPackRuntime } from "./composition/clinic-pack.js";
+import { createClinicPackRuntime, type ClinicRuntime } from "./composition/clinic-pack.js";
+import { FAQ_SYSTEM_PROMPT } from "./prompts/faq.js";
+import { BOOKING_SYSTEM_PROMPT } from "./prompts/booking.js";
+import {
+  clearTelegramUserId,
+  setTelegramUserId,
+} from "./tools/telegram-user-context.js";
 
 const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;
 
@@ -26,9 +34,41 @@ const BOOKING_TOOL_NAMES = [
   "create_meeting",
 ] as const;
 
-const main = async (): Promise<void> => {
-  const config = loadConfig();
-  const runtime = await createClinicPackRuntime(config);
+type CallRecord = { name: string; args: Record<string, unknown> };
+
+const lastAiText = (messages: Array<{ content?: unknown }>): string => {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const content = messages[i]?.content;
+    if (typeof content === "string" && content.trim()) {
+      return content;
+    }
+  }
+  return "";
+};
+
+/** English uses \\b; Cyrillic cannot (JS \\w is ASCII-only), so match Ukrainian stems bare. */
+const softPhoneHeuristic = (text: string): boolean =>
+  /(?:\bphone\b|телефон|номер)/i.test(text);
+
+const installCallToolRecorder = (
+  adapters: ClinicAdapters,
+): { calls: CallRecord[]; restore: () => void } => {
+  const calls: CallRecord[] = [];
+  const original = adapters.callTool;
+  const wrapped: McpCallTool = async (name, args) => {
+    calls.push({ name, args });
+    return original(name, args);
+  };
+  adapters.callTool = wrapped;
+  return {
+    calls,
+    restore: () => {
+      adapters.callTool = original;
+    },
+  };
+};
+
+const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
   const bootstrap = runtime.getBootstrap();
   const agentIds = bootstrap.runtimeAgents.map((agent) => agent.id).sort();
   const expected = [...EXPECTED_AGENT_IDS].sort();
@@ -57,8 +97,20 @@ const main = async (): Promise<void> => {
   }
   console.log("✓ Persisted capability ids migrated (espocrm-read / espocrm-booking)");
 
+  const faqAgent = bootstrap.runtimeAgents.find((agent) => agent.id === "faq");
+  const bookingAgent = bootstrap.runtimeAgents.find((agent) => agent.id === "booking");
+  if (faqAgent?.systemPrompt !== FAQ_SYSTEM_PROMPT) {
+    throw new Error("faq systemPrompt in runtime-agents.json does not match src/prompts/faq.ts");
+  }
+  if (bookingAgent?.systemPrompt !== BOOKING_SYSTEM_PROMPT) {
+    throw new Error(
+      "booking systemPrompt in runtime-agents.json does not match src/prompts/booking.ts",
+    );
+  }
+  console.log("✓ runtime-agents.json systemPrompt synced with TS prompt modules");
+
   const providers = buildClinicCapabilityProviders({
-    config,
+    config: bootstrap.config,
     adapters: bootstrap.adapters,
   });
   const readProvider = providers.find(
@@ -110,34 +162,187 @@ const main = async (): Promise<void> => {
   }
   console.log("✓ Checkpointer attached (default MemorySaver)");
   console.log("✓ EspoCRM MCP adapters connected (stdio)");
+};
 
-  await runtime.shutdownAdapters();
-  console.log("✓ shutdownAdapters completed");
+const shortTelegramId = (prefixDigit: string): string =>
+  `${prefixDigit}${Date.now().toString().slice(-9)}`;
 
-  const shouldInvoke = process.argv.includes("--invoke");
-  if (!shouldInvoke) {
-    console.log("Skip LLM invoke (pass --invoke to exercise supervisor routing).");
+const contactHits = (search: unknown): unknown[] => {
+  if (!search || typeof search !== "object") {
+    return [];
+  }
+  const record = search as { contacts?: unknown; list?: unknown };
+  if (Array.isArray(record.contacts)) {
+    return record.contacts;
+  }
+  if (Array.isArray(record.list)) {
+    return record.list;
+  }
+  return [];
+};
+
+const ensureKnownContact = async (
+  callTool: McpCallTool,
+  telegramId: string,
+): Promise<void> => {
+  const search = await callTool("search_contacts", { cTelegram: telegramId, limit: 5 });
+  if (contactHits(search).length > 0) {
+    console.log(`✓ Known contact already exists for cTelegram=${telegramId}`);
     return;
   }
 
-  const liveRuntime = await createClinicPackRuntime(config);
+  await callTool("create_contact", {
+    firstName: "Smoke",
+    lastName: "Known",
+    cTelegram: telegramId,
+    skipDuplicateCheck: true,
+  });
+  console.log(`✓ Created known contact for cTelegram=${telegramId}`);
+};
+
+const invokeBooking = async (
+  graph: ReturnType<ClinicRuntime["getGraph"]>,
+  telegramId: string,
+  threadId: string,
+  utterance: string,
+): Promise<{ reply: string; recursionHit: boolean }> => {
+  setTelegramUserId(telegramId);
   try {
-    const graph = liveRuntime.getGraph();
     const result = await graph.invoke(
-      { messages: [new HumanMessage("What are your clinic hours?")] },
-      { configurable: { thread_id: "smoke-phase2" } },
+      { messages: [new HumanMessage(utterance)] },
+      { configurable: { thread_id: threadId }, recursionLimit: 40 },
     );
+    return {
+      reply: lastAiText(result.messages as Array<{ content?: unknown }>),
+      recursionHit: false,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Recursion limit")) {
+      return { reply: "", recursionHit: true };
+    }
+    throw error;
+  }
+};
 
-    const lastMessage = result.messages.at(-1);
-    const content =
-      typeof lastMessage?.content === "string"
-        ? lastMessage.content
-        : JSON.stringify(lastMessage?.content ?? null);
+const assertFirstTelegramSearch = (
+  label: string,
+  calls: CallRecord[],
+  telegramId: string,
+): void => {
+  const first = calls[0];
+  if (!first || first.name !== "search_contacts") {
+    throw new Error(
+      `${label}: expected first MCP call search_contacts, got ${first?.name ?? "none"} (calls=${calls.map((c) => c.name).join(",") || "none"})`,
+    );
+  }
+  if (first.args.cTelegram !== telegramId) {
+    throw new Error(
+      `${label}: expected cTelegram=${telegramId}, got ${String(first.args.cTelegram)}`,
+    );
+  }
+};
 
-    console.log("✓ Graph invoke completed");
-    console.log("Last reply:", content.slice(0, 500));
+const runIdentitySmoke = async (runtime: ClinicRuntime): Promise<void> => {
+  const bootstrap = runtime.getBootstrap();
+  const graph = runtime.getGraph();
+  const { calls, restore } = installCallToolRecorder(bootstrap.adapters);
+
+  try {
+    const knownId = process.env.SMOKE_KNOWN_TELEGRAM_ID?.trim() || shortTelegramId("9");
+    await ensureKnownContact(bootstrap.adapters.callTool, knownId);
+
+    // --- Known path ---
+    calls.length = 0;
+    const known = await invokeBooking(
+      graph,
+      knownId,
+      `smoke-identity-known-${randomUUID().slice(0, 8)}`,
+      "I want to book an appointment. Start by looking up my contact.",
+    );
+    assertFirstTelegramSearch("Known path", calls, knownId);
+    if (calls.some((call) => call.name === "create_contact")) {
+      throw new Error("Known path: must not call create_contact on first turn");
+    }
+    console.log("✓ Known path hard asserts (search_contacts + no create_contact)");
+    if (known.recursionHit) {
+      console.warn("⚠ Soft: known path hit recursion limit after identity tools ran");
+    }
+    if (known.reply && softPhoneHeuristic(known.reply)) {
+      console.warn(
+        "⚠ Soft: known-path reply mentions phone — expected skip contact questions:",
+        known.reply.slice(0, 200),
+      );
+    } else if (known.reply) {
+      console.log("✓ Soft: known-path reply does not ask for phone");
+    }
+
+    // --- Unknown path ---
+    calls.length = 0;
+    const unknownId = shortTelegramId("8");
+    const unknown = await invokeBooking(
+      graph,
+      unknownId,
+      `smoke-identity-unknown-${randomUUID().slice(0, 8)}`,
+      "I want to book an appointment. Start by looking up my contact.",
+    );
+    assertFirstTelegramSearch("Unknown path", calls, unknownId);
+    if (calls.some((call) => call.name === "create_contact")) {
+      throw new Error(
+        "Unknown path: must not call create_contact before phone/name are provided",
+      );
+    }
+    console.log("✓ Unknown path hard asserts (search_contacts + no create_contact)");
+    if (unknown.recursionHit) {
+      console.warn("⚠ Soft: unknown path hit recursion limit after identity tools ran");
+    }
+    if (unknown.reply && softPhoneHeuristic(unknown.reply)) {
+      console.log("✓ Soft: unknown-path reply asks for phone");
+    } else if (unknown.reply) {
+      console.warn(
+        "⚠ Soft: unknown-path reply did not clearly ask for phone:",
+        unknown.reply.slice(0, 200),
+      );
+    }
   } finally {
-    await liveRuntime.shutdownAdapters();
+    restore();
+    clearTelegramUserId();
+  }
+};
+
+const main = async (): Promise<void> => {
+  const config = loadConfig();
+  const shouldInvoke = process.argv.includes("--invoke");
+  const shouldIdentity = process.argv.includes("--identity");
+
+  const runtime = await createClinicPackRuntime(config);
+  try {
+    await assertBootstrap(runtime);
+
+    if (!shouldInvoke && !shouldIdentity) {
+      console.log("Skip LLM invoke (pass --invoke or --identity).");
+      return;
+    }
+
+    if (shouldInvoke) {
+      const graph = runtime.getGraph();
+      const result = await graph.invoke(
+        { messages: [new HumanMessage("What are your clinic hours?")] },
+        { configurable: { thread_id: `smoke-faq-${randomUUID().slice(0, 8)}` } },
+      );
+
+      const content = lastAiText(result.messages as Array<{ content?: unknown }>);
+      console.log("✓ Graph invoke completed (--invoke)");
+      console.log("Last reply:", content.slice(0, 500));
+    }
+
+    if (shouldIdentity) {
+      await runIdentitySmoke(runtime);
+      console.log("✓ Identity smoke completed (--identity)");
+    }
+  } finally {
+    await runtime.shutdownAdapters();
+    console.log("✓ shutdownAdapters completed");
   }
 };
 
