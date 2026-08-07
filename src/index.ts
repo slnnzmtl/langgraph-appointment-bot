@@ -5,18 +5,18 @@ import { loadConfig } from "./config.js";
 import { createClinicPackRuntime } from "./composition/clinic-pack.js";
 
 /**
- * Entrypoint: boots the supervisor runtime.
+ * Entrypoint: boots the clinic LangGraph runtime.
  * When TELEGRAM_BOT_TOKEN is set, starts telegraf long polling.
  */
 const main = async (): Promise<void> => {
   const config = loadConfig();
   const runtime = await createClinicPackRuntime(config);
-  const agents = runtime.getBootstrap().runtimeAgents;
+  const agents = runtime.getBootstrap().agents;
 
-  console.log("Clinic supervisor runtime ready.");
+  console.log("Clinic graph runtime ready.");
   console.log(
-    "Seeded agents:",
-    agents.map((agent) => `${agent.id} (${agent.capabilityIds.join(", ")})`).join(", "),
+    "Agents:",
+    agents.map((agent) => agent.id).join(", "),
   );
 
   if (!config.telegramBotToken) {

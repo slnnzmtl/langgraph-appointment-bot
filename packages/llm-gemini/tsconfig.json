@@ -6,8 +6,5 @@
     "outDir": "dist",
     "rootDir": "src"
   },
-  "references": [
-    { "path": "../langgraph-supervisor-expert-bootstrap" }
-  ],
   "include": ["src/**/*.ts"]
 }

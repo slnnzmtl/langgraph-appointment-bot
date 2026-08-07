@@ -16,8 +16,8 @@ import type {
   ContextCacheHandle,
   ContextCacheManager,
   ContextCacheSpec,
-} from "@personal-assistant/supervisor-framework";
-import { getLogger } from "@personal-assistant/supervisor-framework";
+} from "./types.js";
+import { getLogger } from "./logger.js";
 
 import {
   createGeminiChatModel,

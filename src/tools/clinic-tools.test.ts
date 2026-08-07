@@ -1,11 +1,8 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach } from "vitest";
 
 import { createBookingTools, createReadTools } from "./clinic-tools.js";
-import {
-  clearTelegramUserId,
-  setTelegramUserId,
-} from "./telegram-user-context.js";
+import { runWithTelegramUserId } from "./telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
 
@@ -13,16 +10,14 @@ const InterruptState = Annotation.Root({
   result: Annotation<string>,
 });
 
+const withTg = <T>(fn: () => Promise<T> | T): Promise<T> | T =>
+  runWithTelegramUserId("tg-42", fn);
+
 describe("clinic-tools identity", () => {
   const calls: CallRecord[] = [];
 
   beforeEach(() => {
     calls.length = 0;
-    setTelegramUserId("tg-42");
-  });
-
-  afterEach(() => {
-    clearTelegramUserId();
   });
 
   const callTool = async (name: string, args: Record<string, unknown>) => {
@@ -37,69 +32,74 @@ describe("clinic-tools identity", () => {
   };
 
   it("create_contact forces cTelegram from holder", async () => {
-    const [createContact] = createBookingTools({
-      callTool,
-      assignedUserId: "user-1",
-    }).filter((tool) => tool.name === "create_contact");
+    await withTg(async () => {
+      const [createContact] = createBookingTools({
+        callTool,
+        assignedUserId: "user-1",
+      }).filter((tool) => tool.name === "create_contact");
 
-    expect(createContact).toBeDefined();
-    const result = await createContact!.invoke({
-      firstName: "Ada",
-      lastName: "Lovelace",
-      phoneNumber: "+380501112233",
-    });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({
-      name: "create_contact",
-      args: {
+      expect(createContact).toBeDefined();
+      const result = await createContact!.invoke({
         firstName: "Ada",
         lastName: "Lovelace",
         phoneNumber: "+380501112233",
-        cTelegram: "tg-42",
-        skipDuplicateCheck: true,
-      },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual({
+        name: "create_contact",
+        args: {
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          cTelegram: "tg-42",
+          skipDuplicateCheck: true,
+        },
+      });
+      expect(JSON.parse(result as string)).toMatchObject({ cTelegram: "tg-42" });
     });
-    expect(JSON.parse(result as string)).toMatchObject({ cTelegram: "tg-42" });
   });
 
   it("link_telegram_to_contact writes holder id via update_entity", async () => {
-    const [link] = createBookingTools({
-      callTool,
-      assignedUserId: "user-1",
-    }).filter((tool) => tool.name === "link_telegram_to_contact");
+    await withTg(async () => {
+      const [link] = createBookingTools({
+        callTool,
+        assignedUserId: "user-1",
+      }).filter((tool) => tool.name === "link_telegram_to_contact");
 
-    expect(link).toBeDefined();
-    await link!.invoke({ contactId: "c-99" });
+      expect(link).toBeDefined();
+      await link!.invoke({ contactId: "c-99" });
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({
-      name: "update_entity",
-      args: {
-        entityType: "Contact",
-        entityId: "c-99",
-        data: { cTelegram: "tg-42" },
-      },
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toEqual({
+        name: "update_entity",
+        args: {
+          entityType: "Contact",
+          entityId: "c-99",
+          data: { cTelegram: "tg-42" },
+        },
+      });
     });
   });
 
   it("find_contact_by_telegram uses holder id", async () => {
-    const [find] = createBookingTools({
-      callTool,
-      assignedUserId: "user-1",
-    }).filter((tool) => tool.name === "find_contact_by_telegram");
+    await withTg(async () => {
+      const [find] = createBookingTools({
+        callTool,
+        assignedUserId: "user-1",
+      }).filter((tool) => tool.name === "find_contact_by_telegram");
 
-    expect(find).toBeDefined();
-    await find!.invoke({});
+      expect(find).toBeDefined();
+      await find!.invoke({});
 
-    expect(calls[0]).toEqual({
-      name: "search_contacts",
-      args: { cTelegram: "tg-42", limit: 5 },
+      expect(calls[0]).toEqual({
+        name: "search_contacts",
+        args: { cTelegram: "tg-42", limit: 5 },
+      });
     });
   });
 
   it("throws when telegram user id is unset", async () => {
-    clearTelegramUserId();
     const [find] = createBookingTools({
       callTool,
       assignedUserId: "user-1",
@@ -166,11 +166,6 @@ describe("create_meeting HITL interrupt", () => {
 
   beforeEach(() => {
     calls.length = 0;
-    setTelegramUserId("tg-42");
-  });
-
-  afterEach(() => {
-    clearTelegramUserId();
   });
 
   const callTool = async (name: string, args: Record<string, unknown>) => {
@@ -206,60 +201,66 @@ describe("create_meeting HITL interrupt", () => {
   };
 
   it("resume confirmed:false skips MCP create_meeting", async () => {
-    const graph = buildGraph();
-    const config = { configurable: { thread_id: "hitl-cancel" } };
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-cancel" } };
 
-    const first = await graph.invoke({ result: "" }, config);
-    expect(first.__interrupt__).toBeDefined();
-    expect(calls).toHaveLength(0);
+      const first = await graph.invoke({ result: "" }, config);
+      expect(first.__interrupt__).toBeDefined();
+      expect(calls).toHaveLength(0);
 
-    const second = await graph.invoke(
-      new Command({ resume: { confirmed: false } }),
-      config,
-    );
-    expect(calls).toHaveLength(0);
-    expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
+      const second = await graph.invoke(
+        new Command({ resume: { confirmed: false } }),
+        config,
+      );
+      expect(calls).toHaveLength(0);
+      expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
+    });
   });
 
   it("resume confirmed:true calls create_meeting once with required fields", async () => {
-    const graph = buildGraph();
-    const config = { configurable: { thread_id: "hitl-confirm" } };
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-confirm" } };
 
-    await graph.invoke({ result: "" }, config);
-    expect(calls).toHaveLength(0);
+      await graph.invoke({ result: "" }, config);
+      expect(calls).toHaveLength(0);
 
-    const second = await graph.invoke(
-      new Command({ resume: { confirmed: true } }),
-      config,
-    );
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.name).toBe("create_meeting");
-    expect(calls[0]?.args).toMatchObject({
-      name: "Consult",
-      dateStart: "2026-08-07T10:00:00",
-      dateEnd: "2026-08-07T10:30:00",
-      assignedUserId: "assigned-99",
-      parentType: "Contact",
-      parentId: "contact-1",
-      contactsIds: ["contact-1"],
-      cServicesIds: ["svc-1"],
-      status: "Planned",
+      const second = await graph.invoke(
+        new Command({ resume: { confirmed: true } }),
+        config,
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.name).toBe("create_meeting");
+      expect(calls[0]?.args).toMatchObject({
+        name: "Consult",
+        dateStart: "2026-08-07T10:00:00",
+        dateEnd: "2026-08-07T10:30:00",
+        assignedUserId: "assigned-99",
+        parentType: "Contact",
+        parentId: "contact-1",
+        contactsIds: ["contact-1"],
+        cServicesIds: ["svc-1"],
+        status: "Planned",
+      });
+      expect(JSON.parse(second.result)).toMatchObject({ success: true, id: "meeting-1" });
     });
-    expect(JSON.parse(second.result)).toMatchObject({ success: true, id: "meeting-1" });
   });
 
   it("normalizes space-separated datetimes before MCP create_meeting", async () => {
-    const graph = buildGraph({
-      dateStart: "2026-08-07 09:00:00",
-      dateEnd: "2026-08-07 09:30:00",
-    });
-    const config = { configurable: { thread_id: "hitl-normalize-dates" } };
-    await graph.invoke({ result: "" }, config);
-    await graph.invoke(new Command({ resume: { confirmed: true } }), config);
+    await withTg(async () => {
+      const graph = buildGraph({
+        dateStart: "2026-08-07 09:00:00",
+        dateEnd: "2026-08-07 09:30:00",
+      });
+      const config = { configurable: { thread_id: "hitl-normalize-dates" } };
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(new Command({ resume: { confirmed: true } }), config);
 
-    expect(calls[0]?.args).toMatchObject({
-      dateStart: "2026-08-07T09:00:00",
-      dateEnd: "2026-08-07T09:30:00",
+      expect(calls[0]?.args).toMatchObject({
+        dateStart: "2026-08-07T09:00:00",
+        dateEnd: "2026-08-07T09:30:00",
+      });
     });
   });
 });

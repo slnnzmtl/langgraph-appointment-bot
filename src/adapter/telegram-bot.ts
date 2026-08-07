@@ -8,10 +8,7 @@ import {
   normalizeLocalIsoDatetime,
   type AvailabilitySlot,
 } from "../tools/availability-slots.js";
-import {
-  clearTelegramUserId,
-  setTelegramUserId,
-} from "../tools/telegram-user-context.js";
+import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
 import {
   buildConfirmKeyboard,
   buildSlotsKeyboard,
@@ -357,20 +354,16 @@ export const handleGraphTurn = async (
   threadId: string,
   telegramUserId: string,
   input: unknown,
-): Promise<OutboundReply> => {
-  setTelegramUserId(telegramUserId);
-  try {
-    return await runExclusiveForThread(threadId, async () => {
+): Promise<OutboundReply> =>
+  runWithTelegramUserId(telegramUserId, () =>
+    runExclusiveForThread(threadId, async () => {
       const result = await graph.invoke(input as never, {
         configurable: { thread_id: threadId },
         recursionLimit: GRAPH_RECURSION_LIMIT,
       });
       return interpretInvokeResult(result);
-    });
-  } finally {
-    clearTelegramUserId();
-  }
-};
+    }),
+  );
 
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {
   await ctx.reply(

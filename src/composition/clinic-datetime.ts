@@ -1,6 +1,6 @@
-import type { RuntimeShellFormatters } from "@personal-assistant/supervisor-framework";
-
 import { CLINIC_SLOT_TZ } from "../tools/availability-slots.js";
+
+type SystemMetadataOptions = { runtimeAgent?: string };
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
@@ -54,10 +54,10 @@ const kyivWallClock = (date: Date): string => {
 };
 
 /** System metadata block with Kyiv wall clock (not UTC). */
-export const formatKyivSystemMetadata: RuntimeShellFormatters["formatSystemMetadata"] = (
-  date,
-  options,
-) => {
+export const formatKyivSystemMetadata = (
+  date: Date,
+  options?: SystemMetadataOptions,
+): string => {
   const lines = [
     "<system_metadata>",
     `CURRENT DATETIME (${CLINIC_SLOT_TZ}): ${kyivWallClock(date)}`,
@@ -71,10 +71,6 @@ export const formatKyivSystemMetadata: RuntimeShellFormatters["formatSystemMetad
 
   lines.push("</system_metadata>");
   return lines.join("\n");
-};
-
-export const clinicShellFormatters: RuntimeShellFormatters = {
-  formatSystemMetadata: formatKyivSystemMetadata,
 };
 
 export const buildClinicSupervisorDynamicContext = (): string =>

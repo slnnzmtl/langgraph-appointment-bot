@@ -1,28 +1,25 @@
-import type { CreateRuntimeAgentInput } from "@personal-assistant/supervisor-framework";
-
 import { BOOKING_SYSTEM_PROMPT } from "../prompts/booking.js";
 import { FAQ_SYSTEM_PROMPT } from "../prompts/faq.js";
 import {
-  ESPOCRM_BOOKING_CAPABILITY_ID,
-  ESPOCRM_READ_CAPABILITY_ID,
-} from "./clinic-capability-providers.js";
+  BOOKING_AGENT_ID,
+  FAQ_AGENT_ID,
+  type ClinicAgentDefinition,
+} from "../graph/types.js";
 
-export const faqAgentInput: CreateRuntimeAgentInput = {
+export const faqAgent: ClinicAgentDefinition = {
+  id: FAQ_AGENT_ID,
   name: "FAQ",
   description: "Answers clinic FAQ: hours, services, pricing, and general information.",
   systemPrompt: FAQ_SYSTEM_PROMPT,
-  capabilityIds: [ESPOCRM_READ_CAPABILITY_ID],
-  modelKey: "generic",
   maxSteps: 4,
-  enabled: true,
 };
 
-export const bookingAgentInput: CreateRuntimeAgentInput = {
+export const bookingAgent: ClinicAgentDefinition = {
+  id: BOOKING_AGENT_ID,
   name: "Booking",
   description: "Books clinic appointments: identify patient, collect details, schedule meetings.",
   systemPrompt: BOOKING_SYSTEM_PROMPT,
-  capabilityIds: [ESPOCRM_READ_CAPABILITY_ID, ESPOCRM_BOOKING_CAPABILITY_ID],
-  modelKey: "generic",
   maxSteps: 10,
-  enabled: true,
 };
+
+export const clinicAgents: ClinicAgentDefinition[] = [faqAgent, bookingAgent];

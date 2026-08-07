@@ -13,3 +13,13 @@ export {
   parseCacheTooSmallShortfall,
   resolveCacheMinTokens,
 } from "./gemini-context-cache.js";
+export type {
+  BindRoutingToolsOptions,
+  ContextCacheHandle,
+  ContextCacheManager,
+  ContextCacheSpec,
+  ILLMConnector,
+  RoutingChain,
+} from "./types.js";
+export type { Logger } from "./logger.js";
+export { getLogger } from "./logger.js";

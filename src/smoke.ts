@@ -5,28 +5,14 @@ import { HumanMessage } from "@langchain/core/messages";
 
 import { loadConfig } from "./config.js";
 import type { ClinicAdapters, McpCallTool } from "./composition/clinic-adapters.js";
-import {
-  buildClinicCapabilityProviders,
-  ESPOCRM_BOOKING_CAPABILITY_ID,
-  ESPOCRM_READ_CAPABILITY_ID,
-} from "./composition/clinic-capability-providers.js";
 import { createClinicPackRuntime, type ClinicRuntime } from "./composition/clinic-pack.js";
-import { FAQ_SYSTEM_PROMPT } from "./prompts/faq.js";
-import { BOOKING_SYSTEM_PROMPT } from "./prompts/booking.js";
-import {
-  clearTelegramUserId,
-  setTelegramUserId,
-} from "./tools/telegram-user-context.js";
+import { bookingAgent, faqAgent } from "./composition/agents.js";
+import { runWithTelegramUserId } from "./tools/telegram-user-context.js";
 
 const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;
 
-const EXPECTED_CAPS: Record<(typeof EXPECTED_AGENT_IDS)[number], string> = {
-  faq: ESPOCRM_READ_CAPABILITY_ID,
-  booking: ESPOCRM_BOOKING_CAPABILITY_ID,
-};
-
 const FAQ_TOOL_NAMES = ["list_services", "get_service"] as const;
-const BOOKING_TOOL_NAMES = [
+const BOOKING_EXTRA_TOOL_NAMES = [
   "find_contact_by_telegram",
   "find_contact_by_phone",
   "create_contact",
@@ -71,69 +57,35 @@ const installCallToolRecorder = (
 
 const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
   const bootstrap = runtime.getBootstrap();
-  const agentIds = bootstrap.runtimeAgents.map((agent) => agent.id).sort();
+  const agentIds = bootstrap.agents.map((agent) => agent.id).sort();
   const expected = [...EXPECTED_AGENT_IDS].sort();
 
   if (agentIds.join(",") !== expected.join(",")) {
     throw new Error(
-      `Expected seeded agents [${expected.join(", ")}], got [${agentIds.join(", ")}]`,
+      `Expected agents [${expected.join(", ")}], got [${agentIds.join(", ")}]`,
     );
   }
 
   console.log("✓ Runtime bootstrapped");
   console.log(
-    "✓ Seeded agents:",
-    bootstrap.runtimeAgents
-      .map((agent) => `${agent.id} [caps=${agent.capabilityIds.join("|")}]`)
-      .join(", "),
+    "✓ Agents:",
+    bootstrap.agents.map((agent) => agent.id).join(", "),
   );
 
-  for (const agent of bootstrap.runtimeAgents) {
-    const expectedCap = EXPECTED_CAPS[agent.id as keyof typeof EXPECTED_CAPS];
-    if (!expectedCap || !agent.capabilityIds.includes(expectedCap)) {
-      throw new Error(
-        `Agent ${agent.id} expected capability ${expectedCap}, got [${agent.capabilityIds.join(", ")}]`,
-      );
-    }
+  const faqRuntime = bootstrap.agents.find((agent) => agent.id === "faq");
+  const bookingRuntime = bootstrap.agents.find((agent) => agent.id === "booking");
+  if (faqRuntime?.systemPrompt !== faqAgent.systemPrompt) {
+    throw new Error("faq systemPrompt in runtime does not match src/composition/agents.ts");
   }
-  console.log("✓ Persisted capability ids migrated (espocrm-read / espocrm-booking)");
-
-  const faqAgent = bootstrap.runtimeAgents.find((agent) => agent.id === "faq");
-  const bookingAgent = bootstrap.runtimeAgents.find((agent) => agent.id === "booking");
-  if (faqAgent?.systemPrompt !== FAQ_SYSTEM_PROMPT) {
-    throw new Error("faq systemPrompt in runtime-agents.json does not match src/prompts/faq.ts");
+  if (bookingRuntime?.systemPrompt !== bookingAgent.systemPrompt) {
+    throw new Error("booking systemPrompt in runtime does not match src/composition/agents.ts");
   }
-  if (bookingAgent?.systemPrompt !== BOOKING_SYSTEM_PROMPT) {
-    throw new Error(
-      "booking systemPrompt in runtime-agents.json does not match src/prompts/booking.ts",
-    );
-  }
-  console.log("✓ runtime-agents.json systemPrompt synced with TS prompt modules");
+  console.log("✓ Agent prompts loaded from build-time agents.ts");
 
-  const providers = buildClinicCapabilityProviders({
-    config: bootstrap.config,
-    adapters: bootstrap.adapters,
-  });
-  const readProvider = providers.find(
-    (provider) => provider.descriptor.id === ESPOCRM_READ_CAPABILITY_ID,
-  );
-  const bookingProvider = providers.find(
-    (provider) => provider.descriptor.id === ESPOCRM_BOOKING_CAPABILITY_ID,
-  );
-
-  if (!readProvider || !bookingProvider) {
-    throw new Error("Missing espocrm-read or espocrm-booking capability provider");
-  }
-
-  const faqTools = readProvider.resolveTools({})
-    .map((tool) => tool.name)
-    .sort();
-  const bookingTools = bookingProvider.resolveTools({})
-    .map((tool) => tool.name)
-    .sort();
-
+  const faqTools = (bootstrap.agentTools.faq ?? []).map((tool) => tool.name).sort();
+  const bookingTools = (bootstrap.agentTools.booking ?? []).map((tool) => tool.name).sort();
   const expectedFaq = [...FAQ_TOOL_NAMES].sort();
-  const expectedBooking = [...BOOKING_TOOL_NAMES].sort();
+  const expectedBooking = [...FAQ_TOOL_NAMES, ...BOOKING_EXTRA_TOOL_NAMES].sort();
 
   if (faqTools.join(",") !== expectedFaq.join(",")) {
     throw new Error(`FAQ tools mismatch: got [${faqTools.join(", ")}]`);
@@ -141,27 +93,15 @@ const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
   if (bookingTools.join(",") !== expectedBooking.join(",")) {
     throw new Error(`Booking tools mismatch: got [${bookingTools.join(", ")}]`);
   }
-  if (
-    bookingTools.some((name) =>
-      (FAQ_TOOL_NAMES as readonly string[]).includes(name),
-    )
-  ) {
-    throw new Error("Booking capability must not include FAQ-only tools");
-  }
-  console.log("✓ Capability tool resolution:", {
+  console.log("✓ Agent tool wiring:", {
     faq: faqTools.join("|"),
     booking: bookingTools.join("|"),
   });
 
-  if (bookingProvider.descriptor.grantable !== false) {
-    throw new Error("espocrm-booking must be grantable: false");
-  }
-  console.log("✓ espocrm-booking is grantable: false");
-
   if (!runtime.getCheckpointer()) {
-    throw new Error("Expected default MemorySaver checkpointer from createSupervisorRuntime");
+    throw new Error("Expected MemorySaver checkpointer from createClinicPackRuntime");
   }
-  console.log("✓ Checkpointer attached (default MemorySaver)");
+  console.log("✓ Checkpointer attached (MemorySaver)");
   console.log("✓ EspoCRM MCP adapters connected (stdio)");
 };
 
@@ -206,25 +146,25 @@ const invokeBooking = async (
   telegramId: string,
   threadId: string,
   utterance: string,
-): Promise<{ reply: string; recursionHit: boolean }> => {
-  setTelegramUserId(telegramId);
-  try {
-    const result = await graph.invoke(
-      { messages: [new HumanMessage(utterance)] },
-      { configurable: { thread_id: threadId }, recursionLimit: 40 },
-    );
-    return {
-      reply: lastAiText(result.messages as Array<{ content?: unknown }>),
-      recursionHit: false,
-    };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("Recursion limit")) {
-      return { reply: "", recursionHit: true };
+): Promise<{ reply: string; recursionHit: boolean }> =>
+  runWithTelegramUserId(telegramId, async () => {
+    try {
+      const result = await graph.invoke(
+        { messages: [new HumanMessage(utterance)] },
+        { configurable: { thread_id: threadId }, recursionLimit: 40 },
+      );
+      return {
+        reply: lastAiText(result.messages as Array<{ content?: unknown }>),
+        recursionHit: false,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Recursion limit")) {
+        return { reply: "", recursionHit: true };
+      }
+      throw error;
     }
-    throw error;
-  }
-};
+  });
 
 const assertFirstTelegramSearch = (
   label: string,
@@ -253,7 +193,6 @@ const runIdentitySmoke = async (runtime: ClinicRuntime): Promise<void> => {
     const knownId = process.env.SMOKE_KNOWN_TELEGRAM_ID?.trim() || shortTelegramId("9");
     await ensureKnownContact(bootstrap.adapters.callTool, knownId);
 
-    // --- Known path ---
     calls.length = 0;
     const known = await invokeBooking(
       graph,
@@ -278,7 +217,6 @@ const runIdentitySmoke = async (runtime: ClinicRuntime): Promise<void> => {
       console.log("✓ Soft: known-path reply does not ask for phone");
     }
 
-    // --- Unknown path ---
     calls.length = 0;
     const unknownId = shortTelegramId("8");
     const unknown = await invokeBooking(
@@ -307,7 +245,6 @@ const runIdentitySmoke = async (runtime: ClinicRuntime): Promise<void> => {
     }
   } finally {
     restore();
-    clearTelegramUserId();
   }
 };
 

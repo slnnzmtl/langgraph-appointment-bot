@@ -1,14 +1,11 @@
-import path from "node:path";
-
 import { DEFAULT_GEMINI_MODEL } from "@personal-assistant/llm-gemini";
-import { getMessageHistoryMaxTokens } from "@personal-assistant/supervisor-framework";
+
+import { getMessageHistoryMaxTokens } from "./graph/message-trimming.js";
 
 export interface AppConfig {
   googleApiKey: string;
   supervisorModel: string;
   agentModel: string;
-  runtimeAgentsFilePath: string;
-  cronJobsFilePath: string;
   messageHistoryMaxTokens: number;
   espocrmMcpCommand: string;
   espocrmMcpArgs: string[];
@@ -41,12 +38,6 @@ const parseArgs = (raw: string | undefined, fallback: string[]): string[] => {
     .filter(Boolean);
 };
 
-export const getDefaultRuntimeAgentsPath = (cwd = process.cwd()): string =>
-  path.resolve(cwd, "data/runtime-agents.json");
-
-export const getDefaultCronJobsPath = (cwd = process.cwd()): string =>
-  path.resolve(cwd, "data/cron-jobs.json");
-
 export const getDefaultEspocrmMcpCwd = (): string => "/root/espocrm-mcp";
 
 export const loadConfig = (): AppConfig => {
@@ -56,8 +47,6 @@ export const loadConfig = (): AppConfig => {
     googleApiKey: getRequiredEnv("GOOGLE_API_KEY"),
     supervisorModel: process.env.SUPERVISOR_MODEL ?? defaultModel,
     agentModel: process.env.AGENT_MODEL ?? defaultModel,
-    runtimeAgentsFilePath: process.env.RUNTIME_AGENTS_FILE_PATH ?? getDefaultRuntimeAgentsPath(),
-    cronJobsFilePath: process.env.CRON_JOBS_FILE_PATH ?? getDefaultCronJobsPath(),
     messageHistoryMaxTokens: getMessageHistoryMaxTokens(),
     espocrmMcpCommand: process.env.ESPOCRM_MCP_COMMAND ?? "node",
     espocrmMcpArgs: parseArgs(process.env.ESPOCRM_MCP_ARGS, ["build/index.js"]),
