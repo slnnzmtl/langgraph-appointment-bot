@@ -1,9 +1,18 @@
-/** Clinic open hours and slot step (MVP constants; env overrides deferred to Phase 4b). */
-export const CLINIC_SLOT_TZ = "Europe/Kyiv";
-export const CLINIC_OPEN_HOUR = 9;
-export const CLINIC_CLOSE_HOUR = 18;
-export const CLINIC_SLOT_MINUTES = 30;
-export const MAX_PRESENTED_SLOTS = 12;
+import {
+  CLINIC_CLOSE_HOUR,
+  CLINIC_OPEN_HOUR,
+  CLINIC_SLOT_MINUTES,
+  CLINIC_SLOT_TZ,
+  MAX_PRESENTED_SLOTS,
+} from "../shared/clinic-constants.js";
+
+export {
+  CLINIC_CLOSE_HOUR,
+  CLINIC_OPEN_HOUR,
+  CLINIC_SLOT_MINUTES,
+  CLINIC_SLOT_TZ,
+  MAX_PRESENTED_SLOTS,
+} from "../shared/clinic-constants.js";
 
 export type BusyMeeting = {
   dateStart: string;

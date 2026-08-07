@@ -2,7 +2,7 @@ export { compileClinicGraph, type CompileClinicGraphOptions } from "./compile.js
 export {
   getMessageHistoryMaxTokens,
   DEFAULT_MESSAGE_HISTORY_MAX_TOKENS,
-} from "./message-trimming.js";
+} from "../shared/message-budget.js";
 export type { ClinicAgentDefinition, ILLMConnector } from "./types.js";
 export {
   BOOKING_AGENT_ID,

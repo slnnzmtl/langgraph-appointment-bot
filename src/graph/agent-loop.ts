@@ -10,7 +10,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { Overwrite } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
-import { extractMessageTextContent } from "./message-content.js";
+import { extractMessageTextContent } from "../shared/message-content.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import {
   applyDelegationPrompt,

@@ -5,9 +5,16 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import { extractMessageTextContent } from "./message-content.js";
+import {
+  DEFAULT_MESSAGE_HISTORY_MAX_TOKENS,
+  getMessageHistoryMaxTokens,
+} from "../shared/message-budget.js";
+import { extractMessageTextContent } from "../shared/message-content.js";
 
-export const DEFAULT_MESSAGE_HISTORY_MAX_TOKENS = 6_000;
+export {
+  DEFAULT_MESSAGE_HISTORY_MAX_TOKENS,
+  getMessageHistoryMaxTokens,
+} from "../shared/message-budget.js";
 
 const MESSAGE_OVERHEAD_TOKENS = 4;
 const TOOL_CALL_OVERHEAD_TOKENS = 20;
@@ -15,16 +22,6 @@ const TOOL_CALL_OVERHEAD_TOKENS = 20;
 export type TrimMessagesToTokenBudgetOptions = {
   maxTokens?: number;
   tokenCounter?: (messages: BaseMessage[]) => number;
-};
-
-export const getMessageHistoryMaxTokens = (): number => {
-  const raw = process.env.MESSAGE_HISTORY_MAX_TOKENS;
-  if (!raw) {
-    return DEFAULT_MESSAGE_HISTORY_MAX_TOKENS;
-  }
-
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MESSAGE_HISTORY_MAX_TOKENS;
 };
 
 const estimateSingleMessageTokens = (message: BaseMessage): number => {

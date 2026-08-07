@@ -2,9 +2,9 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 
-import type { McpCallTool } from "../composition/clinic-adapters.js";
+import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
+import type { McpCallTool } from "../shared/mcp.js";
 import {
-  CLINIC_SLOT_MINUTES,
   computeFreeSlots,
   extractMeetingsFromSearchResult,
   normalizeLocalIsoDatetime,

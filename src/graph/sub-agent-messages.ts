@@ -1,6 +1,9 @@
 import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
 
-import { extractMessageTextContent, extractNonTextContentParts } from "./message-content.js";
+import {
+  extractMessageTextContent,
+  extractNonTextContentParts,
+} from "../shared/message-content.js";
 
 export const RUNTIME_AGENT_CONTEXT_KEY = "runtimeAgentId" as const;
 export const SUB_AGENT_CONTEXT_HUMAN_TURNS = 3;

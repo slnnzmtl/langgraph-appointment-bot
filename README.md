@@ -18,6 +18,9 @@ cp .env.example .env
 pnpm check   # typecheck
 pnpm test    # unit tests (identity, HITL, slots, Telegram UI, graph)
 pnpm test:all  # app + llm-gemini package tests
+pnpm depcruise  # dependency rules (cycles, orphans, missing deps)
+pnpm depcruise:graph  # write dependency-graph.mmd (Mermaid)
+pnpm depcruise:graph:svg  # write dependency-graph.svg (needs Graphviz `dot`)
 pnpm smoke   # bootstrap + live MCP stdio
 pnpm smoke -- --invoke    # FAQ routing via Gemini
 pnpm smoke -- --identity  # known vs unknown telegram_id booking smoke

@@ -4,7 +4,7 @@ import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
-import { extractMessageTextContent } from "../graph/message-content.js";
+import { extractMessageTextContent } from "../shared/message-content.js";
 import {
   normalizeLocalIsoDatetime,
   type AvailabilitySlot,

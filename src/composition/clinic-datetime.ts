@@ -1,4 +1,4 @@
-import { CLINIC_SLOT_TZ } from "../tools/availability-slots.js";
+import { CLINIC_SLOT_TZ } from "../shared/clinic-constants.js";
 
 type SystemMetadataOptions = { runtimeAgent?: string };
 

@@ -4,9 +4,10 @@ import { randomUUID } from "node:crypto";
 import { HumanMessage } from "@langchain/core/messages";
 
 import { loadConfig } from "./config.js";
-import type { ClinicAdapters, McpCallTool } from "./composition/clinic-adapters.js";
+import type { ClinicAdapters } from "./composition/clinic-adapters.js";
 import { createClinicRuntime, type ClinicRuntime } from "./composition/clinic-runtime.js";
 import { bookingAgent, faqAgent } from "./composition/agents.js";
+import type { McpCallTool } from "./shared/mcp.js";
 import { runWithTelegramUserId } from "./tools/telegram-user-context.js";
 
 const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;

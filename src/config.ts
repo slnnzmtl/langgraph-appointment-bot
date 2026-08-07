@@ -1,6 +1,6 @@
 import { DEFAULT_GEMINI_MODEL } from "@personal-assistant/llm-gemini";
 
-import { getMessageHistoryMaxTokens } from "./graph/message-trimming.js";
+import { getMessageHistoryMaxTokens } from "./shared/message-budget.js";
 
 export interface AppConfig {
   googleApiKey: string;
