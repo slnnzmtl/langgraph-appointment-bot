@@ -32,6 +32,66 @@ export const isBookingConfirmed = (decision: unknown): boolean =>
 const toToolResult = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 
+/** Keep booking-relevant service fields; drop CRM audit metadata and empty description. */
+const compactServiceRecord = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const compact: Record<string, unknown> = {};
+
+  if (typeof record.id === "string") {
+    compact.id = record.id;
+  }
+  if (typeof record.name === "string") {
+    compact.name = record.name;
+  }
+  if (record.price !== undefined && record.price !== null) {
+    compact.price = record.price;
+  }
+  if (record.duration !== undefined && record.duration !== null) {
+    compact.duration = record.duration;
+  }
+  if (typeof record.priceCurrency === "string") {
+    compact.priceCurrency = record.priceCurrency;
+  }
+  if (typeof record.description === "string" && record.description.trim().length > 0) {
+    compact.description = record.description.trim();
+  }
+
+  return compact;
+};
+
+/** Compact search_entity cService payloads for LLM context. */
+const compactListServicesResult = (result: unknown): unknown => {
+  let value: unknown = result;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return result;
+    }
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return result;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.list)) {
+    return result;
+  }
+
+  const compact: Record<string, unknown> = {
+    list: record.list.map(compactServiceRecord),
+  };
+  if (typeof record.total === "number") {
+    compact.total = record.total;
+  }
+  return compact;
+};
+
 /** Shared by find_contact_by_telegram tool and booking prepare prefetch. */
 export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<string> => {
   try {
@@ -54,7 +114,7 @@ export const listServices = async (
       entityType: "cService",
       limit,
     });
-    return toToolResult(result);
+    return toToolResult(compactListServicesResult(result));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return JSON.stringify({ error: message });
