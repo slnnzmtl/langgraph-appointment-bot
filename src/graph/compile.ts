@@ -111,7 +111,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           [toolsNode]: toolsNode,
         },
       )
-      .addEdge(finalize, "supervisor");
+      .addEdge(finalize, END);
 
     supervisorRoutes[agent.id] = prepare;
   }
