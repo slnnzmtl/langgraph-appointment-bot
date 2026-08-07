@@ -1,4 +1,5 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import type { BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
   END,
@@ -9,14 +10,16 @@ import {
 } from "@langchain/langgraph";
 
 import type { McpCallTool } from "../shared/mcp.js";
-import { lookupContactByTelegram } from "../tools/clinic-tools.js";
+import { listServices, lookupContactByTelegram } from "../tools/clinic-tools.js";
 import {
-  buildPrefetchedContactMessages,
+  buildPrefetchedToolMessages,
   createAgentFinalizeNode,
   createAgentLlmNode,
   createAgentPrepareNode,
   createAgentToolsNode,
+  FIND_CONTACT_BY_TELEGRAM_TOOL,
   finalizeNodeName,
+  LIST_SERVICES_TOOL,
   llmNodeName,
   prepareNodeName,
   routeAfterAgentLlm,
@@ -46,8 +49,19 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
-  /** When set, booking prepare prefetches find_contact_by_telegram before the first LLM turn. */
-  bookingContactLookup?: McpCallTool;
+  /** When set, booking prepare prefetches find_contact_by_telegram and list_services before the first LLM turn. */
+  bookingPrefetchCallTool?: McpCallTool;
+};
+
+const prefetchBookingContext = async (callTool: McpCallTool): Promise<BaseMessage[]> => {
+  const [contact, services] = await Promise.all([
+    lookupContactByTelegram(callTool),
+    listServices(callTool),
+  ]);
+  return [
+    ...buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact),
+    ...buildPrefetchedToolMessages(LIST_SERVICES_TOOL, services),
+  ];
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
@@ -80,12 +94,11 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
 
-    const bookingLookup = options.bookingContactLookup;
+    const bookingPrefetchCallTool = options.bookingPrefetchCallTool;
     const prepareNode =
-      agent.id === BOOKING_AGENT_ID && bookingLookup
+      agent.id === BOOKING_AGENT_ID && bookingPrefetchCallTool
         ? createAgentPrepareNode(agent.id, {
-            prefetch: async () =>
-              buildPrefetchedContactMessages(await lookupContactByTelegram(bookingLookup)),
+            prefetch: async () => prefetchBookingContext(bookingPrefetchCallTool),
           })
         : createAgentPrepareNode(agent.id);
 

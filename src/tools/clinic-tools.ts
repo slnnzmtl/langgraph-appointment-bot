@@ -44,22 +44,28 @@ export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<st
   }
 };
 
+/** Shared by list_services tool and booking prepare prefetch. */
+export const listServices = async (
+  callTool: McpCallTool,
+  limit = 50,
+): Promise<string> => {
+  try {
+    const result = await callTool("search_entity", {
+      entityType: "cService",
+      limit,
+    });
+    return toToolResult(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: message });
+  }
+};
+
 export const createReadTools = (options: ReadToolsOptions): StructuredToolInterface[] => {
   const { callTool } = options;
 
-  const listServices = tool(
-    async (input: { limit?: number }) => {
-      try {
-        const result = await callTool("search_entity", {
-          entityType: "cService",
-          limit: input.limit ?? 50,
-        });
-        return toToolResult(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
-      }
-    },
+  const listServicesTool = tool(
+    async (input: { limit?: number }) => listServices(callTool, input.limit ?? 50),
     {
       name: "list_services",
       description: "List clinic services (cService) from EspoCRM: names, pricing, duration.",
@@ -91,7 +97,7 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
     },
   );
 
-  return [listServices, getService];
+  return [listServicesTool, getService];
 };
 
 export const createBookingTools = (options: BookingToolsOptions): StructuredToolInterface[] => {

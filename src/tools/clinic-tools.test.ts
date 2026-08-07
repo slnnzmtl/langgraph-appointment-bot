@@ -1,7 +1,7 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it, beforeEach } from "vitest";
 
-import { createBookingTools, createReadTools, lookupContactByTelegram } from "./clinic-tools.js";
+import { createBookingTools, createReadTools, listServices, lookupContactByTelegram } from "./clinic-tools.js";
 import { runWithTelegramUserId } from "./telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -115,6 +115,31 @@ describe("clinic-tools identity", () => {
     expect(JSON.parse(result)).toMatchObject({
       error: expect.stringContaining("Telegram user id is not set"),
     });
+  });
+
+  it("listServices calls search_entity for cService with default limit", async () => {
+    const result = await listServices(callTool);
+    expect(calls[0]).toEqual({
+      name: "search_entity",
+      args: { entityType: "cService", limit: 50 },
+    });
+    expect(JSON.parse(result)).toEqual({ ok: true });
+  });
+
+  it("listServices respects custom limit", async () => {
+    await listServices(callTool, 10);
+    expect(calls[0]).toEqual({
+      name: "search_entity",
+      args: { entityType: "cService", limit: 10 },
+    });
+  });
+
+  it("listServices returns error JSON when callTool throws", async () => {
+    const failing = async () => {
+      throw new Error("MCP down");
+    };
+    const result = await listServices(failing);
+    expect(JSON.parse(result)).toEqual({ error: "MCP down" });
   });
 
   it("throws when telegram user id is unset", async () => {

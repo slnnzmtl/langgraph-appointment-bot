@@ -28,6 +28,7 @@ export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
 export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
 
 export const FIND_CONTACT_BY_TELEGRAM_TOOL = "find_contact_by_telegram" as const;
+export const LIST_SERVICES_TOOL = "list_services" as const;
 
 export type CreateAgentLoopOptions = {
   agent: ClinicAgentDefinition;
@@ -40,16 +41,19 @@ export type AgentPrepareOptions = {
   prefetch?: (scoped: BaseMessage[]) => Promise<BaseMessage[]>;
 };
 
-/** Synthetic fulfilled tool exchange so booking LLM starts with CRM identity context. */
-export const buildPrefetchedContactMessages = (result: string): BaseMessage[] => {
-  const toolCallId = `prefetch-find-contact-${randomUUID()}`;
+/** Synthetic fulfilled tool exchange so booking LLM starts with prefetched tool context. */
+export const buildPrefetchedToolMessages = (
+  toolName: string,
+  result: string,
+): BaseMessage[] => {
+  const toolCallId = `prefetch-${toolName}-${randomUUID()}`;
   return [
     new AIMessage({
       content: "",
       tool_calls: [
         {
           id: toolCallId,
-          name: FIND_CONTACT_BY_TELEGRAM_TOOL,
+          name: toolName,
           args: {},
         },
       ],
@@ -57,7 +61,7 @@ export const buildPrefetchedContactMessages = (result: string): BaseMessage[] =>
     new ToolMessage({
       content: result,
       tool_call_id: toolCallId,
-      name: FIND_CONTACT_BY_TELEGRAM_TOOL,
+      name: toolName,
     }),
   ];
 };

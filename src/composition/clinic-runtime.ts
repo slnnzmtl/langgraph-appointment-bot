@@ -45,7 +45,7 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     formatSystemMetadata: formatKyivSystemMetadata,
     messageHistoryMaxTokens: config.messageHistoryMaxTokens,
     contextCache,
-    bookingContactLookup: (name, args) => adapters.callTool(name, args),
+    bookingPrefetchCallTool: (name, args) => adapters.callTool(name, args),
   });
 
   const bootstrap: ClinicBootstrap = {

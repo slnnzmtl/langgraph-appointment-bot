@@ -3,16 +3,17 @@ import { Overwrite } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
 import {
-  buildPrefetchedContactMessages,
+  buildPrefetchedToolMessages,
   createAgentPrepareNode,
   FIND_CONTACT_BY_TELEGRAM_TOOL,
+  LIST_SERVICES_TOOL,
 } from "./agent-loop.js";
 import { hasPendingToolCalls } from "./tool-routing.js";
 
-describe("buildPrefetchedContactMessages", () => {
-  it("returns fulfilled AIMessage + ToolMessage pair", () => {
+describe("buildPrefetchedToolMessages", () => {
+  it("returns fulfilled AIMessage + ToolMessage pair for a given tool", () => {
     const result = '{"contacts":[{"id":"c-1"}]}';
-    const messages = buildPrefetchedContactMessages(result);
+    const messages = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, result);
 
     expect(messages).toHaveLength(2);
     const [ai, tool] = messages;
@@ -30,9 +31,17 @@ describe("buildPrefetchedContactMessages", () => {
     expect(hasPendingToolCalls(messages)).toBe(false);
   });
 
+  it("parameterizes tool name for list_services", () => {
+    const messages = buildPrefetchedToolMessages(LIST_SERVICES_TOOL, '{"list":[]}');
+    const aiMessage = messages[0] as AIMessage;
+    const toolMessage = messages[1] as ToolMessage;
+    expect(aiMessage.tool_calls?.[0]?.name).toBe(LIST_SERVICES_TOOL);
+    expect(toolMessage.name).toBe(LIST_SERVICES_TOOL);
+  });
+
   it("uses unique tool_call_id per call", () => {
-    const a = buildPrefetchedContactMessages("{}");
-    const b = buildPrefetchedContactMessages("{}");
+    const a = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, "{}");
+    const b = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, "{}");
     const idA = (a[0] as AIMessage).tool_calls?.[0]?.id;
     const idB = (b[0] as AIMessage).tool_calls?.[0]?.id;
     expect(idA).toBeTruthy();
@@ -44,7 +53,10 @@ describe("buildPrefetchedContactMessages", () => {
 describe("createAgentPrepareNode with prefetch", () => {
   it("appends prefetched messages after scoped human message", async () => {
     const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () => buildPrefetchedContactMessages('{"contacts":[]}'),
+      prefetch: async () => [
+        ...buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, '{"contacts":[]}'),
+        ...buildPrefetchedToolMessages(LIST_SERVICES_TOOL, '{"list":[]}'),
+      ],
     });
 
     const update = await prepare({
@@ -63,14 +75,20 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect((agentMessages[0] as HumanMessage).content).toBe("Book for tomorrow morning");
     expect(agentMessages[1]).toBeInstanceOf(AIMessage);
     expect(agentMessages[2]).toBeInstanceOf(ToolMessage);
-    expect((agentMessages[2] as ToolMessage).content).toBe('{"contacts":[]}');
+    expect((agentMessages[2] as ToolMessage).name).toBe(FIND_CONTACT_BY_TELEGRAM_TOOL);
+    expect(agentMessages[3]).toBeInstanceOf(AIMessage);
+    expect(agentMessages[4]).toBeInstanceOf(ToolMessage);
+    expect((agentMessages[4] as ToolMessage).name).toBe(LIST_SERVICES_TOOL);
     expect(hasPendingToolCalls(agentMessages as never)).toBe(false);
   });
 
   it("injects error ToolMessage when prefetch returns error JSON", async () => {
     const prepare = createAgentPrepareNode("booking", {
       prefetch: async () =>
-        buildPrefetchedContactMessages(JSON.stringify({ error: "CRM down" })),
+        buildPrefetchedToolMessages(
+          FIND_CONTACT_BY_TELEGRAM_TOOL,
+          JSON.stringify({ error: "CRM down" }),
+        ),
     });
 
     const update = await prepare({
