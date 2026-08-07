@@ -5,7 +5,7 @@ import { HumanMessage } from "@langchain/core/messages";
 
 import { loadConfig } from "./config.js";
 import type { ClinicAdapters, McpCallTool } from "./composition/clinic-adapters.js";
-import { createClinicPackRuntime, type ClinicRuntime } from "./composition/clinic-pack.js";
+import { createClinicRuntime, type ClinicRuntime } from "./composition/clinic-runtime.js";
 import { bookingAgent, faqAgent } from "./composition/agents.js";
 import { runWithTelegramUserId } from "./tools/telegram-user-context.js";
 
@@ -99,7 +99,7 @@ const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
   });
 
   if (!runtime.getCheckpointer()) {
-    throw new Error("Expected MemorySaver checkpointer from createClinicPackRuntime");
+    throw new Error("Expected MemorySaver checkpointer from createClinicRuntime");
   }
   console.log("✓ Checkpointer attached (MemorySaver)");
   console.log("✓ EspoCRM MCP adapters connected (stdio)");
@@ -253,7 +253,7 @@ const main = async (): Promise<void> => {
   const shouldInvoke = process.argv.includes("--invoke");
   const shouldIdentity = process.argv.includes("--identity");
 
-  const runtime = await createClinicPackRuntime(config);
+  const runtime = await createClinicRuntime(config);
   try {
     await assertBootstrap(runtime);
 

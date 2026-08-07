@@ -21,7 +21,10 @@ import {
   toolsNodeName,
 } from "./agent-loop.js";
 import { createClinicStateAnnotation } from "./state.js";
-import { createClinicSupervisorNode } from "./supervisor.js";
+import {
+  createClinicSupervisorNode,
+  type SupervisorContextCacheOptions,
+} from "./supervisor.js";
 import {
   FINISH_ROUTE,
   type ClinicAgentDefinition,
@@ -38,6 +41,7 @@ export type CompileClinicGraphOptions = {
   formatSystemMetadata: (date: Date, options?: { runtimeAgent?: string }) => string;
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
+  contextCache?: SupervisorContextCacheOptions;
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
@@ -53,6 +57,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(options.buildSupervisorDynamicContext
       ? { buildSupervisorDynamicContext: options.buildSupervisorDynamicContext }
       : {}),
+    ...(options.contextCache ? { contextCache: options.contextCache } : {}),
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- StateGraph generics are verbose for dynamic agent nodes

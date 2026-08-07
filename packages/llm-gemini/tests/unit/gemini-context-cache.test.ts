@@ -9,6 +9,7 @@ import {
   createCachedGeminiModel,
   createGeminiContextCacheManager,
   fingerprintContextCacheSpec,
+  isCachedContentNotFoundError,
   isGeminiContextCacheEnabled,
   parseCacheTooSmallShortfall,
   resolveCacheMinTokens,
@@ -43,6 +44,17 @@ const otherTool = tool(async () => "ok", {
 });
 
 describe("gemini context cache helpers", () => {
+  it("isCachedContentNotFoundError detects missing cache messages and 403", () => {
+    expect(isCachedContentNotFoundError(new Error("CachedContent not found"))).toBe(true);
+    expect(isCachedContentNotFoundError(new Error("Cached content not found (name=x)"))).toBe(
+      true,
+    );
+    expect(isCachedContentNotFoundError({ status: 403, message: "cached content expired" })).toBe(
+      true,
+    );
+    expect(isCachedContentNotFoundError(new Error("quota exceeded"))).toBe(false);
+  });
+
   it("fingerprintContextCacheSpec is stable for the same spec", () => {
     const spec = {
       modelName: "gemini-2.5-flash",

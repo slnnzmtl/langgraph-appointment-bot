@@ -368,3 +368,38 @@ export const isGeminiContextCacheEnabled = (): boolean => {
   const raw = process.env.GEMINI_CONTEXT_CACHE;
   return raw === undefined || (raw !== "0" && raw.toLowerCase() !== "false");
 };
+
+/** True when Gemini rejected a stale / missing explicit CachedContent name. */
+export const isCachedContentNotFoundError = (error: unknown): boolean => {
+  const parts: string[] = [];
+  if (error instanceof Error) {
+    parts.push(error.message);
+    if (error.cause instanceof Error) {
+      parts.push(error.cause.message);
+    } else if (error.cause != null) {
+      parts.push(String(error.cause));
+    }
+  } else if (error && typeof error === "object") {
+    if ("message" in error && typeof (error as { message: unknown }).message === "string") {
+      parts.push((error as { message: string }).message);
+    }
+    parts.push(JSON.stringify(error));
+  } else {
+    parts.push(String(error));
+  }
+
+  const text = parts.join("\n");
+  const mentionsMissingCache =
+    /CachedContent not found/i.test(text) || /Cached content not found/i.test(text);
+
+  if (mentionsMissingCache) {
+    return true;
+  }
+
+  const status =
+    error && typeof error === "object" && "status" in error
+      ? (error as { status: unknown }).status
+      : undefined;
+
+  return (status === 403 || status === "403") && /cached\s*content/i.test(text);
+};

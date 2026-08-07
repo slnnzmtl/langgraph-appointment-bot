@@ -9,6 +9,7 @@ export {
   createCachedGeminiModel,
   createGeminiContextCacheManager,
   fingerprintContextCacheSpec,
+  isCachedContentNotFoundError,
   isGeminiContextCacheEnabled,
   parseCacheTooSmallShortfall,
   resolveCacheMinTokens,

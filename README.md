@@ -31,7 +31,7 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
 - `src/adapter/` — telegraf bot (`telegram-bot.ts`) + Inline Keyboard helpers (`telegram-ui.ts`)
 - `src/prompts/` — supervisor / FAQ / booking prompts (source of truth with `src/composition/agents.ts`)
-- `packages/llm-gemini` — Gemini connector (+ context cache helpers; not wired into supervisor yet)
+- `packages/llm-gemini` — Gemini connector + explicit context cache for supervisor routing (`GEMINI_CONTEXT_CACHE`, default on)
 
 ## Telegram behaviour
 

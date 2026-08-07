@@ -15,7 +15,6 @@ const agents: ClinicAgentDefinition[] = [
     name: "FAQ",
     description: "FAQ",
     systemPrompt: "faq",
-    capabilityIds: ["espocrm-read"],
     maxSteps: 4,
   },
   {
@@ -23,7 +22,6 @@ const agents: ClinicAgentDefinition[] = [
     name: "Booking",
     description: "Booking",
     systemPrompt: "booking",
-    capabilityIds: ["espocrm-booking"],
     maxSteps: 10,
   },
 ];

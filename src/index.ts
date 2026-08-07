@@ -2,7 +2,7 @@ import "dotenv/config";
 
 import { launchClinicBot } from "./adapter/telegram-bot.js";
 import { loadConfig } from "./config.js";
-import { createClinicPackRuntime } from "./composition/clinic-pack.js";
+import { createClinicRuntime } from "./composition/clinic-runtime.js";
 
 /**
  * Entrypoint: boots the clinic LangGraph runtime.
@@ -10,7 +10,7 @@ import { createClinicPackRuntime } from "./composition/clinic-pack.js";
  */
 const main = async (): Promise<void> => {
   const config = loadConfig();
-  const runtime = await createClinicPackRuntime(config);
+  const runtime = await createClinicRuntime(config);
   const agents = runtime.getBootstrap().agents;
 
   console.log("Clinic graph runtime ready.");

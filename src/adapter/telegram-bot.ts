@@ -3,7 +3,8 @@ import { Command } from "@langchain/langgraph";
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
-import type { ClinicRuntime } from "../composition/clinic-pack.js";
+import type { ClinicRuntime } from "../composition/clinic-runtime.js";
+import { extractMessageTextContent } from "../graph/message-content.js";
 import {
   normalizeLocalIsoDatetime,
   type AvailabilitySlot,
@@ -60,26 +61,8 @@ export const runExclusiveForThread = <T>(
   return run;
 };
 
-const messageText = (content: unknown): string => {
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === "string") {
-          return part;
-        }
-        if (part && typeof part === "object" && "text" in part) {
-          return String((part as { text: unknown }).text);
-        }
-        return "";
-      })
-      .join("")
-      .trim();
-  }
-  return "";
-};
+const messageText = (content: unknown): string =>
+  extractMessageTextContent(content as Parameters<typeof extractMessageTextContent>[0]).trim();
 
 const isRoutingJson = (text: string): boolean => {
   try {

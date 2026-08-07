@@ -1,4 +1,8 @@
-import { GeminiConnector } from "@personal-assistant/llm-gemini";
+import {
+  createGeminiContextCacheManager,
+  GeminiConnector,
+  isGeminiContextCacheEnabled,
+} from "@personal-assistant/llm-gemini";
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 
@@ -50,12 +54,21 @@ export const buildClinicAgentTools = (
   };
 };
 
-export const createClinicPackRuntime = async (config: AppConfig): Promise<ClinicRuntime> => {
+export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRuntime> => {
   const adapters = await setupClinicAdapters(config);
   const agentTools = buildClinicAgentTools(config, adapters);
 
   const supervisorLlm = new GeminiConnector(config.googleApiKey, config.supervisorModel);
   const agentModel = new GeminiConnector(config.googleApiKey, config.agentModel).getModel();
+  const contextCache = {
+    manager: createGeminiContextCacheManager(
+      config.googleApiKey,
+      isGeminiContextCacheEnabled(),
+    ),
+    apiKey: config.googleApiKey,
+    modelName: config.supervisorModel,
+    displayName: "clinic-supervisor",
+  };
 
   const { graph, checkpointer } = compileClinicGraph({
     agents: clinicAgents,
@@ -66,6 +79,7 @@ export const createClinicPackRuntime = async (config: AppConfig): Promise<Clinic
     buildSupervisorDynamicContext: buildClinicSupervisorDynamicContext,
     formatSystemMetadata: formatKyivSystemMetadata,
     messageHistoryMaxTokens: config.messageHistoryMaxTokens,
+    contextCache,
   });
 
   const bootstrap: ClinicBootstrap = {
