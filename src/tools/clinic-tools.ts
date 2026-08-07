@@ -32,6 +32,18 @@ export const isBookingConfirmed = (decision: unknown): boolean =>
 const toToolResult = (value: unknown): string =>
   typeof value === "string" ? value : JSON.stringify(value);
 
+/** Shared by find_contact_by_telegram tool and booking prepare prefetch. */
+export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<string> => {
+  try {
+    const cTelegram = getTelegramUserId();
+    const result = await callTool("search_contacts", { cTelegram, limit: 5 });
+    return toToolResult(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: message });
+  }
+};
+
 export const createReadTools = (options: ReadToolsOptions): StructuredToolInterface[] => {
   const { callTool } = options;
 
@@ -86,16 +98,7 @@ export const createBookingTools = (options: BookingToolsOptions): StructuredTool
   const { callTool, assignedUserId } = options;
 
   const findContactByTelegram = tool(
-    async (_input: Record<string, never>) => {
-      try {
-        const cTelegram = getTelegramUserId();
-        const result = await callTool("search_contacts", { cTelegram, limit: 5 });
-        return toToolResult(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
-      }
-    },
+    async (_input: Record<string, never>) => lookupContactByTelegram(callTool),
     {
       name: "find_contact_by_telegram",
       description:

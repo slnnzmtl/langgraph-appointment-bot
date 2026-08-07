@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import {
   AIMessage,
   SystemMessage,
@@ -25,11 +27,39 @@ export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
 export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
 export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
 
+export const FIND_CONTACT_BY_TELEGRAM_TOOL = "find_contact_by_telegram" as const;
+
 export type CreateAgentLoopOptions = {
   agent: ClinicAgentDefinition;
   model: BaseChatModel;
   tools: StructuredToolInterface[];
   formatSystemMetadata: (date: Date, options?: { runtimeAgent?: string }) => string;
+};
+
+export type AgentPrepareOptions = {
+  prefetch?: (scoped: BaseMessage[]) => Promise<BaseMessage[]>;
+};
+
+/** Synthetic fulfilled tool exchange so booking LLM starts with CRM identity context. */
+export const buildPrefetchedContactMessages = (result: string): BaseMessage[] => {
+  const toolCallId = `prefetch-find-contact-${randomUUID()}`;
+  return [
+    new AIMessage({
+      content: "",
+      tool_calls: [
+        {
+          id: toolCallId,
+          name: FIND_CONTACT_BY_TELEGRAM_TOOL,
+          args: {},
+        },
+      ],
+    }),
+    new ToolMessage({
+      content: result,
+      tool_call_id: toolCallId,
+      name: FIND_CONTACT_BY_TELEGRAM_TOOL,
+    }),
+  ];
 };
 
 const resolveHandoffStatus = (
@@ -64,13 +94,18 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (agentId: string) =>
-  (state: ClinicState): ClinicStateUpdate => {
+export const createAgentPrepareNode = (agentId: string, options?: AgentPrepareOptions) =>
+  async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const scoped = scopeSubAgentMessages(state.messages, agentId);
     const delegationPrompt = state.delegationPrompt?.trim();
-    const agentMessages = delegationPrompt
+    let agentMessages = delegationPrompt
       ? applyDelegationPrompt(scoped, delegationPrompt)
       : scoped;
+
+    if (options?.prefetch) {
+      const prefetched = await options.prefetch(agentMessages);
+      agentMessages = [...agentMessages, ...prefetched];
+    }
 
     return {
       agentMessages: new Overwrite(agentMessages),

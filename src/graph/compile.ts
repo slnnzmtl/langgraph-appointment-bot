@@ -8,7 +8,10 @@ import {
   type BaseCheckpointSaver,
 } from "@langchain/langgraph";
 
+import type { McpCallTool } from "../shared/mcp.js";
+import { lookupContactByTelegram } from "../tools/clinic-tools.js";
 import {
+  buildPrefetchedContactMessages,
   createAgentFinalizeNode,
   createAgentLlmNode,
   createAgentPrepareNode,
@@ -26,6 +29,7 @@ import {
   type SupervisorContextCacheOptions,
 } from "./supervisor.js";
 import {
+  BOOKING_AGENT_ID,
   FINISH_ROUTE,
   type ClinicAgentDefinition,
   type ILLMConnector,
@@ -42,6 +46,8 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
+  /** When set, booking prepare prefetches find_contact_by_telegram before the first LLM turn. */
+  bookingContactLookup?: McpCallTool;
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
@@ -74,8 +80,17 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
 
+    const bookingLookup = options.bookingContactLookup;
+    const prepareNode =
+      agent.id === BOOKING_AGENT_ID && bookingLookup
+        ? createAgentPrepareNode(agent.id, {
+            prefetch: async () =>
+              buildPrefetchedContactMessages(await lookupContactByTelegram(bookingLookup)),
+          })
+        : createAgentPrepareNode(agent.id);
+
     graph = graph
-      .addNode(prepare, createAgentPrepareNode(agent.id))
+      .addNode(prepare, prepareNode)
       .addNode(
         llm,
         createAgentLlmNode({

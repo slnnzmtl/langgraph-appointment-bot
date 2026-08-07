@@ -1,7 +1,7 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it, beforeEach } from "vitest";
 
-import { createBookingTools, createReadTools } from "./clinic-tools.js";
+import { createBookingTools, createReadTools, lookupContactByTelegram } from "./clinic-tools.js";
 import { runWithTelegramUserId } from "./telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -96,6 +96,24 @@ describe("clinic-tools identity", () => {
         name: "search_contacts",
         args: { cTelegram: "tg-42", limit: 5 },
       });
+    });
+  });
+
+  it("lookupContactByTelegram uses holder id and returns JSON", async () => {
+    await withTg(async () => {
+      const result = await lookupContactByTelegram(callTool);
+      expect(calls[0]).toEqual({
+        name: "search_contacts",
+        args: { cTelegram: "tg-42", limit: 5 },
+      });
+      expect(JSON.parse(result)).toEqual({ ok: true });
+    });
+  });
+
+  it("lookupContactByTelegram returns error JSON when telegram id unset", async () => {
+    const result = await lookupContactByTelegram(callTool);
+    expect(JSON.parse(result)).toMatchObject({
+      error: expect.stringContaining("Telegram user id is not set"),
     });
   });
 
