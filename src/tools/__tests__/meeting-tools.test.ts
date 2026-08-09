@@ -1,7 +1,7 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it, beforeEach } from "vitest";
 
-import { createMeetingTools } from "../meeting-tools.js";
+import { createMeetingTools, resolveNextAvailableStart } from "../meeting-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -116,6 +116,208 @@ describe("meeting-tools availability", () => {
     const parsed = JSON.parse(raw as string) as { slots: Array<{ label: string }> };
     expect(parsed.slots[0]?.label).not.toBe("09:00");
     expect(parsed.slots.some((s) => s.label === "09:30")).toBe(true);
+  });
+
+  it("present_availability_slots without date uses ranged search_meetings", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return {
+          meetings: [
+            {
+              status: "Planned",
+              dateStart: "2026-08-10T11:00:00",
+              dateEnd: "2026-08-10T15:00:00",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    const raw = await tool!.invoke({
+      startDate: "2026-08-10",
+      durationMinutes: 60,
+    });
+    const parsed = JSON.parse(raw as string) as {
+      date?: string;
+      slots: Array<{ label: string }>;
+      days?: Array<{ date: string; slots: Array<{ label: string }> }>;
+      searchedDays?: number;
+      stepMinutes: number;
+    };
+
+    const search = calls.find((c) => c.name === "search_meetings");
+    expect(search?.args.dateFrom).toBe("2026-08-10");
+    expect(search?.args.dateTo).toBe("2026-09-08");
+    expect(search?.args.limit).toBe(200);
+    expect(parsed.date).toBe("2026-08-11");
+    expect(parsed.stepMinutes).toBe(60);
+    expect(parsed.slots[0]?.label).toBe("11:00");
+    expect(parsed.days?.length).toBeGreaterThanOrEqual(2);
+    expect(parsed.days?.[0]?.date).toBe("2026-08-11");
+  });
+
+  it("present_availability_slots dated path still uses single-day search", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    await tool!.invoke({ date: "2026-08-10", durationMinutes: 30 });
+    const search = calls.find((c) => c.name === "search_meetings");
+    expect(search?.args).toMatchObject({
+      dateFrom: "2026-08-10",
+      dateTo: "2026-08-10",
+      limit: 100,
+    });
+  });
+
+  it("present_availability_slots afterDate skips the rejected day", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    // afterDate 2026-08-10 (Mon) → start 2026-08-11 (Tue); calendar open Mon–Fri 11–15
+    const raw = await tool!.invoke({
+      afterDate: "2026-08-10",
+      durationMinutes: 60,
+    });
+    const parsed = JSON.parse(raw as string) as {
+      date?: string;
+      slots: Array<{ label: string }>;
+    };
+
+    const search = calls.find((c) => c.name === "search_meetings");
+    expect(search?.args.dateFrom).toBe("2026-08-11");
+    expect(search?.args.dateTo).toBe("2026-09-09");
+    expect(parsed.date).toBe("2026-08-11");
+    expect(parsed.slots[0]?.label).toBe("11:00");
+  });
+
+  it("present_availability_slots afterDate returns later batch not the rejected day", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    const first = JSON.parse(
+      (await tool!.invoke({ startDate: "2026-08-10", durationMinutes: 60 })) as string,
+    ) as { days: Array<{ date: string }> };
+    expect(first.days[0]?.date).toBe("2026-08-10");
+
+    calls.length = 0;
+    const lastProposed = first.days[first.days.length - 1]?.date;
+    const second = JSON.parse(
+      (await tool!.invoke({
+        afterDate: lastProposed,
+        durationMinutes: 60,
+      })) as string,
+    ) as { days: Array<{ date: string }>; date?: string };
+
+    expect(second.days.every((d) => d.date > (lastProposed ?? ""))).toBe(true);
+    expect(second.date).not.toBe("2026-08-10");
+  });
+
+  it("present_availability_slots uses the later of afterDate+1 and startDate", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    // afterDate → 2026-08-11; startDate 2026-08-12 is later
+    const raw = await tool!.invoke({
+      afterDate: "2026-08-10",
+      startDate: "2026-08-12",
+      durationMinutes: 60,
+    });
+    const parsed = JSON.parse(raw as string) as { date?: string };
+
+    const search = calls.find((c) => c.name === "search_meetings");
+    expect(search?.args.dateFrom).toBe("2026-08-12");
+    expect(parsed.date).toBe("2026-08-12");
+  });
+});
+
+describe("resolveNextAvailableStart", () => {
+  it("defaults to today", () => {
+    expect(resolveNextAvailableStart({ today: "2026-08-10" })).toBe("2026-08-10");
+  });
+
+  it("advances past afterDate", () => {
+    expect(
+      resolveNextAvailableStart({ afterDate: "2026-08-10", today: "2026-08-01" }),
+    ).toBe("2026-08-11");
+  });
+
+  it("picks the later of afterDate+1 and startDate", () => {
+    expect(
+      resolveNextAvailableStart({
+        afterDate: "2026-08-10",
+        startDate: "2026-08-12",
+        today: "2026-08-01",
+      }),
+    ).toBe("2026-08-12");
+    expect(
+      resolveNextAvailableStart({
+        afterDate: "2026-08-14",
+        startDate: "2026-08-12",
+        today: "2026-08-01",
+      }),
+    ).toBe("2026-08-15");
   });
 });
 

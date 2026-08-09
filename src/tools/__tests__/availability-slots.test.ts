@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addCalendarDays,
   computeFreeSlots,
   extractMeetingsFromSearchResult,
+  filterSlotsAfterNow,
+  findNextAvailableSlots,
+  formatKyivLocalIso,
   localIso,
   normalizeLocalIsoDatetime,
   resolveDayTimeRanges,
@@ -213,5 +217,185 @@ describe("extractMeetingsFromSearchResult", () => {
         list: [{ dateStart: "a", dateEnd: "b" }],
       }),
     ).toEqual([{ dateStart: "a", dateEnd: "b" }]);
+  });
+});
+
+describe("addCalendarDays", () => {
+  it("shifts across month boundaries", () => {
+    expect(addCalendarDays("2026-08-31", 1)).toBe("2026-09-01");
+    expect(addCalendarDays("2026-08-10", 0)).toBe("2026-08-10");
+  });
+});
+
+describe("filterSlotsAfterNow", () => {
+  it("keeps only slots after Kyiv wall-clock now", () => {
+    const slots = [
+      {
+        id: "a",
+        label: "10:00",
+        dateStart: "2026-08-10T10:00:00",
+        dateEnd: "2026-08-10T11:00:00",
+      },
+      {
+        id: "b",
+        label: "14:00",
+        dateStart: "2026-08-10T14:00:00",
+        dateEnd: "2026-08-10T15:00:00",
+      },
+    ];
+    // 2026-08-10 12:00:00+03:00 Kyiv ≈ 09:00 UTC
+    const now = new Date("2026-08-10T09:00:00Z");
+    expect(formatKyivLocalIso(now).startsWith("2026-08-10T")).toBe(true);
+    expect(filterSlotsAfterNow(slots, now).map((s) => s.label)).toEqual(["14:00"]);
+  });
+});
+
+describe("findNextAvailableSlots", () => {
+  const openWeekdays = {
+    "0": false,
+    "1": true,
+    "2": true,
+    "3": true,
+    "4": true,
+    "5": true,
+    "6": false,
+  };
+
+  const calendar: WorkingTimeCalendarLike = {
+    timeRanges: [["11:00", "15:00"]],
+    weekdays: openWeekdays,
+    weekdayTimeRanges: {
+      "0": null,
+      "1": null,
+      "2": null,
+      "3": null,
+      "4": null,
+      "5": null,
+      "6": null,
+    },
+  };
+
+  const resolve = (day: string) => resolveDayTimeRanges(calendar, day);
+
+  it("skips closed Sunday and finds Monday", () => {
+    // 2026-08-09 is Sunday, 2026-08-10 Monday
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-09",
+      meetings: [],
+      resolveTimeRanges: resolve,
+      durationMinutes: 60,
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    expect(result.date).toBe("2026-08-10");
+    expect(result.slots[0]?.label).toBe("11:00");
+    expect(result.stepMinutes).toBe(60);
+    expect(result.searchedDays).toBeGreaterThanOrEqual(2);
+    expect(result.days[0]?.date).toBe("2026-08-10");
+  });
+
+  it("skips a full day and returns the next open day", () => {
+    const meetings = [
+      {
+        status: "Planned",
+        dateStart: "2026-08-10T11:00:00",
+        dateEnd: "2026-08-10T15:00:00",
+      },
+    ];
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-10",
+      meetings,
+      resolveTimeRanges: resolve,
+      durationMinutes: 60,
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    expect(result.date).toBe("2026-08-11");
+    expect(result.slots.some((s) => s.label === "11:00")).toBe(true);
+    expect(result.days[0]?.date).toBe("2026-08-11");
+  });
+
+  it("uses 60-minute steps from durationMinutes", () => {
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-10",
+      meetings: [],
+      resolveTimeRanges: resolve,
+      durationMinutes: 60,
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    expect(result.slots.map((s) => s.label)).toEqual(["11:00", "12:00", "13:00", "14:00"]);
+    expect(result.slots[0]?.dateEnd).toBe(localIso("2026-08-10", 12, 0));
+  });
+
+  it("filters past slots on Kyiv today then continues if none remain", () => {
+    // Monday 2026-08-10 — after hours in Kyiv (18:00+03 ≈ 15:00Z)
+    const now = new Date("2026-08-10T15:30:00Z");
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-10",
+      meetings: [],
+      resolveTimeRanges: resolve,
+      durationMinutes: 60,
+      now,
+    });
+
+    expect(result.date).toBe("2026-08-11");
+    expect(result.slots[0]?.label).toBe("11:00");
+  });
+
+  it("blocks next-morning slots with overnight spanning meetings", () => {
+    const meetings = [
+      {
+        status: "Planned",
+        dateStart: "2026-08-10T14:00:00",
+        dateEnd: "2026-08-11T12:00:00",
+      },
+    ];
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-11",
+      meetings,
+      resolveTimeRanges: resolve,
+      durationMinutes: 60,
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    expect(result.date).toBe("2026-08-11");
+    expect(result.slots.map((s) => s.label)).toEqual(["12:00", "13:00", "14:00"]);
+  });
+
+  it("returns empty when no slots in horizon", () => {
+    const alwaysClosed = (): [] => [];
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-10",
+      meetings: [],
+      resolveTimeRanges: alwaysClosed,
+      maxDays: 3,
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    expect(result.slots).toEqual([]);
+    expect(result.days).toEqual([]);
+    expect(result.date).toBeUndefined();
+    expect(result.searchedDays).toBe(3);
+  });
+
+  it("collects multiple open days with free slots", () => {
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-10",
+      meetings: [],
+      resolveTimeRanges: resolve,
+      durationMinutes: 60,
+      maxDaysWithSlots: 3,
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    // Mon 10, Tue 11, Wed 12 (Thu 13 would be 4th)
+    expect(result.days.map((d) => d.date)).toEqual([
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+    ]);
+    expect(result.date).toBe("2026-08-10");
+    expect(result.slots).toEqual(result.days[0]?.slots);
   });
 });

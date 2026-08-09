@@ -55,7 +55,7 @@ export type CompileClinicGraphOptions = {
 
 const prefetchBookingContext = async (callTool: McpCallTool): Promise<BaseMessage[]> => {
   const [contact] = await Promise.all([
-    lookupContactByTelegram(callTool),
+    lookupContactByTelegram(callTool)
   ]);
   return [
     ...buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact)

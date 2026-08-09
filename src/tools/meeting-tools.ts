@@ -2,12 +2,18 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 
-import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
+import {
+  CLINIC_SLOT_MINUTES,
+  MAX_AVAILABILITY_SEARCH_DAYS,
+} from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import {
+  addCalendarDays,
   computeFreeSlots,
   extractMeetingsFromSearchResult,
   fallbackClinicTimeRanges,
+  findNextAvailableSlots,
+  formatKyivLocalIso,
   normalizeLocalIsoDatetime,
   resolveDayTimeRanges,
   type TimeRangePair,
@@ -29,6 +35,14 @@ export const isBookingConfirmed = (decision: unknown): boolean =>
   && "confirmed" in decision
   && (decision as BookingConfirmResume).confirmed === true;
 
+const DAY_SCHEMA = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .describe("Calendar day YYYY-MM-DD");
+
+/** MCP search_meetings validates limit <= 200. */
+const RANGED_MEETINGS_LIMIT = 200;
+
 const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
   let value: unknown = raw;
   if (typeof value === "string") {
@@ -45,48 +59,116 @@ const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
   return Array.isArray(calendars) ? (calendars as WorkingTimeCalendarLike[]) : [];
 };
 
-/** Resolve open ranges for a day from CRM; fall back to clinic constants on failure. */
-const resolveTimeRangesForDay = async (
+type WorkingCalendarFetch = {
+  calendar: WorkingTimeCalendarLike | null;
+  /** CRM missing/failed — open every day with clinic fallback hours. */
+  useClinicFallback: boolean;
+};
+
+/** Fetch CRM working-time calendar once; preserve fallback vs closed-day semantics. */
+const fetchWorkingCalendar = async (
   callTool: McpCallTool,
   assignedUserId: string,
-  day: string,
-): Promise<TimeRangePair[]> => {
+): Promise<WorkingCalendarFetch> => {
   try {
     const raw = await callTool("get_working_time", { userId: assignedUserId });
     const calendar = parseWorkingTimeCalendars(raw)[0] ?? null;
     if (!calendar) {
-      return fallbackClinicTimeRanges();
+      return { calendar: null, useClinicFallback: true };
     }
-    return resolveDayTimeRanges(calendar, day);
+    return { calendar, useClinicFallback: false };
   } catch {
+    return { calendar: null, useClinicFallback: true };
+  }
+};
+
+const resolveRangesForDay = (
+  fetch: WorkingCalendarFetch,
+  day: string,
+): TimeRangePair[] => {
+  if (fetch.useClinicFallback) {
     return fallbackClinicTimeRanges();
   }
+  return resolveDayTimeRanges(fetch.calendar, day);
+};
+
+/** Next-available search start: later of startDate and day after afterDate (YYYY-MM-DD compares lexicographically). */
+export const resolveNextAvailableStart = (input: {
+  startDate?: string;
+  afterDate?: string;
+  today: string;
+}): string => {
+  let start = input.startDate ?? input.today;
+  if (input.afterDate) {
+    const after = addCalendarDays(input.afterDate, 1);
+    if (after > start) {
+      start = after;
+    }
+  }
+  return start;
 };
 
 export const createMeetingTools = (options: MeetingToolsOptions): StructuredToolInterface[] => {
   const { callTool, assignedUserId } = options;
 
   const presentAvailabilitySlots = tool(
-    async (input: { date: string; durationMinutes?: number }) => {
+    async (input: {
+      date?: string;
+      startDate?: string;
+      afterDate?: string;
+      durationMinutes?: number;
+    }) => {
       try {
         const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
-        const [timeRanges, raw] = await Promise.all([
-          resolveTimeRangesForDay(callTool, assignedUserId, input.date),
+
+        if (input.date) {
+          const [fetch, raw] = await Promise.all([
+            fetchWorkingCalendar(callTool, assignedUserId),
+            callTool("search_meetings", {
+              dateFrom: input.date,
+              dateTo: input.date,
+              assignedUserId,
+              limit: 100,
+            }),
+          ]);
+          const meetings = extractMeetingsFromSearchResult(raw);
+          const slots = computeFreeSlots({
+            day: input.date,
+            meetings,
+            timeRanges: resolveRangesForDay(fetch, input.date),
+            stepMinutes,
+          });
+          return JSON.stringify({ slots, date: input.date, stepMinutes });
+        }
+
+        const today = formatKyivLocalIso(new Date()).slice(0, 10);
+        const start = resolveNextAvailableStart({
+          ...(input.startDate ? { startDate: input.startDate } : {}),
+          ...(input.afterDate ? { afterDate: input.afterDate } : {}),
+          today,
+        });
+        const end = addCalendarDays(start, MAX_AVAILABILITY_SEARCH_DAYS - 1);
+        const [fetch, raw] = await Promise.all([
+          fetchWorkingCalendar(callTool, assignedUserId),
           callTool("search_meetings", {
-            dateFrom: input.date,
-            dateTo: input.date,
+            dateFrom: start,
+            dateTo: end,
             assignedUserId,
-            limit: 100,
+            limit: RANGED_MEETINGS_LIMIT,
           }),
         ]);
         const meetings = extractMeetingsFromSearchResult(raw);
-        const slots = computeFreeSlots({
-          day: input.date,
+        const result = findNextAvailableSlots({
+          startDate: start,
           meetings,
-          timeRanges,
-          stepMinutes,
+          durationMinutes: stepMinutes,
+          resolveTimeRanges: (day) => resolveRangesForDay(fetch, day),
+          now: new Date(),
         });
-        return JSON.stringify({ slots, date: input.date, stepMinutes });
+        return JSON.stringify({
+          ...result,
+          ...(meetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return JSON.stringify({ error: message, slots: [] });
@@ -95,16 +177,24 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots for a calendar day from CRM meetings (search_meetings). Returns JSON { slots: [{ id, label, dateStart, dateEnd }, ...] }. List the slot labels in your reply and ask the user to type one — do not invent times.",
+        "Compute free appointment slots from CRM meetings (search_meetings). Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / пошукай ще / another day) — set afterDate to the last proposed YYYY-MM-DD. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, slots }], date, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. List every returned day and all slot labels — do not invent times or claim a day is the only option unless days is empty after afterDate.",
       schema: z.object({
-        date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Calendar day YYYY-MM-DD"),
+        date: DAY_SCHEMA.optional().describe(
+          "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
+        ),
+        startDate: DAY_SCHEMA.optional().describe(
+          "When date is omitted: first day of the next-available search (default Kyiv today).",
+        ),
+        afterDate: DAY_SCHEMA.optional().describe(
+          "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates (коли ще / пошукай ще). If both afterDate and startDate are set, the later day wins.",
+        ),
         durationMinutes: z
           .number()
           .int()
           .min(15)
           .max(180)
           .optional()
-          .describe("Slot length in minutes (default 30)"),
+          .describe("Slot length in minutes from the service duration (default 30)"),
       }),
     },
   );

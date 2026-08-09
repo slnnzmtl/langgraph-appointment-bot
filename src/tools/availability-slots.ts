@@ -3,7 +3,9 @@ import {
   CLINIC_OPEN_HOUR,
   CLINIC_SLOT_MINUTES,
   CLINIC_SLOT_TZ,
+  MAX_AVAILABILITY_SEARCH_DAYS,
   MAX_PRESENTED_SLOTS,
+  MAX_PROPOSED_AVAILABILITY_DAYS,
 } from "../shared/clinic-constants.js";
 
 export {
@@ -11,7 +13,9 @@ export {
   CLINIC_OPEN_HOUR,
   CLINIC_SLOT_MINUTES,
   CLINIC_SLOT_TZ,
+  MAX_AVAILABILITY_SEARCH_DAYS,
   MAX_PRESENTED_SLOTS,
+  MAX_PROPOSED_AVAILABILITY_DAYS,
 } from "../shared/clinic-constants.js";
 
 export type BusyMeeting = {
@@ -230,6 +234,135 @@ export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot
   }
 
   return slots;
+};
+
+/** Shift a YYYY-MM-DD calendar day by whole days (UTC-noon arithmetic). */
+export const addCalendarDays = (day: string, offsetDays: number): string => {
+  if (!DAY_RE.test(day)) {
+    throw new Error(`day must be YYYY-MM-DD, got: ${day}`);
+  }
+  const [year, month, date] = day.split("-").map(Number) as [number, number, number];
+  const shifted = new Date(Date.UTC(year, month - 1, date + offsetDays, 12, 0, 0));
+  return `${shifted.getUTCFullYear()}-${pad2(shifted.getUTCMonth() + 1)}-${pad2(shifted.getUTCDate())}`;
+};
+
+/** Kyiv wall-clock `YYYY-MM-DDTHH:mm:ss` for an instant (no offset). */
+export const formatKyivLocalIso = (date: Date): string => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: CLINIC_SLOT_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const byType = Object.fromEntries(
+    parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
+  );
+  return `${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}`;
+};
+
+/** Drop slots whose start is at or before the given Kyiv wall-clock instant. */
+export const filterSlotsAfterNow = (
+  slots: AvailabilitySlot[],
+  now: Date,
+): AvailabilitySlot[] => {
+  const nowIso = formatKyivLocalIso(now);
+  return slots.filter((slot) => slot.dateStart > nowIso);
+};
+
+export type FindNextAvailableSlotsInput = {
+  startDate: string;
+  meetings: BusyMeeting[];
+  resolveTimeRanges: (day: string) => TimeRangePair[];
+  maxDays?: number;
+  /** Max open days with free slots to collect (default MAX_PROPOSED_AVAILABILITY_DAYS). */
+  maxDaysWithSlots?: number;
+  durationMinutes?: number;
+  now?: Date;
+};
+
+export type AvailableDaySlots = {
+  date: string;
+  slots: AvailabilitySlot[];
+};
+
+export type FindNextAvailableSlotsResult = {
+  /** First day with slots (compat); undefined if none. */
+  date?: string;
+  /** Slots on the first day (compat). */
+  slots: AvailabilitySlot[];
+  /** Up to maxDaysWithSlots open days that have free slots. */
+  days: AvailableDaySlots[];
+  stepMinutes: number;
+  searchedDays: number;
+};
+
+/**
+ * Scan calendar days from startDate and collect up to maxDaysWithSlots days with free slots.
+ * Pass the full ranged meeting list — computeFreeSlots overlaps by millis.
+ * On Kyiv "today", past wall-clock slots are dropped before accepting the day.
+ */
+export const findNextAvailableSlots = (
+  input: FindNextAvailableSlotsInput,
+): FindNextAvailableSlotsResult => {
+  const {
+    startDate,
+    meetings,
+    resolveTimeRanges,
+    maxDays = MAX_AVAILABILITY_SEARCH_DAYS,
+    maxDaysWithSlots = MAX_PROPOSED_AVAILABILITY_DAYS,
+    durationMinutes = CLINIC_SLOT_MINUTES,
+    now = new Date(),
+  } = input;
+
+  if (!DAY_RE.test(startDate)) {
+    throw new Error(`startDate must be YYYY-MM-DD, got: ${startDate}`);
+  }
+
+  const today = formatKyivLocalIso(now).slice(0, 10);
+  const horizon = Math.max(1, maxDays);
+  const dayCap = Math.max(1, maxDaysWithSlots);
+  const days: AvailableDaySlots[] = [];
+  let searchedDays = 0;
+
+  for (let offset = 0; offset < horizon; offset += 1) {
+    searchedDays = offset + 1;
+    const day = addCalendarDays(startDate, offset);
+    const timeRanges = resolveTimeRanges(day);
+    if (timeRanges.length === 0) {
+      continue;
+    }
+
+    let slots = computeFreeSlots({
+      day,
+      meetings,
+      timeRanges,
+      stepMinutes: durationMinutes,
+    });
+
+    if (day === today) {
+      slots = filterSlotsAfterNow(slots, now);
+    }
+
+    if (slots.length > 0) {
+      days.push({ date: day, slots });
+      if (days.length >= dayCap) {
+        break;
+      }
+    }
+  }
+
+  const first = days[0];
+  return {
+    ...(first ? { date: first.date } : {}),
+    slots: first?.slots ?? [],
+    days,
+    stepMinutes: durationMinutes,
+    searchedDays,
+  };
 };
 
 export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => {
