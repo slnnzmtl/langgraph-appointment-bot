@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   addCalendarDays,
   computeFreeSlots,
+  excludeMeetingsById,
   extractMeetingsFromSearchResult,
   filterSlotsAfterNow,
   findNextAvailableSlots,
@@ -217,6 +218,46 @@ describe("extractMeetingsFromSearchResult", () => {
         list: [{ dateStart: "a", dateEnd: "b" }],
       }),
     ).toEqual([{ dateStart: "a", dateEnd: "b" }]);
+  });
+
+  it("preserves meeting id when present", () => {
+    expect(
+      extractMeetingsFromSearchResult({
+        meetings: [
+          {
+            id: "mtg-1",
+            dateStart: "2026-08-10T09:00:00",
+            dateEnd: "2026-08-10T09:30:00",
+            status: "Planned",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "mtg-1",
+        dateStart: "2026-08-10T09:00:00",
+        dateEnd: "2026-08-10T09:30:00",
+        status: "Planned",
+      },
+    ]);
+  });
+});
+
+describe("excludeMeetingsById", () => {
+  it("drops meetings whose id is listed", () => {
+    expect(
+      excludeMeetingsById(
+        [
+          { id: "a", dateStart: "1", dateEnd: "2" },
+          { id: "b", dateStart: "3", dateEnd: "4" },
+          { dateStart: "5", dateEnd: "6" },
+        ],
+        ["a"],
+      ),
+    ).toEqual([
+      { id: "b", dateStart: "3", dateEnd: "4" },
+      { dateStart: "5", dateEnd: "6" },
+    ]);
   });
 });
 

@@ -424,3 +424,266 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 });
+
+describe("list_planned_meetings", () => {
+  it("calls search_entity with Contact parent and Planned filters", async () => {
+    const calls: CallRecord[] = [];
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return {
+        success: true,
+        list: [
+          {
+            id: "mtg-1",
+            name: "Consult: Ada",
+            dateStart: "2026-08-12T10:00:00",
+            dateEnd: "2026-08-12T10:30:00",
+            status: "Planned",
+          },
+        ],
+      };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "list_planned_meetings");
+
+    const raw = await tool!.invoke({ contactId: "contact-9", dateFrom: "2026-08-10" });
+    const parsed = JSON.parse(raw as string) as {
+      meetings: Array<{ id: string; name: string }>;
+      dateFrom: string;
+    };
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.name).toBe("search_entity");
+    expect(calls[0]?.args).toMatchObject({
+      entityType: "Meeting",
+      filters: {
+        parentId: "contact-9",
+        parentType: "Contact",
+        status: "Planned",
+        dateStart: { $gte: "2026-08-10T00:00:00" },
+      },
+      orderBy: "dateStart",
+      order: "asc",
+    });
+    expect(parsed.dateFrom).toBe("2026-08-10");
+    expect(parsed.meetings).toEqual([
+      {
+        id: "mtg-1",
+        name: "Consult: Ada",
+        dateStart: "2026-08-12T10:00:00",
+        dateEnd: "2026-08-12T10:30:00",
+      },
+    ]);
+  });
+});
+
+describe("cancel_meeting HITL interrupt", () => {
+  const calls: CallRecord[] = [];
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  const callTool = async (name: string, args: Record<string, unknown>) => {
+    calls.push({ name, args });
+    return { success: true };
+  };
+
+  const buildGraph = () => {
+    const [cancelMeeting] = createMeetingTools({
+      callTool,
+      assignedUserId: "assigned-99",
+    }).filter((tool) => tool.name === "cancel_meeting");
+
+    if (!cancelMeeting) {
+      throw new Error("cancel_meeting tool missing");
+    }
+
+    return new StateGraph(InterruptState)
+      .addNode("cancel", async () => {
+        const result = await cancelMeeting.invoke({
+          meetingId: "mtg-1",
+          name: "Consult: Ada",
+          confirmMessage: "Cancel this appointment?",
+        });
+        return { result: String(result) };
+      })
+      .addEdge(START, "cancel")
+      .addEdge("cancel", END)
+      .compile({ checkpointer: new MemorySaver() });
+  };
+
+  it("resume confirmed:false skips MCP update_meeting", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-cancel-meeting" } };
+
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(
+        new Command({ resume: { confirmed: false } }),
+        config,
+      );
+      expect(calls).toHaveLength(0);
+      expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
+    });
+  });
+
+  it("resume confirmed:true soft-cancels via update_meeting Not Held", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-cancel-confirm" } };
+
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(
+        new Command({ resume: { confirmed: true } }),
+        config,
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.name).toBe("update_meeting");
+      expect(calls[0]?.args).toEqual({
+        meetingId: "mtg-1",
+        status: "Not Held",
+      });
+      expect(JSON.parse(second.result)).toMatchObject({ success: true });
+    });
+  });
+});
+
+describe("reschedule_meeting HITL interrupt", () => {
+  const calls: CallRecord[] = [];
+
+  beforeEach(() => {
+    calls.length = 0;
+  });
+
+  const callTool = async (name: string, args: Record<string, unknown>) => {
+    calls.push({ name, args });
+    return { success: true };
+  };
+
+  const buildGraph = () => {
+    const [rescheduleMeeting] = createMeetingTools({
+      callTool,
+      assignedUserId: "assigned-99",
+    }).filter((tool) => tool.name === "reschedule_meeting");
+
+    if (!rescheduleMeeting) {
+      throw new Error("reschedule_meeting tool missing");
+    }
+
+    return new StateGraph(InterruptState)
+      .addNode("reschedule", async () => {
+        const result = await rescheduleMeeting.invoke({
+          meetingId: "mtg-1",
+          name: "Consult: Ada",
+          dateStart: "2026-08-14 11:00:00",
+          dateEnd: "2026-08-14 11:30:00",
+          confirmMessage: "Reschedule to this time?",
+        });
+        return { result: String(result) };
+      })
+      .addEdge(START, "reschedule")
+      .addEdge("reschedule", END)
+      .compile({ checkpointer: new MemorySaver() });
+  };
+
+  it("resume confirmed:false skips MCP update_meeting", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-reschedule-no" } };
+
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(
+        new Command({ resume: { confirmed: false } }),
+        config,
+      );
+      expect(calls).toHaveLength(0);
+      expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
+    });
+  });
+
+  it("resume confirmed:true updates dateStart/dateEnd", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-reschedule-yes" } };
+
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(
+        new Command({ resume: { confirmed: true } }),
+        config,
+      );
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.name).toBe("update_meeting");
+      expect(calls[0]?.args).toEqual({
+        meetingId: "mtg-1",
+        dateStart: "2026-08-14T11:00:00",
+        dateEnd: "2026-08-14T11:30:00",
+      });
+      expect(JSON.parse(second.result)).toMatchObject({ success: true });
+    });
+  });
+});
+
+describe("present_availability_slots excludeMeetingIds", () => {
+  it("frees the excluded meeting's current slot", async () => {
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return {
+          success: true,
+          calendars: [
+            {
+              name: "Main",
+              timeRanges: [["09:00", "10:00"]],
+              weekdays: {
+                "0": true,
+                "1": true,
+                "2": true,
+                "3": true,
+                "4": true,
+                "5": true,
+                "6": true,
+              },
+              weekdayTimeRanges: {},
+            },
+          ],
+          ranges: [],
+        };
+      }
+      if (name === "search_meetings") {
+        return {
+          meetings: [
+            {
+              id: "mtg-busy",
+              status: "Planned",
+              dateStart: "2026-08-10T09:00:00",
+              dateEnd: "2026-08-10T09:30:00",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    const blocked = JSON.parse(
+      (await tool!.invoke({ date: "2026-08-10", durationMinutes: 30 })) as string,
+    ) as { slots: Array<{ label: string }> };
+    expect(blocked.slots.some((s) => s.label === "09:00")).toBe(false);
+
+    const freed = JSON.parse(
+      (await tool!.invoke({
+        date: "2026-08-10",
+        durationMinutes: 30,
+        excludeMeetingIds: ["mtg-busy"],
+      })) as string,
+    ) as { slots: Array<{ label: string }> };
+    expect(freed.slots.some((s) => s.label === "09:00")).toBe(true);
+  });
+});

@@ -20,6 +20,9 @@ const BOOKING_EXTRA_TOOL_NAMES = [
   "link_telegram_to_contact",
   "present_availability_slots",
   "create_meeting",
+  "list_planned_meetings",
+  "cancel_meeting",
+  "reschedule_meeting",
 ] as const;
 
 type CallRecord = { name: string; args: Record<string, unknown> };

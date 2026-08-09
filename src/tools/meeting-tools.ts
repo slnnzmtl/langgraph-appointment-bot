@@ -10,6 +10,7 @@ import type { McpCallTool } from "../shared/mcp.js";
 import {
   addCalendarDays,
   computeFreeSlots,
+  excludeMeetingsById,
   extractMeetingsFromSearchResult,
   fallbackClinicTimeRanges,
   findNextAvailableSlots,
@@ -35,6 +36,32 @@ export const isBookingConfirmed = (decision: unknown): boolean =>
   && "confirmed" in decision
   && (decision as BookingConfirmResume).confirmed === true;
 
+type ConfirmDraft = {
+  confirmMessage: string;
+  name?: string;
+  dateStart?: string;
+  dateEnd?: string;
+};
+
+/** Shared HITL pause for create / cancel / reschedule — Telegram reuses confirm_booking Yes/No. */
+const withUserConfirm = async (
+  draft: ConfirmDraft,
+  execute: () => Promise<unknown>,
+  cancelledMessage = "Cancelled by user.",
+): Promise<string> => {
+  const decision = interrupt({ type: "confirm_booking", draft });
+  if (!isBookingConfirmed(decision)) {
+    return JSON.stringify({ cancelled: true, message: cancelledMessage });
+  }
+  try {
+    const result = await execute();
+    return toToolResult(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: message });
+  }
+};
+
 const DAY_SCHEMA = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -42,6 +69,13 @@ const DAY_SCHEMA = z
 
 /** MCP search_meetings validates limit <= 200. */
 const RANGED_MEETINGS_LIMIT = 200;
+
+const CONFIRM_MESSAGE_SCHEMA = z
+  .string()
+  .min(1)
+  .describe(
+    "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). Ignore supervisor prompt language.",
+  );
 
 const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
   let value: unknown = raw;
@@ -108,6 +142,56 @@ export const resolveNextAvailableStart = (input: {
   return start;
 };
 
+type PlannedMeetingRow = {
+  id: string;
+  name: string;
+  dateStart: string;
+  dateEnd: string;
+};
+
+/** Compact planned meetings from search_entity Meeting list payloads. */
+export const extractPlannedMeetingsFromEntityResult = (raw: unknown): PlannedMeetingRow[] => {
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const list = Array.isArray((value as { list?: unknown }).list)
+    ? (value as { list: unknown[] }).list
+    : Array.isArray((value as { meetings?: unknown }).meetings)
+      ? (value as { meetings: unknown[] }).meetings
+      : [];
+
+  const out: PlannedMeetingRow[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const m = item as Record<string, unknown>;
+    if (
+      typeof m.id !== "string"
+      || typeof m.name !== "string"
+      || typeof m.dateStart !== "string"
+      || typeof m.dateEnd !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      id: m.id,
+      name: m.name,
+      dateStart: m.dateStart,
+      dateEnd: m.dateEnd,
+    });
+  }
+  return out;
+};
+
 export const createMeetingTools = (options: MeetingToolsOptions): StructuredToolInterface[] => {
   const { callTool, assignedUserId } = options;
 
@@ -117,9 +201,11 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       startDate?: string;
       afterDate?: string;
       durationMinutes?: number;
+      excludeMeetingIds?: string[];
     }) => {
       try {
         const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
+        const excludeIds = input.excludeMeetingIds;
 
         if (input.date) {
           const [fetch, raw] = await Promise.all([
@@ -131,7 +217,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
               limit: 100,
             }),
           ]);
-          const meetings = extractMeetingsFromSearchResult(raw);
+          const meetings = excludeMeetingsById(
+            extractMeetingsFromSearchResult(raw),
+            excludeIds,
+          );
           const slots = computeFreeSlots({
             day: input.date,
             meetings,
@@ -157,7 +246,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
             limit: RANGED_MEETINGS_LIMIT,
           }),
         ]);
-        const meetings = extractMeetingsFromSearchResult(raw);
+        const meetings = excludeMeetingsById(
+          extractMeetingsFromSearchResult(raw),
+          excludeIds,
+        );
         const result = findNextAvailableSlots({
           startDate: start,
           meetings,
@@ -177,7 +269,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots from CRM meetings (search_meetings). Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / пошукай ще / another day) — set afterDate to the last proposed YYYY-MM-DD. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, slots }], date, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. List every returned day and all slot labels — do not invent times or claim a day is the only option unless days is empty after afterDate.",
+        "Compute free appointment slots from CRM meetings (search_meetings). Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so its current slot is free. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, slots }], date, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. List every returned day and all slot labels — do not invent times or claim a day is the only option unless days is empty after afterDate.",
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
@@ -186,7 +278,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           "When date is omitted: first day of the next-available search (default Kyiv today).",
         ),
         afterDate: DAY_SCHEMA.optional().describe(
-          "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates (коли ще / пошукай ще). If both afterDate and startDate are set, the later day wins.",
+          "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates (коли ще / покажи ще). If both afterDate and startDate are set, the later day wins.",
         ),
         durationMinutes: z
           .number()
@@ -195,6 +287,49 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .max(180)
           .optional()
           .describe("Slot length in minutes from the service duration (default 30)"),
+        excludeMeetingIds: z
+          .array(z.string().min(1))
+          .optional()
+          .describe(
+            "Meeting ids to ignore as busy (pass the meeting being rescheduled so its current slot is offered).",
+          ),
+      }),
+    },
+  );
+
+  const listPlannedMeetings = tool(
+    async (input: { contactId: string; dateFrom?: string }) => {
+      try {
+        const dateFrom = input.dateFrom ?? formatKyivLocalIso(new Date()).slice(0, 10);
+        const raw = await callTool("search_entity", {
+          entityType: "Meeting",
+          filters: {
+            parentId: input.contactId,
+            parentType: "Contact",
+            status: "Planned",
+            dateStart: { $gte: `${dateFrom}T00:00:00` },
+          },
+          select: ["id", "name", "dateStart", "dateEnd", "status"],
+          orderBy: "dateStart",
+          order: "asc",
+          limit: 50,
+        });
+        const meetings = extractPlannedMeetingsFromEntityResult(raw);
+        return JSON.stringify({ meetings, dateFrom });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return JSON.stringify({ error: message, meetings: [] });
+      }
+    },
+    {
+      name: "list_planned_meetings",
+      description:
+        "List upcoming Planned meetings for a Contact (parentId). Use before cancel or reschedule, or when the user asks what is booked. Pass contactId from find_contact_by_telegram / create_contact. Optional dateFrom defaults to Kyiv today. Returns { meetings: [{ id, name, dateStart, dateEnd }] }.",
+      schema: z.object({
+        contactId: z.string().min(1).describe("Patient Contact id"),
+        dateFrom: DAY_SCHEMA.optional().describe(
+          "First day to include (YYYY-MM-DD). Default: Kyiv today.",
+        ),
       }),
     },
   );
@@ -216,37 +351,27 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         name: input.name,
         dateStart,
         dateEnd,
-        contactId: input.contactId,
         confirmMessage: input.confirmMessage.trim(),
-        serviceId: input.serviceId,
-        ...(input.description ? { description: input.description } : {}),
-        ...(input.location ? { location: input.location } : {}),
       };
 
-      const decision = interrupt({ type: "confirm_booking", draft });
-      if (!isBookingConfirmed(decision)) {
-        return JSON.stringify({ cancelled: true, message: "Booking cancelled by user." });
-      }
-
-      try {
-        const result = await callTool("create_meeting", {
-          name: input.name,
-          dateStart,
-          dateEnd,
-          assignedUserId,
-          parentType: "Contact",
-          parentId: input.contactId,
-          contactsIds: [input.contactId],
-          cServicesIds: [input.serviceId],
-          ...(input.description ? { description: input.description } : {}),
-          ...(input.location ? { location: input.location } : {}),
-          status: "Planned",
-        });
-        return toToolResult(result);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
-      }
+      return withUserConfirm(
+        draft,
+        () =>
+          callTool("create_meeting", {
+            name: input.name,
+            dateStart,
+            dateEnd,
+            assignedUserId,
+            parentType: "Contact",
+            parentId: input.contactId,
+            contactsIds: [input.contactId],
+            cServicesIds: [input.serviceId],
+            ...(input.description ? { description: input.description } : {}),
+            ...(input.location ? { location: input.location } : {}),
+            status: "Planned",
+          }),
+        "Booking cancelled by user.",
+      );
     },
     {
       name: "create_meeting",
@@ -260,12 +385,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         contactId: z.string().min(1).describe("Patient Contact id"),
-        confirmMessage: z
-          .string()
-          .min(1)
-          .describe(
-            "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). Ignore supervisor prompt language.",
-          ),
+        confirmMessage: CONFIRM_MESSAGE_SCHEMA,
         serviceId: z.string().min(1).describe("Required cService entity id (resolve via list_services)"),
         description: z.string().optional(),
         location: z.string().optional(),
@@ -273,5 +393,88 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     },
   );
 
-  return [presentAvailabilitySlots, createMeeting];
+  const cancelMeeting = tool(
+    async (input: { meetingId: string; confirmMessage: string; name?: string }) => {
+      const draft: ConfirmDraft = {
+        confirmMessage: input.confirmMessage.trim(),
+        ...(input.name ? { name: input.name } : {}),
+      };
+
+      return withUserConfirm(
+        draft,
+        () =>
+          callTool("update_meeting", {
+            meetingId: input.meetingId,
+            status: "Not Held",
+          }),
+        "Cancellation cancelled by user.",
+      );
+    },
+    {
+      name: "cancel_meeting",
+      description:
+        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Requires confirmMessage (patient language). Pauses for Yes/No before writing.",
+      schema: z.object({
+        meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
+        confirmMessage: CONFIRM_MESSAGE_SCHEMA,
+        name: z
+          .string()
+          .optional()
+          .describe("Meeting name for the Yes/No caption (from list_planned_meetings)"),
+      }),
+    },
+  );
+
+  const rescheduleMeeting = tool(
+    async (input: {
+      meetingId: string;
+      dateStart: string;
+      dateEnd: string;
+      confirmMessage: string;
+      name?: string;
+    }) => {
+      const dateStart = normalizeLocalIsoDatetime(input.dateStart);
+      const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
+      const draft: ConfirmDraft = {
+        confirmMessage: input.confirmMessage.trim(),
+        dateStart,
+        dateEnd,
+        ...(input.name ? { name: input.name } : {}),
+      };
+
+      return withUserConfirm(
+        draft,
+        () =>
+          callTool("update_meeting", {
+            meetingId: input.meetingId,
+            dateStart,
+            dateEnd,
+          }),
+        "Reschedule cancelled by user.",
+      );
+    },
+    {
+      name: "reschedule_meeting",
+      description:
+        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds). Requires confirmMessage (patient language). Pauses for Yes/No before writing.",
+      schema: z.object({
+        meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
+        dateStart: z.string().describe("New start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
+        dateEnd: z.string().describe("New end datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
+        confirmMessage: CONFIRM_MESSAGE_SCHEMA,
+        name: z
+          .string()
+          .optional()
+          .describe("Meeting name for the Yes/No caption (from list_planned_meetings)"),
+      }),
+    },
+  );
+
+  return [
+    presentAvailabilitySlots,
+    createMeeting,
+    listPlannedMeetings,
+    cancelMeeting,
+    rescheduleMeeting,
+  ];
 };

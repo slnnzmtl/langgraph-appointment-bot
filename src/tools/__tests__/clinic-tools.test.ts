@@ -14,6 +14,9 @@ describe("clinic-tools composition", () => {
       "link_telegram_to_contact",
       "present_availability_slots",
       "create_meeting",
+      "list_planned_meetings",
+      "cancel_meeting",
+      "reschedule_meeting",
     ]);
     expect(names).not.toContain("list_services");
     expect(names).not.toContain("get_service");

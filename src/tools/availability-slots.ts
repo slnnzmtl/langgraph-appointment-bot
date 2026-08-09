@@ -19,6 +19,7 @@ export {
 } from "../shared/clinic-constants.js";
 
 export type BusyMeeting = {
+  id?: string;
   dateStart: string;
   dateEnd: string;
   status?: string;
@@ -399,8 +400,21 @@ export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => 
     out.push({
       dateStart: m.dateStart,
       dateEnd: m.dateEnd,
+      ...(typeof m.id === "string" ? { id: m.id } : {}),
       ...(typeof m.status === "string" ? { status: m.status } : {}),
     });
   }
   return out;
+};
+
+/** Drop meetings whose id is in excludeIds (e.g. the meeting being rescheduled). */
+export const excludeMeetingsById = (
+  meetings: BusyMeeting[],
+  excludeIds?: string[],
+): BusyMeeting[] => {
+  if (!excludeIds || excludeIds.length === 0) {
+    return meetings;
+  }
+  const skip = new Set(excludeIds);
+  return meetings.filter((m) => !m.id || !skip.has(m.id));
 };
