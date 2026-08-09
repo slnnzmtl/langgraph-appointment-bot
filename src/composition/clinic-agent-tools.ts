@@ -5,7 +5,7 @@ import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
 } from "../graph/types.js";
-import { createBookingTools, createReadTools } from "../tools/clinic-tools.js";
+import { createBookingTools, createReadTools } from "../tools/index.js";
 import type { ClinicAdapters } from "./clinic-adapters.js";
 
 /** Build FAQ/booking tool lists. callTool is read via adapters each invoke so smoke can wrap it. */

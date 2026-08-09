@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   getTelegramUserId,
   runWithTelegramUserId,
-} from "./telegram-user-context.js";
+} from "../telegram-user-context.js";
 
 describe("telegram-user-context ALS", () => {
   it("throws when no context is active", () => {

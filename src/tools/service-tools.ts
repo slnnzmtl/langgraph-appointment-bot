@@ -1,0 +1,125 @@
+import { tool, type StructuredToolInterface } from "@langchain/core/tools";
+import { z } from "zod";
+
+import type { McpCallTool } from "../shared/mcp.js";
+import { toToolResult } from "./tool-result.js";
+
+export type ReadToolsOptions = {
+  callTool: McpCallTool;
+};
+
+/** Keep booking-relevant service fields; drop CRM audit metadata and empty description. */
+const compactServiceRecord = (raw: unknown): unknown => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+
+  const record = raw as Record<string, unknown>;
+  const compact: Record<string, unknown> = {};
+
+  if (typeof record.id === "string") {
+    compact.id = record.id;
+  }
+  if (typeof record.name === "string") {
+    compact.name = record.name;
+  }
+  if (record.price !== undefined && record.price !== null) {
+    compact.price = record.price;
+  }
+  if (record.duration !== undefined && record.duration !== null) {
+    compact.duration = record.duration;
+  }
+  if (typeof record.priceCurrency === "string") {
+    compact.priceCurrency = record.priceCurrency;
+  }
+  if (typeof record.description === "string" && record.description.trim().length > 0) {
+    compact.description = record.description.trim();
+  }
+
+  return compact;
+};
+
+/** Compact search_entity cService payloads for LLM context. */
+const compactListServicesResult = (result: unknown): unknown => {
+  let value: unknown = result;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return result;
+    }
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return result;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.list)) {
+    return result;
+  }
+
+  const compact: Record<string, unknown> = {
+    list: record.list.map(compactServiceRecord),
+  };
+  if (typeof record.total === "number") {
+    compact.total = record.total;
+  }
+  return compact;
+};
+
+/** Shared by list_services tool and booking prepare prefetch. */
+export const listServices = async (
+  callTool: McpCallTool,
+  limit = 50,
+): Promise<string> => {
+  try {
+    const result = await callTool("search_entity", {
+      entityType: "cService",
+      limit,
+    });
+    return toToolResult(compactListServicesResult(result));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: message });
+  }
+};
+
+export const createReadTools = (options: ReadToolsOptions): StructuredToolInterface[] => {
+  const { callTool } = options;
+
+  const listServicesTool = tool(
+    async (input: { limit?: number }) => listServices(callTool, input.limit ?? 50),
+    {
+      name: "list_services",
+      description: "List clinic services (cService) from EspoCRM: names, pricing, duration.",
+      schema: z.object({
+        limit: z.number().int().min(1).max(200).optional().describe("Max services to return"),
+      }),
+    },
+  );
+
+  const getService = tool(
+    async (input: { serviceId: string }) => {
+      try {
+        const result = await callTool("get_entity", {
+          entityType: "cService",
+          entityId: input.serviceId,
+        });
+        return toToolResult(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return JSON.stringify({ error: message });
+      }
+    },
+    {
+      name: "get_service",
+      description: "Get a single clinic service by id from EspoCRM.",
+      schema: z.object({
+        serviceId: z.string().min(1).describe("cService entity id"),
+      }),
+    },
+  );
+
+  return [listServicesTool, getService];
+};

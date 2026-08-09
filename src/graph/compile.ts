@@ -10,7 +10,7 @@ import {
 } from "@langchain/langgraph";
 
 import type { McpCallTool } from "../shared/mcp.js";
-import { listServices, lookupContactByTelegram } from "../tools/clinic-tools.js";
+import { listServices, lookupContactByTelegram } from "../tools/index.js";
 import {
   buildPrefetchedToolMessages,
   createAgentFinalizeNode,

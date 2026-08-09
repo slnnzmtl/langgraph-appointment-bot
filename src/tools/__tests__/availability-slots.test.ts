@@ -5,7 +5,7 @@ import {
   extractMeetingsFromSearchResult,
   localIso,
   normalizeLocalIsoDatetime,
-} from "./availability-slots.js";
+} from "../availability-slots.js";
 
 describe("normalizeLocalIsoDatetime", () => {
   it("converts EspoCRM space-separated wall times to ISO", () => {
