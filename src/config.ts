@@ -1,15 +1,11 @@
-import path from "node:path";
+import { DEFAULT_GEMINI_MODEL } from "@personal-assistant/llm-gemini";
 
-import { getMessageHistoryMaxTokens } from "@personal-assistant/supervisor-framework";
-
-import { DEFAULT_GEMINI_MODEL } from "./llm/gemini-connector.js";
+import { getMessageHistoryMaxTokens } from "./shared/message-budget.js";
 
 export interface AppConfig {
   googleApiKey: string;
   supervisorModel: string;
   agentModel: string;
-  runtimeAgentsFilePath: string;
-  cronJobsFilePath: string;
   messageHistoryMaxTokens: number;
   espocrmMcpCommand: string;
   espocrmMcpArgs: string[];
@@ -20,6 +16,8 @@ export interface AppConfig {
   espocrmSecretKey?: string;
   /** Injected into every create_meeting MCP call. */
   assignedUserId: string;
+  /** Optional; required only when launching the Telegram bot. */
+  telegramBotToken?: string;
 }
 
 const getRequiredEnv = (name: string): string => {
@@ -40,12 +38,6 @@ const parseArgs = (raw: string | undefined, fallback: string[]): string[] => {
     .filter(Boolean);
 };
 
-export const getDefaultRuntimeAgentsPath = (cwd = process.cwd()): string =>
-  path.resolve(cwd, "data/runtime-agents.json");
-
-export const getDefaultCronJobsPath = (cwd = process.cwd()): string =>
-  path.resolve(cwd, "data/cron-jobs.json");
-
 export const getDefaultEspocrmMcpCwd = (): string => "/root/espocrm-mcp";
 
 export const loadConfig = (): AppConfig => {
@@ -55,8 +47,6 @@ export const loadConfig = (): AppConfig => {
     googleApiKey: getRequiredEnv("GOOGLE_API_KEY"),
     supervisorModel: process.env.SUPERVISOR_MODEL ?? defaultModel,
     agentModel: process.env.AGENT_MODEL ?? defaultModel,
-    runtimeAgentsFilePath: process.env.RUNTIME_AGENTS_FILE_PATH ?? getDefaultRuntimeAgentsPath(),
-    cronJobsFilePath: process.env.CRON_JOBS_FILE_PATH ?? getDefaultCronJobsPath(),
     messageHistoryMaxTokens: getMessageHistoryMaxTokens(),
     espocrmMcpCommand: process.env.ESPOCRM_MCP_COMMAND ?? "node",
     espocrmMcpArgs: parseArgs(process.env.ESPOCRM_MCP_ARGS, ["build/index.js"]),
@@ -68,5 +58,8 @@ export const loadConfig = (): AppConfig => {
       ? { espocrmSecretKey: process.env.ESPOCRM_SECRET_KEY }
       : {}),
     assignedUserId: getRequiredEnv("ESPOCRM_ASSIGNED_USER_ID"),
+    ...(process.env.TELEGRAM_BOT_TOKEN?.trim()
+      ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN.trim() }
+      : {}),
   };
 };

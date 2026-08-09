@@ -1,23 +1,23 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 /**
- * Process-local Telegram user id for identity-enforcing CRM tools.
- * Phase 4 adapter sets this per turn from ctx.from.id; Phase 2 tests set it explicitly.
+ * Per-async-context Telegram user id for identity-enforcing CRM tools.
+ * Adapter / smoke wrap each turn with runWithTelegramUserId(from.id).
  * Never trust LLM-supplied telegram ids for cTelegram writes.
  */
-let telegramUserId: string | undefined;
+const telegramUserIdStore = new AsyncLocalStorage<string>();
 
-export const setTelegramUserId = (id: string | undefined): void => {
-  telegramUserId = id;
-};
+export const runWithTelegramUserId = <T>(
+  id: string,
+  fn: () => T,
+): T => telegramUserIdStore.run(id, fn);
 
 export const getTelegramUserId = (): string => {
-  if (!telegramUserId) {
+  const id = telegramUserIdStore.getStore();
+  if (!id) {
     throw new Error(
-      "Telegram user id is not set for this turn. The adapter must call setTelegramUserId before invoke.",
+      "Telegram user id is not set for this turn. The adapter must call runWithTelegramUserId before invoke.",
     );
   }
-  return telegramUserId;
-};
-
-export const clearTelegramUserId = (): void => {
-  telegramUserId = undefined;
+  return id;
 };

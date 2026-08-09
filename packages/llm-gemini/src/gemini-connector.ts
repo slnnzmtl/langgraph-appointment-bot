@@ -5,7 +5,7 @@ import type {
   BindRoutingToolsOptions,
   ILLMConnector,
   RoutingChain,
-} from "@personal-assistant/supervisor-framework";
+} from "./types.js";
 
 export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
 export const DEFAULT_GEMINI_TEMPERATURE = 0.2;
@@ -23,13 +23,25 @@ export const createGeminiChatModel = (
 
 export class GeminiConnector implements ILLMConnector {
   private readonly model: ChatGoogleGenerativeAI;
+  private readonly apiKey: string;
+  private readonly modelName: string;
 
   constructor(apiKey: string, modelName = DEFAULT_GEMINI_MODEL) {
+    this.apiKey = apiKey;
+    this.modelName = modelName;
     this.model = createGeminiChatModel(apiKey, modelName);
   }
 
   getModel(): BaseChatModel {
     return this.model;
+  }
+
+  getApiKey(): string {
+    return this.apiKey;
+  }
+
+  getModelName(): string {
+    return this.modelName;
   }
 
   bindRoutingTools<TRoute extends Record<string, unknown>>(

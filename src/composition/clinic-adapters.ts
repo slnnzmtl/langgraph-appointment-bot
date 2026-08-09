@@ -2,11 +2,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import type { AppConfig } from "../config.js";
+import type { McpCallTool } from "../shared/mcp.js";
 
-export type McpCallTool = (
-  name: string,
-  args: Record<string, unknown>,
-) => Promise<unknown>;
+export type { McpCallTool };
 
 export type ClinicAdapters = {
   callTool: McpCallTool;

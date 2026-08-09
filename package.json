@@ -7,25 +7,34 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm --filter @personal-assistant/supervisor-framework build && tsc -p tsconfig.json",
-    "check": "tsc --noEmit -p tsconfig.json",
-    "dev": "pnpm --filter @personal-assistant/supervisor-framework build && tsx src/index.ts",
-    "smoke": "pnpm --filter @personal-assistant/supervisor-framework build && tsx src/smoke.ts",
+    "build": "pnpm --filter @personal-assistant/llm-gemini build && tsc -p tsconfig.json",
+    "check": "pnpm --filter @personal-assistant/llm-gemini build && tsc --noEmit -p tsconfig.json",
+    "dev": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/index.ts",
+    "smoke": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/smoke.ts",
     "test": "vitest run",
     "test:all": "pnpm -r test",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "depcruise": "depcruise src packages --include-only '^(src|packages)'",
+    "depcruise:graph": "depcruise src packages --include-only '^(src|packages)' --output-type mermaid --output-to dependency-graph.mmd",
+    "depcruise:graph:svg": "depcruise src packages --include-only '^(src|packages)' --output-type dot | dot -T svg > dependency-graph.svg",
+    "depcruise:graph:dot": "depcruise src packages --include-only '^(src|packages)' --output-type dot --output-to dependency-graph.dot",
+    "depcruise:graph:archi": "depcruise src packages --include-only '^(src|packages)' --output-type archi --output-to high-level-dependency-graph.dot",
+    "depcruise:html": "depcruise src packages --include-only '^(src|packages)' --progress --output-type err-html --output-to dependency-violation-report.html",
+    "depcruise:text": "depcruise src packages --include-only '^(src|packages)' --progress --output-type text",
+    "depcruise:focus": "depcruise src packages --include-only '^(src|packages)' --progress --output-type text --focus"
   },
   "dependencies": {
     "@langchain/core": "1.2.1",
-    "@langchain/google-genai": "^2.2.0",
     "@langchain/langgraph": "^1.4.8",
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@personal-assistant/supervisor-framework": "workspace:*",
+    "@personal-assistant/llm-gemini": "workspace:*",
     "dotenv": "^16.6.1",
+    "telegraf": "^4.16.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
+    "dependency-cruiser": "^18.1.1",
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

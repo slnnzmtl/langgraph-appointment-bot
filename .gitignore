@@ -7,5 +7,9 @@ tsconfig.tsbuildinfo
 .DS_Store
 dependency-*.dot
 dependency-*.svg
+dependency-*.mmd
+dependency-*.html
+high-level-dependency-graph.dot
+dependency-violation-report.html
 .pnpm-store/
 .cursor/plans
