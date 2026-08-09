@@ -395,6 +395,18 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
 
     let input: unknown;
     if (decoded.kind === "confirm") {
+      const msg = ctx.callbackQuery.message;
+      if (msg && "text" in msg && msg.text) {
+        await ctx.telegram
+          .editMessageText(
+            msg.chat.id,
+            msg.message_id,
+            undefined,
+            msg.text,
+            { reply_markup: { inline_keyboard: [] } },
+          )
+          .catch(() => undefined);
+      }
       input = new Command({ resume: { confirmed: decoded.confirmed } });
     } else if (decoded.kind === "slot") {
       input = {
