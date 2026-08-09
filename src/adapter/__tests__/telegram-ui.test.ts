@@ -6,7 +6,7 @@ import {
   decodeCallbackData,
   encodeSlotCallback,
   slotChoiceHumanText,
-} from "./telegram-ui.js";
+} from "../telegram-ui.js";
 
 describe("telegram-ui callback_data", () => {
   it("round-trips slot encode/decode", () => {

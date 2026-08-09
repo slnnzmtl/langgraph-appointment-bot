@@ -348,11 +348,20 @@ export const handleGraphTurn = async (
     }),
   );
 
+/** Convert common Markdown (bold + bullets) to Telegram HTML; escape first. */
+export const formatForTelegram = (text: string): string =>
+  text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/^(\*|-) /gm, "• ");
+
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {
-  await ctx.reply(
-    outbound.text,
-    outbound.reply_markup ? { reply_markup: outbound.reply_markup } : undefined,
-  );
+  await ctx.reply(formatForTelegram(outbound.text), {
+    parse_mode: "HTML",
+    ...(outbound.reply_markup ? { reply_markup: outbound.reply_markup } : {}),
+  });
 };
 
 export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<ClinicBotHandle> => {

@@ -7,7 +7,7 @@ import {
   RUNTIME_AGENT_CONTEXT_KEY,
   scopeSubAgentMessages,
   tagRuntimeAgentMessage,
-} from "./sub-agent-messages.js";
+} from "../sub-agent-messages.js";
 
 describe("sub-agent-messages", () => {
   it("tagRuntimeAgentMessage stamps agent id", () => {

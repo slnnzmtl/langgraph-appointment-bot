@@ -1,7 +1,25 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
-import { interpretInvokeResult } from "./telegram-bot.js";
+import { formatForTelegram, interpretInvokeResult } from "../telegram-bot.js";
+
+describe("formatForTelegram", () => {
+  it("converts Markdown bold to HTML bold", () => {
+    expect(formatForTelegram("Say **hello** there")).toBe("Say <b>hello</b> there");
+  });
+
+  it("converts line-start * and - bullets to Unicode bullets", () => {
+    expect(formatForTelegram("* first\n- second")).toBe("• first\n• second");
+  });
+
+  it("escapes HTML entities before inserting tags", () => {
+    expect(formatForTelegram("A <tag> & **safe**")).toBe("A &lt;tag&gt; &amp; <b>safe</b>");
+  });
+
+  it("leaves mid-line asterisks unchanged", () => {
+    expect(formatForTelegram("rate * 2")).toBe("rate * 2");
+  });
+});
 
 describe("interpretInvokeResult reply selection", () => {
   it("prefers the substantive specialist reply over routing leaks and short supervisor meta", () => {
@@ -70,8 +88,8 @@ describe("interpretInvokeResult reply selection", () => {
     );
     expect(result.text).not.toContain("Confirm booking?");
     expect(result.reply_markup?.inline_keyboard.flat().map((b) => b.text)).toEqual([
-      "Yes",
-      "No",
+      "✅",
+      "❌",
     ]);
   });
 });

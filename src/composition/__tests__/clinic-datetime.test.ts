@@ -4,7 +4,7 @@ import {
   formatKyivSystemMetadata,
   getKyivYmd,
   kyivCalendarDate,
-} from "./clinic-datetime.js";
+} from "../clinic-datetime.js";
 
 describe("clinic-datetime", () => {
   it("formats Kyiv calendar dates for a known UTC instant", () => {

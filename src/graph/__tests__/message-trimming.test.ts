@@ -5,7 +5,7 @@ import {
   estimateMessageTokens,
   getMessageHistoryMaxTokens,
   trimMessagesToTokenBudgetSync,
-} from "./message-trimming.js";
+} from "../message-trimming.js";
 
 describe("message-trimming", () => {
   it("getMessageHistoryMaxTokens defaults to 6000", () => {

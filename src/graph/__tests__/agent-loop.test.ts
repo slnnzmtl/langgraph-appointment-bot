@@ -10,9 +10,9 @@ import {
   createAgentPrepareNode,
   FIND_CONTACT_BY_TELEGRAM_TOOL,
   LIST_SERVICES_TOOL,
-} from "./agent-loop.js";
-import { hasPendingToolCalls } from "./tool-routing.js";
-import type { ClinicAgentDefinition } from "./types.js";
+} from "../agent-loop.js";
+import { hasPendingToolCalls } from "../tool-routing.js";
+import type { ClinicAgentDefinition } from "../types.js";
 
 const createCachedGeminiModel = vi.fn(
   (_apiKey: string, _model: string, handle: { cacheName: string }) => ({
@@ -33,7 +33,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createAgentLlmNode } = await import("./agent-loop.js");
+const { createAgentLlmNode } = await import("../agent-loop.js");
 
 describe("buildPrefetchedToolMessages", () => {
   it("returns fulfilled AIMessage + ToolMessage pair for a given tool", () => {
@@ -179,6 +179,7 @@ describe("createAgentLlmNode context cache", () => {
       (_apiKey: string, _model: string, handle: { cacheName: string }) => ({
         kind: "cached",
         cacheName: handle.cacheName,
+        bindTools: vi.fn(),
         invoke: cachedInvoke,
       }),
     );
@@ -226,8 +227,9 @@ describe("createAgentLlmNode context cache", () => {
     expect(messages[0]).toBeInstanceOf(SystemMessage);
     expect((messages[0] as SystemMessage).content).toContain("STATIC FAQ PROMPT");
     expect((messages[0] as SystemMessage).content).toContain("DYNAMIC METADATA");
-    expect(update.agentMessages?.[0]).toBeInstanceOf(AIMessage);
-    expect((update.agentMessages?.[0] as AIMessage).content).toBe("uncached reply");
+    const agentMessages = update.agentMessages as AIMessage[];
+    expect(agentMessages[0]).toBeInstanceOf(AIMessage);
+    expect(agentMessages[0].content).toBe("uncached reply");
   });
 
   it("uses HumanMessage for dynamic context on cache hit (not SystemMessage)", async () => {
@@ -316,7 +318,7 @@ describe("createAgentLlmNode context cache", () => {
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
     expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
-    expect((update.agentMessages?.[0] as AIMessage).content).toBe("recovered");
+    expect((update.agentMessages as AIMessage[])[0].content).toBe("recovered");
   });
 
   it("falls back to uncached when recreate returns null", async () => {
@@ -362,7 +364,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(messages[0]).toBeInstanceOf(SystemMessage);
     expect((messages[0] as SystemMessage).content).toContain("STATIC FAQ PROMPT");
     expect((messages[0] as SystemMessage).content).toContain("DYN");
-    expect((update.agentMessages?.[0] as AIMessage).content).toBe("uncached after miss");
+    expect((update.agentMessages as AIMessage[])[0].content).toBe("uncached after miss");
   });
 
   it("uses clinic-booking displayName for booking agent", async () => {

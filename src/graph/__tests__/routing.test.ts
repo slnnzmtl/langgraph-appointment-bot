@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { routeAfterAgentLlm, routeAfterAgentTools } from "./agent-loop.js";
+import { routeAfterAgentLlm, routeAfterAgentTools } from "../agent-loop.js";
 import {
   buildClinicRoutingSchema,
   normalizeDelegationPrompt,
   normalizeSupervisorReply,
-} from "./routing.js";
-import type { ClinicAgentDefinition } from "./types.js";
+} from "../routing.js";
+import type { ClinicAgentDefinition } from "../types.js";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 
 const agents: ClinicAgentDefinition[] = [

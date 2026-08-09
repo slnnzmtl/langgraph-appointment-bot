@@ -1,7 +1,7 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ClinicAgentDefinition, ILLMConnector } from "./types.js";
+import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 
 const createCachedGeminiModel = vi.fn((_apiKey: string, _model: string, handle: { cacheName: string }) => ({
   kind: "cached",
@@ -19,7 +19,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode } = await import("./supervisor.js");
+const { createClinicSupervisorNode } = await import("../supervisor.js");
 
 const agents: ClinicAgentDefinition[] = [
   {
