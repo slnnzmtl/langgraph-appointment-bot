@@ -33,12 +33,14 @@ export { buildClinicAgentTools } from "./clinic-agent-tools.js";
 export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRuntime> => {
   const adapters = await setupClinicAdapters(config);
   const agentTools = buildClinicAgentTools(config, adapters);
-  const { supervisorLlm, agentModel, contextCache } = createClinicLlmStack(config);
+  const { supervisorLlm, agentModel, agentModelName, contextCache } =
+    createClinicLlmStack(config);
 
   const { graph, checkpointer } = compileClinicGraph({
     agents: clinicAgents,
     agentTools,
     agentModel,
+    agentModelName,
     supervisorLlm,
     loadSupervisorPrompt: () => SUPERVISOR_PROMPT,
     buildSupervisorDynamicContext: buildClinicSupervisorDynamicContext,

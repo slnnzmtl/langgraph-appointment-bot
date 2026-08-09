@@ -68,8 +68,8 @@ export const buildSlotsKeyboard = (slots: AvailabilitySlot[]): InlineKeyboardMar
 export const buildConfirmKeyboard = (): InlineKeyboardMarkup => ({
   inline_keyboard: [
     [
-      { text: "Yes", callback_data: CONFIRM_YES },
-      { text: "No", callback_data: CONFIRM_NO },
+      { text: "✅", callback_data: CONFIRM_YES },
+      { text: "❌", callback_data: CONFIRM_NO },
     ],
   ],
 });

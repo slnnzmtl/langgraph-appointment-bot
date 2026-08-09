@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import {
   AIMessage,
-  SystemMessage,
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
@@ -11,14 +10,24 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { Overwrite } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
+import {
+  createCachedGeminiModel,
+  isCachedContentNotFoundError,
+  type ContextCacheHandle,
+} from "@personal-assistant/llm-gemini";
 
 import { extractMessageTextContent } from "../shared/message-content.js";
+import {
+  buildCachedMessages,
+  buildUncachedMessages,
+} from "./gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import {
   applyDelegationPrompt,
   scopeSubAgentMessages,
   tagRuntimeAgentMessage,
 } from "./sub-agent-messages.js";
+import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
 import type { ClinicAgentDefinition, ClinicHandoffStatus } from "./types.js";
 
@@ -35,6 +44,7 @@ export type CreateAgentLoopOptions = {
   model: BaseChatModel;
   tools: StructuredToolInterface[];
   formatSystemMetadata: (date: Date, options?: { runtimeAgent?: string }) => string;
+  contextCache?: SupervisorContextCacheOptions;
 };
 
 export type AgentPrepareOptions = {
@@ -119,12 +129,40 @@ export const createAgentPrepareNode = (agentId: string, options?: AgentPrepareOp
 
 export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
   const { agent, model, tools, formatSystemMetadata } = options;
+  const cache = options.contextCache;
 
   if (typeof model.bindTools !== "function") {
     throw new Error(`Agent ${agent.id} model must support tool calling.`);
   }
 
   const boundModel = model.bindTools(tools);
+  const displayName = cache?.displayName ?? `clinic-${agent.id}`;
+
+  const invokeUncached = async (
+    staticPrompt: string,
+    dynamic: string,
+    history: BaseMessage[],
+    config?: RunnableConfig,
+  ) =>
+    boundModel.invoke(buildUncachedMessages(staticPrompt, dynamic, history), config);
+
+  const invokeCached = async (
+    handle: ContextCacheHandle,
+    dynamic: string,
+    history: BaseMessage[],
+    config?: RunnableConfig,
+  ) => {
+    const cachedModel = createCachedGeminiModel(cache!.apiKey, cache!.modelName, handle);
+    // Tools and system instruction live in CachedContent — must not be sent again on generateContent.
+    return cachedModel.invoke(buildCachedMessages(dynamic, history), config);
+  };
+
+  const cacheSpec = (staticPrompt: string) => ({
+    modelName: cache!.modelName,
+    staticSystemInstruction: staticPrompt,
+    tools,
+    displayName,
+  });
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
     if (hasPendingToolCalls(state.agentMessages)) {
@@ -135,20 +173,45 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const isContinuation = last instanceof ToolMessage;
     const stepCount = isContinuation ? state.stepCount + 1 : 1;
 
-    const system = [
-      agent.systemPrompt.trim(),
-      formatSystemMetadata(new Date(), { runtimeAgent: agent.name }),
-    ]
-      .filter(Boolean)
-      .join("\n\n");
+    const staticPrompt = agent.systemPrompt.trim();
+    const dynamic = formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim();
 
     try {
-      const response = await boundModel.invoke(
-        [new SystemMessage(system), ...state.agentMessages],
-        config,
-      );
+      let handle: ContextCacheHandle | null = null;
+      if (cache) {
+        handle = await cache.manager.getOrCreate(cacheSpec(staticPrompt));
+      }
+
+      let response: AIMessage;
+      if (handle) {
+        try {
+          response = (await invokeCached(
+            handle,
+            dynamic,
+            state.agentMessages,
+            config,
+          )) as AIMessage;
+        } catch (error) {
+          if (!isCachedContentNotFoundError(error)) {
+            throw error;
+          }
+          cache!.manager.invalidate(handle.cacheName);
+          const recreated = await cache!.manager.getOrCreate(cacheSpec(staticPrompt));
+          response = (recreated
+            ? await invokeCached(recreated, dynamic, state.agentMessages, config)
+            : await invokeUncached(staticPrompt, dynamic, state.agentMessages, config)) as AIMessage;
+        }
+      } else {
+        response = (await invokeUncached(
+          staticPrompt,
+          dynamic,
+          state.agentMessages,
+          config,
+        )) as AIMessage;
+      }
+
       return {
-        agentMessages: [response as AIMessage],
+        agentMessages: [response],
         stepCount,
       };
     } catch (error) {

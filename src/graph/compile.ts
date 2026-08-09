@@ -41,6 +41,7 @@ export type CompileClinicGraphOptions = {
   agents: ClinicAgentDefinition[];
   agentTools: Record<string, StructuredToolInterface[]>;
   agentModel: BaseChatModel;
+  agentModelName?: string;
   supervisorLlm: ILLMConnector;
   loadSupervisorPrompt: () => string;
   buildSupervisorDynamicContext?: () => string;
@@ -104,6 +105,15 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           model: options.agentModel,
           tools,
           formatSystemMetadata: options.formatSystemMetadata,
+          ...(options.contextCache && options.agentModelName
+            ? {
+                contextCache: {
+                  manager: options.contextCache.manager,
+                  apiKey: options.contextCache.apiKey,
+                  modelName: options.agentModelName,
+                },
+              }
+            : {}),
         }),
       )
       .addNode(toolsNode, createAgentToolsNode(tools))

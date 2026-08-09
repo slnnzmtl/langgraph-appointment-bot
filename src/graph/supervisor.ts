@@ -1,7 +1,5 @@
 import {
   AIMessage,
-  HumanMessage,
-  SystemMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -12,6 +10,10 @@ import {
   type ContextCacheManager,
 } from "@personal-assistant/llm-gemini";
 
+import {
+  buildCachedMessages,
+  buildUncachedMessages,
+} from "./gemini-cache-messages.js";
 import {
   normalizeDelegationPrompt,
   normalizeSupervisorReply,
@@ -51,21 +53,6 @@ const routingFailureUpdate = (_reason: string): ClinicStateUpdate => ({
     ),
   ],
 });
-
-const buildUncachedMessages = (
-  staticPrompt: string,
-  dynamic: string,
-  history: BaseMessage[],
-): BaseMessage[] => {
-  const systemText = dynamic.length > 0 ? `${staticPrompt}\n\n${dynamic}` : staticPrompt;
-  return [new SystemMessage(systemText), ...history];
-};
-
-/** Gemini forbids system_instruction alongside cachedContent — use HumanMessage for dynamic bits. */
-const buildCachedMessages = (dynamic: string, history: BaseMessage[]): BaseMessage[] => [
-  ...(dynamic.length > 0 ? [new HumanMessage(dynamic)] : []),
-  ...history,
-];
 
 const resolveRoutingDecision = (
   decision: ClinicRoutingDecision,

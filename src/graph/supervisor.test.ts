@@ -171,6 +171,55 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(update).toMatchObject({ next: "faq", delegationPrompt: "Answer hours" });
   });
 
+  it("falls back to uncached when recreate returns null", async () => {
+    const manager = {
+      getOrCreate: vi
+        .fn()
+        .mockResolvedValueOnce({
+          cacheName: "caches/stale",
+          model: "models/gemini-2.5-flash-lite",
+        })
+        .mockResolvedValueOnce(null),
+      invalidate: vi.fn(),
+    };
+
+    invoke
+      .mockRejectedValueOnce(new Error("CachedContent not found"))
+      .mockResolvedValueOnce({ next: "FINISH", reply: "Uncached reply" });
+
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      buildSupervisorDynamicContext: () => "DYN",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash-lite",
+      },
+    });
+
+    const update = await node({
+      messages: [new HumanMessage("hours?")],
+      agentMessages: [],
+      stepCount: 0,
+      next: undefined,
+      delegationPrompt: null,
+      lastHandoff: null,
+    });
+
+    expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
+    expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
+    expect(createCachedGeminiModel).toHaveBeenCalledTimes(1);
+    const messages = invoke.mock.calls[1]?.[0] as unknown[];
+    expect(messages[0]).toBeInstanceOf(SystemMessage);
+    expect((messages[0] as SystemMessage).content).toContain("STATIC");
+    expect((messages[0] as SystemMessage).content).toContain("DYN");
+    expect(update.next).toBe("FINISH");
+    expect(update.messages?.[0]).toBeInstanceOf(AIMessage);
+    expect((update.messages?.[0] as AIMessage).content).toBe("Uncached reply");
+  });
+
   it("routes to booking with delegation prompt", async () => {
     invoke.mockResolvedValue({ next: "booking", prompt: "Book tomorrow 10:00" });
     const node = createClinicSupervisorNode({

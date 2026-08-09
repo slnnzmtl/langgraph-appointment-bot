@@ -11,6 +11,7 @@ import type { ILLMConnector } from "../graph/types.js";
 export type ClinicLlmStack = {
   supervisorLlm: ILLMConnector;
   agentModel: BaseChatModel;
+  agentModelName: string;
   contextCache: {
     manager: ReturnType<typeof createGeminiContextCacheManager>;
     apiKey: string;
@@ -32,5 +33,10 @@ export const createClinicLlmStack = (config: AppConfig): ClinicLlmStack => {
     displayName: "clinic-supervisor",
   };
 
-  return { supervisorLlm, agentModel, contextCache };
+  return {
+    supervisorLlm,
+    agentModel,
+    agentModelName: config.agentModel,
+    contextCache,
+  };
 };
