@@ -14,7 +14,10 @@ export const buildClinicAgentTools = (
   adapters: ClinicAdapters,
 ): Record<string, StructuredToolInterface[]> => {
   const callTool: typeof adapters.callTool = (name, args) => adapters.callTool(name, args);
-  const readTools = createReadTools({ callTool });
+  const readTools = createReadTools({
+    callTool,
+    assignedUserId: config.assignedUserId,
+  });
   const bookingTools = createBookingTools({
     callTool,
     assignedUserId: config.assignedUserId,

@@ -7,7 +7,11 @@ import type { McpCallTool } from "../shared/mcp.js";
 import {
   computeFreeSlots,
   extractMeetingsFromSearchResult,
+  fallbackClinicTimeRanges,
   normalizeLocalIsoDatetime,
+  resolveDayTimeRanges,
+  type TimeRangePair,
+  type WorkingTimeCalendarLike,
 } from "./availability-slots.js";
 import { toToolResult } from "./tool-result.js";
 
@@ -25,6 +29,40 @@ export const isBookingConfirmed = (decision: unknown): boolean =>
   && "confirmed" in decision
   && (decision as BookingConfirmResume).confirmed === true;
 
+const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
+  let value: unknown = raw;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return [];
+    }
+  }
+  if (!value || typeof value !== "object") {
+    return [];
+  }
+  const calendars = (value as { calendars?: unknown }).calendars;
+  return Array.isArray(calendars) ? (calendars as WorkingTimeCalendarLike[]) : [];
+};
+
+/** Resolve open ranges for a day from CRM; fall back to clinic constants on failure. */
+const resolveTimeRangesForDay = async (
+  callTool: McpCallTool,
+  assignedUserId: string,
+  day: string,
+): Promise<TimeRangePair[]> => {
+  try {
+    const raw = await callTool("get_working_time", { userId: assignedUserId });
+    const calendar = parseWorkingTimeCalendars(raw)[0] ?? null;
+    if (!calendar) {
+      return fallbackClinicTimeRanges();
+    }
+    return resolveDayTimeRanges(calendar, day);
+  } catch {
+    return fallbackClinicTimeRanges();
+  }
+};
+
 export const createMeetingTools = (options: MeetingToolsOptions): StructuredToolInterface[] => {
   const { callTool, assignedUserId } = options;
 
@@ -32,16 +70,20 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     async (input: { date: string; durationMinutes?: number }) => {
       try {
         const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
-        const raw = await callTool("search_meetings", {
-          dateFrom: input.date,
-          dateTo: input.date,
-          assignedUserId,
-          limit: 100,
-        });
+        const [timeRanges, raw] = await Promise.all([
+          resolveTimeRangesForDay(callTool, assignedUserId, input.date),
+          callTool("search_meetings", {
+            dateFrom: input.date,
+            dateTo: input.date,
+            assignedUserId,
+            limit: 100,
+          }),
+        ]);
         const meetings = extractMeetingsFromSearchResult(raw);
         const slots = computeFreeSlots({
           day: input.date,
           meetings,
+          timeRanges,
           stepMinutes,
         });
         return JSON.stringify({ slots, date: input.date, stepMinutes });
@@ -121,7 +163,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       description:
         "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). Pauses for Yes/No before writing; injects assignedUserId and Contact parent fields.",
       schema: z.object({
-        name: z.string().min(1).describe("Meeting title in the patient's chat language"),
+        name: z
+          .string()
+          .min(1)
+          .describe('Meeting title as "[service-name]: [client-name]" (e.g. "Консультація: Daniel")'),
         dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         contactId: z.string().min(1).describe("Patient Contact id"),

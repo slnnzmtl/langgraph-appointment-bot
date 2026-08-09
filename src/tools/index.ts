@@ -9,8 +9,8 @@ export { createContactTools, lookupContactByTelegram } from "./contact-tools.js"
 export type { BookingConfirmResume, MeetingToolsOptions } from "./meeting-tools.js";
 export { createMeetingTools, isBookingConfirmed } from "./meeting-tools.js";
 
-export type { ReadToolsOptions } from "./service-tools.js";
-export { createReadTools, listServices } from "./service-tools.js";
+export type { GetWorkingTimeArgs, ReadToolsOptions } from "./service-tools.js";
+export { createReadTools, getWorkingTime, listServices } from "./service-tools.js";
 
 export type BookingToolsOptions = MeetingToolsOptions;
 

@@ -6,6 +6,16 @@ import { toToolResult } from "./tool-result.js";
 
 export type ReadToolsOptions = {
   callTool: McpCallTool;
+  assignedUserId: string;
+};
+
+export type GetWorkingTimeArgs = {
+  calendarId?: string;
+  userId?: string;
+  teamId?: string;
+  name?: string;
+  limit?: number;
+  offset?: number;
 };
 
 /** Keep booking-relevant service fields; drop CRM audit metadata and empty description. */
@@ -85,8 +95,22 @@ export const listServices = async (
   }
 };
 
+/** Shared by get_working_time tool; args are passed through to espocrm-mcp. */
+export const getWorkingTime = async (
+  callTool: McpCallTool,
+  args: GetWorkingTimeArgs = {},
+): Promise<string> => {
+  try {
+    const result = await callTool("get_working_time", args as Record<string, unknown>);
+    return toToolResult(result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: message });
+  }
+};
+
 export const createReadTools = (options: ReadToolsOptions): StructuredToolInterface[] => {
-  const { callTool } = options;
+  const { callTool, assignedUserId } = options;
 
   const listServicesTool = tool(
     async (input: { limit?: number }) => listServices(callTool, input.limit ?? 50),
@@ -121,5 +145,28 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
     },
   );
 
-  return [listServicesTool, getService];
+  const getWorkingTimeTool = tool(
+    async (input: GetWorkingTimeArgs) => {
+      const hasSelector = Boolean(input.calendarId || input.userId || input.teamId);
+      const args: GetWorkingTimeArgs = hasSelector
+        ? input
+        : { ...input, userId: assignedUserId };
+      return getWorkingTime(callTool, args);
+    },
+    {
+      name: "get_working_time",
+      description:
+        "Get EspoCRM working time calendars (weekday flags, time ranges, timezone). Defaults to the clinic assigned user when no calendarId/userId/teamId is given.",
+      schema: z.object({
+        calendarId: z.string().min(1).optional().describe("WorkingTimeCalendar ID"),
+        userId: z.string().min(1).optional().describe("Resolve calendar from a user"),
+        teamId: z.string().min(1).optional().describe("Resolve calendar from a team"),
+        name: z.string().min(1).optional().describe("Filter calendars by name (contains)"),
+        limit: z.number().int().min(1).max(200).optional().describe("Max calendars when listing"),
+        offset: z.number().int().min(0).optional().describe("Offset when listing"),
+      }),
+    },
+  );
+
+  return [listServicesTool, getService, getWorkingTimeTool];
 };

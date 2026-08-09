@@ -5,6 +5,8 @@ import {
   extractMeetingsFromSearchResult,
   localIso,
   normalizeLocalIsoDatetime,
+  resolveDayTimeRanges,
+  type WorkingTimeCalendarLike,
 } from "../availability-slots.js";
 
 describe("normalizeLocalIsoDatetime", () => {
@@ -24,13 +26,63 @@ describe("normalizeLocalIsoDatetime", () => {
   });
 });
 
+const sampleCalendar: WorkingTimeCalendarLike = {
+  timeRanges: [["11:00", "15:00"]],
+  weekdays: {
+    "0": false,
+    "1": true,
+    "2": true,
+    "3": true,
+    "4": true,
+    "5": true,
+    "6": false,
+  },
+  weekdayTimeRanges: {
+    "0": null,
+    "1": null,
+    "2": null,
+    "3": null,
+    "4": null,
+    "5": null,
+    "6": null,
+  },
+};
+
+describe("resolveDayTimeRanges", () => {
+  // 2026-08-10 is Monday (weekday 1), 2026-08-09 is Sunday (weekday 0)
+  it("returns default timeRanges on an open weekday", () => {
+    expect(resolveDayTimeRanges(sampleCalendar, "2026-08-10")).toEqual([["11:00", "15:00"]]);
+  });
+
+  it("returns empty on a closed weekday", () => {
+    expect(resolveDayTimeRanges(sampleCalendar, "2026-08-09")).toEqual([]);
+  });
+
+  it("prefers weekdayTimeRanges when non-empty", () => {
+    const calendar: WorkingTimeCalendarLike = {
+      ...sampleCalendar,
+      weekdayTimeRanges: {
+        ...sampleCalendar.weekdayTimeRanges,
+        "1": [["09:00", "12:00"], ["14:00", "18:00"]],
+      },
+    };
+    expect(resolveDayTimeRanges(calendar, "2026-08-10")).toEqual([
+      ["09:00", "12:00"],
+      ["14:00", "18:00"],
+    ]);
+  });
+
+  it("returns empty when calendar is null", () => {
+    expect(resolveDayTimeRanges(null, "2026-08-10")).toEqual([]);
+  });
+});
+
 describe("computeFreeSlots", () => {
   it("returns open-hour candidates when no meetings", () => {
     const slots = computeFreeSlots({
       day: "2026-08-10",
       meetings: [],
-      openHour: 9,
-      closeHour: 11,
+      timeRanges: [["09:00", "11:00"]],
       stepMinutes: 30,
     });
 
@@ -40,6 +92,38 @@ describe("computeFreeSlots", () => {
       dateStart: localIso("2026-08-10", 9, 0),
       dateEnd: localIso("2026-08-10", 9, 30),
     });
+  });
+
+  it("supports minute-precision range starts", () => {
+    const slots = computeFreeSlots({
+      day: "2026-08-10",
+      meetings: [],
+      timeRanges: [["11:00", "12:30"]],
+      stepMinutes: 30,
+    });
+
+    expect(slots.map((s) => s.label)).toEqual(["11:00", "11:30", "12:00"]);
+  });
+
+  it("supports multiple ranges per day", () => {
+    const slots = computeFreeSlots({
+      day: "2026-08-10",
+      meetings: [],
+      timeRanges: [["09:00", "10:00"], ["14:00", "15:00"]],
+      stepMinutes: 30,
+    });
+
+    expect(slots.map((s) => s.label)).toEqual(["09:00", "09:30", "14:00", "14:30"]);
+  });
+
+  it("returns empty for empty timeRanges (closed day)", () => {
+    expect(
+      computeFreeSlots({
+        day: "2026-08-10",
+        meetings: [],
+        timeRanges: [],
+      }),
+    ).toEqual([]);
   });
 
   it("drops slots overlapping Planned meetings", () => {
@@ -52,8 +136,7 @@ describe("computeFreeSlots", () => {
           dateEnd: localIso("2026-08-10", 10, 0),
         },
       ],
-      openHour: 9,
-      closeHour: 11,
+      timeRanges: [["09:00", "11:00"]],
       stepMinutes: 30,
     });
 
@@ -70,8 +153,7 @@ describe("computeFreeSlots", () => {
           dateEnd: "2026-08-07 12:00:00",
         },
       ],
-      openHour: 11,
-      closeHour: 13,
+      timeRanges: [["11:00", "13:00"]],
       stepMinutes: 30,
     });
 
@@ -88,8 +170,7 @@ describe("computeFreeSlots", () => {
           dateEnd: localIso("2026-08-10", 10, 0),
         },
       ],
-      openHour: 9,
-      closeHour: 10,
+      timeRanges: [["09:00", "10:00"]],
       stepMinutes: 30,
     });
 
@@ -100,8 +181,7 @@ describe("computeFreeSlots", () => {
     const slots = computeFreeSlots({
       day: "2026-08-10",
       meetings: [],
-      openHour: 9,
-      closeHour: 18,
+      timeRanges: [["09:00", "18:00"]],
       stepMinutes: 30,
       maxSlots: 3,
     });
@@ -110,7 +190,9 @@ describe("computeFreeSlots", () => {
   });
 
   it("rejects invalid day", () => {
-    expect(() => computeFreeSlots({ day: "08-10", meetings: [] })).toThrow(/YYYY-MM-DD/);
+    expect(() =>
+      computeFreeSlots({ day: "08-10", meetings: [], timeRanges: [["09:00", "18:00"]] }),
+    ).toThrow(/YYYY-MM-DD/);
   });
 });
 

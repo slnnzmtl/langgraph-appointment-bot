@@ -20,9 +20,79 @@ describe("meeting-tools availability", () => {
     calls.length = 0;
   });
 
-  it("present_availability_slots searches meetings and returns free slots", async () => {
+  const crmCalendar = {
+    success: true,
+    calendars: [
+      {
+        name: "Main",
+        timeRanges: [["11:00", "15:00"]],
+        weekdays: {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true,
+          "4": true,
+          "5": true,
+          "6": false,
+        },
+        weekdayTimeRanges: {
+          "0": null,
+          "1": null,
+          "2": null,
+          "3": null,
+          "4": null,
+          "5": null,
+          "6": null,
+        },
+      },
+    ],
+    ranges: [],
+  };
+
+  it("present_availability_slots uses CRM working hours", async () => {
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return {
+          meetings: [
+            {
+              status: "Planned",
+              dateStart: "2026-08-10T11:00:00",
+              dateEnd: "2026-08-10T11:30:00",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    };
+
+    const [tool] = createMeetingTools({
+      callTool,
+      assignedUserId: "user-1",
+    }).filter((t) => t.name === "present_availability_slots");
+
+    const raw = await tool!.invoke({ date: "2026-08-10" });
+    const parsed = JSON.parse(raw as string) as { slots: Array<{ label: string }> };
+
+    expect(calls.some((c) => c.name === "get_working_time")).toBe(true);
+    expect(calls.some((c) => c.name === "search_meetings")).toBe(true);
+    expect(
+      calls.find((c) => c.name === "get_working_time")?.args,
+    ).toEqual({ userId: "user-1" });
+    expect(parsed.slots[0]?.label).toBe("11:30");
+    expect(parsed.slots.some((s) => s.label === "09:00")).toBe(false);
+    expect(parsed.slots.some((s) => s.label === "14:30")).toBe(true);
+  });
+
+  it("present_availability_slots falls back to clinic constants when get_working_time fails", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        throw new Error("CRM calendar missing");
+      }
       if (name === "search_meetings") {
         return {
           meetings: [
@@ -44,14 +114,6 @@ describe("meeting-tools availability", () => {
 
     const raw = await tool!.invoke({ date: "2026-08-10" });
     const parsed = JSON.parse(raw as string) as { slots: Array<{ label: string }> };
-    expect(calls[0]).toMatchObject({
-      name: "search_meetings",
-      args: {
-        dateFrom: "2026-08-10",
-        dateTo: "2026-08-10",
-        assignedUserId: "user-1",
-      },
-    });
     expect(parsed.slots[0]?.label).not.toBe("09:00");
     expect(parsed.slots.some((s) => s.label === "09:30")).toBe(true);
   });

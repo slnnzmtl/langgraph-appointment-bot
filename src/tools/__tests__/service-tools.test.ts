@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "vitest";
 
-import { createReadTools, listServices } from "../service-tools.js";
+import { createReadTools, getWorkingTime, listServices } from "../service-tools.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
 
@@ -123,8 +123,47 @@ describe("service-tools", () => {
     });
   });
 
-  it("read tools expose list_services and get_service only", () => {
-    const names = createReadTools({ callTool }).map((t) => t.name);
-    expect(names).toEqual(["list_services", "get_service"]);
+  it("getWorkingTime calls get_working_time MCP tool", async () => {
+    const result = await getWorkingTime(callTool, { userId: "user-1" });
+    expect(calls[0]).toEqual({
+      name: "get_working_time",
+      args: { userId: "user-1" },
+    });
+    expect(JSON.parse(result)).toEqual({ ok: true });
+  });
+
+  it("getWorkingTime returns error JSON when callTool throws", async () => {
+    const failing = async () => {
+      throw new Error("MCP down");
+    };
+    const result = await getWorkingTime(failing, { userId: "user-1" });
+    expect(JSON.parse(result)).toEqual({ error: "MCP down" });
+  });
+
+  it("read tools expose list_services, get_service, and get_working_time", () => {
+    const names = createReadTools({ callTool, assignedUserId: "assigned-1" }).map((t) => t.name);
+    expect(names).toEqual(["list_services", "get_service", "get_working_time"]);
+  });
+
+  it("get_working_time defaults to assignedUserId when no selector given", async () => {
+    const [tool] = createReadTools({ callTool, assignedUserId: "assigned-99" }).filter(
+      (t) => t.name === "get_working_time",
+    );
+    await tool!.invoke({});
+    expect(calls[0]).toEqual({
+      name: "get_working_time",
+      args: { userId: "assigned-99" },
+    });
+  });
+
+  it("get_working_time respects explicit userId", async () => {
+    const [tool] = createReadTools({ callTool, assignedUserId: "assigned-99" }).filter(
+      (t) => t.name === "get_working_time",
+    );
+    await tool!.invoke({ userId: "other-user" });
+    expect(calls[0]).toEqual({
+      name: "get_working_time",
+      args: { userId: "other-user" },
+    });
   });
 });
