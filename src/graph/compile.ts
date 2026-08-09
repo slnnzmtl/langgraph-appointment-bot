@@ -10,7 +10,7 @@ import {
 } from "@langchain/langgraph";
 
 import type { McpCallTool } from "../shared/mcp.js";
-import { listServices, lookupContactByTelegram } from "../tools/index.js";
+import { lookupContactByTelegram } from "../tools/index.js";
 import {
   buildPrefetchedToolMessages,
   createAgentFinalizeNode,
@@ -19,7 +19,6 @@ import {
   createAgentToolsNode,
   FIND_CONTACT_BY_TELEGRAM_TOOL,
   finalizeNodeName,
-  LIST_SERVICES_TOOL,
   llmNodeName,
   prepareNodeName,
   routeAfterAgentLlm,
@@ -49,17 +48,13 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
-  /** When set, booking prepare prefetches find_contact_by_telegram and list_services before the first LLM turn. */
+  /** When set, booking prepare prefetches find_contact_by_telegram before the first LLM turn. */
   bookingPrefetchCallTool?: McpCallTool;
 };
 
 const prefetchBookingContext = async (callTool: McpCallTool): Promise<BaseMessage[]> => {
-  const [contact] = await Promise.all([
-    lookupContactByTelegram(callTool)
-  ]);
-  return [
-    ...buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact)
-  ];
+  const contact = await lookupContactByTelegram(callTool);
+  return buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact);
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
