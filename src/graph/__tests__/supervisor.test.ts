@@ -74,7 +74,6 @@ describe("createClinicSupervisorNode context cache", () => {
       agentMessages: [],
       stepCount: 0,
       next: undefined,
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -112,7 +111,6 @@ describe("createClinicSupervisorNode context cache", () => {
       agentMessages: [],
       stepCount: 0,
       next: undefined,
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -143,7 +141,7 @@ describe("createClinicSupervisorNode context cache", () => {
 
     invoke
       .mockRejectedValueOnce(new Error("CachedContent not found"))
-      .mockResolvedValueOnce({ next: "faq", prompt: "Answer hours" });
+      .mockResolvedValueOnce({ next: "faq" });
 
     const node = createClinicSupervisorNode({
       agents,
@@ -162,13 +160,12 @@ describe("createClinicSupervisorNode context cache", () => {
       agentMessages: [],
       stepCount: 0,
       next: undefined,
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
     expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
-    expect(update).toMatchObject({ next: "faq", delegationPrompt: "Answer hours" });
+    expect(update).toMatchObject({ next: "faq", lastHandoff: null });
   });
 
   it("falls back to uncached when recreate returns null", async () => {
@@ -204,7 +201,6 @@ describe("createClinicSupervisorNode context cache", () => {
       agentMessages: [],
       stepCount: 0,
       next: undefined,
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -220,8 +216,8 @@ describe("createClinicSupervisorNode context cache", () => {
     expect((update.messages?.[0] as AIMessage).content).toBe("Uncached reply");
   });
 
-  it("routes to booking with delegation prompt", async () => {
-    invoke.mockResolvedValue({ next: "booking", prompt: "Book tomorrow 10:00" });
+  it("routes to booking without rewriting a specialist prompt", async () => {
+    invoke.mockResolvedValue({ next: "booking", reply: "ignored when delegating" });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -233,14 +229,13 @@ describe("createClinicSupervisorNode context cache", () => {
       agentMessages: [],
       stepCount: 0,
       next: undefined,
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
     expect(update).toEqual({
       next: "booking",
-      delegationPrompt: "Book tomorrow 10:00",
       lastHandoff: null,
     });
+    expect(update.messages).toBeUndefined();
   });
 });

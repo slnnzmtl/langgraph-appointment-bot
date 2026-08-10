@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { routeAfterAgentLlm, routeAfterAgentTools } from "../agent-loop.js";
 import {
   buildClinicRoutingSchema,
-  normalizeDelegationPrompt,
   normalizeSupervisorReply,
 } from "../routing.js";
 import type { ClinicAgentDefinition } from "../types.js";
@@ -30,15 +29,13 @@ describe("clinic routing schema", () => {
   it("accepts faq, booking, and FINISH", () => {
     const schema = buildClinicRoutingSchema(agents);
     expect(schema.parse({ next: "FINISH", reply: "Hello" }).next).toBe("FINISH");
-    expect(schema.parse({ next: "faq", prompt: "Hours?" }).next).toBe("faq");
-    expect(schema.parse({ next: "booking", prompt: "Book tomorrow" }).next).toBe("booking");
+    expect(schema.parse({ next: "faq" }).next).toBe("faq");
+    expect(schema.parse({ next: "booking" }).next).toBe("booking");
   });
 
-  it("normalizes reply and prompt placeholders", () => {
+  it("normalizes reply placeholders", () => {
     expect(normalizeSupervisorReply("  hi  ")).toBe("hi");
     expect(normalizeSupervisorReply("null")).toBeUndefined();
-    expect(normalizeDelegationPrompt("  task  ")).toBe("task");
-    expect(normalizeDelegationPrompt("   ")).toBeUndefined();
   });
 });
 

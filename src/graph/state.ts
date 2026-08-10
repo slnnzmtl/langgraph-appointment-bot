@@ -36,10 +36,6 @@ export const createClinicStateAnnotation = ({
       reducer: (_left, right) => right,
       default: () => undefined,
     }),
-    delegationPrompt: Annotation<string | null>({
-      reducer: (_left, right) => right ?? null,
-      default: () => null,
-    }),
     lastHandoff: Annotation<ClinicHandoff | null>({
       reducer: (_left, right) => right ?? null,
       default: () => null,

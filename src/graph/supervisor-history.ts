@@ -13,8 +13,7 @@ const mergeMessages = (message: BaseMessage, nextMessage: BaseMessage): BaseMess
   return new AIMessage(mergedContent);
 };
 
-/** Drop tool noise and collapse consecutive same-role messages for supervisor routing. */
-export const stripToolsForSupervisor = (messages: BaseMessage[]): BaseMessage[] => {
+export const stripToolNoiseFromMessages = (messages: BaseMessage[]): BaseMessage[] => {
   const result: BaseMessage[] = [];
 
   for (const message of messages) {

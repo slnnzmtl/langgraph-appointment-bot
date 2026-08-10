@@ -22,11 +22,8 @@ import {
   buildUncachedMessages,
 } from "./gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import {
-  applyDelegationPrompt,
-  scopeSubAgentMessages,
-  tagRuntimeAgentMessage,
-} from "./sub-agent-messages.js";
+import { tagRuntimeAgentMessage } from "./sub-agent-messages.js";
+import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
 import type { ClinicAgentDefinition, ClinicHandoffStatus } from "./types.js";
@@ -108,13 +105,9 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (agentId: string, options?: AgentPrepareOptions) =>
+export const createAgentPrepareNode = (_agentId: string, options?: AgentPrepareOptions) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
-    const scoped = scopeSubAgentMessages(state.messages, agentId);
-    const delegationPrompt = state.delegationPrompt?.trim();
-    let agentMessages = delegationPrompt
-      ? applyDelegationPrompt(scoped, delegationPrompt)
-      : scoped;
+    let agentMessages = stripToolNoiseFromMessages(state.messages);
 
     if (options?.prefetch) {
       const prefetched = await options.prefetch(agentMessages);
@@ -252,7 +245,6 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const cleared = {
       agentMessages: new Overwrite([] as BaseMessage[]),
       stepCount: 0,
-      delegationPrompt: null,
     };
 
     if (!(lastMessage instanceof AIMessage)) {

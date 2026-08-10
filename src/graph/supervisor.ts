@@ -15,13 +15,12 @@ import {
   buildUncachedMessages,
 } from "./gemini-cache-messages.js";
 import {
-  normalizeDelegationPrompt,
   normalizeSupervisorReply,
   type ClinicRoutingDecision,
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { stripToolsForSupervisor } from "./supervisor-history.js";
+import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   FINISH_ROUTE,
   type ClinicAgentDefinition,
@@ -46,7 +45,6 @@ export type CreateClinicSupervisorNodeOptions = {
 const routingFailureUpdate = (_reason: string): ClinicStateUpdate => ({
   next: FINISH_ROUTE,
   lastHandoff: null,
-  delegationPrompt: null,
   messages: [
     new AIMessage(
       "Sorry, I could not route that request. Please try again in a moment.",
@@ -67,7 +65,6 @@ const resolveRoutingDecision = (
         return {
           next: FINISH_ROUTE,
           lastHandoff: null,
-          delegationPrompt: null,
         };
       }
       return routingFailureUpdate("FINISH without reply");
@@ -76,7 +73,6 @@ const resolveRoutingDecision = (
     return {
       next: FINISH_ROUTE,
       lastHandoff: null,
-      delegationPrompt: null,
       messages: [new AIMessage(reply)],
     };
   }
@@ -85,14 +81,8 @@ const resolveRoutingDecision = (
     return routingFailureUpdate(`Unknown route: ${decision.next}`);
   }
 
-  const prompt = normalizeDelegationPrompt(decision.prompt);
-  if (!prompt) {
-    return routingFailureUpdate(`Missing delegation prompt for ${decision.next}`);
-  }
-
   return {
     next: decision.next,
-    delegationPrompt: prompt,
     lastHandoff: null,
   };
 };
@@ -128,7 +118,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
     const staticPrompt = options.loadSupervisorPrompt().trim();
     const dynamic = options.buildSupervisorDynamicContext?.().trim() ?? "";
-    const history = stripToolsForSupervisor(state.messages);
+    const history = stripToolNoiseFromMessages(state.messages);
 
     let decision: ClinicRoutingDecision;
     try {

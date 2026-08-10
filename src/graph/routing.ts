@@ -1,8 +1,6 @@
 import { z } from "zod";
 
 import {
-  BOOKING_AGENT_ID,
-  FAQ_AGENT_ID,
   FINISH_ROUTE,
   type ClinicAgentDefinition,
   type ClinicRouteId,
@@ -23,18 +21,8 @@ export const normalizeSupervisorReply = (reply: string | undefined): string | un
   return trimmed;
 };
 
-export const normalizeDelegationPrompt = (prompt: string | undefined): string | undefined => {
-  if (typeof prompt !== "string") {
-    return undefined;
-  }
-
-  const trimmed = prompt.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-};
-
 export type ClinicRoutingDecision = {
   next: ClinicRouteId;
-  prompt?: string;
   reply?: string;
 };
 
@@ -51,12 +39,6 @@ export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
 
   return z.object({
     next: z.enum(nextValues).describe(description),
-    prompt: z
-      .string()
-      .optional()
-      .describe(
-        "Self-contained specialist task when next is faq or booking. Required then. Patient language.",
-      ),
     reply: z
       .string()
       .optional()

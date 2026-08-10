@@ -76,7 +76,7 @@ describe("buildPrefetchedToolMessages", () => {
 });
 
 describe("createAgentPrepareNode with prefetch", () => {
-  it("appends prefetched messages after scoped human message", async () => {
+  it("keeps original human message and appends prefetched tools", async () => {
     const prepare = createAgentPrepareNode("booking", {
       prefetch: async () => [
         ...buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, '{"contacts":[]}'),
@@ -89,7 +89,6 @@ describe("createAgentPrepareNode with prefetch", () => {
       agentMessages: [],
       stepCount: 5,
       next: "booking",
-      delegationPrompt: "Book for tomorrow morning",
       lastHandoff: null,
     });
 
@@ -97,7 +96,7 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect(update.agentMessages).toBeInstanceOf(Overwrite);
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
     expect(agentMessages[0]).toBeInstanceOf(HumanMessage);
-    expect((agentMessages[0] as HumanMessage).content).toBe("Book for tomorrow morning");
+    expect((agentMessages[0] as HumanMessage).content).toBe("Book tomorrow");
     expect(agentMessages[1]).toBeInstanceOf(AIMessage);
     expect(agentMessages[2]).toBeInstanceOf(ToolMessage);
     expect((agentMessages[2] as ToolMessage).name).toBe(FIND_CONTACT_BY_TELEGRAM_TOOL);
@@ -105,6 +104,43 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect(agentMessages[4]).toBeInstanceOf(ToolMessage);
     expect((agentMessages[4] as ToolMessage).name).toBe(LIST_SERVICES_TOOL);
     expect(hasPendingToolCalls(agentMessages as never)).toBe(false);
+  });
+
+  it("passes full thread history including other agents' replies", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const faqReply = new AIMessage({
+      content: "hours are 9-18",
+      additional_kwargs: { runtimeAgentId: "faq" },
+    });
+    const bookingReply = new AIMessage({
+      content: "what day?",
+      additional_kwargs: { runtimeAgentId: "booking" },
+    });
+
+    const update = await prepare({
+      messages: [
+        new HumanMessage("hours?"),
+        faqReply,
+        new HumanMessage("book tomorrow"),
+        bookingReply,
+        new HumanMessage("10:00"),
+      ],
+      agentMessages: [],
+      stepCount: 0,
+      next: "booking",
+      lastHandoff: null,
+    });
+
+    const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
+    expect(agentMessages.map((m) => m.getType())).toEqual([
+      "human",
+      "ai",
+      "human",
+      "ai",
+      "human",
+    ]);
+    expect((agentMessages[0] as HumanMessage).content).toBe("hours?");
+    expect((agentMessages[4] as HumanMessage).content).toBe("10:00");
   });
 
   it("injects error ToolMessage when prefetch returns error JSON", async () => {
@@ -121,7 +157,6 @@ describe("createAgentPrepareNode with prefetch", () => {
       agentMessages: [],
       stepCount: 0,
       next: "booking",
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -138,13 +173,13 @@ describe("createAgentPrepareNode with prefetch", () => {
       agentMessages: [],
       stepCount: 0,
       next: "faq",
-      delegationPrompt: "What are hours?",
       lastHandoff: null,
     });
 
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
     expect(agentMessages).toHaveLength(1);
     expect(agentMessages[0]).toBeInstanceOf(HumanMessage);
+    expect((agentMessages[0] as HumanMessage).content).toBe("Hours?");
   });
 });
 
@@ -210,7 +245,6 @@ describe("createAgentLlmNode context cache", () => {
       agentMessages: [new HumanMessage("hours?")],
       stepCount: 0,
       next: "faq",
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -258,7 +292,6 @@ describe("createAgentLlmNode context cache", () => {
       agentMessages: [new HumanMessage("hours?")],
       stepCount: 0,
       next: "faq",
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -312,7 +345,6 @@ describe("createAgentLlmNode context cache", () => {
       agentMessages: [new HumanMessage("hours?")],
       stepCount: 0,
       next: "faq",
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -353,7 +385,6 @@ describe("createAgentLlmNode context cache", () => {
       agentMessages: [new HumanMessage("hours?")],
       stepCount: 0,
       next: "faq",
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
@@ -398,7 +429,6 @@ describe("createAgentLlmNode context cache", () => {
       agentMessages: [new HumanMessage("book")],
       stepCount: 0,
       next: "booking",
-      delegationPrompt: null,
       lastHandoff: null,
     });
 
