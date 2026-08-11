@@ -11,6 +11,7 @@ import {
   localIso,
   normalizeLocalIsoDatetime,
   resolveDayTimeRanges,
+  resolveWeekdayTimeRanges,
   type WorkingTimeCalendarLike,
 } from "../availability-slots.js";
 
@@ -79,6 +80,16 @@ describe("resolveDayTimeRanges", () => {
 
   it("returns empty when calendar is null", () => {
     expect(resolveDayTimeRanges(null, "2026-08-10")).toEqual([]);
+  });
+});
+
+describe("resolveWeekdayTimeRanges", () => {
+  it("returns default timeRanges on an open weekday index", () => {
+    expect(resolveWeekdayTimeRanges(sampleCalendar, "1")).toEqual([["11:00", "15:00"]]);
+  });
+
+  it("returns empty on a closed weekday index", () => {
+    expect(resolveWeekdayTimeRanges(sampleCalendar, "0")).toEqual([]);
   });
 });
 

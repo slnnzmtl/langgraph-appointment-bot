@@ -146,17 +146,16 @@ export const getKyivWeekdayIndex = (day: string): string => {
 };
 
 /**
- * Resolve open time ranges for a calendar day from a normalized WorkingTimeCalendar.
+ * Resolve open time ranges for an EspoCRM weekday index (0 = Sunday … 6 = Saturday).
  * Closed weekdays return []. Prefer weekdayTimeRanges when non-empty, else timeRanges.
  */
-export const resolveDayTimeRanges = (
+export const resolveWeekdayTimeRanges = (
   calendar: WorkingTimeCalendarLike | null | undefined,
-  day: string,
+  weekday: string,
 ): TimeRangePair[] => {
   if (!calendar) {
     return [];
   }
-  const weekday = getKyivWeekdayIndex(day);
   if (calendar.weekdays?.[weekday] !== true) {
     return [];
   }
@@ -166,6 +165,15 @@ export const resolveDayTimeRanges = (
   }
   return Array.isArray(calendar.timeRanges) ? calendar.timeRanges : [];
 };
+
+/**
+ * Resolve open time ranges for a calendar day from a normalized WorkingTimeCalendar.
+ * Closed weekdays return []. Prefer weekdayTimeRanges when non-empty, else timeRanges.
+ */
+export const resolveDayTimeRanges = (
+  calendar: WorkingTimeCalendarLike | null | undefined,
+  day: string,
+): TimeRangePair[] => resolveWeekdayTimeRanges(calendar, getKyivWeekdayIndex(day));
 
 /**
  * Build free slots for a calendar day by subtracting busy meetings from open ranges.

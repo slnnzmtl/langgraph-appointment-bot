@@ -2,6 +2,7 @@ import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { formatForTelegram, interpretInvokeResult } from "../telegram-bot.js";
+import { loadWelcomeMessage } from "../welcome-message.js";
 
 describe("formatForTelegram", () => {
   it("converts Markdown bold to HTML bold", () => {
@@ -18,6 +19,96 @@ describe("formatForTelegram", () => {
 
   it("leaves mid-line asterisks unchanged", () => {
     expect(formatForTelegram("rate * 2")).toBe("rate * 2");
+  });
+});
+
+describe("welcome message", () => {
+  const crmHours = JSON.stringify({
+    calendars: [
+      {
+        timeRanges: [["11:00", "15:00"]],
+        weekdays: {
+          "0": false,
+          "1": true,
+          "2": true,
+          "3": true,
+          "4": true,
+          "5": true,
+          "6": false,
+        },
+      },
+    ],
+  });
+
+  const loadWithHours = (hoursJson: string) =>
+    loadWelcomeMessage(async () => JSON.parse(hoursJson) as unknown, "user-1");
+
+  it("includes intro, categorized services, and CRM hours without prices", async () => {
+    const message = await loadWithHours(crmHours);
+    expect(message).toContain("Welcome to **Clinic**.");
+    expect(message).toContain("**Consultations**");
+    expect(message).toContain("Консультація");
+    expect(message).toContain("**Injectables**");
+    expect(message).toContain("Біоревіталізація");
+    expect(message).toContain("**Skin care**");
+    expect(message).toContain("Пілінг");
+    expect(message).toContain("Mon–Fri: 11:00–15:00");
+    expect(message).toContain("Sat–Sun: closed");
+    expect(message).not.toMatch(/UAH|USD|\$|грн/i);
+  });
+
+  it("formats CRM weekday-specific ranges", async () => {
+    const message = await loadWithHours(
+      JSON.stringify({
+        calendars: [
+          {
+            timeRanges: [["09:00", "18:00"]],
+            weekdays: {
+              "0": false,
+              "1": true,
+              "2": true,
+              "3": true,
+              "4": true,
+              "5": true,
+              "6": false,
+            },
+            weekdayTimeRanges: {
+              "5": [["09:00", "14:00"]],
+            },
+          },
+        ],
+      }),
+    );
+    expect(message).toContain("Mon–Thu: 09:00–18:00");
+    expect(message).toContain("Fri: 09:00–14:00");
+    expect(message).toContain("Sat–Sun: closed");
+  });
+
+  it("does not use clinic-constant fallback hours when CRM fails", async () => {
+    expect((await loadWithHours(JSON.stringify({ error: "MCP down" }))).includes(
+      "Currently unavailable.",
+    )).toBe(true);
+    expect((await loadWithHours("{}")).includes("Currently unavailable.")).toBe(true);
+  });
+
+  it("loadWelcomeMessage reads hours via get_working_time", async () => {
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const message = await loadWelcomeMessage(async (name, args) => {
+      calls.push({ name, args });
+      return JSON.parse(crmHours) as unknown;
+    }, "user-1");
+
+    expect(calls).toEqual([{ name: "get_working_time", args: { userId: "user-1" } }]);
+    expect(message).toContain("Mon–Fri: 11:00–15:00");
+  });
+
+  it("formats to Telegram HTML with bold headings and bullets", async () => {
+    const html = formatForTelegram(await loadWithHours(crmHours));
+    expect(html).toContain("<b>Clinic</b>");
+    expect(html).toContain("<b>Consultations</b>");
+    expect(html).toContain("• Консультація");
+    expect(html).toContain("• Mon–Fri: 11:00–15:00");
+    expect(html).not.toContain("*Consultations*");
   });
 });
 

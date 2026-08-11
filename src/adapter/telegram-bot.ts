@@ -17,6 +17,7 @@ import {
   slotChoiceHumanText,
   type InlineKeyboardMarkup,
 } from "./telegram-ui.js";
+import { loadWelcomeMessage } from "./welcome-message.js";
 
 const PRESENT_SLOTS_TOOL = "present_availability_slots";
 /** Temporary: list slots in agent text; re-enable Inline Keyboard later. */
@@ -370,7 +371,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
   const bot = new Telegraf(token);
 
   bot.start(async (ctx) => {
-    await ctx.reply("Clinic appointment bot ready. Ask about hours or book an appointment.");
+    const { adapters, config } = runtime.getBootstrap();
+    const text = await loadWelcomeMessage(adapters.callTool, config.assignedUserId);
+    await ctx.reply(formatForTelegram(text), { parse_mode: "HTML" });
   });
 
   bot.on("text", async (ctx) => {
