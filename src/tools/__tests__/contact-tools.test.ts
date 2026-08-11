@@ -6,6 +6,7 @@ import {
   createContactTools,
   extractContactIdFromSearchResult,
   lookupContactByTelegram,
+  normalizeContactLookupResult,
 } from "../contact-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
@@ -197,6 +198,52 @@ describe("contact-tools", () => {
     const result = await lookupContactByTelegram(callTool);
     expect(JSON.parse(result)).toMatchObject({
       error: expect.stringContaining("Telegram user id is not set"),
+    });
+  });
+
+  it("normalizeContactLookupResult keeps found contacts and missingFields", () => {
+    const raw = JSON.stringify({
+      success: true,
+      contacts: [
+        {
+          id: "c-1",
+          firstName: "Ada",
+          lastName: null,
+          phoneNumber: "123",
+          missingFields: ["lastName"],
+        },
+      ],
+    });
+    expect(normalizeContactLookupResult(raw)).toEqual({
+      contacts: [
+        {
+          id: "c-1",
+          firstName: "Ada",
+          lastName: null,
+          phoneNumber: "123",
+          missingFields: ["lastName"],
+        },
+      ],
+    });
+  });
+
+  it("normalizeContactLookupResult maps list key and empty contacts", () => {
+    expect(normalizeContactLookupResult(JSON.stringify({ list: [{ id: "c-2" }] }))).toEqual({
+      contacts: [{ id: "c-2" }],
+    });
+    expect(normalizeContactLookupResult(JSON.stringify({ contacts: [] }))).toEqual({
+      contacts: [],
+    });
+  });
+
+  it("normalizeContactLookupResult maps error JSON", () => {
+    expect(normalizeContactLookupResult(JSON.stringify({ error: "CRM down" }))).toEqual({
+      contacts: [],
+      error: "CRM down",
+    });
+    expect(normalizeContactLookupResult("not-json")).toEqual({
+      contacts: [],
+      error: "Invalid contact lookup JSON",
     });
   });
 

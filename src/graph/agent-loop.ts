@@ -1,5 +1,3 @@
-import { randomUUID } from "node:crypto";
-
 import {
   AIMessage,
   ToolMessage,
@@ -17,6 +15,7 @@ import {
 } from "@personal-assistant/llm-gemini";
 
 import { extractMessageTextContent } from "../shared/message-content.js";
+import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { BookingContext } from "../tools/meeting-tools.js";
 import {
   buildCachedMessages,
@@ -34,14 +33,20 @@ export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
 export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
 export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
 
-export const FIND_CONTACT_BY_TELEGRAM_TOOL = "find_contact_by_telegram" as const;
-
 /** Uncached dynamic block — Gemini 3 drops synthetic functionCall parts without thoughtSignature. */
 export const formatListedMeetingsContext = (ctx: BookingContext | null | undefined): string => {
   if (!ctx) {
     return "";
   }
   return `<list_planned_meetings>\n${JSON.stringify({ meetings: ctx.meetings, dateFrom: ctx.dateFrom })}\n</list_planned_meetings>`;
+};
+
+/** Uncached dynamic block — Gemini 3 drops synthetic functionCall parts without thoughtSignature. */
+export const formatContactContext = (ctx: ContactLookupContext | null | undefined): string => {
+  if (!ctx) {
+    return "";
+  }
+  return `<find_contact_by_telegram>\n${JSON.stringify(ctx)}\n</find_contact_by_telegram>`;
 };
 
 export type CreateAgentLoopOptions = {
@@ -53,37 +58,12 @@ export type CreateAgentLoopOptions = {
 };
 
 export type AgentPrefetchResult = {
-  messages: BaseMessage[];
+  contactContext: ContactLookupContext;
   bookingContext: BookingContext | null;
 };
 
 export type AgentPrepareOptions = {
   prefetch?: () => Promise<AgentPrefetchResult>;
-};
-
-/** Synthetic fulfilled tool exchange so booking LLM starts with prefetched tool context. */
-export const buildPrefetchedToolMessages = (
-  toolName: string,
-  result: string,
-): BaseMessage[] => {
-  const toolCallId = `prefetch-${toolName}-${randomUUID()}`;
-  return [
-    new AIMessage({
-      content: "",
-      tool_calls: [
-        {
-          id: toolCallId,
-          name: toolName,
-          args: {},
-        },
-      ],
-    }),
-    new ToolMessage({
-      content: result,
-      tool_call_id: toolCallId,
-      name: toolName,
-    }),
-  ];
 };
 
 const resolveHandoffStatus = (
@@ -120,7 +100,7 @@ const resolveHandoffStatus = (
 
 export const createAgentPrepareNode = (_agentId: string, options?: AgentPrepareOptions) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
-    let agentMessages = stripToolNoiseFromMessages(state.messages);
+    const agentMessages = stripToolNoiseFromMessages(state.messages);
 
     if (!options?.prefetch) {
       return {
@@ -131,8 +111,9 @@ export const createAgentPrepareNode = (_agentId: string, options?: AgentPrepareO
 
     const prefetched = await options.prefetch();
     return {
-      agentMessages: new Overwrite([...agentMessages, ...prefetched.messages]),
+      agentMessages: new Overwrite(agentMessages),
       stepCount: 0,
+      contactContext: prefetched.contactContext,
       bookingContext: prefetched.bookingContext,
     };
   };
@@ -186,6 +167,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const staticPrompt = agent.systemPrompt.trim();
     const dynamic = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
+      agent.id === BOOKING_AGENT_ID ? formatContactContext(state.contactContext) : "",
       agent.id === BOOKING_AGENT_ID ? formatListedMeetingsContext(state.bookingContext) : "",
     ]
       .filter((part) => part.length > 0)

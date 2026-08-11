@@ -13,14 +13,13 @@ import {
   extractContactIdFromSearchResult,
   lookupContactByTelegram,
   lookupPlannedMeetings,
+  normalizeContactLookupResult,
 } from "../tools/index.js";
 import {
-  buildPrefetchedToolMessages,
   createAgentFinalizeNode,
   createAgentLlmNode,
   createAgentPrepareNode,
   createAgentToolsNode,
-  FIND_CONTACT_BY_TELEGRAM_TOOL,
   finalizeNodeName,
   llmNodeName,
   prepareNodeName,
@@ -58,14 +57,14 @@ export type CompileClinicGraphOptions = {
 };
 
 export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
-  const contact = await lookupContactByTelegram(callTool);
-  const messages = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact);
-  const contactId = extractContactIdFromSearchResult(contact);
+  const contactJson = await lookupContactByTelegram(callTool);
+  const contactContext = normalizeContactLookupResult(contactJson);
+  const contactId = extractContactIdFromSearchResult(contactJson);
   if (!contactId) {
-    return { messages, bookingContext: null };
+    return { contactContext, bookingContext: null };
   }
   const listed = await lookupPlannedMeetings(callTool, contactId);
-  return { messages, bookingContext: listed };
+  return { contactContext, bookingContext: listed };
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {

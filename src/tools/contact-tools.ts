@@ -60,6 +60,33 @@ export const annotateContactSearchResult = (raw: unknown): string => {
   return JSON.stringify({ ...record, [key]: annotated });
 };
 
+export type ContactLookupContext = {
+  contacts: Array<Record<string, unknown>>;
+  error?: string;
+};
+
+export const normalizeContactLookupResult = (contactJson: string): ContactLookupContext => {
+  let value: unknown;
+  try {
+    value = JSON.parse(contactJson) as unknown;
+  } catch {
+    return { contacts: [], error: "Invalid contact lookup JSON" };
+  }
+  if (!value || typeof value !== "object") {
+    return { contacts: [], error: "Invalid contact lookup result" };
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.error === "string") {
+    return { contacts: [], error: record.error };
+  }
+  const rows = contactRowsFromSearch(record) ?? [];
+  const contacts = rows.filter(
+    (item): item is Record<string, unknown> =>
+      Boolean(item) && typeof item === "object" && !Array.isArray(item),
+  );
+  return { contacts };
+};
+
 export const extractContactIdFromSearchResult = (contactJson: string): string | null => {
   let value: unknown;
   try {

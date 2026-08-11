@@ -1,6 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 
+import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { BookingContext } from "../tools/meeting-tools.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { ClinicHandoff } from "./types.js";
@@ -42,6 +43,10 @@ export const createClinicStateAnnotation = ({
       default: () => null,
     }),
     bookingContext: Annotation<BookingContext | null>({
+      reducer: (_left, right) => right ?? null,
+      default: () => null,
+    }),
+    contactContext: Annotation<ContactLookupContext | null>({
       reducer: (_left, right) => right ?? null,
       default: () => null,
     }),

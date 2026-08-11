@@ -6,14 +6,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
-  buildPrefetchedToolMessages,
   createAgentPrepareNode,
-  FIND_CONTACT_BY_TELEGRAM_TOOL,
+  formatContactContext,
   formatListedMeetingsContext,
 } from "../agent-loop.js";
+import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/meeting-tools.js";
 import type { ClinicState } from "../state.js";
-import { hasPendingToolCalls } from "../tool-routing.js";
 import type { ClinicAgentDefinition } from "../types.js";
 
 const listedMeetings: BookingContext = {
@@ -28,6 +27,10 @@ const listedMeetings: BookingContext = {
   dateFrom: "2026-08-11",
 };
 
+const listedContact: ContactLookupContext = {
+  contacts: [{ id: "c-1", firstName: "Ada", missingFields: ["lastName", "phoneNumber"] }],
+};
+
 const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   messages: [],
   agentMessages: [],
@@ -35,6 +38,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   next: undefined,
   lastHandoff: null,
   bookingContext: null,
+  contactContext: null,
   ...overrides,
 });
 
@@ -78,46 +82,36 @@ describe("formatListedMeetingsContext", () => {
   });
 });
 
-describe("buildPrefetchedToolMessages", () => {
-  it("returns fulfilled AIMessage + ToolMessage pair for a given tool", () => {
-    const result = '{"contacts":[{"id":"c-1"}]}';
-    const messages = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, result);
-
-    expect(messages).toHaveLength(2);
-    const [ai, toolMsg] = messages;
-    expect(ai).toBeInstanceOf(AIMessage);
-    expect(toolMsg).toBeInstanceOf(ToolMessage);
-
-    const aiMessage = ai as AIMessage;
-    const toolMessage = toolMsg as ToolMessage;
-    expect(aiMessage.tool_calls).toHaveLength(1);
-    expect(aiMessage.tool_calls?.[0]?.name).toBe(FIND_CONTACT_BY_TELEGRAM_TOOL);
-    expect(aiMessage.tool_calls?.[0]?.args).toEqual({});
-    expect(toolMessage.tool_call_id).toBe(aiMessage.tool_calls?.[0]?.id);
-    expect(toolMessage.content).toBe(result);
-    expect(toolMessage.name).toBe(FIND_CONTACT_BY_TELEGRAM_TOOL);
-    expect(hasPendingToolCalls(messages)).toBe(false);
+describe("formatContactContext", () => {
+  it("returns an empty string when context is missing", () => {
+    expect(formatContactContext(null)).toBe("");
   });
 
-  it("uses unique tool_call_id per call", () => {
-    const a = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, "{}");
-    const b = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, "{}");
-    const idA = (a[0] as AIMessage).tool_calls?.[0]?.id;
-    const idB = (b[0] as AIMessage).tool_calls?.[0]?.id;
-    expect(idA).toBeTruthy();
-    expect(idB).toBeTruthy();
-    expect(idA).not.toBe(idB);
+  it("renders an empty contacts list so the model does not re-fetch", () => {
+    const block = formatContactContext({ contacts: [] });
+    expect(block).toContain("<find_contact_by_telegram>");
+    expect(block).toContain('"contacts":[]');
+  });
+
+  it("renders error lookups as a completed prefetch block", () => {
+    const block = formatContactContext({ contacts: [], error: "CRM down" });
+    expect(block).toContain("<find_contact_by_telegram>");
+    expect(block).toContain('"error":"CRM down"');
+  });
+
+  it("wraps the contact payload for uncached system metadata", () => {
+    const block = formatContactContext(listedContact);
+    expect(block).toContain("<find_contact_by_telegram>");
+    expect(block).toContain("</find_contact_by_telegram>");
+    expect(block).toContain(JSON.stringify(listedContact));
   });
 });
 
 describe("createAgentPrepareNode with prefetch", () => {
-  it("keeps original human message and appends prefetched tools", async () => {
+  it("keeps original human message without synthetic ToolMessages", async () => {
     const prepare = createAgentPrepareNode("booking", {
       prefetch: async () => ({
-        messages: buildPrefetchedToolMessages(
-          FIND_CONTACT_BY_TELEGRAM_TOOL,
-          '{"contacts":[]}',
-        ),
+        contactContext: { contacts: [] },
         bookingContext: null,
       }),
     });
@@ -133,12 +127,11 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect(update.stepCount).toBe(0);
     expect(update.agentMessages).toBeInstanceOf(Overwrite);
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
+    expect(agentMessages).toHaveLength(1);
     expect(agentMessages[0]).toBeInstanceOf(HumanMessage);
     expect((agentMessages[0] as HumanMessage).content).toBe("Book tomorrow");
-    expect(agentMessages[1]).toBeInstanceOf(AIMessage);
-    expect(agentMessages[2]).toBeInstanceOf(ToolMessage);
-    expect((agentMessages[2] as ToolMessage).name).toBe(FIND_CONTACT_BY_TELEGRAM_TOOL);
-    expect(hasPendingToolCalls(agentMessages as never)).toBe(false);
+    expect(agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
+    expect(update.contactContext).toEqual({ contacts: [] });
     expect(update.bookingContext).toBeNull();
   });
 
@@ -178,13 +171,10 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect((agentMessages[4] as HumanMessage).content).toBe("10:00");
   });
 
-  it("injects error ToolMessage when prefetch returns error JSON", async () => {
+  it("writes contactContext when prefetch reports an error lookup", async () => {
     const prepare = createAgentPrepareNode("booking", {
       prefetch: async () => ({
-        messages: buildPrefetchedToolMessages(
-          FIND_CONTACT_BY_TELEGRAM_TOOL,
-          JSON.stringify({ error: "CRM down" }),
-        ),
+        contactContext: { contacts: [], error: "CRM down" },
         bookingContext: null,
       }),
     });
@@ -197,9 +187,8 @@ describe("createAgentPrepareNode with prefetch", () => {
     );
 
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
-    const toolMsg = agentMessages[agentMessages.length - 1] as ToolMessage;
-    expect(toolMsg).toBeInstanceOf(ToolMessage);
-    expect(JSON.parse(String(toolMsg.content))).toEqual({ error: "CRM down" });
+    expect(agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
+    expect(update.contactContext).toEqual({ contacts: [], error: "CRM down" });
   });
 
   it("skips prefetch when option omitted", async () => {
@@ -217,29 +206,24 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect((agentMessages[0] as HumanMessage).content).toBe("Hours?");
   });
 
-  it("writes bookingContext when prefetch supplies it", async () => {
+  it("writes bookingContext and contactContext when prefetch supplies them", async () => {
     const prepare = createAgentPrepareNode("booking", {
       prefetch: async () => ({
-        messages: buildPrefetchedToolMessages(
-          FIND_CONTACT_BY_TELEGRAM_TOOL,
-          '{"contacts":[{"id":"c-1"}]}',
-        ),
+        contactContext: listedContact,
         bookingContext: listedMeetings,
       }),
     });
     const update = await prepare(
       clinicState({ messages: [new HumanMessage("скасуй")] }),
     );
+    expect(update.contactContext).toEqual(listedContact);
     expect(update.bookingContext).toEqual(listedMeetings);
   });
 
   it("sets bookingContext null when prefetch reports no meetings", async () => {
     const prepare = createAgentPrepareNode("booking", {
       prefetch: async () => ({
-        messages: buildPrefetchedToolMessages(
-          FIND_CONTACT_BY_TELEGRAM_TOOL,
-          '{"contacts":[]}',
-        ),
+        contactContext: { contacts: [] },
         bookingContext: null,
       }),
     });
@@ -249,6 +233,7 @@ describe("createAgentPrepareNode with prefetch", () => {
         bookingContext: listedMeetings,
       }),
     );
+    expect(update.contactContext).toEqual({ contacts: [] });
     expect(update.bookingContext).toBeNull();
   });
 
@@ -378,7 +363,7 @@ describe("createAgentLlmNode context cache", () => {
     );
   });
 
-  it("appends listed meetings to booking dynamic context only", async () => {
+  it("appends contact and listed meetings to booking dynamic context only", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -422,6 +407,7 @@ describe("createAgentLlmNode context cache", () => {
       clinicState({
         agentMessages: [new HumanMessage("hours?")],
         bookingContext: listedMeetings,
+        contactContext: listedContact,
         next: "faq",
       }),
     );
@@ -429,6 +415,7 @@ describe("createAgentLlmNode context cache", () => {
       clinicState({
         agentMessages: [new HumanMessage("скасуй")],
         bookingContext: listedMeetings,
+        contactContext: listedContact,
         next: "booking",
       }),
     );
@@ -437,7 +424,9 @@ describe("createAgentLlmNode context cache", () => {
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
     expect(faqDynamic.content).toBe("DYNAMIC KYIV");
     expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
+    expect(String(faqDynamic.content)).not.toContain("<find_contact_by_telegram>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
+    expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));
   });
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { FIND_CONTACT_BY_TELEGRAM_TOOL } from "../agent-loop.js";
 import { prefetchBookingContext } from "../compile.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 
@@ -32,7 +31,9 @@ describe("prefetchBookingContext", () => {
     );
 
     expect(names).toEqual(["search_contacts", "search_entity"]);
-    expect(result.messages[1]).toMatchObject({ name: FIND_CONTACT_BY_TELEGRAM_TOOL });
+    expect(result.contactContext.contacts).toEqual([
+      { id: "c-1", firstName: "Ada", missingFields: ["lastName", "phoneNumber"] },
+    ]);
     expect(result.bookingContext?.meetings).toEqual([
       {
         id: "m-1",
@@ -43,7 +44,7 @@ describe("prefetchBookingContext", () => {
     ]);
   });
 
-  it("skips meetings lookup when no contact id", async () => {
+  it("sets contactContext when no contact id and skips meetings lookup", async () => {
     const names: string[] = [];
     const result = await runWithTelegramUserId("tg-1", () =>
       prefetchBookingContext(async (name) => {
@@ -52,10 +53,11 @@ describe("prefetchBookingContext", () => {
       }),
     );
     expect(names).toEqual(["search_contacts"]);
+    expect(result.contactContext).toEqual({ contacts: [] });
     expect(result.bookingContext).toBeNull();
   });
 
-  it("sets bookingContext null when meetings lookup fails", async () => {
+  it("keeps contactContext when meetings lookup fails", async () => {
     const result = await runWithTelegramUserId("tg-1", () =>
       prefetchBookingContext(async (name) => {
         if (name === "search_contacts") {
@@ -64,6 +66,9 @@ describe("prefetchBookingContext", () => {
         throw new Error("CRM down");
       }),
     );
+    expect(result.contactContext.contacts).toEqual([
+      { id: "c-1", missingFields: ["firstName", "lastName", "phoneNumber"] },
+    ]);
     expect(result.bookingContext).toBeNull();
   });
 });
