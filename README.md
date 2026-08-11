@@ -71,8 +71,8 @@ Meeting tools (booking agent):
 - `thread_id = chat.id`; per-chat exclusive graph invoke queue
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
 - `present_availability_slots` uses `search_meetings` free/busy; agent lists times in text (Inline Keyboard temporarily disabled)
-- HITL confirm is **button-only**: tap Confirm Yes/No (`Command` resume). Typing "Yes"/"No" as text starts a new turn, not a HITL resume.
-- After Yes/No, the bot edits the confirm message (appends ✓ Confirmed / ✗ Cancelled) and removes the inline keyboard, then replies with the agent outcome.
+- HITL confirm: tap Yes/No to resume with `Command`. Typing while the confirm card is pending sends the text into the interrupt (`userReply`); the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. Chat text never implicitly cancels.
+- After button Yes/No, the bot removes the inline keyboard, then replies with the agent outcome.
 
 ## Manual E2E checklist
 
@@ -81,8 +81,8 @@ Meeting tools (booking agent):
 3. Unknown user: asks phone/name, create/link writes `cTelegram`
 4. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`
 5. Type a slot time from the agent's text list (Inline Keyboard disabled)
-6. Tap Confirm Yes to book; Confirm No cancels without CRM write
-7. After Yes/No, confirm message shows status and buttons disappear
+6. Tap Confirm Yes to book; Confirm No cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`
+7. After Yes/No, agent continues; button path removes the inline keyboard
 8. Cancel: list upcoming visits → Confirm Yes soft-cancels (`Not Held`)
 9. Reschedule: pick new slot (old slot offered via `excludeMeetingIds`) → Confirm Yes updates times
 10. No recursion-limit loops after clarifying questions

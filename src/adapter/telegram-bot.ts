@@ -49,7 +49,7 @@ type OutboundReply = {
 const threadChains = new Map<string, Promise<unknown>>();
 
 /** Serialize graph invokes per Telegram chat (thread_id). */
-export const runExclusiveForThread = <T>(
+const runExclusiveForThread = <T>(
   threadId: string,
   fn: () => Promise<T>,
 ): Promise<T> => {
@@ -134,8 +134,6 @@ const lastUserFacingAiText = (messages: unknown): string => {
   return best;
 };
 
-const lastAiText = (messages: unknown): string => lastUserFacingAiText(messages);
-
 const parseSlotsPayload = (raw: string): AvailabilitySlot[] | null => {
   try {
     const parsed = JSON.parse(raw) as { slots?: unknown };
@@ -169,7 +167,7 @@ const parseSlotsPayload = (raw: string): AvailabilitySlot[] | null => {
 };
 
 /** Prefer the latest present_availability_slots tool JSON (single slot path). */
-export const findPresentedSlots = (messages: unknown): AvailabilitySlot[] | null => {
+const findPresentedSlots = (messages: unknown): AvailabilitySlot[] | null => {
   if (!Array.isArray(messages)) {
     return null;
   }
@@ -190,6 +188,13 @@ export const findPresentedSlots = (messages: unknown): AvailabilitySlot[] | null
 };
 
 type InterruptItem = { value?: unknown };
+
+const CONFIRM_BOOKING_INTERRUPT = "confirm_booking";
+
+const isConfirmBookingInterrupt = (value: unknown): boolean =>
+  !!value
+  && typeof value === "object"
+  && (value as { type?: string }).type === CONFIRM_BOOKING_INTERRUPT;
 
 type ConfirmBookingDraft = {
   name?: string;
@@ -296,11 +301,7 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
   }
   for (const item of interrupts as InterruptItem[]) {
     const value = item?.value;
-    if (
-      !value
-      || typeof value !== "object"
-      || (value as { type?: string }).type !== "confirm_booking"
-    ) {
+    if (!isConfirmBookingInterrupt(value)) {
       continue;
     }
     const draft = (value as { draft?: unknown }).draft;
@@ -312,10 +313,34 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
   return null;
 };
 
+/** True when the thread is paused on create/cancel/reschedule HITL Yes/No. */
+const hasPendingConfirmBooking = async (
+  graph: Graph,
+  threadId: string,
+): Promise<boolean> => {
+  const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+  const tasks = snapshot.tasks;
+  if (!Array.isArray(tasks)) {
+    return false;
+  }
+  for (const task of tasks) {
+    const interrupts = (task as { interrupts?: InterruptItem[] }).interrupts;
+    if (!Array.isArray(interrupts)) {
+      continue;
+    }
+    for (const item of interrupts) {
+      if (isConfirmBookingInterrupt(item?.value)) {
+        return true;
+      }
+    }
+  }
+  return false;
+};
+
 export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const record = (result && typeof result === "object" ? result : {}) as Record<string, unknown>;
   const messages = record.messages;
-  const text = lastAiText(messages) || "…";
+  const text = lastUserFacingAiText(messages) || "…";
   const confirmDraft = getConfirmBookingDraft(record);
 
   if (confirmDraft) {
@@ -338,21 +363,49 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
   return { text };
 };
 
-export const handleGraphTurn = async (
+const graphInvokeConfig = (threadId: string) => ({
+  configurable: { thread_id: threadId },
+  recursionLimit: GRAPH_RECURSION_LIMIT,
+});
+
+type GraphInvokeConfig = ReturnType<typeof graphInvokeConfig>;
+
+/** One exclusive graph session per thread. */
+const runGraphExclusive = async (
   graph: Graph,
   threadId: string,
   telegramUserId: string,
-  input: unknown,
+  run: (config: GraphInvokeConfig) => Promise<unknown>,
 ): Promise<OutboundReply> =>
   runWithTelegramUserId(telegramUserId, () =>
     runExclusiveForThread(threadId, async () => {
-      const result = await graph.invoke(input as never, {
-        configurable: { thread_id: threadId },
-        recursionLimit: GRAPH_RECURSION_LIMIT,
-      });
+      const result = await run(graphInvokeConfig(threadId));
       return interpretInvokeResult(result);
     }),
   );
+
+/**
+ * Text turn: when a confirm card is pending, resume it with the user's text in a single invoke so
+ * the pending tool call keeps its arguments instead of being cancelled.
+ */
+export const handleGraphTextTurn = async (
+  graph: Graph,
+  threadId: string,
+  telegramUserId: string,
+  text: string,
+): Promise<OutboundReply> =>
+  runGraphExclusive(graph, threadId, telegramUserId, async (config) => {
+    if (await hasPendingConfirmBooking(graph, threadId)) {
+      return graph.invoke(
+        new Command({
+          resume: { userReply: text },
+          update: { messages: [new HumanMessage(text)] },
+        }) as never,
+        config,
+      );
+    }
+    return graph.invoke({ messages: [new HumanMessage(text)] } as never, config);
+  });
 
 /** Convert common Markdown (bold + bullets) to Telegram HTML; escape first. */
 export const formatForTelegram = (text: string): string =>
@@ -400,11 +453,12 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       return;
     }
 
-    const outbound = await handleGraphTurn(
+    const threadId = String(chatId);
+    const outbound = await handleGraphTextTurn(
       graph,
-      String(chatId),
+      threadId,
       String(fromId),
-      { messages: [new HumanMessage(text)] },
+      text,
     );
     await replyOutbound(ctx, outbound);
   });
@@ -449,7 +503,12 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       return;
     }
 
-    const outbound = await handleGraphTurn(graph, String(chatId), String(fromId), input);
+    const outbound = await runGraphExclusive(
+      graph,
+      String(chatId),
+      String(fromId),
+      (config) => graph.invoke(input as never, config),
+    );
     await replyOutbound(ctx, outbound);
   });
 

@@ -28,14 +28,26 @@ export type MeetingToolsOptions = {
   assignedUserId: string;
 };
 
-/** Phase 4 Telegram Yes/No callbacks resume with this shape (LangGraph skips falsy `resume`). */
-export type BookingConfirmResume = { confirmed: boolean };
+/**
+ * HITL resume payloads: Telegram Yes/No buttons send `{ confirmed }`, chat text sent while the
+ * confirm card is pending sends `{ userReply }`. Anything else counts as a decline.
+ */
+type ConfirmDecision =
+  | { kind: "confirmed" }
+  | { kind: "chatReply"; userReply: string }
+  | { kind: "declined" };
 
-export const isBookingConfirmed = (decision: unknown): boolean =>
-  typeof decision === "object"
-  && decision !== null
-  && "confirmed" in decision
-  && (decision as BookingConfirmResume).confirmed === true;
+const parseConfirmDecision = (decision: unknown): ConfirmDecision => {
+  if (typeof decision !== "object" || decision === null) {
+    return { kind: "declined" };
+  }
+  const { confirmed, userReply } = decision as { confirmed?: unknown; userReply?: unknown };
+  if (confirmed === true) {
+    return { kind: "confirmed" };
+  }
+  const reply = typeof userReply === "string" ? userReply.trim() : "";
+  return reply.length > 0 ? { kind: "chatReply", userReply: reply } : { kind: "declined" };
+};
 
 type ConfirmDraft = {
   confirmMessage: string;
@@ -59,23 +71,35 @@ const parseEntityRecord = (raw: unknown): Record<string, unknown> => {
   return entity as Record<string, unknown>;
 };
 
+/** Execute MCP write and normalize success/error JSON (no HITL). */
+const runMeetingWrite = async (execute: () => Promise<unknown>): Promise<string> => {
+  try {
+    return toToolResult(await execute());
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return JSON.stringify({ error: message });
+  }
+};
+
 /** Shared HITL pause for create / cancel / reschedule — Telegram reuses confirm_booking Yes/No. */
 const withUserConfirm = async (
   draft: ConfirmDraft,
   execute: () => Promise<unknown>,
   cancelledMessage = "Cancelled by user.",
 ): Promise<string> => {
-  const decision = interrupt({ type: "confirm_booking", draft });
-  if (!isBookingConfirmed(decision)) {
-    return JSON.stringify({ cancelled: true, message: cancelledMessage });
+  const decision = parseConfirmDecision(interrupt({ type: "confirm_booking", draft }));
+  if (decision.kind === "confirmed") {
+    return runMeetingWrite(execute);
   }
-  try {
-    const result = await execute();
-    return toToolResult(result);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return JSON.stringify({ error: message });
+  if (decision.kind === "chatReply") {
+    return JSON.stringify({
+      awaitingConfirmation: true,
+      userReply: decision.userReply,
+      draft,
+      hint: "Nothing was written. The user replied in chat instead of tapping Yes/No. If this reply confirms the action, call this tool again with identical arguments plus confirmationGiven true. Otherwise handle their message normally.",
+    });
   }
+  return JSON.stringify({ cancelled: true, message: cancelledMessage });
 };
 
 const DAY_SCHEMA = z
@@ -90,7 +114,15 @@ const CONFIRM_MESSAGE_SCHEMA = z
   .string()
   .min(1)
   .describe(
-    "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). Ignore supervisor prompt language.",
+    "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). For HITL button caption only — not for chat text. Ignore supervisor prompt language.",
+  );
+
+const CONFIRMATION_GIVEN_SCHEMA = z
+  .boolean()
+  .optional()
+  .default(false)
+  .describe(
+    "Set true only when the user explicitly confirmed in chat after a prior call showed HITL buttons. Default false: pauses for Yes/No before writing.",
   );
 
 const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
@@ -360,6 +392,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       serviceId: string;
       description?: string;
       location?: string;
+      confirmationGiven?: boolean;
     }) => {
       let contact: Record<string, unknown> = {};
       try {
@@ -389,30 +422,30 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         dateEnd,
         confirmMessage: input.confirmMessage.trim(),
       };
+      const execute = () =>
+        callTool("create_meeting", {
+          name: input.name,
+          dateStart,
+          dateEnd,
+          assignedUserId,
+          parentType: "Contact",
+          parentId: input.contactId,
+          contactsIds: [input.contactId],
+          cServicesIds: [input.serviceId],
+          ...(input.description ? { description: input.description } : {}),
+          ...(input.location ? { location: input.location } : {}),
+          status: "Planned",
+        });
 
-      return withUserConfirm(
-        draft,
-        () =>
-          callTool("create_meeting", {
-            name: input.name,
-            dateStart,
-            dateEnd,
-            assignedUserId,
-            parentType: "Contact",
-            parentId: input.contactId,
-            contactsIds: [input.contactId],
-            cServicesIds: [input.serviceId],
-            ...(input.description ? { description: input.description } : {}),
-            ...(input.location ? { location: input.location } : {}),
-            status: "Planned",
-          }),
-        "Booking cancelled by user.",
-      );
+      if (input.confirmationGiven) {
+        return runMeetingWrite(execute);
+      }
+      return withUserConfirm(draft, execute, "Booking cancelled by user.");
     },
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). Pauses for Yes/No before writing; injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()
@@ -427,31 +460,37 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         serviceId: z.string().min(1).describe("Required cService entity id (resolve via list_services)"),
         description: z.string().optional(),
         location: z.string().optional(),
+        confirmationGiven: CONFIRMATION_GIVEN_SCHEMA,
       }),
     },
   );
 
   const cancelMeeting = tool(
-    async (input: { meetingId: string; confirmMessage: string; name?: string }) => {
+    async (input: {
+      meetingId: string;
+      confirmMessage: string;
+      name?: string;
+      confirmationGiven?: boolean;
+    }) => {
       const draft: ConfirmDraft = {
         confirmMessage: input.confirmMessage.trim(),
         ...(input.name ? { name: input.name } : {}),
       };
+      const execute = () =>
+        callTool("update_meeting", {
+          meetingId: input.meetingId,
+          status: "Not Held",
+        });
 
-      return withUserConfirm(
-        draft,
-        () =>
-          callTool("update_meeting", {
-            meetingId: input.meetingId,
-            status: "Not Held",
-          }),
-        "Cancellation cancelled by user.",
-      );
+      if (input.confirmationGiven) {
+        return runMeetingWrite(execute);
+      }
+      return withUserConfirm(draft, execute, "Cancellation cancelled by user.");
     },
     {
       name: "cancel_meeting",
       description:
-        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Requires confirmMessage (patient language). Pauses for Yes/No before writing.",
+        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true.",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
@@ -459,6 +498,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .string()
           .optional()
           .describe("Meeting name for the Yes/No caption (from list_planned_meetings)"),
+        confirmationGiven: CONFIRMATION_GIVEN_SCHEMA,
       }),
     },
   );
@@ -470,6 +510,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       dateEnd: string;
       confirmMessage: string;
       name?: string;
+      confirmationGiven?: boolean;
     }) => {
       const dateStart = normalizeLocalIsoDatetime(input.dateStart);
       const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
@@ -479,22 +520,22 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         dateEnd,
         ...(input.name ? { name: input.name } : {}),
       };
+      const execute = () =>
+        callTool("update_meeting", {
+          meetingId: input.meetingId,
+          dateStart,
+          dateEnd,
+        });
 
-      return withUserConfirm(
-        draft,
-        () =>
-          callTool("update_meeting", {
-            meetingId: input.meetingId,
-            dateStart,
-            dateEnd,
-          }),
-        "Reschedule cancelled by user.",
-      );
+      if (input.confirmationGiven) {
+        return runMeetingWrite(execute);
+      }
+      return withUserConfirm(draft, execute, "Reschedule cancelled by user.");
     },
     {
       name: "reschedule_meeting",
       description:
-        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds). Requires confirmMessage (patient language). Pauses for Yes/No before writing.",
+        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds). Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true.",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         dateStart: z.string().describe("New start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
@@ -504,6 +545,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .string()
           .optional()
           .describe("Meeting name for the Yes/No caption (from list_planned_meetings)"),
+        confirmationGiven: CONFIRMATION_GIVEN_SCHEMA,
       }),
     },
   );

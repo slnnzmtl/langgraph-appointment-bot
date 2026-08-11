@@ -1,9 +1,13 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
-import { END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
+import { Annotation, END, interrupt, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
 import { createClinicStateAnnotation } from "../../graph/state.js";
-import { formatForTelegram, interpretInvokeResult } from "../telegram-bot.js";
+import {
+  formatForTelegram,
+  handleGraphTextTurn,
+  interpretInvokeResult,
+} from "../telegram-bot.js";
 import {
   buildStartHistoryText,
   loadWelcomeMessage,
@@ -206,5 +210,54 @@ describe("interpretInvokeResult reply selection", () => {
       "✅",
       "❌",
     ]);
+  });
+});
+
+describe("text while HITL pending", () => {
+  const InterruptState = Annotation.Root({
+    result: Annotation<string>(),
+    messages: Annotation<unknown[]>({
+      reducer: (left: unknown[], right: unknown[]) => left.concat(right),
+      default: () => [],
+    }),
+  });
+
+  const buildPendingConfirmGraph = () =>
+    new StateGraph(InterruptState)
+      .addNode("ask", async () => {
+        const decision = interrupt({
+          type: "confirm_booking",
+          draft: { confirmMessage: "Confirm?" },
+        });
+        return { result: JSON.stringify(decision) };
+      })
+      .addEdge(START, "ask")
+      .addEdge("ask", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+  it("resumes pending interrupt with userReply and appends the text", async () => {
+    const graph = buildPendingConfirmGraph();
+    const threadId = "text-hitl-user-reply";
+    const first = await graph.invoke(
+      { result: "", messages: [] },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    const outbound = await handleGraphTextTurn(graph, threadId, "tg-1", "так");
+    expect(outbound.reply_markup).toBeUndefined();
+
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(snap.next).toEqual([]);
+    expect(JSON.parse(String(snap.values.result))).toEqual({ userReply: "так" });
+    const texts = (snap.values.messages as Array<{ content?: unknown }>).map(
+      (message) => message.content,
+    );
+    expect(texts).toContain("так");
+    expect(
+      (snap.tasks as Array<{ interrupts?: unknown[] }> | undefined)?.some(
+        (task) => Array.isArray(task.interrupts) && task.interrupts.length > 0,
+      ),
+    ).toBeFalsy();
   });
 });

@@ -388,6 +388,29 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 
+  it("resume userReply returns awaitingConfirmation without MCP write", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-chat-reply" } };
+
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(
+        new Command({ resume: { userReply: "так" } }),
+        config,
+      );
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
+      expect(JSON.parse(second.result)).toMatchObject({
+        awaitingConfirmation: true,
+        userReply: "так",
+        draft: {
+          name: "Consult",
+          dateStart: "2026-08-07T10:00:00",
+          dateEnd: "2026-08-07T10:30:00",
+        },
+      });
+    });
+  });
+
   it("resume confirmed:true calls create_meeting once with required fields", async () => {
     await withTg(async () => {
       const graph = buildGraph();
@@ -481,6 +504,28 @@ describe("create_meeting HITL interrupt", () => {
         error: "Contact incomplete",
         missingFields: ["lastName"],
       });
+    });
+  });
+
+  it("confirmationGiven:true skips interrupt and calls MCP create_meeting", async () => {
+    await withTg(async () => {
+      const [createMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const raw = await createMeeting!.invoke({
+        name: "Consult",
+        dateStart: "2026-08-07T10:00:00",
+        dateEnd: "2026-08-07T10:30:00",
+        contactId: "contact-1",
+        serviceId: "svc-1",
+        confirmMessage: "Confirm this booking?",
+        confirmationGiven: true,
+      });
+
+      expect(calls.filter((call) => call.name === "create_meeting")).toHaveLength(1);
+      expect(JSON.parse(String(raw))).toMatchObject({ success: true, id: "meeting-1" });
     });
   });
 });
@@ -610,6 +655,26 @@ describe("cancel_meeting HITL interrupt", () => {
       expect(JSON.parse(second.result)).toMatchObject({ success: true });
     });
   });
+
+  it("confirmationGiven:true skips interrupt and calls update_meeting", async () => {
+    await withTg(async () => {
+      const [cancelMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "cancel_meeting");
+
+      const raw = await cancelMeeting!.invoke({
+        meetingId: "mtg-1",
+        name: "Consult: Ada",
+        confirmMessage: "Cancel this appointment?",
+        confirmationGiven: true,
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.name).toBe("update_meeting");
+      expect(JSON.parse(String(raw))).toMatchObject({ success: true });
+    });
+  });
 });
 
 describe("reschedule_meeting HITL interrupt", () => {
@@ -683,6 +748,32 @@ describe("reschedule_meeting HITL interrupt", () => {
         dateEnd: "2026-08-14T11:30:00",
       });
       expect(JSON.parse(second.result)).toMatchObject({ success: true });
+    });
+  });
+
+  it("confirmationGiven:true skips interrupt and updates dates", async () => {
+    await withTg(async () => {
+      const [rescheduleMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "reschedule_meeting");
+
+      const raw = await rescheduleMeeting!.invoke({
+        meetingId: "mtg-1",
+        name: "Consult: Ada",
+        dateStart: "2026-08-14 11:00:00",
+        dateEnd: "2026-08-14 11:30:00",
+        confirmMessage: "Reschedule to this time?",
+        confirmationGiven: true,
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.args).toEqual({
+        meetingId: "mtg-1",
+        dateStart: "2026-08-14T11:00:00",
+        dateEnd: "2026-08-14T11:30:00",
+      });
+      expect(JSON.parse(String(raw))).toMatchObject({ success: true });
     });
   });
 });
