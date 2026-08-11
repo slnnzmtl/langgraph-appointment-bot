@@ -374,6 +374,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     const { adapters, config } = runtime.getBootstrap();
     const text = await loadWelcomeMessage(adapters.callTool, config.assignedUserId);
     await ctx.reply(formatForTelegram(text), { parse_mode: "HTML" });
+    await ctx.reply("Хотіли б ви дізнатися деталіше про наші послуги або записатися на прийом? 💬");
   });
 
   bot.on("text", async (ctx) => {
