@@ -1,0 +1,17 @@
+services:
+  appointment-bot:
+    build: .
+    container_name: appointment-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      TZ: Europe/Kyiv
+      ESPOCRM_MCP_URL: http://espocrm-mcp-server:3000/sse
+    networks:
+      - espocrm-mcp_default
+
+networks:
+  espocrm-mcp_default:
+    external: true

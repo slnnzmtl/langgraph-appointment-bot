@@ -4,13 +4,26 @@ Thin LangGraph clinic bot for Telegram. FAQ + booking/cancel/reschedule via Espo
 
 ## Setup
 
+EspoCRM MCP must already be running (HTTP/SSE). CRM API secrets live on that service, not this bot.
+
 ```sh
 pnpm install
 cp .env.example .env
-# set GOOGLE_API_KEY, ESPOCRM_URL, ESPOCRM_API_KEY, ESPOCRM_ASSIGNED_USER_ID
+# set GOOGLE_API_KEY, ESPOCRM_ASSIGNED_USER_ID
+# set ESPOCRM_MCP_URL=http://127.0.0.1:3000/sse for local MCP
 # set TELEGRAM_BOT_TOKEN to launch the bot
 # optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
 ```
+
+## Docker
+
+Start the sibling MCP stack first (`espocrm-mcp-server` on network `espocrm-mcp_default`). Then:
+
+```sh
+docker compose up -d --build
+```
+
+Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000/sse`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`.
 
 ## Commands
 
@@ -21,7 +34,7 @@ pnpm test:all  # app + llm-gemini package tests
 pnpm depcruise  # dependency rules (cycles, orphans, missing deps)
 pnpm depcruise:graph  # write dependency-graph.mmd (Mermaid)
 pnpm depcruise:graph:svg  # write dependency-graph.svg (needs Graphviz `dot`)
-pnpm smoke   # bootstrap + live MCP stdio
+pnpm smoke   # bootstrap + live MCP SSE (`ESPOCRM_MCP_URL`)
 pnpm smoke -- --invoke    # FAQ routing via Gemini
 pnpm smoke -- --identity  # known vs unknown telegram_id booking smoke
 pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is set

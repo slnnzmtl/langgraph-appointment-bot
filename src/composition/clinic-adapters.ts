@@ -1,5 +1,5 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 import type { AppConfig } from "../config.js";
 import type { McpCallTool } from "../shared/mcp.js";
@@ -31,33 +31,8 @@ const parseToolResponse = (response: unknown): unknown => {
   }
 };
 
-const buildChildEnv = (config: AppConfig): Record<string, string> => {
-  const env: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined) {
-      env[key] = value;
-    }
-  }
-
-  env.TRANSPORT_MODE = "stdio";
-  env.ESPOCRM_URL = config.espocrmUrl;
-  env.ESPOCRM_API_KEY = config.espocrmApiKey;
-  env.ESPOCRM_AUTH_METHOD = config.espocrmAuthMethod;
-  if (config.espocrmSecretKey) {
-    env.ESPOCRM_SECRET_KEY = config.espocrmSecretKey;
-  }
-
-  return env;
-};
-
 export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdapters> => {
-  const transport = new StdioClientTransport({
-    command: config.espocrmMcpCommand,
-    args: config.espocrmMcpArgs,
-    cwd: config.espocrmMcpCwd,
-    env: buildChildEnv(config),
-  });
+  const transport = new SSEClientTransport(new URL(config.espocrmMcpUrl));
 
   const client = new Client(
     { name: "clinic-espocrm-mcp", version: "0.1.0" },
