@@ -28,6 +28,8 @@ const PRESENT_SLOTS_TOOL = "present_availability_slots";
 /** Temporary: list slots in agent text; re-enable Inline Keyboard later. */
 const SLOT_INLINE_KEYBOARD_ENABLED = false;
 const GRAPH_RECURSION_LIMIT = 40;
+/** Telegram typing action lasts ~5s; refresh before it expires. */
+const TYPING_REFRESH_MS = 4_000;
 
 type Graph = ReturnType<ClinicRuntime["getGraph"]>;
 
@@ -47,6 +49,24 @@ type OutboundReply = {
 };
 
 const threadChains = new Map<string, Promise<unknown>>();
+
+/** Keep Telegram "typing" visible while `work` (graph invoke) is in progress. */
+export const withTypingIndicator = async <T>(
+  telegram: Pick<Context["telegram"], "sendChatAction">,
+  chatId: number,
+  work: () => Promise<T>,
+): Promise<T> => {
+  const sendTyping = () =>
+    telegram.sendChatAction(chatId, "typing").catch(() => undefined);
+
+  await sendTyping();
+  const interval = setInterval(sendTyping, TYPING_REFRESH_MS);
+  try {
+    return await work();
+  } finally {
+    clearInterval(interval);
+  }
+};
 
 /** Serialize graph invokes per Telegram chat (thread_id). */
 const runExclusiveForThread = <T>(
@@ -454,11 +474,13 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     }
 
     const threadId = String(chatId);
-    const outbound = await handleGraphTextTurn(
-      graph,
-      threadId,
-      String(fromId),
-      text,
+    const outbound = await withTypingIndicator(ctx.telegram, chatId, () =>
+      handleGraphTextTurn(
+        graph,
+        threadId,
+        String(fromId),
+        text,
+      ),
     );
     await replyOutbound(ctx, outbound);
   });
@@ -503,11 +525,13 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       return;
     }
 
-    const outbound = await runGraphExclusive(
-      graph,
-      String(chatId),
-      String(fromId),
-      (config) => graph.invoke(input as never, config),
+    const outbound = await withTypingIndicator(ctx.telegram, chatId, () =>
+      runGraphExclusive(
+        graph,
+        String(chatId),
+        String(fromId),
+        (config) => graph.invoke(input as never, config),
+      ),
     );
     await replyOutbound(ctx, outbound);
   });

@@ -1,12 +1,13 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { Annotation, END, interrupt, MemorySaver, START, StateGraph } from "@langchain/langgraph";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createClinicStateAnnotation } from "../../graph/state.js";
 import {
   formatForTelegram,
   handleGraphTextTurn,
   interpretInvokeResult,
+  withTypingIndicator,
 } from "../telegram-bot.js";
 import {
   buildStartHistoryText,
@@ -259,5 +260,63 @@ describe("text while HITL pending", () => {
         (task) => Array.isArray(task.interrupts) && task.interrupts.length > 0,
       ),
     ).toBeFalsy();
+  });
+});
+
+describe("withTypingIndicator", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("sends typing once immediately and returns the work result", async () => {
+    const sendChatAction = vi.fn().mockResolvedValue(true);
+    const result = await withTypingIndicator(
+      { sendChatAction },
+      42,
+      async () => "done",
+    );
+
+    expect(result).toBe("done");
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+    expect(sendChatAction).toHaveBeenCalledWith(42, "typing");
+  });
+
+  it("clears the interval and rethrows when work fails", async () => {
+    const sendChatAction = vi.fn().mockResolvedValue(true);
+    await expect(
+      withTypingIndicator({ sendChatAction }, 7, async () => {
+        throw new Error("graph failed");
+      }),
+    ).rejects.toThrow("graph failed");
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes typing after 4s while work is still running", async () => {
+    vi.useFakeTimers();
+    const sendChatAction = vi.fn().mockResolvedValue(true);
+    let resolveWork: (() => void) | undefined;
+    const work = new Promise<string>((resolve) => {
+      resolveWork = () => resolve("slow");
+    });
+
+    const pending = withTypingIndicator({ sendChatAction }, 1, () => work);
+    await Promise.resolve();
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(sendChatAction).toHaveBeenCalledTimes(2);
+
+    resolveWork?.();
+    await expect(pending).resolves.toBe("slow");
+  });
+
+  it("does not block work when sendChatAction fails", async () => {
+    const sendChatAction = vi.fn().mockRejectedValue(new Error("network"));
+    const result = await withTypingIndicator(
+      { sendChatAction },
+      3,
+      async () => "ok",
+    );
+    expect(result).toBe("ok");
   });
 });
