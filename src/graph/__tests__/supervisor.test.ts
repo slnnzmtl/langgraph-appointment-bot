@@ -249,3 +249,94 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(update.messages).toBeUndefined();
   });
 });
+
+describe("createClinicSupervisorNode patient prefetch", () => {
+  const invoke = vi.fn();
+  const bindRoutingTools = vi.fn(() => ({ invoke }));
+  const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
+
+  const listedContact = {
+    contacts: [{ id: "c-1", firstName: "Марія" }],
+  };
+  const listedMeetings = {
+    meetings: [
+      {
+        id: "m-1",
+        name: "Консультація: Марія",
+        dateStart: "2026-08-12 10:00:00",
+        dateEnd: "2026-08-12 10:30:00",
+      },
+    ],
+    dateFrom: "2026-08-11",
+  };
+
+  beforeEach(() => {
+    invoke.mockReset();
+    bindRoutingTools.mockClear();
+    invoke.mockResolvedValue({ next: "FINISH", reply: "Привіт, Марія" });
+  });
+
+  it("injects contact and planned meetings into dynamic context and state", async () => {
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      buildSupervisorDynamicContext: () => "DYNAMIC",
+      prefetch: async () => ({
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+      }),
+    });
+
+    const update = await node({
+      messages: [new HumanMessage("привіт")],
+      agentMessages: [],
+      stepCount: 0,
+      next: undefined,
+      lastHandoff: null,
+      bookingContext: null,
+      contactContext: null,
+    });
+
+    const messages = invoke.mock.calls[0]?.[0] as unknown[];
+    expect(messages[0]).toBeInstanceOf(SystemMessage);
+    const system = String((messages[0] as SystemMessage).content);
+    expect(system).toContain("DYNAMIC");
+    expect(system).toContain("<find_contact_by_telegram>");
+    expect(system).toContain("Марія");
+    expect(system).toContain("<list_planned_meetings>");
+    expect(system).toContain("Консультація: Марія");
+    expect(update.contactContext).toEqual(listedContact);
+    expect(update.bookingContext).toEqual(listedMeetings);
+  });
+
+  it("still greets when prefetch throws", async () => {
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      buildSupervisorDynamicContext: () => "DYNAMIC",
+      prefetch: async () => {
+        throw new Error("CRM down");
+      },
+    });
+
+    const update = await node({
+      messages: [new HumanMessage("hello")],
+      agentMessages: [],
+      stepCount: 0,
+      next: undefined,
+      lastHandoff: null,
+      bookingContext: null,
+      contactContext: null,
+    });
+
+    const messages = invoke.mock.calls[0]?.[0] as unknown[];
+    const system = String((messages[0] as SystemMessage).content);
+    expect(system).toContain("DYNAMIC");
+    expect(system).not.toContain("<find_contact_by_telegram>");
+    expect(system).not.toContain("<list_planned_meetings>");
+    expect(update.next).toBe("FINISH");
+    expect(update.contactContext).toBeUndefined();
+  });
+});

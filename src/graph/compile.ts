@@ -26,8 +26,8 @@ import {
   routeAfterAgentLlm,
   routeAfterAgentTools,
   toolsNodeName,
-  type AgentPrefetchResult,
 } from "./agent-loop.js";
+import type { AgentPrefetchResult } from "./context-blocks.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
   createClinicSupervisorNode,
@@ -52,7 +52,7 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
-  /** When set, booking prepare prefetches Telegram contact and planned meetings. */
+  /** When set, supervisor prefetches Telegram contact and planned meetings (booking prepare refreshes). */
   bookingPrefetchCallTool?: McpCallTool;
 };
 
@@ -73,6 +73,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     messageHistoryMaxTokens: options.messageHistoryMaxTokens,
   });
 
+  const callTool = options.bookingPrefetchCallTool;
+  const prefetch = callTool ? () => prefetchBookingContext(callTool) : undefined;
+
   const supervisorNode = createClinicSupervisorNode({
     agents: options.agents,
     supervisorLlm: options.supervisorLlm,
@@ -80,6 +83,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(options.buildSupervisorDynamicContext
       ? { buildSupervisorDynamicContext: options.buildSupervisorDynamicContext }
       : {}),
+    ...(prefetch ? { prefetch } : {}),
     ...(options.contextCache ? { contextCache: options.contextCache } : {}),
   });
 
@@ -97,12 +101,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
 
-    const bookingPrefetchCallTool = options.bookingPrefetchCallTool;
     const prepareNode =
-      agent.id === BOOKING_AGENT_ID && bookingPrefetchCallTool
-        ? createAgentPrepareNode(agent.id, {
-            prefetch: async () => prefetchBookingContext(bookingPrefetchCallTool),
-          })
+      agent.id === BOOKING_AGENT_ID && prefetch
+        ? createAgentPrepareNode(agent.id, { prefetch })
         : createAgentPrepareNode(agent.id);
 
     graph = graph

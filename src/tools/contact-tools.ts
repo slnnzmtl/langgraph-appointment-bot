@@ -106,7 +106,7 @@ export const extractContactIdFromSearchResult = (contactJson: string): string | 
   return typeof id === "string" && id.length > 0 ? id : null;
 };
 
-/** Shared by find_contact_by_telegram tool and booking prepare prefetch. */
+/** Shared by find_contact_by_telegram tool and supervisor/booking prefetch. */
 export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<string> => {
   try {
     const cTelegram = getTelegramUserId();

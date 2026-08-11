@@ -5,11 +5,11 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { createAgentPrepareNode } from "../agent-loop.js";
 import {
-  createAgentPrepareNode,
   formatContactContext,
   formatListedMeetingsContext,
-} from "../agent-loop.js";
+} from "../context-blocks.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/meeting-tools.js";
 import type { ClinicState } from "../state.js";

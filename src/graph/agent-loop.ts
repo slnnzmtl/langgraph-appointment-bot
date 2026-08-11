@@ -15,8 +15,11 @@ import {
 } from "@personal-assistant/llm-gemini";
 
 import { extractMessageTextContent } from "../shared/message-content.js";
-import type { ContactLookupContext } from "../tools/contact-tools.js";
-import type { BookingContext } from "../tools/meeting-tools.js";
+import {
+  formatContactContext,
+  formatListedMeetingsContext,
+  type AgentPrefetchResult,
+} from "./context-blocks.js";
 import {
   buildCachedMessages,
   buildUncachedMessages,
@@ -33,33 +36,12 @@ export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
 export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
 export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
 
-/** Uncached dynamic block — Gemini 3 drops synthetic functionCall parts without thoughtSignature. */
-export const formatListedMeetingsContext = (ctx: BookingContext | null | undefined): string => {
-  if (!ctx) {
-    return "";
-  }
-  return `<list_planned_meetings>\n${JSON.stringify({ meetings: ctx.meetings, dateFrom: ctx.dateFrom })}\n</list_planned_meetings>`;
-};
-
-/** Uncached dynamic block — Gemini 3 drops synthetic functionCall parts without thoughtSignature. */
-export const formatContactContext = (ctx: ContactLookupContext | null | undefined): string => {
-  if (!ctx) {
-    return "";
-  }
-  return `<find_contact_by_telegram>\n${JSON.stringify(ctx)}\n</find_contact_by_telegram>`;
-};
-
 export type CreateAgentLoopOptions = {
   agent: ClinicAgentDefinition;
   model: BaseChatModel;
   tools: StructuredToolInterface[];
   formatSystemMetadata: (date: Date, options?: { runtimeAgent?: string }) => string;
   contextCache?: SupervisorContextCacheOptions;
-};
-
-export type AgentPrefetchResult = {
-  contactContext: ContactLookupContext;
-  bookingContext: BookingContext | null;
 };
 
 export type AgentPrepareOptions = {

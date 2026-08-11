@@ -11,6 +11,11 @@ import {
 } from "@personal-assistant/llm-gemini";
 
 import {
+  formatContactContext,
+  formatListedMeetingsContext,
+  type AgentPrefetchResult,
+} from "./context-blocks.js";
+import {
   buildCachedMessages,
   buildUncachedMessages,
 } from "./gemini-cache-messages.js";
@@ -39,6 +44,8 @@ export type CreateClinicSupervisorNodeOptions = {
   supervisorLlm: ILLMConnector;
   loadSupervisorPrompt: () => string;
   buildSupervisorDynamicContext?: () => string;
+  /** Prefetch Telegram contact + planned meetings for greeting and booking state. */
+  prefetch?: () => Promise<AgentPrefetchResult>;
   contextCache?: SupervisorContextCacheOptions;
 };
 
@@ -117,8 +124,30 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
     const staticPrompt = options.loadSupervisorPrompt().trim();
-    const dynamic = options.buildSupervisorDynamicContext?.().trim() ?? "";
     const history = stripToolNoiseFromMessages(state.messages);
+
+    let contactContext = state.contactContext;
+    let bookingContext = state.bookingContext;
+    let prefetchUpdate: ClinicStateUpdate = {};
+    if (options.prefetch) {
+      try {
+        const prefetched = await options.prefetch();
+        contactContext = prefetched.contactContext;
+        bookingContext = prefetched.bookingContext;
+        prefetchUpdate = prefetched;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[clinic-supervisor] prefetch failed:", message);
+      }
+    }
+
+    const dynamic = [
+      options.buildSupervisorDynamicContext?.().trim() ?? "",
+      formatContactContext(contactContext),
+      formatListedMeetingsContext(bookingContext),
+    ]
+      .filter((part) => part.length > 0)
+      .join("\n\n");
 
     let decision: ClinicRoutingDecision;
     try {
@@ -156,9 +185,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error("[clinic-supervisor] routing failed:", message);
-      return routingFailureUpdate(message);
+      return { ...routingFailureUpdate(message), ...prefetchUpdate };
     }
 
-    return resolveRoutingDecision(decision, state, enabledIds);
+    return { ...resolveRoutingDecision(decision, state, enabledIds), ...prefetchUpdate };
   };
 };
