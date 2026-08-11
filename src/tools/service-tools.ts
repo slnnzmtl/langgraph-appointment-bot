@@ -4,6 +4,9 @@ import { z } from "zod";
 import type { McpCallTool } from "../shared/mcp.js";
 import { toToolResult } from "./tool-result.js";
 
+const USD_UAH_URL =
+  "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json";
+
 export type ReadToolsOptions = {
   callTool: McpCallTool;
   assignedUserId: string;
@@ -33,14 +36,8 @@ const compactServiceRecord = (raw: unknown): unknown => {
   if (typeof record.name === "string") {
     compact.name = record.name;
   }
-  if (record.price !== undefined && record.price !== null) {
-    compact.price = record.price;
-  }
   if (record.duration !== undefined && record.duration !== null) {
     compact.duration = record.duration;
-  }
-  if (typeof record.priceCurrency === "string") {
-    compact.priceCurrency = record.priceCurrency;
   }
   if (typeof record.description === "string" && record.description.trim().length > 0) {
     compact.description = record.description.trim();
@@ -75,6 +72,56 @@ const compactListServicesResult = (result: unknown): unknown => {
   if (typeof record.total === "number") {
     compact.total = record.total;
   }
+  return compact;
+};
+
+/** Keep FAQ-relevant get_service fields; drop CRM audit and relation metadata. */
+const compactGetServiceResult = (result: unknown): unknown => {
+  let value: unknown = result;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return result;
+    }
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return result;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.error === "string") {
+    return result;
+  }
+
+  const compact: Record<string, unknown> = {};
+  if (typeof record.name === "string") {
+    compact.name = record.name;
+  }
+  if (typeof record.description === "string" && record.description.trim().length > 0) {
+    compact.description = record.description.trim();
+  }
+  if (record.price !== undefined && record.price !== null) {
+    compact.price = record.price;
+  }
+  if (typeof record.priceCurrency === "string") {
+    compact.currency = record.priceCurrency;
+  }
+  if (record.priceUah !== undefined && record.priceUah !== null) {
+    compact.priceUah = record.priceUah;
+  }
+
+  const names = record.medicationsNames;
+  if (names && typeof names === "object" && !Array.isArray(names)) {
+    const medications = Object.values(names as Record<string, unknown>).filter(
+      (item): item is string => typeof item === "string" && item.trim().length > 0,
+    );
+    if (medications.length > 0) {
+      compact.medications = medications;
+    }
+  }
+
   return compact;
 };
 
@@ -116,7 +163,7 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
     async (input: { limit?: number }) => listServices(callTool, input.limit ?? 50),
     {
       name: "list_services",
-      description: "List clinic services (cService) from EspoCRM: names, pricing, duration.",
+      description: "List clinic services (cService) from EspoCRM: names and duration (no pricing — use get_service for prices).",
       schema: z.object({
         limit: z.number().int().min(1).max(200).optional().describe("Max services to return"),
       }),
@@ -130,7 +177,35 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
           entityType: "cService",
           entityId: input.serviceId,
         });
-        return toToolResult(result);
+        let entity: unknown = result;
+        if (typeof entity === "string") {
+          try {
+            entity = JSON.parse(entity) as unknown;
+          } catch {
+            return toToolResult(result);
+          }
+        }
+        if (entity && typeof entity === "object" && !Array.isArray(entity)) {
+          const record = entity as Record<string, unknown>;
+          const price = record.price;
+          if (
+            record.priceCurrency === "USD" &&
+            typeof price === "number" &&
+            Number.isFinite(price)
+          ) {
+            try {
+              const response = await fetch(USD_UAH_URL);
+              const json = (await response.json()) as { usd?: { uah?: unknown } };
+              const rate = json.usd?.uah;
+              if (typeof rate === "number" && Number.isFinite(rate)) {
+                record.priceUah = Math.round(price * rate);
+              }
+            } catch {
+              // Keep CRM entity unchanged when FX lookup fails.
+            }
+          }
+        }
+        return toToolResult(compactGetServiceResult(entity));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return JSON.stringify({ error: message });
