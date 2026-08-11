@@ -1,8 +1,14 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
+import { createClinicStateAnnotation } from "../../graph/state.js";
 import { formatForTelegram, interpretInvokeResult } from "../telegram-bot.js";
-import { loadWelcomeMessage } from "../welcome-message.js";
+import {
+  buildStartHistoryText,
+  loadWelcomeMessage,
+  recordWelcomeInHistory,
+} from "../welcome-message.js";
 
 describe("formatForTelegram", () => {
   it("converts Markdown bold to HTML bold", () => {
@@ -45,15 +51,14 @@ describe("welcome message", () => {
 
   it("includes intro, categorized services, and CRM hours without prices", async () => {
     const message = await loadWithHours(crmHours);
-    expect(message).toContain("Welcome to **Clinic**.");
-    expect(message).toContain("**Consultations**");
-    expect(message).toContain("Консультація");
-    expect(message).toContain("**Injectables**");
+    expect(message).toContain("Катерини Федченко");
+    expect(message).toContain("Консультації та дерматологія");
+    expect(message).toContain("Консультація дерматолога-косметолога");
+    expect(message).toContain("Ін'єкційна косметологія");
     expect(message).toContain("Біоревіталізація");
-    expect(message).toContain("**Skin care**");
-    expect(message).toContain("Пілінг");
-    expect(message).toContain("Mon–Fri: 11:00–15:00");
-    expect(message).toContain("Sat–Sun: closed");
+    expect(message).toContain("Скинкери");
+    expect(message).toContain("Понеділок–П'ятниця: 11:00–15:00");
+    expect(message).toContain("Субота–Неділя: вихідний");
     expect(message).not.toMatch(/UAH|USD|\$|грн/i);
   });
 
@@ -79,16 +84,16 @@ describe("welcome message", () => {
         ],
       }),
     );
-    expect(message).toContain("Mon–Thu: 09:00–18:00");
-    expect(message).toContain("Fri: 09:00–14:00");
-    expect(message).toContain("Sat–Sun: closed");
+    expect(message).toContain("Понеділок–Четвер: 09:00–18:00");
+    expect(message).toContain("П'ятниця: 09:00–14:00");
+    expect(message).toContain("Субота–Неділя: вихідний");
   });
 
   it("does not use clinic-constant fallback hours when CRM fails", async () => {
     expect((await loadWithHours(JSON.stringify({ error: "MCP down" }))).includes(
-      "Currently unavailable.",
+      "Час роботи наразі недоступний.",
     )).toBe(true);
-    expect((await loadWithHours("{}")).includes("Currently unavailable.")).toBe(true);
+    expect((await loadWithHours("{}")).includes("Час роботи наразі недоступний.")).toBe(true);
   });
 
   it("loadWelcomeMessage reads hours via get_working_time", async () => {
@@ -99,16 +104,35 @@ describe("welcome message", () => {
     }, "user-1");
 
     expect(calls).toEqual([{ name: "get_working_time", args: { userId: "user-1" } }]);
-    expect(message).toContain("Mon–Fri: 11:00–15:00");
+    expect(message).toContain("Понеділок–П'ятниця: 11:00–15:00");
   });
 
   it("formats to Telegram HTML with bold headings and bullets", async () => {
     const html = formatForTelegram(await loadWithHours(crmHours));
-    expect(html).toContain("<b>Clinic</b>");
-    expect(html).toContain("<b>Consultations</b>");
-    expect(html).toContain("• Консультація");
-    expect(html).toContain("• Mon–Fri: 11:00–15:00");
-    expect(html).not.toContain("*Consultations*");
+    expect(html).toContain("<b>Години роботи</b>");
+    expect(html).toContain("• Консультація дерматолога-косметолога");
+    expect(html).toContain("• Понеділок–П'ятниця: 11:00–15:00");
+  });
+});
+
+describe("recordWelcomeInHistory", () => {
+  it("appends the welcome as an AIMessage on the chat thread", async () => {
+    const state = createClinicStateAnnotation({ messageHistoryMaxTokens: 6000 });
+    const graph = new StateGraph(state)
+      .addNode("noop", async () => ({}))
+      .addEdge(START, "noop")
+      .addEdge("noop", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+    const threadId = "welcome-history-1";
+    const welcome = buildStartHistoryText("Clinic intro");
+    await recordWelcomeInHistory(graph, threadId, welcome);
+
+    const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+    const messages = snapshot.values.messages as AIMessage[];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toBeInstanceOf(AIMessage);
+    expect(messages[0]?.content).toBe(welcome);
   });
 });
 

@@ -1,4 +1,4 @@
-import { HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
@@ -17,7 +17,12 @@ import {
   slotChoiceHumanText,
   type InlineKeyboardMarkup,
 } from "./telegram-ui.js";
-import { loadWelcomeMessage } from "./welcome-message.js";
+import {
+  buildStartHistoryText,
+  loadWelcomeMessage,
+  recordWelcomeInHistory,
+  START_FOLLOW_UP,
+} from "./welcome-message.js";
 
 const PRESENT_SLOTS_TOOL = "present_availability_slots";
 /** Temporary: list slots in agent text; re-enable Inline Keyboard later. */
@@ -371,10 +376,20 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
   const bot = new Telegraf(token);
 
   bot.start(async (ctx) => {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) {
+      return;
+    }
+
     const { adapters, config } = runtime.getBootstrap();
-    const text = await loadWelcomeMessage(adapters.callTool, config.assignedUserId);
-    await ctx.reply(formatForTelegram(text), { parse_mode: "HTML" });
-    await ctx.reply("Хотіли б ви дізнатися деталіше про наші послуги або записатися на прийом? 💬");
+    const welcome = await loadWelcomeMessage(adapters.callTool, config.assignedUserId);
+    await ctx.reply(formatForTelegram(welcome), { parse_mode: "HTML" });
+    await ctx.reply(START_FOLLOW_UP);
+
+    const threadId = String(chatId);
+    await runExclusiveForThread(threadId, () =>
+      recordWelcomeInHistory(graph, threadId, buildStartHistoryText(welcome)),
+    );
   });
 
   bot.on("text", async (ctx) => {

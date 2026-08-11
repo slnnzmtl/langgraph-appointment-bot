@@ -1,3 +1,6 @@
+import { AIMessage } from "@langchain/core/messages";
+
+import type { ClinicRuntime } from "../composition/clinic-runtime.js";
 import { CLINIC_ADDRESS } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import {
@@ -10,7 +13,7 @@ import { getWorkingTime } from "../tools/service-tools.js";
 const DAY_LABELS = ["Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "П'ятниця", "Субота"] as const;
 /** Mon–Sun display order (EspoCRM weekday 0 = Sunday … 6 = Saturday). */
 const DISPLAY_WEEKDAYS = ["1", "2", "3", "4", "5", "6", "0"] as const;
-const HOURS_UNAVAILABLE = "Currently unavailable.";
+const HOURS_UNAVAILABLE = "Час роботи наразі недоступний.";
 
 const WELCOME_PREFIX = `✨ Ласкаво просимо до косметологічної клініки Катерини Федченко!
 
@@ -109,4 +112,24 @@ export const loadWelcomeMessage = async (
 ): Promise<string> => {
   const raw = await getWorkingTime(callTool, { userId: assignedUserId });
   return buildWelcomeMessage(raw);
+};
+
+export const START_FOLLOW_UP =
+  "Хотіли б ви дізнатися деталіше про наші послуги або записатися на прийом? 💬";
+
+export const buildStartHistoryText = (welcome: string): string =>
+  `${welcome}\n\n${START_FOLLOW_UP}`;
+
+type Graph = ReturnType<ClinicRuntime["getGraph"]>;
+
+/** Append welcome copy to checkpointed messages without running the supervisor. */
+export const recordWelcomeInHistory = async (
+  graph: Graph,
+  threadId: string,
+  welcomeText: string,
+): Promise<void> => {
+  await graph.updateState(
+    { configurable: { thread_id: threadId } },
+    { messages: [new AIMessage(welcomeText)] },
+  );
 };

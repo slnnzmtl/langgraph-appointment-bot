@@ -67,7 +67,7 @@ Meeting tools (booking agent):
 
 ## Telegram behaviour
 
-- `/start` replies with a static intro and categorized services (no prices); working hours come from CRM `get_working_time`
+- `/start` replies with a static intro and categorized services (no prices); working hours come from CRM `get_working_time`; the same text is appended to the chat's graph message history as an `AIMessage` so later agent turns see it
 - `thread_id = chat.id`; per-chat exclusive graph invoke queue
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
 - `present_availability_slots` uses `search_meetings` free/busy; agent lists times in text (Inline Keyboard temporarily disabled)
