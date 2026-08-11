@@ -20,6 +20,7 @@ import {
   type TimeRangePair,
   type WorkingTimeCalendarLike,
 } from "./availability-slots.js";
+import { contactMissingFields } from "./contact-tools.js";
 import { toToolResult } from "./tool-result.js";
 
 export type MeetingToolsOptions = {
@@ -41,6 +42,21 @@ type ConfirmDraft = {
   name?: string;
   dateStart?: string;
   dateEnd?: string;
+};
+
+const parseEntityRecord = (raw: unknown): Record<string, unknown> => {
+  let entity: unknown = raw;
+  if (typeof entity === "string") {
+    try {
+      entity = JSON.parse(entity) as unknown;
+    } catch {
+      return {};
+    }
+  }
+  if (!entity || typeof entity !== "object" || Array.isArray(entity)) {
+    return {};
+  }
+  return entity as Record<string, unknown>;
 };
 
 /** Shared HITL pause for create / cancel / reschedule — Telegram reuses confirm_booking Yes/No. */
@@ -345,6 +361,26 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       description?: string;
       location?: string;
     }) => {
+      let contact: Record<string, unknown> = {};
+      try {
+        contact = parseEntityRecord(
+          await callTool("get_entity", {
+            entityType: "Contact",
+            entityId: input.contactId,
+          }),
+        );
+      } catch {
+        contact = {};
+      }
+      const missing = contactMissingFields(contact);
+      if (missing.length > 0) {
+        return JSON.stringify({
+          error: "Contact incomplete",
+          missingFields: missing,
+          hint: "Ask for these fields, call update_contact, then retry create_meeting.",
+        });
+      }
+
       const dateStart = normalizeLocalIsoDatetime(input.dateStart);
       const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
       const draft = {
@@ -381,7 +417,9 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         name: z
           .string()
           .min(1)
-          .describe('Meeting title as "[service-name]: [client-name]" (e.g. "Консультація: Daniel")'),
+          .describe(
+            'Meeting title as "[service-name]: [firstName lastName]" (e.g. "Консультація: Daniel Kovalenko")',
+          ),
         dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         contactId: z.string().min(1).describe("Patient Contact id"),

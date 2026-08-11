@@ -36,6 +36,12 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 - `src/prompts/` — supervisor / FAQ / booking prompts (source of truth with `src/composition/agents.ts`)
 - `packages/llm-gemini` — Gemini connector + explicit context cache for supervisor routing (`GEMINI_CONTEXT_CACHE`, default on)
 
+## FAQ / services
+
+- Catalog questions (`list_services`): short categorized summary; **no prices** in the tool payload or reply
+- Pricing: `get_service` for the matched service only; quote only what the user asked for
+- USD → UAH: when CRM `priceCurrency` is USD, `get_service` fetches `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) and attaches `priceUah`; FAQ quotes it only if the user asks in UAH (FX failure → native USD, no invented rates)
+
 ## Booking tools
 
 Meeting tools (booking agent):
@@ -57,11 +63,12 @@ Meeting tools (booking agent):
 ## Manual E2E checklist
 
 1. Known Telegram user: booking skips phone/name after `cTelegram` lookup
-2. Unknown user: asks phone/name, create/link writes `cTelegram`
-3. FAQ: hours/services answered from CRM tools
-4. Type a slot time from the agent's text list (Inline Keyboard disabled)
-5. Tap Confirm Yes to book; Confirm No cancels without CRM write
-6. After Yes/No, confirm message shows status and buttons disappear
-7. Cancel: list upcoming visits → Confirm Yes soft-cancels (`Not Held`)
-8. Reschedule: pick new slot (old slot offered via `excludeMeetingIds`) → Confirm Yes updates times
-9. No recursion-limit loops after clarifying questions
+2. Incomplete CRM contact (missing firstName/lastName/phone): collect them at book time, then `update_contact` before confirm
+3. Unknown user: asks phone/name, create/link writes `cTelegram`
+4. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`
+5. Type a slot time from the agent's text list (Inline Keyboard disabled)
+6. Tap Confirm Yes to book; Confirm No cancels without CRM write
+7. After Yes/No, confirm message shows status and buttons disappear
+8. Cancel: list upcoming visits → Confirm Yes soft-cancels (`Not Held`)
+9. Reschedule: pick new slot (old slot offered via `excludeMeetingIds`) → Confirm Yes updates times
+10. No recursion-limit loops after clarifying questions

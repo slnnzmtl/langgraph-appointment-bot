@@ -328,8 +328,18 @@ describe("create_meeting HITL interrupt", () => {
     calls.length = 0;
   });
 
+  const completeContact = {
+    id: "contact-1",
+    firstName: "Ada",
+    lastName: "Lovelace",
+    phoneNumber: "+380501112233",
+  };
+
   const callTool = async (name: string, args: Record<string, unknown>) => {
     calls.push({ name, args });
+    if (name === "get_entity") {
+      return completeContact;
+    }
     return { success: true, id: "meeting-1" };
   };
 
@@ -367,13 +377,13 @@ describe("create_meeting HITL interrupt", () => {
 
       const first = await graph.invoke({ result: "" }, config);
       expect(first.__interrupt__).toBeDefined();
-      expect(calls).toHaveLength(0);
+      expect(calls.map((call) => call.name)).toEqual(["get_entity"]);
 
       const second = await graph.invoke(
         new Command({ resume: { confirmed: false } }),
         config,
       );
-      expect(calls).toHaveLength(0);
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
       expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
     });
   });
@@ -384,15 +394,15 @@ describe("create_meeting HITL interrupt", () => {
       const config = { configurable: { thread_id: "hitl-confirm" } };
 
       await graph.invoke({ result: "" }, config);
-      expect(calls).toHaveLength(0);
+      expect(calls.map((call) => call.name)).toEqual(["get_entity"]);
 
       const second = await graph.invoke(
         new Command({ resume: { confirmed: true } }),
         config,
       );
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.name).toBe("create_meeting");
-      expect(calls[0]?.args).toMatchObject({
+      const createCalls = calls.filter((call) => call.name === "create_meeting");
+      expect(createCalls).toHaveLength(1);
+      expect(createCalls[0]?.args).toMatchObject({
         name: "Consult",
         dateStart: "2026-08-07T10:00:00",
         dateEnd: "2026-08-07T10:30:00",
@@ -417,9 +427,59 @@ describe("create_meeting HITL interrupt", () => {
       await graph.invoke({ result: "" }, config);
       await graph.invoke(new Command({ resume: { confirmed: true } }), config);
 
-      expect(calls[0]?.args).toMatchObject({
+      const createCall = calls.find((call) => call.name === "create_meeting");
+      expect(createCall?.args).toMatchObject({
         dateStart: "2026-08-07T09:00:00",
         dateEnd: "2026-08-07T09:30:00",
+      });
+    });
+  });
+
+  it("rejects incomplete CRM contact before HITL", async () => {
+    await withTg(async () => {
+      const incompleteCallTool = async (name: string, args: Record<string, unknown>) => {
+        calls.push({ name, args });
+        if (name === "get_entity") {
+          return {
+            id: "contact-1",
+            firstName: "Daniel",
+            lastName: null,
+            phoneNumber: "+380501234567",
+          };
+        }
+        return { success: true, id: "meeting-1" };
+      };
+
+      const [createMeeting] = createMeetingTools({
+        callTool: incompleteCallTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const graph = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const first = await graph.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-incomplete" } },
+      );
+      expect(first.__interrupt__).toBeUndefined();
+      expect(calls.map((call) => call.name)).toEqual(["get_entity"]);
+      expect(JSON.parse(first.result)).toMatchObject({
+        error: "Contact incomplete",
+        missingFields: ["lastName"],
       });
     });
   });

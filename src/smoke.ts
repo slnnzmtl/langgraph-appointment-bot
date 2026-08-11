@@ -18,6 +18,7 @@ const BOOKING_EXTRA_TOOL_NAMES = [
   "find_contact_by_phone",
   "create_contact",
   "link_telegram_to_contact",
+  "update_contact",
   "present_availability_slots",
   "create_meeting",
   "list_planned_meetings",

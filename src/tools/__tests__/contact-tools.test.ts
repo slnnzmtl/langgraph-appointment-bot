@@ -1,6 +1,11 @@
 import { describe, expect, it, beforeEach } from "vitest";
 
-import { createContactTools, lookupContactByTelegram } from "../contact-tools.js";
+import {
+  annotateContactSearchResult,
+  contactMissingFields,
+  createContactTools,
+  lookupContactByTelegram,
+} from "../contact-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -54,6 +59,32 @@ describe("contact-tools", () => {
     });
   });
 
+  it("update_contact writes name and phone via update_entity", async () => {
+    const [update] = createContactTools({ callTool }).filter((tool) => tool.name === "update_contact");
+
+    expect(update).toBeDefined();
+    await update!.invoke({
+      contactId: "c-99",
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumber: "+380501112233",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual({
+      name: "update_entity",
+      args: {
+        entityType: "Contact",
+        entityId: "c-99",
+        data: {
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+        },
+      },
+    });
+  });
+
   it("link_telegram_to_contact writes holder id via update_entity", async () => {
     await withTg(async () => {
       const [link] = createContactTools({ callTool }).filter(
@@ -88,6 +119,65 @@ describe("contact-tools", () => {
         name: "search_contacts",
         args: { cTelegram: "tg-42", limit: 5 },
       });
+    });
+  });
+
+  it("contactMissingFields treats null and blank as missing", () => {
+    expect(
+      contactMissingFields({
+        firstName: "Daniel",
+        lastName: null,
+        phoneNumber: "+380501234567",
+      }),
+    ).toEqual(["lastName"]);
+    expect(
+      contactMissingFields({
+        firstName: "Ada",
+        lastName: "  ",
+        phoneNumber: "+380501112233",
+      }),
+    ).toEqual(["lastName"]);
+    expect(
+      contactMissingFields({
+        firstName: "Ada",
+        lastName: "Lovelace",
+        phoneNumber: "+380501112233",
+      }),
+    ).toEqual([]);
+  });
+
+  it("annotateContactSearchResult flags lastName null", () => {
+    const raw = {
+      success: true,
+      total: 1,
+      contacts: [
+        {
+          id: "686f75c23dc0601e8",
+          firstName: "Daniel",
+          lastName: null,
+          phoneNumber: "+380501234567",
+        },
+      ],
+    };
+    expect(JSON.parse(annotateContactSearchResult(raw))).toMatchObject({
+      contacts: [{ missingFields: ["lastName"] }],
+    });
+  });
+
+  it("find_contact_by_phone annotates missingFields", async () => {
+    const phoneCallTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      return {
+        success: true,
+        contacts: [{ id: "c-1", firstName: "Ada", lastName: null, phoneNumber: args.phoneNumber }],
+      };
+    };
+    const [find] = createContactTools({ callTool: phoneCallTool }).filter(
+      (tool) => tool.name === "find_contact_by_phone",
+    );
+    const result = await find!.invoke({ phoneNumber: "+380501112233" });
+    expect(JSON.parse(result as string)).toMatchObject({
+      contacts: [{ missingFields: ["lastName"] }],
     });
   });
 
