@@ -9,10 +9,34 @@ import {
   buildPrefetchedToolMessages,
   createAgentPrepareNode,
   FIND_CONTACT_BY_TELEGRAM_TOOL,
-  LIST_SERVICES_TOOL,
+  formatListedMeetingsContext,
 } from "../agent-loop.js";
+import type { BookingContext } from "../../tools/meeting-tools.js";
+import type { ClinicState } from "../state.js";
 import { hasPendingToolCalls } from "../tool-routing.js";
 import type { ClinicAgentDefinition } from "../types.js";
+
+const listedMeetings: BookingContext = {
+  meetings: [
+    {
+      id: "m-1",
+      name: "Консультація: Daniel",
+      dateStart: "2026-08-17 11:00:00",
+      dateEnd: "2026-08-17 11:30:00",
+    },
+  ],
+  dateFrom: "2026-08-11",
+};
+
+const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
+  messages: [],
+  agentMessages: [],
+  stepCount: 0,
+  next: undefined,
+  lastHandoff: null,
+  bookingContext: null,
+  ...overrides,
+});
 
 const createCachedGeminiModel = vi.fn(
   (_apiKey: string, _model: string, handle: { cacheName: string }) => ({
@@ -35,6 +59,25 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
 
 const { createAgentLlmNode } = await import("../agent-loop.js");
 
+describe("formatListedMeetingsContext", () => {
+  it("returns an empty string when context is missing", () => {
+    expect(formatListedMeetingsContext(null)).toBe("");
+  });
+
+  it("renders an empty meetings list so the model does not re-fetch", () => {
+    const block = formatListedMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
+    expect(block).toContain("<list_planned_meetings>");
+    expect(block).toContain('"meetings":[]');
+  });
+
+  it("wraps the list payload for uncached system metadata", () => {
+    const block = formatListedMeetingsContext(listedMeetings);
+    expect(block).toContain("<list_planned_meetings>");
+    expect(block).toContain("</list_planned_meetings>");
+    expect(block).toContain(JSON.stringify(listedMeetings));
+  });
+});
+
 describe("buildPrefetchedToolMessages", () => {
   it("returns fulfilled AIMessage + ToolMessage pair for a given tool", () => {
     const result = '{"contacts":[{"id":"c-1"}]}';
@@ -56,14 +99,6 @@ describe("buildPrefetchedToolMessages", () => {
     expect(hasPendingToolCalls(messages)).toBe(false);
   });
 
-  it("parameterizes tool name for list_services", () => {
-    const messages = buildPrefetchedToolMessages(LIST_SERVICES_TOOL, '{"list":[]}');
-    const aiMessage = messages[0] as AIMessage;
-    const toolMessage = messages[1] as ToolMessage;
-    expect(aiMessage.tool_calls?.[0]?.name).toBe(LIST_SERVICES_TOOL);
-    expect(toolMessage.name).toBe(LIST_SERVICES_TOOL);
-  });
-
   it("uses unique tool_call_id per call", () => {
     const a = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, "{}");
     const b = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, "{}");
@@ -78,19 +113,22 @@ describe("buildPrefetchedToolMessages", () => {
 describe("createAgentPrepareNode with prefetch", () => {
   it("keeps original human message and appends prefetched tools", async () => {
     const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () => [
-        ...buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, '{"contacts":[]}'),
-        ...buildPrefetchedToolMessages(LIST_SERVICES_TOOL, '{"list":[]}'),
-      ],
+      prefetch: async () => ({
+        messages: buildPrefetchedToolMessages(
+          FIND_CONTACT_BY_TELEGRAM_TOOL,
+          '{"contacts":[]}',
+        ),
+        bookingContext: null,
+      }),
     });
 
-    const update = await prepare({
-      messages: [new HumanMessage("Book tomorrow")],
-      agentMessages: [],
-      stepCount: 5,
-      next: "booking",
-      lastHandoff: null,
-    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Book tomorrow")],
+        stepCount: 5,
+        next: "booking",
+      }),
+    );
 
     expect(update.stepCount).toBe(0);
     expect(update.agentMessages).toBeInstanceOf(Overwrite);
@@ -100,10 +138,8 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect(agentMessages[1]).toBeInstanceOf(AIMessage);
     expect(agentMessages[2]).toBeInstanceOf(ToolMessage);
     expect((agentMessages[2] as ToolMessage).name).toBe(FIND_CONTACT_BY_TELEGRAM_TOOL);
-    expect(agentMessages[3]).toBeInstanceOf(AIMessage);
-    expect(agentMessages[4]).toBeInstanceOf(ToolMessage);
-    expect((agentMessages[4] as ToolMessage).name).toBe(LIST_SERVICES_TOOL);
     expect(hasPendingToolCalls(agentMessages as never)).toBe(false);
+    expect(update.bookingContext).toBeNull();
   });
 
   it("passes full thread history including other agents' replies", async () => {
@@ -117,19 +153,18 @@ describe("createAgentPrepareNode with prefetch", () => {
       additional_kwargs: { runtimeAgentId: "booking" },
     });
 
-    const update = await prepare({
-      messages: [
-        new HumanMessage("hours?"),
-        faqReply,
-        new HumanMessage("book tomorrow"),
-        bookingReply,
-        new HumanMessage("10:00"),
-      ],
-      agentMessages: [],
-      stepCount: 0,
-      next: "booking",
-      lastHandoff: null,
-    });
+    const update = await prepare(
+      clinicState({
+        messages: [
+          new HumanMessage("hours?"),
+          faqReply,
+          new HumanMessage("book tomorrow"),
+          bookingReply,
+          new HumanMessage("10:00"),
+        ],
+        next: "booking",
+      }),
+    );
 
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
     expect(agentMessages.map((m) => m.getType())).toEqual([
@@ -145,20 +180,21 @@ describe("createAgentPrepareNode with prefetch", () => {
 
   it("injects error ToolMessage when prefetch returns error JSON", async () => {
     const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () =>
-        buildPrefetchedToolMessages(
+      prefetch: async () => ({
+        messages: buildPrefetchedToolMessages(
           FIND_CONTACT_BY_TELEGRAM_TOOL,
           JSON.stringify({ error: "CRM down" }),
         ),
+        bookingContext: null,
+      }),
     });
 
-    const update = await prepare({
-      messages: [new HumanMessage("Book")],
-      agentMessages: [],
-      stepCount: 0,
-      next: "booking",
-      lastHandoff: null,
-    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Book")],
+        next: "booking",
+      }),
+    );
 
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
     const toolMsg = agentMessages[agentMessages.length - 1] as ToolMessage;
@@ -168,19 +204,54 @@ describe("createAgentPrepareNode with prefetch", () => {
 
   it("skips prefetch when option omitted", async () => {
     const prepare = createAgentPrepareNode("faq");
-    const update = await prepare({
-      messages: [new HumanMessage("Hours?")],
-      agentMessages: [],
-      stepCount: 0,
-      next: "faq",
-      lastHandoff: null,
-    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Hours?")],
+        next: "faq",
+      }),
+    );
 
     const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
     expect(agentMessages).toHaveLength(1);
     expect(agentMessages[0]).toBeInstanceOf(HumanMessage);
     expect((agentMessages[0] as HumanMessage).content).toBe("Hours?");
   });
+
+  it("writes bookingContext when prefetch supplies it", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      prefetch: async () => ({
+        messages: buildPrefetchedToolMessages(
+          FIND_CONTACT_BY_TELEGRAM_TOOL,
+          '{"contacts":[{"id":"c-1"}]}',
+        ),
+        bookingContext: listedMeetings,
+      }),
+    });
+    const update = await prepare(
+      clinicState({ messages: [new HumanMessage("скасуй")] }),
+    );
+    expect(update.bookingContext).toEqual(listedMeetings);
+  });
+
+  it("sets bookingContext null when prefetch reports no meetings", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      prefetch: async () => ({
+        messages: buildPrefetchedToolMessages(
+          FIND_CONTACT_BY_TELEGRAM_TOOL,
+          '{"contacts":[]}',
+        ),
+        bookingContext: null,
+      }),
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("скасуй")],
+        bookingContext: listedMeetings,
+      }),
+    );
+    expect(update.bookingContext).toBeNull();
+  });
+
 });
 
 describe("createAgentLlmNode context cache", () => {
@@ -240,13 +311,12 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    const update = await node({
-      messages: [],
-      agentMessages: [new HumanMessage("hours?")],
-      stepCount: 0,
-      next: "faq",
-      lastHandoff: null,
-    });
+    const update = await node(
+      clinicState({
+        agentMessages: [new HumanMessage("hours?")],
+        next: "faq",
+      }),
+    );
 
     expect(createCachedGeminiModel).not.toHaveBeenCalled();
     expect(manager.getOrCreate).toHaveBeenCalledWith(
@@ -287,13 +357,12 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    await node({
-      messages: [],
-      agentMessages: [new HumanMessage("hours?")],
-      stepCount: 0,
-      next: "faq",
-      lastHandoff: null,
-    });
+    await node(
+      clinicState({
+        agentMessages: [new HumanMessage("hours?")],
+        next: "faq",
+      }),
+    );
 
     expect(createCachedGeminiModel).toHaveBeenCalledOnce();
     expect(bindTools).toHaveBeenCalledTimes(1);
@@ -307,6 +376,69 @@ describe("createAgentLlmNode context cache", () => {
         tools: [sampleTool],
       }),
     );
+  });
+
+  it("appends listed meetings to booking dynamic context only", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "STATIC BOOKING",
+      maxSteps: 10,
+    };
+
+    const faqNode = createAgentLlmNode({
+      agent: faqAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+    const bookingNode = createAgentLlmNode({
+      agent: bookingAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await faqNode(
+      clinicState({
+        agentMessages: [new HumanMessage("hours?")],
+        bookingContext: listedMeetings,
+        next: "faq",
+      }),
+    );
+    await bookingNode(
+      clinicState({
+        agentMessages: [new HumanMessage("скасуй")],
+        bookingContext: listedMeetings,
+        next: "booking",
+      }),
+    );
+
+    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
+    expect(faqDynamic.content).toBe("DYNAMIC KYIV");
+    expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
+    expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
+    expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));
   });
 
   it("invalidates and retries once on CachedContent not found", async () => {
@@ -340,13 +472,12 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    const update = await node({
-      messages: [],
-      agentMessages: [new HumanMessage("hours?")],
-      stepCount: 0,
-      next: "faq",
-      lastHandoff: null,
-    });
+    const update = await node(
+      clinicState({
+        agentMessages: [new HumanMessage("hours?")],
+        next: "faq",
+      }),
+    );
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
     expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
@@ -380,13 +511,12 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    const update = await node({
-      messages: [],
-      agentMessages: [new HumanMessage("hours?")],
-      stepCount: 0,
-      next: "faq",
-      lastHandoff: null,
-    });
+    const update = await node(
+      clinicState({
+        agentMessages: [new HumanMessage("hours?")],
+        next: "faq",
+      }),
+    );
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
     expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
@@ -424,13 +554,12 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    await node({
-      messages: [],
-      agentMessages: [new HumanMessage("book")],
-      stepCount: 0,
-      next: "booking",
-      lastHandoff: null,
-    });
+    await node(
+      clinicState({
+        agentMessages: [new HumanMessage("book")],
+        next: "booking",
+      }),
+    );
 
     expect(manager.getOrCreate).toHaveBeenCalledWith(
       expect.objectContaining({ displayName: "clinic-booking" }),

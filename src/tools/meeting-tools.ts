@@ -190,15 +190,20 @@ export const resolveNextAvailableStart = (input: {
   return start;
 };
 
-type PlannedMeetingRow = {
+export type ListedMeeting = {
   id: string;
   name: string;
   dateStart: string;
   dateEnd: string;
 };
 
+export type BookingContext = {
+  meetings: ListedMeeting[];
+  dateFrom: string;
+};
+
 /** Compact planned meetings from search_entity Meeting list payloads. */
-export const extractPlannedMeetingsFromEntityResult = (raw: unknown): PlannedMeetingRow[] => {
+const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] => {
   let value: unknown = raw;
   if (typeof value === "string") {
     try {
@@ -216,7 +221,7 @@ export const extractPlannedMeetingsFromEntityResult = (raw: unknown): PlannedMee
       ? (value as { meetings: unknown[] }).meetings
       : [];
 
-  const out: PlannedMeetingRow[] = [];
+  const out: ListedMeeting[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") {
       continue;
@@ -238,6 +243,33 @@ export const extractPlannedMeetingsFromEntityResult = (raw: unknown): PlannedMee
     });
   }
   return out;
+};
+
+/** Shared by list_planned_meetings tool and booking prepare prefetch. */
+export const lookupPlannedMeetings = async (
+  callTool: McpCallTool,
+  contactId: string,
+  dateFrom?: string,
+): Promise<BookingContext | null> => {
+  try {
+    const from = dateFrom ?? formatKyivLocalIso(new Date()).slice(0, 10);
+    const raw = await callTool("search_entity", {
+      entityType: "Meeting",
+      filters: {
+        parentId: contactId,
+        parentType: "Contact",
+        status: "Planned",
+        dateStart: { $gte: `${from}T00:00:00` },
+      },
+      select: ["id", "name", "dateStart", "dateEnd", "status"],
+      orderBy: "dateStart",
+      order: "asc",
+      limit: 50,
+    });
+    return { meetings: extractPlannedMeetingsFromEntityResult(raw), dateFrom: from };
+  } catch {
+    return null;
+  }
 };
 
 export const createMeetingTools = (options: MeetingToolsOptions): StructuredToolInterface[] => {
@@ -347,27 +379,8 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
 
   const listPlannedMeetings = tool(
     async (input: { contactId: string; dateFrom?: string }) => {
-      try {
-        const dateFrom = input.dateFrom ?? formatKyivLocalIso(new Date()).slice(0, 10);
-        const raw = await callTool("search_entity", {
-          entityType: "Meeting",
-          filters: {
-            parentId: input.contactId,
-            parentType: "Contact",
-            status: "Planned",
-            dateStart: { $gte: `${dateFrom}T00:00:00` },
-          },
-          select: ["id", "name", "dateStart", "dateEnd", "status"],
-          orderBy: "dateStart",
-          order: "asc",
-          limit: 50,
-        });
-        const meetings = extractPlannedMeetingsFromEntityResult(raw);
-        return JSON.stringify({ meetings, dateFrom });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message, meetings: [] });
-      }
+      const listed = await lookupPlannedMeetings(callTool, input.contactId, input.dateFrom);
+      return JSON.stringify(listed ?? { error: "Unable to list planned meetings", meetings: [] });
     },
     {
       name: "list_planned_meetings",

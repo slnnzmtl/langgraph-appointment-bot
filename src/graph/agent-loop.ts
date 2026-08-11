@@ -17,6 +17,7 @@ import {
 } from "@personal-assistant/llm-gemini";
 
 import { extractMessageTextContent } from "../shared/message-content.js";
+import type { BookingContext } from "../tools/meeting-tools.js";
 import {
   buildCachedMessages,
   buildUncachedMessages,
@@ -26,7 +27,7 @@ import { tagRuntimeAgentMessage } from "./sub-agent-messages.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import type { ClinicAgentDefinition, ClinicHandoffStatus } from "./types.js";
+import { BOOKING_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
@@ -34,7 +35,14 @@ export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
 export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
 
 export const FIND_CONTACT_BY_TELEGRAM_TOOL = "find_contact_by_telegram" as const;
-export const LIST_SERVICES_TOOL = "list_services" as const;
+
+/** Uncached dynamic block — Gemini 3 drops synthetic functionCall parts without thoughtSignature. */
+export const formatListedMeetingsContext = (ctx: BookingContext | null | undefined): string => {
+  if (!ctx) {
+    return "";
+  }
+  return `<list_planned_meetings>\n${JSON.stringify({ meetings: ctx.meetings, dateFrom: ctx.dateFrom })}\n</list_planned_meetings>`;
+};
 
 export type CreateAgentLoopOptions = {
   agent: ClinicAgentDefinition;
@@ -44,8 +52,13 @@ export type CreateAgentLoopOptions = {
   contextCache?: SupervisorContextCacheOptions;
 };
 
+export type AgentPrefetchResult = {
+  messages: BaseMessage[];
+  bookingContext: BookingContext | null;
+};
+
 export type AgentPrepareOptions = {
-  prefetch?: (scoped: BaseMessage[]) => Promise<BaseMessage[]>;
+  prefetch?: () => Promise<AgentPrefetchResult>;
 };
 
 /** Synthetic fulfilled tool exchange so booking LLM starts with prefetched tool context. */
@@ -109,14 +122,18 @@ export const createAgentPrepareNode = (_agentId: string, options?: AgentPrepareO
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
     let agentMessages = stripToolNoiseFromMessages(state.messages);
 
-    if (options?.prefetch) {
-      const prefetched = await options.prefetch(agentMessages);
-      agentMessages = [...agentMessages, ...prefetched];
+    if (!options?.prefetch) {
+      return {
+        agentMessages: new Overwrite(agentMessages),
+        stepCount: 0,
+      };
     }
 
+    const prefetched = await options.prefetch();
     return {
-      agentMessages: new Overwrite(agentMessages),
+      agentMessages: new Overwrite([...agentMessages, ...prefetched.messages]),
       stepCount: 0,
+      bookingContext: prefetched.bookingContext,
     };
   };
 
@@ -167,7 +184,12 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const stepCount = isContinuation ? state.stepCount + 1 : 1;
 
     const staticPrompt = agent.systemPrompt.trim();
-    const dynamic = formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim();
+    const dynamic = [
+      formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
+      agent.id === BOOKING_AGENT_ID ? formatListedMeetingsContext(state.bookingContext) : "",
+    ]
+      .filter((part) => part.length > 0)
+      .join("\n\n");
 
     try {
       let handle: ContextCacheHandle | null = null;

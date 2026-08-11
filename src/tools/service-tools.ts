@@ -125,7 +125,7 @@ const compactGetServiceResult = (result: unknown): unknown => {
   return compact;
 };
 
-/** Shared by list_services tool and booking prepare prefetch. */
+/** Shared by list_services tool. */
 export const listServices = async (
   callTool: McpCallTool,
   limit = 50,

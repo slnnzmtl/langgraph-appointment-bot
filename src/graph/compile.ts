@@ -1,5 +1,4 @@
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import type { BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import {
   END,
@@ -10,7 +9,11 @@ import {
 } from "@langchain/langgraph";
 
 import type { McpCallTool } from "../shared/mcp.js";
-import { lookupContactByTelegram } from "../tools/index.js";
+import {
+  extractContactIdFromSearchResult,
+  lookupContactByTelegram,
+  lookupPlannedMeetings,
+} from "../tools/index.js";
 import {
   buildPrefetchedToolMessages,
   createAgentFinalizeNode,
@@ -24,6 +27,7 @@ import {
   routeAfterAgentLlm,
   routeAfterAgentTools,
   toolsNodeName,
+  type AgentPrefetchResult,
 } from "./agent-loop.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
@@ -49,13 +53,19 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
-  /** When set, booking prepare prefetches find_contact_by_telegram before the first LLM turn. */
+  /** When set, booking prepare prefetches Telegram contact and planned meetings. */
   bookingPrefetchCallTool?: McpCallTool;
 };
 
-const prefetchBookingContext = async (callTool: McpCallTool): Promise<BaseMessage[]> => {
+export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
   const contact = await lookupContactByTelegram(callTool);
-  return buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact);
+  const messages = buildPrefetchedToolMessages(FIND_CONTACT_BY_TELEGRAM_TOOL, contact);
+  const contactId = extractContactIdFromSearchResult(contact);
+  if (!contactId) {
+    return { messages, bookingContext: null };
+  }
+  const listed = await lookupPlannedMeetings(callTool, contactId);
+  return { messages, bookingContext: listed };
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {

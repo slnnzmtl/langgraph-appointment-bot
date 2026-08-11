@@ -60,6 +60,25 @@ export const annotateContactSearchResult = (raw: unknown): string => {
   return JSON.stringify({ ...record, [key]: annotated });
 };
 
+export const extractContactIdFromSearchResult = (contactJson: string): string | null => {
+  let value: unknown;
+  try {
+    value = JSON.parse(contactJson) as unknown;
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || "error" in value) {
+    return null;
+  }
+  const rows = contactRowsFromSearch(value as Record<string, unknown>);
+  const first = rows?.[0];
+  if (!first || typeof first !== "object") {
+    return null;
+  }
+  const id = (first as Record<string, unknown>).id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+};
+
 /** Shared by find_contact_by_telegram tool and booking prepare prefetch. */
 export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<string> => {
   try {

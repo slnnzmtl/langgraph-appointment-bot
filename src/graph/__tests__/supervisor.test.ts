@@ -75,6 +75,7 @@ describe("createClinicSupervisorNode context cache", () => {
       stepCount: 0,
       next: undefined,
       lastHandoff: null,
+      bookingContext: null,
     });
 
     expect(update.next).toBe("FINISH");
@@ -112,6 +113,7 @@ describe("createClinicSupervisorNode context cache", () => {
       stepCount: 0,
       next: undefined,
       lastHandoff: null,
+      bookingContext: null,
     });
 
     expect(createCachedGeminiModel).toHaveBeenCalledOnce();
@@ -161,6 +163,7 @@ describe("createClinicSupervisorNode context cache", () => {
       stepCount: 0,
       next: undefined,
       lastHandoff: null,
+      bookingContext: null,
     });
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
@@ -202,6 +205,7 @@ describe("createClinicSupervisorNode context cache", () => {
       stepCount: 0,
       next: undefined,
       lastHandoff: null,
+      bookingContext: null,
     });
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
@@ -230,6 +234,7 @@ describe("createClinicSupervisorNode context cache", () => {
       stepCount: 0,
       next: undefined,
       lastHandoff: null,
+      bookingContext: null,
     });
 
     expect(update).toEqual({

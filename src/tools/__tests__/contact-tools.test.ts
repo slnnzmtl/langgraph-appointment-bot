@@ -4,6 +4,7 @@ import {
   annotateContactSearchResult,
   contactMissingFields,
   createContactTools,
+  extractContactIdFromSearchResult,
   lookupContactByTelegram,
 } from "../contact-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
@@ -197,6 +198,20 @@ describe("contact-tools", () => {
     expect(JSON.parse(result)).toMatchObject({
       error: expect.stringContaining("Telegram user id is not set"),
     });
+  });
+
+  it("extractContactIdFromSearchResult reads the first contact id", () => {
+    expect(
+      extractContactIdFromSearchResult(
+        JSON.stringify({ success: true, contacts: [{ id: "c-1", firstName: "Ada" }] }),
+      ),
+    ).toBe("c-1");
+    expect(
+      extractContactIdFromSearchResult(JSON.stringify({ list: [{ id: "c-2" }] })),
+    ).toBe("c-2");
+    expect(extractContactIdFromSearchResult(JSON.stringify({ error: "down" }))).toBeNull();
+    expect(extractContactIdFromSearchResult(JSON.stringify({ contacts: [] }))).toBeNull();
+    expect(extractContactIdFromSearchResult("not-json")).toBeNull();
   });
 
   it("throws when telegram user id is unset", async () => {

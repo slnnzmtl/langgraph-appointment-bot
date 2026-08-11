@@ -1,7 +1,11 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it, beforeEach } from "vitest";
 
-import { createMeetingTools, resolveNextAvailableStart } from "../meeting-tools.js";
+import {
+  createMeetingTools,
+  lookupPlannedMeetings,
+  resolveNextAvailableStart,
+} from "../meeting-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -582,6 +586,40 @@ describe("list_planned_meetings", () => {
         dateEnd: "2026-08-12T10:30:00",
       },
     ]);
+  });
+
+  it("lookupPlannedMeetings returns meetings payload and null on throw", async () => {
+    const listed = await lookupPlannedMeetings(
+      async () => ({
+        list: [
+          {
+            id: "mtg-1",
+            name: "Consult: Ada",
+            dateStart: "2026-08-12T10:00:00",
+            dateEnd: "2026-08-12T10:30:00",
+          },
+        ],
+      }),
+      "contact-9",
+      "2026-08-10",
+    );
+    expect(listed).toEqual({
+      meetings: [
+        {
+          id: "mtg-1",
+          name: "Consult: Ada",
+          dateStart: "2026-08-12T10:00:00",
+          dateEnd: "2026-08-12T10:30:00",
+        },
+      ],
+      dateFrom: "2026-08-10",
+    });
+
+    expect(
+      await lookupPlannedMeetings(async () => {
+        throw new Error("CRM down");
+      }, "contact-9"),
+    ).toBeNull();
   });
 });
 
