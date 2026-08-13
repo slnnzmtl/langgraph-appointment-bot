@@ -39,6 +39,8 @@ export type SupervisorContextCacheOptions = {
   displayName?: string;
 };
 
+export const PREFETCH_TTL_MS = 5 * 60 * 1000;
+
 export type CreateClinicSupervisorNodeOptions = {
   agents: ClinicAgentDefinition[];
   supervisorLlm: ILLMConnector;
@@ -46,8 +48,16 @@ export type CreateClinicSupervisorNodeOptions = {
   buildSupervisorDynamicContext?: () => string;
   /** Prefetch Telegram contact + planned meetings for greeting and booking state. */
   prefetch?: () => Promise<AgentPrefetchResult>;
+  /** Wall-clock freshness for checkpointed prefetch (default 5 minutes). */
+  prefetchTtlMs?: number;
   contextCache?: SupervisorContextCacheOptions;
 };
+
+export const isPrefetchExpired = (
+  fetchedAt: number | null | undefined,
+  ttlMs: number,
+  now = Date.now(),
+): boolean => fetchedAt == null || now - fetchedAt >= ttlMs;
 
 const routingFailureUpdate = (_reason: string): ClinicStateUpdate => ({
   next: FINISH_ROUTE,
@@ -125,16 +135,25 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
     const staticPrompt = options.loadSupervisorPrompt().trim();
     const history = stripToolNoiseFromMessages(state.messages);
+    const ttlMs = options.prefetchTtlMs ?? PREFETCH_TTL_MS;
 
     let contactContext = state.contactContext;
     let bookingContext = state.bookingContext;
     let prefetchUpdate: ClinicStateUpdate = {};
-    if (options.prefetch) {
+    const reusePrefetch =
+      state.contactContext != null
+      && !state.prefetchDirty
+      && !isPrefetchExpired(state.prefetchFetchedAt, ttlMs);
+    if (options.prefetch && !reusePrefetch) {
       try {
         const prefetched = await options.prefetch();
         contactContext = prefetched.contactContext;
         bookingContext = prefetched.bookingContext;
-        prefetchUpdate = prefetched;
+        prefetchUpdate = {
+          ...prefetched,
+          prefetchDirty: false,
+          prefetchFetchedAt: Date.now(),
+        };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[clinic-supervisor] prefetch failed:", message);

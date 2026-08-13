@@ -30,15 +30,17 @@ import {
 import type { AgentPrefetchResult } from "./context-blocks.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
+  PREFETCH_TTL_MS,
   createClinicSupervisorNode,
   type SupervisorContextCacheOptions,
 } from "./supervisor.js";
 import {
-  BOOKING_AGENT_ID,
   FINISH_ROUTE,
   type ClinicAgentDefinition,
   type ILLMConnector,
 } from "./types.js";
+
+export { PREFETCH_TTL_MS };
 
 export type CompileClinicGraphOptions = {
   agents: ClinicAgentDefinition[];
@@ -52,8 +54,10 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
-  /** When set, supervisor prefetches Telegram contact and planned meetings (booking prepare refreshes). */
+  /** When set, supervisor prefetches Telegram contact and planned meetings. Booking prepare reuses that state. */
   bookingPrefetchCallTool?: McpCallTool;
+  /** Override checkpoint prefetch TTL (default PREFETCH_TTL_MS). */
+  prefetchTtlMs?: number;
 };
 
 export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
@@ -84,6 +88,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       ? { buildSupervisorDynamicContext: options.buildSupervisorDynamicContext }
       : {}),
     ...(prefetch ? { prefetch } : {}),
+    prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
     ...(options.contextCache ? { contextCache: options.contextCache } : {}),
   });
 
@@ -101,13 +106,8 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
 
-    const prepareNode =
-      agent.id === BOOKING_AGENT_ID && prefetch
-        ? createAgentPrepareNode(agent.id, { prefetch })
-        : createAgentPrepareNode(agent.id);
-
     graph = graph
-      .addNode(prepare, prepareNode)
+      .addNode(prepare, createAgentPrepareNode(agent.id))
       .addNode(
         llm,
         createAgentLlmNode({

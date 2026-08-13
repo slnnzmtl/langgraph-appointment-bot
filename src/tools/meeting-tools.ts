@@ -288,7 +288,6 @@ const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] =
   return out;
 };
 
-/** Shared by list_planned_meetings tool and booking prepare prefetch. */
 export const lookupPlannedMeetings = async (
   callTool: McpCallTool,
   contactId: string,

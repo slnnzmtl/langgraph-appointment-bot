@@ -5,7 +5,7 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentPrepareNode } from "../agent-loop.js";
+import { createAgentPrepareNode, crmWriteDirtiesPrefetch } from "../agent-loop.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
@@ -39,6 +39,8 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   lastHandoff: null,
   bookingContext: null,
   contactContext: null,
+  prefetchDirty: false,
+  prefetchFetchedAt: null,
   ...overrides,
 });
 
@@ -89,38 +91,35 @@ describe("formatContactContext", () => {
 
   it("renders an empty contacts list so the model does not re-fetch", () => {
     const block = formatContactContext({ contacts: [] });
-    expect(block).toContain("<find_contact_by_telegram>");
+    expect(block).toContain("<contact_info>");
     expect(block).toContain('"contacts":[]');
   });
 
   it("renders error lookups as a completed prefetch block", () => {
     const block = formatContactContext({ contacts: [], error: "CRM down" });
-    expect(block).toContain("<find_contact_by_telegram>");
+    expect(block).toContain("<contact_info>");
     expect(block).toContain('"error":"CRM down"');
   });
 
   it("wraps the contact payload for uncached system metadata", () => {
     const block = formatContactContext(listedContact);
-    expect(block).toContain("<find_contact_by_telegram>");
-    expect(block).toContain("</find_contact_by_telegram>");
+    expect(block).toContain("<contact_info>");
+    expect(block).toContain("</contact_info>");
     expect(block).toContain(JSON.stringify(listedContact));
   });
 });
 
-describe("createAgentPrepareNode with prefetch", () => {
-  it("keeps original human message without synthetic ToolMessages", async () => {
-    const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () => ({
-        contactContext: { contacts: [] },
-        bookingContext: null,
-      }),
-    });
+describe("createAgentPrepareNode", () => {
+  it("keeps original human message without synthetic ToolMessages or CRM writes", async () => {
+    const prepare = createAgentPrepareNode("booking");
 
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Book tomorrow")],
         stepCount: 5,
         next: "booking",
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
       }),
     );
 
@@ -131,8 +130,8 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect(agentMessages[0]).toBeInstanceOf(HumanMessage);
     expect((agentMessages[0] as HumanMessage).content).toBe("Book tomorrow");
     expect(agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
-    expect(update.contactContext).toEqual({ contacts: [] });
-    expect(update.bookingContext).toBeNull();
+    expect(update.contactContext).toBeUndefined();
+    expect(update.bookingContext).toBeUndefined();
   });
 
   it("passes full thread history including other agents' replies", async () => {
@@ -170,73 +169,59 @@ describe("createAgentPrepareNode with prefetch", () => {
     expect((agentMessages[0] as HumanMessage).content).toBe("hours?");
     expect((agentMessages[4] as HumanMessage).content).toBe("10:00");
   });
+});
 
-  it("writes contactContext when prefetch reports an error lookup", async () => {
-    const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () => ({
-        contactContext: { contacts: [], error: "CRM down" },
-        bookingContext: null,
-      }),
-    });
-
-    const update = await prepare(
-      clinicState({
-        messages: [new HumanMessage("Book")],
-        next: "booking",
-      }),
-    );
-
-    const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
-    expect(agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
-    expect(update.contactContext).toEqual({ contacts: [], error: "CRM down" });
+describe("crmWriteDirtiesPrefetch", () => {
+  it("is true for a successful CRM write tool result", () => {
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-1" }),
+          tool_call_id: "1",
+          name: "create_contact",
+        }),
+      ]),
+    ).toBe(true);
   });
 
-  it("skips prefetch when option omitted", async () => {
-    const prepare = createAgentPrepareNode("faq");
-    const update = await prepare(
-      clinicState({
-        messages: [new HumanMessage("Hours?")],
-        next: "faq",
-      }),
-    );
-
-    const agentMessages = (update.agentMessages as Overwrite<unknown[]>).value;
-    expect(agentMessages).toHaveLength(1);
-    expect(agentMessages[0]).toBeInstanceOf(HumanMessage);
-    expect((agentMessages[0] as HumanMessage).content).toBe("Hours?");
+  it("is false for HITL pending, errors, and read tools", () => {
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
+          content: JSON.stringify({ awaitingConfirmation: true }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ]),
+    ).toBe(false);
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
+          content: JSON.stringify({ cancelled: true }),
+          tool_call_id: "1",
+          name: "cancel_meeting",
+        }),
+      ]),
+    ).toBe(false);
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
+          content: JSON.stringify({ error: "CRM down" }),
+          tool_call_id: "1",
+          name: "update_contact",
+        }),
+      ]),
+    ).toBe(false);
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
+          content: JSON.stringify({ slots: [] }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+      ]),
+    ).toBe(false);
   });
-
-  it("writes bookingContext and contactContext when prefetch supplies them", async () => {
-    const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () => ({
-        contactContext: listedContact,
-        bookingContext: listedMeetings,
-      }),
-    });
-    const update = await prepare(
-      clinicState({ messages: [new HumanMessage("скасуй")] }),
-    );
-    expect(update.contactContext).toEqual(listedContact);
-    expect(update.bookingContext).toEqual(listedMeetings);
-  });
-
-  it("sets bookingContext null when prefetch reports no meetings", async () => {
-    const prepare = createAgentPrepareNode("booking", {
-      prefetch: async () => ({
-        contactContext: { contacts: [] },
-        bookingContext: null,
-      }),
-    });
-    const update = await prepare(
-      clinicState({
-        messages: [new HumanMessage("скасуй")],
-        bookingContext: listedMeetings,
-      }),
-    );
-    expect(update.contactContext).toEqual({ contacts: [] });
-    expect(update.bookingContext).toBeNull();
-  });
-
 });
 
 describe("createAgentLlmNode context cache", () => {
@@ -424,7 +409,7 @@ describe("createAgentLlmNode context cache", () => {
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
     expect(faqDynamic.content).toBe("DYNAMIC KYIV");
     expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
-    expect(String(faqDynamic.content)).not.toContain("<find_contact_by_telegram>");
+    expect(String(faqDynamic.content)).not.toContain("<contact_info>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));

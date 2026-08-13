@@ -50,6 +50,14 @@ export const createClinicStateAnnotation = ({
       reducer: (_left, right) => right ?? null,
       default: () => null,
     }),
+    prefetchDirty: Annotation<boolean>({
+      reducer: (_left, right) => right,
+      default: () => false,
+    }),
+    prefetchFetchedAt: Annotation<number | null>({
+      reducer: (_left, right) => right ?? null,
+      default: () => null,
+    }),
   });
 
 export type ClinicStateAnnotation = ReturnType<typeof createClinicStateAnnotation>;

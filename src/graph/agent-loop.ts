@@ -14,11 +14,11 @@ import {
   type ContextCacheHandle,
 } from "@personal-assistant/llm-gemini";
 
+import { asJsonRecord } from "../shared/json-record.js";
 import { extractMessageTextContent } from "../shared/message-content.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
-  type AgentPrefetchResult,
 } from "./context-blocks.js";
 import {
   buildCachedMessages,
@@ -44,9 +44,38 @@ export type CreateAgentLoopOptions = {
   contextCache?: SupervisorContextCacheOptions;
 };
 
-export type AgentPrepareOptions = {
-  prefetch?: () => Promise<AgentPrefetchResult>;
-};
+/** CRM writes that invalidate checkpointed contact/meetings prefetch. */
+const PREFETCH_INVALIDATING_TOOLS = new Set([
+  "create_contact",
+  "link_telegram_to_contact",
+  "update_contact",
+  "create_meeting",
+  "cancel_meeting",
+  "reschedule_meeting",
+]);
+
+export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
+  messages.some((message) => {
+    if (!(message instanceof ToolMessage)) {
+      return false;
+    }
+    const name = message.name;
+    if (!name || !PREFETCH_INVALIDATING_TOOLS.has(name)) {
+      return false;
+    }
+    const body = extractMessageTextContent(message.content).trim();
+    if (body.startsWith("Error:")) {
+      return false;
+    }
+    const record = asJsonRecord(body);
+    if (!record) {
+      return true;
+    }
+    if (typeof record.error === "string") {
+      return false;
+    }
+    return record.cancelled !== true && record.awaitingConfirmation !== true;
+  });
 
 const resolveHandoffStatus = (
   message: AIMessage,
@@ -80,25 +109,11 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (_agentId: string, options?: AgentPrepareOptions) =>
-  async (state: ClinicState): Promise<ClinicStateUpdate> => {
-    const agentMessages = stripToolNoiseFromMessages(state.messages);
-
-    if (!options?.prefetch) {
-      return {
-        agentMessages: new Overwrite(agentMessages),
-        stepCount: 0,
-      };
-    }
-
-    const prefetched = await options.prefetch();
-    return {
-      agentMessages: new Overwrite(agentMessages),
-      stepCount: 0,
-      contactContext: prefetched.contactContext,
-      bookingContext: prefetched.bookingContext,
-    };
-  };
+export const createAgentPrepareNode = (_agentId: string) =>
+  async (state: ClinicState): Promise<ClinicStateUpdate> => ({
+    agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
+    stepCount: 0,
+  });
 
 export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
   const { agent, model, tools, formatSystemMetadata } = options;
@@ -217,6 +232,10 @@ export const createAgentToolsNode = (tools: StructuredToolInterface[]) => {
         ): Promise<{ messages: BaseMessage[] }>;
       }
     ).run({ messages: state.agentMessages }, config);
+
+    if (crmWriteDirtiesPrefetch(result.messages)) {
+      return { agentMessages: result.messages, prefetchDirty: true };
+    }
 
     return { agentMessages: result.messages };
   };

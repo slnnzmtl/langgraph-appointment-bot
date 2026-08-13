@@ -1,6 +1,7 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 
 const createCachedGeminiModel = vi.fn((_apiKey: string, _model: string, handle: { cacheName: string }) => ({
@@ -19,7 +20,21 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode } = await import("../supervisor.js");
+const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS } =
+  await import("../supervisor.js");
+
+const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
+  messages: [],
+  agentMessages: [],
+  stepCount: 0,
+  next: undefined,
+  lastHandoff: null,
+  bookingContext: null,
+  contactContext: null,
+  prefetchDirty: false,
+  prefetchFetchedAt: null,
+  ...overrides,
+});
 
 const agents: ClinicAgentDefinition[] = [
   {
@@ -69,15 +84,9 @@ describe("createClinicSupervisorNode context cache", () => {
       },
     });
 
-    const update = await node({
-      messages: [new HumanMessage("hello")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("hello")] }),
+    );
 
     expect(update.next).toBe("FINISH");
     expect(createCachedGeminiModel).not.toHaveBeenCalled();
@@ -108,15 +117,9 @@ describe("createClinicSupervisorNode context cache", () => {
       },
     });
 
-    await node({
-      messages: [new HumanMessage("hello")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    await node(
+      supervisorState({ messages: [new HumanMessage("hello")] }),
+    );
 
     expect(createCachedGeminiModel).toHaveBeenCalledOnce();
     expect(bindRoutingTools.mock.calls[0]?.[1]).toMatchObject({
@@ -159,15 +162,9 @@ describe("createClinicSupervisorNode context cache", () => {
       },
     });
 
-    const update = await node({
-      messages: [new HumanMessage("hours?")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("hours?")] }),
+    );
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
     expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
@@ -202,15 +199,9 @@ describe("createClinicSupervisorNode context cache", () => {
       },
     });
 
-    const update = await node({
-      messages: [new HumanMessage("hours?")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("hours?")] }),
+    );
 
     expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
     expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
@@ -232,15 +223,9 @@ describe("createClinicSupervisorNode context cache", () => {
       loadSupervisorPrompt: () => "STATIC",
     });
 
-    const update = await node({
-      messages: [new HumanMessage("book")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("book")] }),
+    );
 
     expect(update).toEqual({
       next: "booking",
@@ -288,26 +273,135 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       }),
     });
 
-    const update = await node({
-      messages: [new HumanMessage("привіт")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("привіт")] }),
+    );
 
     const messages = invoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(SystemMessage);
     const system = String((messages[0] as SystemMessage).content);
     expect(system).toContain("DYNAMIC");
-    expect(system).toContain("<find_contact_by_telegram>");
+    expect(system).toContain("<contact_info>");
     expect(system).toContain("Марія");
     expect(system).toContain("<list_planned_meetings>");
     expect(system).toContain("Консультація: Марія");
     expect(update.contactContext).toEqual(listedContact);
     expect(update.bookingContext).toEqual(listedMeetings);
+    expect(update.prefetchDirty).toBe(false);
+    expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
+  });
+
+  it("reuses checkpointed prefetch when fresh and not dirty", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      buildSupervisorDynamicContext: () => "DYNAMIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("привіт")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).not.toHaveBeenCalled();
+    expect(update.contactContext).toBeUndefined();
+    expect(update.bookingContext).toBeUndefined();
+    const messages = invoke.mock.calls[0]?.[0] as unknown[];
+    const system = String((messages[0] as SystemMessage).content);
+    expect(system).toContain("Марія");
+    expect(system).toContain("<list_planned_meetings>");
+  });
+
+  it("refetches when prefetchFetchedAt is missing", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("привіт")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.contactContext).toEqual(listedContact);
+    expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
+  });
+
+  it("refetches when prefetch age exceeds TTL", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+      prefetchTtlMs: 1_000,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("привіт")],
+        contactContext: { contacts: [{ id: "stale" }] },
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now() - 1_000,
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.contactContext).toEqual(listedContact);
+    expect(update.prefetchDirty).toBe(false);
+    expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
+  });
+
+  it("refetches when prefetchDirty is set even if still within TTL", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("привіт")],
+        contactContext: { contacts: [{ id: "stale" }] },
+        bookingContext: null,
+        prefetchDirty: true,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.contactContext).toEqual(listedContact);
+    expect(update.bookingContext).toEqual(listedMeetings);
+    expect(update.prefetchDirty).toBe(false);
+    expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
   });
 
   it("still greets when prefetch throws", async () => {
@@ -321,22 +415,29 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       },
     });
 
-    const update = await node({
-      messages: [new HumanMessage("hello")],
-      agentMessages: [],
-      stepCount: 0,
-      next: undefined,
-      lastHandoff: null,
-      bookingContext: null,
-      contactContext: null,
-    });
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("hello")] }),
+    );
 
     const messages = invoke.mock.calls[0]?.[0] as unknown[];
     const system = String((messages[0] as SystemMessage).content);
     expect(system).toContain("DYNAMIC");
-    expect(system).not.toContain("<find_contact_by_telegram>");
+    expect(system).not.toContain("<contact_info>");
     expect(system).not.toContain("<list_planned_meetings>");
     expect(update.next).toBe("FINISH");
     expect(update.contactContext).toBeUndefined();
+  });
+});
+
+describe("isPrefetchExpired", () => {
+  it("treats a missing timestamp as expired", () => {
+    expect(isPrefetchExpired(null, PREFETCH_TTL_MS)).toBe(true);
+    expect(isPrefetchExpired(undefined, PREFETCH_TTL_MS)).toBe(true);
+  });
+
+  it("expires at the TTL boundary", () => {
+    const now = 10_000;
+    expect(isPrefetchExpired(now - PREFETCH_TTL_MS + 1, PREFETCH_TTL_MS, now)).toBe(false);
+    expect(isPrefetchExpired(now - PREFETCH_TTL_MS, PREFETCH_TTL_MS, now)).toBe(true);
   });
 });

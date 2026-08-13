@@ -1,7 +1,10 @@
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { describe, expect, it } from "vitest";
 
-import { prefetchBookingContext } from "../compile.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
+import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
+import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 
 describe("prefetchBookingContext", () => {
   it("chains contact lookup then planned meetings", async () => {
@@ -70,5 +73,113 @@ describe("prefetchBookingContext", () => {
       { id: "c-1", missingFields: ["firstName", "lastName", "phoneNumber"] },
     ]);
     expect(result.bookingContext).toBeNull();
+  });
+});
+
+const bookingAgent: ClinicAgentDefinition = {
+  id: "booking",
+  name: "Booking",
+  description: "Booking",
+  systemPrompt: "booking",
+  maxSteps: 10,
+};
+
+describe("compileClinicGraph prefetch once", () => {
+  const compileWithCallTool = (
+    callTool: (name: string) => Promise<unknown>,
+    extra?: { prefetchTtlMs?: number },
+  ) =>
+    compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [] },
+      agentModel: {
+        bindTools: () => ({
+          invoke: async () => new AIMessage("ok"),
+        }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+      bookingPrefetchCallTool: callTool,
+      ...(extra?.prefetchTtlMs != null ? { prefetchTtlMs: extra.prefetchTtlMs } : {}),
+    });
+
+  it("supervisor prefetches once per booking turn; prepare does not", async () => {
+    const names: string[] = [];
+    const { graph } = compileWithCallTool(async (name) => {
+      names.push(name);
+      if (name === "search_contacts") {
+        return { success: true, contacts: [{ id: "c-1", firstName: "Ada" }] };
+      }
+      return { list: [] };
+    });
+
+    await runWithTelegramUserId("tg-1", () =>
+      graph.invoke(
+        { messages: [new HumanMessage("book")] } as never,
+        { configurable: { thread_id: "t1" } },
+      ),
+    );
+
+    expect(names.filter((n) => n === "search_contacts")).toHaveLength(1);
+    expect(names.filter((n) => n === "search_entity")).toHaveLength(1);
+  });
+
+  it("reuses checkpointed prefetch on the next turn within TTL", async () => {
+    const names: string[] = [];
+    const { graph } = compileWithCallTool(async (name) => {
+      names.push(name);
+      if (name === "search_contacts") {
+        return { success: true, contacts: [{ id: "c-1", firstName: "Ada" }] };
+      }
+      return { list: [] };
+    });
+
+    await runWithTelegramUserId("tg-1", async () => {
+      await graph.invoke(
+        { messages: [new HumanMessage("book")] } as never,
+        { configurable: { thread_id: "t1" } },
+      );
+      await graph.invoke(
+        { messages: [new HumanMessage("tomorrow")] } as never,
+        { configurable: { thread_id: "t1" } },
+      );
+    });
+
+    expect(names.filter((n) => n === "search_contacts")).toHaveLength(1);
+    expect(names.filter((n) => n === "search_entity")).toHaveLength(1);
+  });
+
+  it("refetches on the next turn when TTL is zero", async () => {
+    const names: string[] = [];
+    const { graph } = compileWithCallTool(
+      async (name) => {
+        names.push(name);
+        if (name === "search_contacts") {
+          return { success: true, contacts: [{ id: "c-1", firstName: "Ada" }] };
+        }
+        return { list: [] };
+      },
+      { prefetchTtlMs: 0 },
+    );
+
+    await runWithTelegramUserId("tg-1", async () => {
+      await graph.invoke(
+        { messages: [new HumanMessage("book")] } as never,
+        { configurable: { thread_id: "t1" } },
+      );
+      await graph.invoke(
+        { messages: [new HumanMessage("tomorrow")] } as never,
+        { configurable: { thread_id: "t1" } },
+      );
+    });
+
+    expect(names.filter((n) => n === "search_contacts")).toHaveLength(2);
+    expect(names.filter((n) => n === "search_entity")).toHaveLength(2);
   });
 });
