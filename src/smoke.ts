@@ -156,7 +156,17 @@ const invokeBooking = async (
     try {
       const result = await graph.invoke(
         { messages: [new HumanMessage(utterance)] },
-        { configurable: { thread_id: threadId }, recursionLimit: 40 },
+        {
+          configurable: { thread_id: threadId },
+          recursionLimit: 40,
+          runName: "clinic-turn",
+          tags: ["smoke"],
+          metadata: {
+            telegram_user_id: telegramId,
+            chat_id: threadId,
+            source: "smoke",
+          },
+        },
       );
       return {
         reply: lastAiText(result.messages as Array<{ content?: unknown }>),
@@ -271,7 +281,16 @@ const main = async (): Promise<void> => {
       const graph = runtime.getGraph();
       const result = await graph.invoke(
         { messages: [new HumanMessage("What are your clinic hours?")] },
-        { configurable: { thread_id: `smoke-faq-${randomUUID().slice(0, 8)}` } },
+        {
+          configurable: { thread_id: `smoke-faq-${randomUUID().slice(0, 8)}` },
+          runName: "clinic-turn",
+          tags: ["smoke"],
+          metadata: {
+            telegram_user_id: "smoke-faq",
+            chat_id: "smoke-faq",
+            source: "smoke",
+          },
+        },
       );
 
       const content = lastAiText(result.messages as Array<{ content?: unknown }>);

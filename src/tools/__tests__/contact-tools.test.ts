@@ -1,5 +1,6 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
+import { setTrackEventForTests, type Tier1EventName } from "../../analytics/track.js";
 import {
   annotateContactSearchResult,
   contactMissingFields,
@@ -17,9 +18,18 @@ const withTg = <T>(fn: () => Promise<T> | T): Promise<T> | T =>
 
 describe("contact-tools", () => {
   const calls: CallRecord[] = [];
+  const events: Array<{ name: Tier1EventName; props: Record<string, unknown> }> = [];
 
   beforeEach(() => {
     calls.length = 0;
+    events.length = 0;
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+  });
+
+  afterEach(() => {
+    setTrackEventForTests(null);
   });
 
   const callTool = async (name: string, args: Record<string, unknown>) => {
@@ -58,6 +68,12 @@ describe("contact-tools", () => {
         },
       });
       expect(JSON.parse(result as string)).toMatchObject({ cTelegram: "tg-42" });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "contact_created",
+          props: expect.objectContaining({ contact_id: "contact-1" }),
+        }),
+      );
     });
   });
 

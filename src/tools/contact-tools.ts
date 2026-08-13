@@ -1,6 +1,8 @@
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
+import { finishTrackedWrite, toolErrorJson, trackEvent, trackToolError } from "../analytics/track.js";
+import { errorMessage } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { getTelegramUserId } from "./telegram-user-context.js";
 import { toToolResult } from "./tool-result.js";
@@ -87,6 +89,29 @@ export const normalizeContactLookupResult = (contactJson: string): ContactLookup
   return { contacts };
 };
 
+const trackContactLookup = (
+  name: "contact_lookup_telegram" | "contact_lookup_phone",
+  tool: string,
+  json: string,
+  extra?: Record<string, unknown>,
+): void => {
+  const parsed = normalizeContactLookupResult(json);
+  if (parsed.error) {
+    trackEvent(name, { outcome: "error", tool, ...extra });
+    trackToolError(tool, parsed.error);
+    return;
+  }
+  const contactId = extractContactIdFromSearchResult(json);
+  const missing = parsed.contacts[0]?.missingFields;
+  trackEvent(name, {
+    outcome: contactId ? "success" : "not_found",
+    tool,
+    ...(contactId ? { contact_id: contactId } : {}),
+    ...(Array.isArray(missing) ? { missing_fields: missing } : {}),
+    ...extra,
+  });
+};
+
 export const extractContactIdFromSearchResult = (contactJson: string): string | null => {
   let value: unknown;
   try {
@@ -113,8 +138,7 @@ export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<st
     const result = await callTool("search_contacts", { cTelegram, limit: 5 });
     return annotateContactSearchResult(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return JSON.stringify({ error: message });
+    return JSON.stringify({ error: errorMessage(error) });
   }
 };
 
@@ -122,7 +146,11 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
   const { callTool } = options;
 
   const findContactByTelegram = tool(
-    async (_input: Record<string, never>) => lookupContactByTelegram(callTool),
+    async (_input: Record<string, never>) => {
+      const result = await lookupContactByTelegram(callTool);
+      trackContactLookup("contact_lookup_telegram", "find_contact_by_telegram", result);
+      return result;
+    },
     {
       name: "find_contact_by_telegram",
       description:
@@ -134,14 +162,22 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
   const findContactByPhone = tool(
     async (input: { phoneNumber: string }) => {
       try {
-        const result = await callTool("search_contacts", {
-          phoneNumber: input.phoneNumber,
-          limit: 5,
+        const result = annotateContactSearchResult(
+          await callTool("search_contacts", {
+            phoneNumber: input.phoneNumber,
+            limit: 5,
+          }),
+        );
+        trackContactLookup("contact_lookup_phone", "find_contact_by_phone", result, {
+          has_phone: true,
         });
-        return annotateContactSearchResult(result);
+        return result;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
+        const result = JSON.stringify({ error: errorMessage(error) });
+        trackContactLookup("contact_lookup_phone", "find_contact_by_phone", result, {
+          has_phone: true,
+        });
+        return result;
       }
     },
     {
@@ -157,17 +193,23 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
     async (input: { firstName: string; lastName?: string; phoneNumber?: string }) => {
       try {
         const cTelegram = getTelegramUserId();
-        const result = await callTool("create_contact", {
-          firstName: input.firstName,
-          ...(input.lastName ? { lastName: input.lastName } : {}),
-          ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
-          cTelegram,
-          skipDuplicateCheck: true,
+        const result = toToolResult(
+          await callTool("create_contact", {
+            firstName: input.firstName,
+            ...(input.lastName ? { lastName: input.lastName } : {}),
+            ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
+            cTelegram,
+            skipDuplicateCheck: true,
+          }),
+        );
+        return finishTrackedWrite("create_contact", result, (contactId) => {
+          trackEvent("contact_created", {
+            outcome: "success",
+            ...(contactId ? { contact_id: contactId } : {}),
+          });
         });
-        return toToolResult(result);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
+        return toolErrorJson("create_contact", error);
       }
     },
     {
@@ -186,15 +228,21 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
     async (input: { contactId: string }) => {
       try {
         const cTelegram = getTelegramUserId();
-        const result = await callTool("update_entity", {
-          entityType: "Contact",
-          entityId: input.contactId,
-          data: { cTelegram },
+        const result = toToolResult(
+          await callTool("update_entity", {
+            entityType: "Contact",
+            entityId: input.contactId,
+            data: { cTelegram },
+          }),
+        );
+        return finishTrackedWrite("link_telegram_to_contact", result, () => {
+          trackEvent("contact_telegram_linked", {
+            outcome: "success",
+            contact_id: input.contactId,
+          });
         });
-        return toToolResult(result);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
+        return toolErrorJson("link_telegram_to_contact", error);
       }
     },
     {
@@ -215,19 +263,29 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
       phoneNumber?: string;
     }) => {
       try {
-        const result = await callTool("update_entity", {
-          entityType: "Contact",
-          entityId: input.contactId,
-          data: {
-            ...(input.firstName ? { firstName: input.firstName } : {}),
-            ...(input.lastName ? { lastName: input.lastName } : {}),
-            ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
-          },
+        const fieldsUpdated = (
+          ["firstName", "lastName", "phoneNumber"] as const
+        ).filter((field) => typeof input[field] === "string" && input[field]!.trim() !== "");
+        const result = toToolResult(
+          await callTool("update_entity", {
+            entityType: "Contact",
+            entityId: input.contactId,
+            data: {
+              ...(input.firstName ? { firstName: input.firstName } : {}),
+              ...(input.lastName ? { lastName: input.lastName } : {}),
+              ...(input.phoneNumber ? { phoneNumber: input.phoneNumber } : {}),
+            },
+          }),
+        );
+        return finishTrackedWrite("update_contact", result, () => {
+          trackEvent("contact_updated", {
+            outcome: "success",
+            contact_id: input.contactId,
+            fields_updated: fieldsUpdated,
+          });
         });
-        return toToolResult(result);
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
+        return toolErrorJson("update_contact", error);
       }
     },
     {

@@ -13,7 +13,12 @@ cp .env.example .env
 # set ESPOCRM_MCP_URL=http://127.0.0.1:3000/sse for local MCP
 # set TELEGRAM_BOT_TOKEN to launch the bot
 # optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
+# optional LangSmith: LANGSMITH_TRACING=true LANGSMITH_API_KEY= LANGSMITH_PROJECT=clinic-appointment-bot
 ```
+
+## LangSmith
+
+Set `LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` to send LangGraph traces to LangSmith (`LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` aliases also work). Optional `LANGSMITH_PROJECT` (example: `clinic-appointment-bot`) and `LANGSMITH_ENDPOINT` (EU / self-hosted). Telegram and smoke invokes tag each turn as `clinic-turn` with `telegram_user_id` and `chat_id` metadata. Tier 1 booking events (`meeting_created`, `contact_created`, …) are posted as named runs (filter by run name; they may be flat rather than nested under the tool span). `ANALYTICS_DISABLED=1` skips those events only; LLM tracing still runs.
 
 ## Docker
 
@@ -44,6 +49,7 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 
 - `src/graph/` — thin LangGraph (supervisor + faq/booking agent loops)
 - `src/composition/` — runtime wiring, MCP adapters, build-time agents
+- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs)
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
 - `src/adapter/` — telegraf bot (`telegram-bot.ts`) + Inline Keyboard helpers (`telegram-ui.ts`)
 - `src/prompts/` — supervisor / FAQ / booking prompts (source of truth with `src/composition/agents.ts`)

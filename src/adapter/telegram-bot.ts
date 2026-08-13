@@ -383,9 +383,16 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
   return { text };
 };
 
-const graphInvokeConfig = (threadId: string) => ({
+const graphInvokeConfig = (threadId: string, telegramUserId: string) => ({
   configurable: { thread_id: threadId },
   recursionLimit: GRAPH_RECURSION_LIMIT,
+  runName: "clinic-turn",
+  tags: ["telegram"],
+  metadata: {
+    telegram_user_id: telegramUserId,
+    chat_id: threadId,
+    source: "telegram",
+  },
 });
 
 type GraphInvokeConfig = ReturnType<typeof graphInvokeConfig>;
@@ -399,7 +406,7 @@ const runGraphExclusive = async (
 ): Promise<OutboundReply> =>
   runWithTelegramUserId(telegramUserId, () =>
     runExclusiveForThread(threadId, async () => {
-      const result = await run(graphInvokeConfig(threadId));
+      const result = await run(graphInvokeConfig(threadId, telegramUserId));
       return interpretInvokeResult(result);
     }),
   );

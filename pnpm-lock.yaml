@@ -26,6 +26,9 @@ importers:
       dotenv:
         specifier: ^16.6.1
         version: 16.6.1
+      langsmith:
+        specifier: ^0.8.9
+        version: 0.8.9
       telegraf:
         specifier: ^4.16.3
         version: 4.16.3

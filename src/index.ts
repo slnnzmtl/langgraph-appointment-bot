@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { getDefaultProjectName, isTracingEnabled } from "langsmith";
 
 import { launchClinicBot } from "./adapter/telegram-bot.js";
 import { loadConfig } from "./config.js";
@@ -10,6 +11,10 @@ import { createClinicRuntime } from "./composition/clinic-runtime.js";
  */
 const main = async (): Promise<void> => {
   const config = loadConfig();
+  console.log(
+    `LangSmith tracing: ${isTracingEnabled() ? "on" : "off"} (project: ${getDefaultProjectName()})`,
+  );
+
   const runtime = await createClinicRuntime(config);
   const agents = runtime.getBootstrap().agents;
 

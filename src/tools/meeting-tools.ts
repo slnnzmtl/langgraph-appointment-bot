@@ -2,10 +2,12 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 
+import { finishTrackedWrite, trackEvent, trackToolError, type BookingAction, type Tier1EventName } from "../analytics/track.js";
 import {
   CLINIC_SLOT_MINUTES,
   MAX_AVAILABILITY_SEARCH_DAYS,
 } from "../shared/clinic-constants.js";
+import { asJsonRecord, errorMessage } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import {
   addCalendarDays,
@@ -56,28 +58,54 @@ type ConfirmDraft = {
   dateEnd?: string;
 };
 
-const parseEntityRecord = (raw: unknown): Record<string, unknown> => {
-  let entity: unknown = raw;
-  if (typeof entity === "string") {
-    try {
-      entity = JSON.parse(entity) as unknown;
-    } catch {
-      return {};
-    }
-  }
-  if (!entity || typeof entity !== "object" || Array.isArray(entity)) {
-    return {};
-  }
-  return entity as Record<string, unknown>;
+type ConfirmAnalytics = {
+  action: BookingAction;
+  cancelledMessage?: string;
+  contactId?: string;
+  serviceId?: string;
+  meetingId?: string;
 };
+
+const hitlProps = (ctx: ConfirmAnalytics): Record<string, unknown> => ({
+  action: ctx.action,
+  ...(ctx.contactId ? { contact_id: ctx.contactId } : {}),
+  ...(ctx.serviceId ? { service_id: ctx.serviceId } : {}),
+  ...(ctx.meetingId ? { meeting_id: ctx.meetingId } : {}),
+});
+
+const skipHitlPending = (record: Record<string, unknown>): boolean =>
+  record.cancelled === true || record.awaitingConfirmation === true;
+
+const finishMeetingMutation = (
+  tool: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
+  raw: string,
+  successEvent: Extract<
+    Tier1EventName,
+    "meeting_created" | "meeting_cancelled" | "meeting_rescheduled"
+  >,
+  successProps: Record<string, unknown>,
+): string =>
+  finishTrackedWrite(
+    tool,
+    raw,
+    (entityId) => {
+      const meetingId =
+        typeof successProps.meeting_id === "string" ? successProps.meeting_id : entityId;
+      trackEvent(successEvent, {
+        outcome: "success",
+        ...successProps,
+        ...(meetingId ? { meeting_id: meetingId } : {}),
+      });
+    },
+    { skip: skipHitlPending },
+  );
 
 /** Execute MCP write and normalize success/error JSON (no HITL). */
 const runMeetingWrite = async (execute: () => Promise<unknown>): Promise<string> => {
   try {
     return toToolResult(await execute());
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return JSON.stringify({ error: message });
+    return JSON.stringify({ error: errorMessage(error) });
   }
 };
 
@@ -85,13 +113,21 @@ const runMeetingWrite = async (execute: () => Promise<unknown>): Promise<string>
 const withUserConfirm = async (
   draft: ConfirmDraft,
   execute: () => Promise<unknown>,
-  cancelledMessage = "Cancelled by user.",
+  ctx: ConfirmAnalytics,
 ): Promise<string> => {
+  trackEvent("booking_confirmation_requested", {
+    ...hitlProps(ctx),
+    outcome: "awaiting",
+  });
   const decision = parseConfirmDecision(interrupt({ type: "confirm_booking", draft }));
   if (decision.kind === "confirmed") {
     return runMeetingWrite(execute);
   }
   if (decision.kind === "chatReply") {
+    trackEvent("booking_awaiting_chat_confirm", {
+      ...hitlProps(ctx),
+      outcome: "awaiting",
+    });
     return JSON.stringify({
       awaitingConfirmation: true,
       userReply: decision.userReply,
@@ -99,7 +135,14 @@ const withUserConfirm = async (
       hint: "Nothing was written. The user replied in chat instead of tapping Yes/No. If this reply confirms the action, call this tool again with identical arguments plus confirmationGiven true. Otherwise handle their message normally.",
     });
   }
-  return JSON.stringify({ cancelled: true, message: cancelledMessage });
+  trackEvent("booking_declined", {
+    ...hitlProps(ctx),
+    outcome: "declined",
+  });
+  return JSON.stringify({
+    cancelled: true,
+    message: ctx.cancelledMessage ?? "Cancelled by user.",
+  });
 };
 
 const DAY_SCHEMA = z
@@ -307,6 +350,12 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
             timeRanges: resolveRangesForDay(fetch, input.date),
             stepMinutes,
           });
+          trackEvent("availability_presented", {
+            outcome: "success",
+            date: input.date,
+            slot_count: slots.length,
+            duration_minutes: stepMinutes,
+          });
           return JSON.stringify({ slots, date: input.date, stepMinutes });
         }
 
@@ -337,12 +386,20 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           resolveTimeRanges: (day) => resolveRangesForDay(fetch, day),
           now: new Date(),
         });
+        trackEvent("availability_presented", {
+          outcome: "success",
+          ...(result.date ? { date: result.date } : {}),
+          slot_count: result.days.reduce((sum, day) => sum + day.slots.length, 0),
+          searched_days: result.searchedDays,
+          duration_minutes: stepMinutes,
+        });
         return JSON.stringify({
           ...result,
           ...(meetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
         });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = errorMessage(error);
+        trackToolError("present_availability_slots", message);
         return JSON.stringify({ error: message, slots: [] });
       }
     },
@@ -409,17 +466,21 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     }) => {
       let contact: Record<string, unknown> = {};
       try {
-        contact = parseEntityRecord(
+        contact = asJsonRecord(
           await callTool("get_entity", {
             entityType: "Contact",
             entityId: input.contactId,
           }),
-        );
+        ) ?? {};
       } catch {
         contact = {};
       }
       const missing = contactMissingFields(contact);
       if (missing.length > 0) {
+        trackEvent("contact_incomplete_blocked", {
+          contact_id: input.contactId,
+          missing_fields: missing,
+        });
         return JSON.stringify({
           error: "Contact incomplete",
           missingFields: missing,
@@ -450,10 +511,30 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           status: "Planned",
         });
 
+      const writeProps = {
+        contact_id: input.contactId,
+        service_id: input.serviceId,
+        date_start: dateStart,
+      };
       if (input.confirmationGiven) {
-        return runMeetingWrite(execute);
+        return finishMeetingMutation(
+          "create_meeting",
+          await runMeetingWrite(execute),
+          "meeting_created",
+          writeProps,
+        );
       }
-      return withUserConfirm(draft, execute, "Booking cancelled by user.");
+      return finishMeetingMutation(
+        "create_meeting",
+        await withUserConfirm(draft, execute, {
+          action: "create",
+          cancelledMessage: "Booking cancelled by user.",
+          contactId: input.contactId,
+          serviceId: input.serviceId,
+        }),
+        "meeting_created",
+        writeProps,
+      );
     },
     {
       name: "create_meeting",
@@ -495,10 +576,25 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           status: "Not Held",
         });
 
+      const writeProps = { meeting_id: input.meetingId };
       if (input.confirmationGiven) {
-        return runMeetingWrite(execute);
+        return finishMeetingMutation(
+          "cancel_meeting",
+          await runMeetingWrite(execute),
+          "meeting_cancelled",
+          writeProps,
+        );
       }
-      return withUserConfirm(draft, execute, "Cancellation cancelled by user.");
+      return finishMeetingMutation(
+        "cancel_meeting",
+        await withUserConfirm(draft, execute, {
+          action: "cancel",
+          cancelledMessage: "Cancellation cancelled by user.",
+          meetingId: input.meetingId,
+        }),
+        "meeting_cancelled",
+        writeProps,
+      );
     },
     {
       name: "cancel_meeting",
@@ -540,10 +636,29 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           dateEnd,
         });
 
+      const writeProps = {
+        meeting_id: input.meetingId,
+        date_start: dateStart,
+        date_end: dateEnd,
+      };
       if (input.confirmationGiven) {
-        return runMeetingWrite(execute);
+        return finishMeetingMutation(
+          "reschedule_meeting",
+          await runMeetingWrite(execute),
+          "meeting_rescheduled",
+          writeProps,
+        );
       }
-      return withUserConfirm(draft, execute, "Reschedule cancelled by user.");
+      return finishMeetingMutation(
+        "reschedule_meeting",
+        await withUserConfirm(draft, execute, {
+          action: "reschedule",
+          cancelledMessage: "Reschedule cancelled by user.",
+          meetingId: input.meetingId,
+        }),
+        "meeting_rescheduled",
+        writeProps,
+      );
     },
     {
       name: "reschedule_meeting",

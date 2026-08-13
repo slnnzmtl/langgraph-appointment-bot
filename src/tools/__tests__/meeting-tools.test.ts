@@ -1,6 +1,7 @@
 import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
+import { setTrackEventForTests, type Tier1EventName } from "../../analytics/track.js";
 import {
   createMeetingTools,
   lookupPlannedMeetings,
@@ -327,9 +328,18 @@ describe("resolveNextAvailableStart", () => {
 
 describe("create_meeting HITL interrupt", () => {
   const calls: CallRecord[] = [];
+  const events: Array<{ name: Tier1EventName; props: Record<string, unknown> }> = [];
 
   beforeEach(() => {
     calls.length = 0;
+    events.length = 0;
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+  });
+
+  afterEach(() => {
+    setTrackEventForTests(null);
   });
 
   const completeContact = {
@@ -389,6 +399,12 @@ describe("create_meeting HITL interrupt", () => {
       );
       expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
       expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "booking_declined",
+          props: expect.objectContaining({ action: "create", outcome: "declined" }),
+        }),
+      );
     });
   });
 
@@ -508,6 +524,15 @@ describe("create_meeting HITL interrupt", () => {
         error: "Contact incomplete",
         missingFields: ["lastName"],
       });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "contact_incomplete_blocked",
+          props: expect.objectContaining({
+            contact_id: "contact-1",
+            missing_fields: ["lastName"],
+          }),
+        }),
+      );
     });
   });
 
