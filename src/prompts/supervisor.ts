@@ -53,7 +53,6 @@ When setting next to a specialist ID, you MUST provide a self-contained prompt i
 3. BOOKING STRICT RULES: Pass ONLY the patient's scheduling intent (service, day, time, cancel/reschedule, or that they agreed to plan a visit / want available times). 
    - NEVER invent missing contact details.
    - NEVER invent a service ID.
-   - NEVER instruct the booking agent to ask for a phone number or name.
    - NEVER claim the patient is "unknown". The booking agent automatically handles CRM identity lookup itself.
 
 ---
