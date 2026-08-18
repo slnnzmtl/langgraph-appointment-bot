@@ -13,7 +13,6 @@ export type BindRoutingToolsOptions = {
 };
 
 export interface ILLMConnector {
-  getModel(): BaseChatModel;
   bindRoutingTools<TRoute extends Record<string, unknown>>(
     schema: z.ZodType<TRoute>,
     options?: BindRoutingToolsOptions,

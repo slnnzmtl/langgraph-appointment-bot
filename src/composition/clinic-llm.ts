@@ -1,4 +1,5 @@
 import {
+  createGeminiChatModel,
   createGeminiContextCacheManager,
   GeminiConnector,
   isGeminiContextCacheEnabled,
@@ -22,7 +23,7 @@ export type ClinicLlmStack = {
 
 export const createClinicLlmStack = (config: AppConfig): ClinicLlmStack => {
   const supervisorLlm = new GeminiConnector(config.googleApiKey, config.supervisorModel);
-  const agentModel = new GeminiConnector(config.googleApiKey, config.agentModel).getModel();
+  const agentModel = createGeminiChatModel(config.googleApiKey, config.agentModel);
   const contextCache = {
     manager: createGeminiContextCacheManager(
       config.googleApiKey,
