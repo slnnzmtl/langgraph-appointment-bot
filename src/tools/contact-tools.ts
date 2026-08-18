@@ -4,8 +4,11 @@ import { z } from "zod";
 import { finishTrackedWrite, toolErrorJson, trackEvent, trackToolError } from "../analytics/track.js";
 import { errorMessage } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
+import { clinicPhoneSchema, optionalClinicPhoneSchema } from "../shared/phone.js";
 import { getTelegramUserId } from "./telegram-user-context.js";
 import { toToolResult } from "./tool-result.js";
+
+const PHONE_NUMBER_DESCRIBE = "Local UA or +international; normalized to E.164.";
 
 export type ContactToolsOptions = {
   callTool: McpCallTool;
@@ -183,7 +186,7 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
       name: "find_contact_by_phone",
       description: "Find EspoCRM contact by phone number.",
       schema: z.object({
-        phoneNumber: z.string().min(1).describe("Patient phone number"),
+        phoneNumber: clinicPhoneSchema.describe(PHONE_NUMBER_DESCRIBE),
       }),
     },
   );
@@ -218,7 +221,7 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
       schema: z.object({
         firstName: z.string().min(1),
         lastName: z.string().optional(),
-        phoneNumber: z.string().optional(),
+        phoneNumber: optionalClinicPhoneSchema.describe(PHONE_NUMBER_DESCRIBE),
       }),
     },
   );
@@ -264,7 +267,11 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
       try {
         const fieldsUpdated = (
           ["firstName", "lastName", "phoneNumber"] as const
-        ).filter((field) => typeof input[field] === "string" && input[field]!.trim() !== "");
+        ).filter((field) =>
+          field === "phoneNumber"
+            ? Boolean(input.phoneNumber)
+            : typeof input[field] === "string" && input[field]!.trim() !== "",
+        );
         const result = toToolResult(
           await callTool("update_entity", {
             entityType: "Contact",
@@ -295,7 +302,7 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
         contactId: z.string().min(1).describe("EspoCRM Contact id"),
         firstName: z.string().optional(),
         lastName: z.string().optional(),
-        phoneNumber: z.string().optional(),
+        phoneNumber: optionalClinicPhoneSchema.describe(PHONE_NUMBER_DESCRIBE),
       }),
     },
   );

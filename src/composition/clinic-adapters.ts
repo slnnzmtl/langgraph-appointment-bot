@@ -3,6 +3,7 @@ import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 
 import type { AppConfig } from "../config.js";
 import type { McpCallTool } from "../shared/mcp.js";
+import { withNormalizedClinicPhones } from "../shared/phone.js";
 
 export type { McpCallTool };
 
@@ -42,7 +43,7 @@ export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdap
   await client.connect(transport);
 
   return {
-    callTool: async (name, args) => {
+    callTool: withNormalizedClinicPhones(async (name, args) => {
       const response = await client.callTool({ name, arguments: args });
       if ((response as { isError?: boolean }).isError) {
         const text = parseToolResponse(response);
@@ -51,7 +52,7 @@ export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdap
         );
       }
       return parseToolResponse(response);
-    },
+    }),
     close: async () => {
       await client.close();
     },

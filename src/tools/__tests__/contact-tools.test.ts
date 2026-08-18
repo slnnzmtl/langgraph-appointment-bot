@@ -77,6 +77,51 @@ describe("contact-tools", () => {
     });
   });
 
+  it("create_contact normalizes local UA phone to E.164", async () => {
+    await withTg(async () => {
+      const [createContact] = createContactTools({ callTool }).filter(
+        (tool) => tool.name === "create_contact",
+      );
+      await createContact!.invoke({
+        firstName: "Тест",
+        lastName: "Тестовий",
+        phoneNumber: "0501838282",
+      });
+      expect(calls[0]?.args.phoneNumber).toBe("+380501838282");
+    });
+  });
+
+  it("create_contact omits blank phone and still calls MCP", async () => {
+    await withTg(async () => {
+      const [createContact] = createContactTools({ callTool }).filter(
+        (tool) => tool.name === "create_contact",
+      );
+      await createContact!.invoke({ firstName: "Ada", phoneNumber: "  " });
+      expect(calls[0]?.args).not.toHaveProperty("phoneNumber");
+    });
+  });
+
+  it("invalid phone returns error and does not call MCP", async () => {
+    await withTg(async () => {
+      const tools = createContactTools({ callTool });
+      const find = tools.find((tool) => tool.name === "find_contact_by_phone");
+      const update = tools.find((tool) => tool.name === "update_contact");
+      const create = tools.find((tool) => tool.name === "create_contact");
+
+      await expect(find!.invoke({ phoneNumber: "garbage" })).rejects.toThrow(
+        /Could not parse phone number/,
+      );
+      await expect(update!.invoke({ contactId: "c-99", phoneNumber: "123" })).rejects.toThrow(
+        /Could not parse phone number/,
+      );
+      await expect(create!.invoke({ firstName: "Ada", phoneNumber: "garbage" })).rejects.toThrow(
+        /Could not parse phone number/,
+      );
+
+      expect(calls).toHaveLength(0);
+    });
+  });
+
   it("update_contact writes name and phone via update_entity", async () => {
     const [update] = createContactTools({ callTool }).filter((tool) => tool.name === "update_contact");
 

@@ -29,6 +29,9 @@ importers:
       langsmith:
         specifier: ^0.8.9
         version: 0.8.9
+      libphonenumber-js:
+        specifier: ^1.13.11
+        version: 1.13.11
       telegraf:
         specifier: ^4.16.3
         version: 4.16.3
@@ -886,6 +889,9 @@ packages:
         optional: true
       ws:
         optional: true
+
+  libphonenumber-js@1.13.11:
+    resolution: {integrity: sha512-ETER2kMaIFTI/Nh1a8Gk03dUF/SL0VZqtI+CcVHZxp5WIHYwNS7S+uiYZDYCvLy3lOR4/DAD5jf0h5WkePPpqg==}
 
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
@@ -2033,6 +2039,8 @@ snapshots:
   langsmith@0.8.9:
     dependencies:
       p-queue: 6.6.2
+
+  libphonenumber-js@1.13.11: {}
 
   loupe@3.2.1: {}
 
