@@ -1,9 +1,12 @@
 export {
   createGeminiChatModel,
+  DEFAULT_AUDIO_MODEL,
   DEFAULT_GEMINI_MODEL,
   DEFAULT_GEMINI_TEMPERATURE,
   GeminiConnector,
+  transcribeAudio,
 } from "./gemini-connector.js";
+export type { TranscribeAudioInput } from "./gemini-connector.js";
 export {
   buildCacheSeedContents,
   createCachedGeminiModel,

@@ -80,6 +80,7 @@ Meeting tools (booking agent):
 - `present_availability_slots` uses `search_meetings` free/busy; agent lists times in text (Inline Keyboard temporarily disabled)
 - HITL confirm: tap Yes/No to resume with `Command`. Typing while the confirm card is pending sends the text into the interrupt (`userReply`); the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. Chat text never implicitly cancels.
 - After button Yes/No, the bot removes the inline keyboard, then replies with the agent outcome.
+- Voice notes: Telegraf downloads the OGG, Gemini 3.1 Flash Lite transcribes it (`AUDIO_MODEL` optional), then the same text graph path runs; empty or failed transcription gets a short Ukrainian fallback and does not invoke the graph. Replies are always text.
 
 ## Manual E2E checklist
 

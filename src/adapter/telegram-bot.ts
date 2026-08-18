@@ -1,5 +1,9 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { Command } from "@langchain/langgraph";
+import {
+  DEFAULT_AUDIO_MODEL,
+  transcribeAudio,
+} from "@personal-assistant/llm-gemini";
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
@@ -30,6 +34,8 @@ const SLOT_INLINE_KEYBOARD_ENABLED = false;
 const GRAPH_RECURSION_LIMIT = 40;
 /** Telegram typing action lasts ~5s; refresh before it expires. */
 const TYPING_REFRESH_MS = 4_000;
+const VOICE_EMPTY_FALLBACK =
+  "Не вдалося розібрати голосове повідомлення. Напишіть текстом, будь ласка.";
 
 type Graph = ReturnType<ClinicRuntime["getGraph"]>;
 
@@ -489,6 +495,40 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
         text,
       ),
     );
+    await replyOutbound(ctx, outbound);
+  });
+
+  bot.on("voice", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    const fromId = ctx.from?.id;
+    const voice = ctx.message.voice;
+    if (chatId === undefined || fromId === undefined || !voice) {
+      return;
+    }
+
+    const threadId = String(chatId);
+    const { googleApiKey } = runtime.getBootstrap().config;
+    const outbound = await withTypingIndicator(ctx.telegram, chatId, async () => {
+      let transcript = "";
+      try {
+        const fileLink = await ctx.telegram.getFileLink(voice.file_id);
+        const bytes = Buffer.from(await (await fetch(fileLink.href)).arrayBuffer());
+        transcript = await transcribeAudio(
+          googleApiKey,
+          {
+            mimeType: voice.mime_type ?? "audio/ogg",
+            data: bytes.toString("base64"),
+          },
+          process.env.AUDIO_MODEL ?? DEFAULT_AUDIO_MODEL,
+        );
+      } catch (error: unknown) {
+        console.error("Voice transcription failed:", error);
+      }
+      if (!transcript) {
+        return { text: VOICE_EMPTY_FALLBACK };
+      }
+      return handleGraphTextTurn(graph, threadId, String(fromId), transcript);
+    });
     await replyOutbound(ctx, outbound);
   });
 
