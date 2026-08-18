@@ -40,4 +40,23 @@ describe("transcribeAudio", () => {
       transcribeAudio("test-key", { mimeType: "audio/ogg", data: "YWJj" }, "gemini-3.1-flash-lite"),
     ).resolves.toBe("");
   });
+
+  it("uses a caller-provided prompt", async () => {
+    const invoke = vi.spyOn(ChatGoogleGenerativeAI.prototype, "invoke").mockResolvedValue(
+      new AIMessage("ok") as never,
+    );
+
+    await transcribeAudio(
+      "test-key",
+      { mimeType: "audio/ogg", data: "YWJj" },
+      DEFAULT_AUDIO_MODEL,
+      "Custom prompt",
+    );
+
+    const messages = invoke.mock.calls[0]?.[0] as HumanMessage[];
+    expect(messages[0]?.content).toEqual(
+      expect.arrayContaining([{ type: "text", text: "Custom prompt" }]),
+    );
+    invoke.mockRestore();
+  });
 });

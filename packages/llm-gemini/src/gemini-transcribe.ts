@@ -37,12 +37,13 @@ export const transcribeAudio = async (
   apiKey: string,
   audio: TranscribeAudioInput,
   modelName = DEFAULT_AUDIO_MODEL,
+  prompt = TRANSCRIBE_PROMPT,
 ): Promise<string> => {
   const model = createGeminiChatModel(apiKey, modelName);
   const result = await model.invoke([
     new HumanMessage({
       content: [
-        { type: "text", text: TRANSCRIBE_PROMPT },
+        { type: "text", text: prompt },
         { type: "media", mimeType: audio.mimeType, data: audio.data },
       ],
     }),

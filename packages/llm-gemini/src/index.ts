@@ -7,14 +7,9 @@ export {
 export { DEFAULT_AUDIO_MODEL, transcribeAudio } from "./gemini-transcribe.js";
 export type { TranscribeAudioInput } from "./gemini-transcribe.js";
 export {
-  buildCacheSeedContents,
   createCachedGeminiModel,
   createGeminiContextCacheManager,
-  fingerprintContextCacheSpec,
   isCachedContentNotFoundError,
-  isGeminiContextCacheEnabled,
-  parseCacheTooSmallShortfall,
-  resolveCacheMinTokens,
 } from "./gemini-context-cache.js";
 export type {
   BindRoutingToolsOptions,
@@ -24,5 +19,3 @@ export type {
   ILLMConnector,
   RoutingChain,
 } from "./types.js";
-export type { Logger } from "./logger.js";
-export { getLogger } from "./logger.js";

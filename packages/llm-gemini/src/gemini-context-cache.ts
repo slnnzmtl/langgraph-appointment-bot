@@ -17,7 +17,6 @@ import type {
   ContextCacheManager,
   ContextCacheSpec,
 } from "./types.js";
-import { getLogger } from "./logger.js";
 
 import {
   createGeminiChatModel,
@@ -294,7 +293,6 @@ export const createGeminiContextCacheManager = (
       }
 
       if (!created.name) {
-        getLogger().warn("Gemini context cache creation returned no cache name.");
         return null;
       }
 
@@ -311,9 +309,7 @@ export const createGeminiContextCacheManager = (
       });
       fingerprintByCacheName.set(created.name, fingerprint);
       return handle;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      getLogger().warn(`Gemini context cache creation failed; using uncached path. ${message}`);
+    } catch {
       return null;
     }
   };
@@ -362,11 +358,6 @@ export const createCachedGeminiModel = (
     model: handle.model,
   } as CachedContent);
   return model;
-};
-
-export const isGeminiContextCacheEnabled = (): boolean => {
-  const raw = process.env.GEMINI_CONTEXT_CACHE;
-  return raw === undefined || (raw !== "0" && raw.toLowerCase() !== "false");
 };
 
 /** True when Gemini rejected a stale / missing explicit CachedContent name. */

@@ -33,7 +33,7 @@ export class GeminiConnector implements ILLMConnector {
   ): RoutingChain<TRoute> {
     const model = (options?.model ?? this.model) as ChatGoogleGenerativeAI;
     return model.withStructuredOutput(schema, {
-      name: "route_request",
+      name: options?.name ?? "route_request",
     }) as unknown as RoutingChain<TRoute>;
   }
 }

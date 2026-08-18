@@ -13,6 +13,8 @@ export interface AppConfig {
   assignedUserId: string;
   /** Optional; required only when launching the Telegram bot. */
   telegramBotToken?: string;
+  /** Explicit Gemini CachedContent for supervisor/agent prompts. Default on. */
+  geminiContextCacheEnabled: boolean;
 }
 
 const getRequiredEnv = (name: string): string => {
@@ -22,6 +24,9 @@ const getRequiredEnv = (name: string): string => {
   }
   return value;
 };
+
+const isGeminiContextCacheEnabled = (raw = process.env.GEMINI_CONTEXT_CACHE): boolean =>
+  raw === undefined || (raw !== "0" && raw.toLowerCase() !== "false");
 
 export const loadConfig = (): AppConfig => {
   const defaultModel = process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
@@ -33,6 +38,7 @@ export const loadConfig = (): AppConfig => {
     messageHistoryMaxTokens: getMessageHistoryMaxTokens(),
     espocrmMcpUrl: getRequiredEnv("ESPOCRM_MCP_URL"),
     assignedUserId: getRequiredEnv("ESPOCRM_ASSIGNED_USER_ID"),
+    geminiContextCacheEnabled: isGeminiContextCacheEnabled(),
     ...(process.env.TELEGRAM_BOT_TOKEN?.trim()
       ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN.trim() }
       : {}),

@@ -2,7 +2,6 @@ import {
   createGeminiChatModel,
   createGeminiContextCacheManager,
   GeminiConnector,
-  isGeminiContextCacheEnabled,
 } from "@personal-assistant/llm-gemini";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 
@@ -27,7 +26,7 @@ export const createClinicLlmStack = (config: AppConfig): ClinicLlmStack => {
   const contextCache = {
     manager: createGeminiContextCacheManager(
       config.googleApiKey,
-      isGeminiContextCacheEnabled(),
+      config.geminiContextCacheEnabled,
     ),
     apiKey: config.googleApiKey,
     modelName: config.supervisorModel,

@@ -10,6 +10,8 @@ export type RoutingChain<TRoute> = {
 export type BindRoutingToolsOptions = {
   /** When set, structured routing runs against this model (e.g. a Gemini cached-content client). */
   model?: BaseChatModel;
+  /** Structured-output function name. Defaults to `route_request`. */
+  name?: string;
 };
 
 export interface ILLMConnector {

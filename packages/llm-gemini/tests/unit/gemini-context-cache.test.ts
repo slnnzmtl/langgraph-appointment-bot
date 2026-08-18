@@ -10,7 +10,6 @@ import {
   createGeminiContextCacheManager,
   fingerprintContextCacheSpec,
   isCachedContentNotFoundError,
-  isGeminiContextCacheEnabled,
   parseCacheTooSmallShortfall,
   resolveCacheMinTokens,
 } from "../../src/gemini-context-cache.js";
@@ -115,15 +114,6 @@ describe("gemini context cache helpers", () => {
     });
 
     expect(handle).toBeNull();
-  });
-
-  it("isGeminiContextCacheEnabled defaults to enabled", () => {
-    const previous = process.env.GEMINI_CONTEXT_CACHE;
-    delete process.env.GEMINI_CONTEXT_CACHE;
-
-    expect(isGeminiContextCacheEnabled()).toBe(true);
-
-    process.env.GEMINI_CONTEXT_CACHE = previous;
   });
 
   it("resolveCacheMinTokens matches Gemini's per-model minimums", () => {

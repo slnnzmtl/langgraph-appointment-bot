@@ -23,6 +23,7 @@ describe("GeminiConnector", () => {
     new GeminiConnector("test-key").bindRoutingTools(routingSchema);
 
     expect(withStructuredOutput).toHaveBeenCalledTimes(1);
+    expect(withStructuredOutput).toHaveBeenCalledWith(routingSchema, { name: "route_request" });
     withStructuredOutput.mockRestore();
   });
 
