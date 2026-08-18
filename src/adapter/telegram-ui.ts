@@ -76,3 +76,12 @@ export const buildConfirmKeyboard = (): InlineKeyboardMarkup => ({
 
 export const slotChoiceHumanText = (dateStart: string, dateEnd: string, label: string): string =>
   `I choose the ${label} slot (${dateStart} – ${dateEnd}).`;
+
+/** Convert common Markdown (bold + bullets) to Telegram HTML; escape first. */
+export const formatForTelegram = (text: string): string =>
+  text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/^(\*|-) /gm, "• ");

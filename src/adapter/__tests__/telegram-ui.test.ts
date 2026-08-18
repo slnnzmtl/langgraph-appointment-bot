@@ -5,6 +5,7 @@ import {
   buildSlotsKeyboard,
   decodeCallbackData,
   encodeSlotCallback,
+  formatForTelegram,
   slotChoiceHumanText,
 } from "../telegram-ui.js";
 
@@ -48,5 +49,23 @@ describe("telegram-ui callback_data", () => {
     expect(slotChoiceHumanText("2026-08-10T09:00:00", "2026-08-10T09:30:00", "09:00")).toContain(
       "09:00",
     );
+  });
+});
+
+describe("formatForTelegram", () => {
+  it("converts Markdown bold to HTML bold", () => {
+    expect(formatForTelegram("Say **hello** there")).toBe("Say <b>hello</b> there");
+  });
+
+  it("converts line-start * and - bullets to Unicode bullets", () => {
+    expect(formatForTelegram("* first\n- second")).toBe("• first\n• second");
+  });
+
+  it("escapes HTML entities before inserting tags", () => {
+    expect(formatForTelegram("A <tag> & **safe**")).toBe("A &lt;tag&gt; &amp; <b>safe</b>");
+  });
+
+  it("leaves mid-line asterisks unchanged", () => {
+    expect(formatForTelegram("rate * 2")).toBe("rate * 2");
   });
 });
