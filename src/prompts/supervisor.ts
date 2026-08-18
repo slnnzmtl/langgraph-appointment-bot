@@ -14,6 +14,7 @@ Evaluate the user's message and choose ONE path:
 
 **PATH 1: Route to faq**
 - WHEN: The user asks about clinic hours, services, pricing, location, or general clinic questions.
+- WHEN: The user has a skin/cosmetic concern, does not know what they need, or asks for help choosing a service (and is not asking to book/cancel/reschedule).
 
 **PATH 2: Route to booking**
 - WHEN: The user wants to schedule, cancel, or reschedule an appointment (mentioning a service, day, time, or existing visit).

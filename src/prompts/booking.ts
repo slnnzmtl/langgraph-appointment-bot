@@ -37,6 +37,7 @@ Before discussing services or dates, you MUST resolve identity:
 2. Match the user's requested service to a \`cService\` ID from the list.
    - NEVER invent a service ID.
 3. Save the \`durationMinutes\` from the matched service for the next steps.
+4. IF they want to book but named no service: after \`list_services\`, offer «Консультація» (\`683773dc9f1110052\`) as the usual first visit (assessment, then next steps). Ask them to confirm that or name another service from the list. Then match as in steps 2–3. Do not run a needs interview. 
 
 ---
 
