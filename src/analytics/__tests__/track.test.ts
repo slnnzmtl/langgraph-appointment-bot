@@ -1,7 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
-import { finishTrackedWrite, setTrackEventForTests, toolErrorJson, trackEvent, type Tier1EventName } from "../track.js";
+import {
+  applyTracingPrivacyDefaults,
+  finishTrackedWrite,
+  setTrackEventForTests,
+  toolErrorJson,
+  trackEvent,
+  type Tier1EventName,
+} from "../track.js";
 
 type Captured = { name: Tier1EventName; props: Record<string, unknown> };
 
@@ -52,6 +59,79 @@ describe("trackEvent", () => {
       telegram_user_id: "tg-42",
       contact_id: "c-1",
     });
+  });
+});
+
+const TRACING_ENV_KEYS = [
+  "LANGSMITH_TRACING",
+  "LANGCHAIN_TRACING_V2",
+  "LANGSMITH_TRACE_CONTENT",
+  "LANGSMITH_HIDE_INPUTS",
+  "LANGSMITH_HIDE_OUTPUTS",
+] as const;
+
+describe("applyTracingPrivacyDefaults", () => {
+  const saved: Record<string, string | undefined> = {};
+
+  const snapshotEnv = (): void => {
+    for (const key of TRACING_ENV_KEYS) {
+      saved[key] = process.env[key];
+    }
+  };
+
+  const restoreEnv = (): void => {
+    for (const key of TRACING_ENV_KEYS) {
+      const value = saved[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+
+  const clearTracingEnv = (): void => {
+    for (const key of TRACING_ENV_KEYS) {
+      delete process.env[key];
+    }
+  };
+
+  beforeEach(() => {
+    snapshotEnv();
+    clearTracingEnv();
+  });
+
+  afterEach(() => {
+    restoreEnv();
+  });
+
+  it("does not set hide vars when tracing is off", () => {
+    applyTracingPrivacyDefaults();
+    expect(process.env.LANGSMITH_HIDE_INPUTS).toBeUndefined();
+    expect(process.env.LANGSMITH_HIDE_OUTPUTS).toBeUndefined();
+  });
+
+  it("redacts chat inputs/outputs when tracing is on", () => {
+    process.env.LANGSMITH_TRACING = "true";
+    applyTracingPrivacyDefaults();
+    expect(process.env.LANGSMITH_HIDE_INPUTS).toBe("true");
+    expect(process.env.LANGSMITH_HIDE_OUTPUTS).toBe("true");
+  });
+
+  it("leaves hide vars untouched when LANGSMITH_TRACE_CONTENT=true", () => {
+    process.env.LANGSMITH_TRACING = "true";
+    process.env.LANGSMITH_TRACE_CONTENT = "true";
+    applyTracingPrivacyDefaults();
+    expect(process.env.LANGSMITH_HIDE_INPUTS).toBeUndefined();
+    expect(process.env.LANGSMITH_HIDE_OUTPUTS).toBeUndefined();
+  });
+
+  it("preserves an explicit LANGSMITH_HIDE_INPUTS=false", () => {
+    process.env.LANGSMITH_TRACING = "true";
+    process.env.LANGSMITH_HIDE_INPUTS = "false";
+    applyTracingPrivacyDefaults();
+    expect(process.env.LANGSMITH_HIDE_INPUTS).toBe("false");
+    expect(process.env.LANGSMITH_HIDE_OUTPUTS).toBe("true");
   });
 });
 

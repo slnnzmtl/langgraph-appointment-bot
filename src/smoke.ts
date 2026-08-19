@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 
 import { HumanMessage } from "@langchain/core/messages";
 
+import { applyTracingPrivacyDefaults } from "./analytics/track.js";
 import { loadConfig } from "./config.js";
 import type { ClinicAdapters } from "./composition/clinic-adapters.js";
 import { createClinicRuntime, type ClinicRuntime } from "./composition/clinic-runtime.js";
@@ -265,6 +266,7 @@ const runIdentitySmoke = async (runtime: ClinicRuntime): Promise<void> => {
 
 const main = async (): Promise<void> => {
   const config = loadConfig();
+  applyTracingPrivacyDefaults();
   const shouldInvoke = process.argv.includes("--invoke");
   const shouldIdentity = process.argv.includes("--identity");
 

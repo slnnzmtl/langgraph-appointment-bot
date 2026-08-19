@@ -2,6 +2,7 @@ import "dotenv/config";
 import { getDefaultProjectName, isTracingEnabled } from "langsmith";
 
 import { launchClinicBot } from "./adapter/telegram-bot.js";
+import { applyTracingPrivacyDefaults } from "./analytics/track.js";
 import { loadConfig } from "./config.js";
 import { createClinicRuntime } from "./composition/clinic-runtime.js";
 
@@ -11,8 +12,12 @@ import { createClinicRuntime } from "./composition/clinic-runtime.js";
  */
 const main = async (): Promise<void> => {
   const config = loadConfig();
+  applyTracingPrivacyDefaults();
+  const tracingOn = isTracingEnabled();
+  const chatContent =
+    process.env.LANGSMITH_TRACE_CONTENT === "true" ? "included" : "redacted";
   console.log(
-    `LangSmith tracing: ${isTracingEnabled() ? "on" : "off"} (project: ${getDefaultProjectName()})`,
+    `LangSmith tracing: ${tracingOn ? "on" : "off"} (project: ${getDefaultProjectName()}${tracingOn ? `, chat content: ${chatContent}` : ""})`,
   );
 
   const runtime = await createClinicRuntime(config);

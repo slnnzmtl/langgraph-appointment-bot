@@ -45,8 +45,25 @@ const optionalTelegramUserId = (): string | undefined => {
   }
 };
 
+/**
+ * When tracing is on, hide LLM/tool inputs and outputs unless the operator opted in.
+ * Call once at process start, before any LangSmith Client is constructed.
+ * Does not hide metadata (telegram_user_id / chat_id stay). Explicit
+ * LANGSMITH_HIDE_INPUTS / LANGSMITH_HIDE_OUTPUTS win via ??= .
+ */
+export const applyTracingPrivacyDefaults = (): void => {
+  if (!isTracingEnabled()) {
+    return;
+  }
+  if (process.env.LANGSMITH_TRACE_CONTENT === "true") {
+    return;
+  }
+  process.env.LANGSMITH_HIDE_INPUTS ??= "true";
+  process.env.LANGSMITH_HIDE_OUTPUTS ??= "true";
+};
+
 const getClient = (): Client => {
-  sharedClient ??= new Client();
+  sharedClient ??= new Client({ hideInputs: false, hideOutputs: false });
   return sharedClient;
 };
 
