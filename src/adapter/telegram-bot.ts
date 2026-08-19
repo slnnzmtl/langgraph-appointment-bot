@@ -17,7 +17,6 @@ import {
 import {
   decodeCallbackData,
   formatForTelegram,
-  slotChoiceHumanText,
 } from "./telegram-ui.js";
 import {
   buildStartHistoryText,
@@ -33,6 +32,16 @@ const VOICE_EMPTY_FALLBACK =
   "Не вдалося розібрати голосове повідомлення. Напишіть текстом, будь ласка.";
 export const PRIVATE_CHAT_ONLY =
   "Цей бот працює лише в особистих повідомленнях. Напишіть нам у приватний чат.";
+export const RATE_LIMITED_MESSAGE =
+  "Забагато повідомлень. Зачекайте хвилину й спробуйте ще раз.";
+export const VOICE_TOO_LONG =
+  "Голосове повідомлення має бути до 1 хвилини. Напишіть текстом або надішліть коротший запис.";
+export const MAX_VOICE_DURATION_SECONDS = 60;
+export const USER_MESSAGE_RATE_LIMIT = 20;
+export const USER_MESSAGE_RATE_WINDOW_MS = 60_000;
+
+export const isVoiceDurationAllowed = (durationSeconds: number): boolean =>
+  durationSeconds <= MAX_VOICE_DURATION_SECONDS;
 
 type Graph = ReturnType<ClinicRuntime["getGraph"]>;
 
@@ -47,6 +56,24 @@ export type ClinicBotHandle = {
 };
 
 const threadChains = new Map<string, Promise<unknown>>();
+const userMessageTimes = new Map<string, number[]>();
+
+/** True when this user is still under the per-minute message cap. Records the attempt when allowed. */
+export const takeUserMessageSlot = (userId: string, now = Date.now()): boolean => {
+  const cutoff = now - USER_MESSAGE_RATE_WINDOW_MS;
+  const recent = (userMessageTimes.get(userId) ?? []).filter((time) => time > cutoff);
+  if (recent.length >= USER_MESSAGE_RATE_LIMIT) {
+    userMessageTimes.set(userId, recent);
+    return false;
+  }
+  recent.push(now);
+  userMessageTimes.set(userId, recent);
+  return true;
+};
+
+export const clearUserMessageSlotsForTests = (): void => {
+  userMessageTimes.clear();
+};
 
 export type DetachedWorkRunner = {
   runDetached: (work: () => Promise<void>) => void;
@@ -234,6 +261,20 @@ export const rejectNonPrivateTelegramChat = async (ctx: Context): Promise<boolea
   return true;
 };
 
+const rejectIfRateLimited = async (
+  ctx: Context,
+  userId: string | number | undefined,
+): Promise<boolean> => {
+  if (userId === undefined || takeUserMessageSlot(String(userId))) {
+    return false;
+  }
+  if (ctx.callbackQuery) {
+    await ctx.answerCbQuery().catch(() => undefined);
+  }
+  await ctx.reply(RATE_LIMITED_MESSAGE);
+  return true;
+};
+
 export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<ClinicBotHandle> => {
   const { token, runtime } = options;
   const graph = runtime.getGraph();
@@ -266,6 +307,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     if (await rejectNonPrivateTelegramChat(ctx)) {
       return;
     }
+    if (await rejectIfRateLimited(ctx, ctx.from?.id)) {
+      return;
+    }
     const chatId = ctx.chat?.id;
     const fromId = ctx.from?.id;
     const text = ctx.message.text?.trim();
@@ -289,6 +333,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     if (await rejectNonPrivateTelegramChat(ctx)) {
       return;
     }
+    if (await rejectIfRateLimited(ctx, ctx.from?.id)) {
+      return;
+    }
     const chatId = ctx.chat?.id;
     const fromId = ctx.from?.id;
     const voice = ctx.message.voice;
@@ -299,6 +346,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     const threadId = String(chatId);
     const { googleApiKey } = runtime.getBootstrap().config;
     const outbound = await withTypingIndicator(ctx.telegram, chatId, async () => {
+      if (!isVoiceDurationAllowed(voice.duration)) {
+        return { text: VOICE_TOO_LONG };
+      }
       let transcript = "";
       try {
         const fileLink = await ctx.telegram.getFileLink(voice.file_id);
@@ -324,6 +374,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
 
   bot.on("callback_query", detach(async (ctx) => {
     if (await rejectNonPrivateTelegramChat(ctx)) {
+      return;
+    }
+    if (await rejectIfRateLimited(ctx, ctx.from?.id)) {
       return;
     }
     const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
@@ -352,14 +405,6 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
           .catch(() => undefined);
       }
       input = new Command({ resume: { confirmed: decoded.confirmed } });
-    } else if (decoded.kind === "slot") {
-      input = {
-        messages: [
-          new HumanMessage(
-            slotChoiceHumanText(decoded.dateStart, decoded.dateEnd, decoded.label),
-          ),
-        ],
-      };
     } else {
       await ctx.reply("Unknown button. Please type your request.");
       return;

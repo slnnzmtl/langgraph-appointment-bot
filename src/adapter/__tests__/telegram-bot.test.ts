@@ -6,6 +6,11 @@ import {
   handleGraphTextTurn,
   PRIVATE_CHAT_ONLY,
   rejectNonPrivateTelegramChat,
+  takeUserMessageSlot,
+  clearUserMessageSlotsForTests,
+  USER_MESSAGE_RATE_LIMIT,
+  MAX_VOICE_DURATION_SECONDS,
+  isVoiceDurationAllowed,
   withTypingIndicator,
   wrapTelegramHandler,
 } from "../telegram-bot.js";
@@ -48,6 +53,36 @@ describe("private chat restriction", () => {
     } as never);
     expect(rejected).toBe(false);
     expect(reply).not.toHaveBeenCalled();
+  });
+});
+
+describe("per-user message rate limit", () => {
+  afterEach(() => {
+    clearUserMessageSlotsForTests();
+  });
+
+  it("allows 20 messages in a minute and rejects the 21st", () => {
+    const start = 1_000_000;
+    for (let i = 0; i < USER_MESSAGE_RATE_LIMIT; i += 1) {
+      expect(takeUserMessageSlot("u-1", start + i)).toBe(true);
+    }
+    expect(takeUserMessageSlot("u-1", start + USER_MESSAGE_RATE_LIMIT)).toBe(false);
+    expect(takeUserMessageSlot("u-2", start)).toBe(true);
+  });
+
+  it("resets after the window elapses", () => {
+    const start = 2_000_000;
+    for (let i = 0; i < USER_MESSAGE_RATE_LIMIT; i += 1) {
+      expect(takeUserMessageSlot("u-1", start)).toBe(true);
+    }
+    expect(takeUserMessageSlot("u-1", start + 60_000)).toBe(true);
+  });
+});
+
+describe("voice duration cap", () => {
+  it("allows notes up to 60 seconds and rejects longer", () => {
+    expect(isVoiceDurationAllowed(MAX_VOICE_DURATION_SECONDS)).toBe(true);
+    expect(isVoiceDurationAllowed(MAX_VOICE_DURATION_SECONDS + 1)).toBe(false);
   });
 });
 

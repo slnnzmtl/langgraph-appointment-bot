@@ -74,14 +74,17 @@ Meeting tools (booking agent):
 ## Telegram behaviour
 
 - `/start` replies with a static intro and categorized services (no prices); working hours come from CRM `get_working_time`; the same text is appended to the chat's graph message history as an `AIMessage` so later agent turns see it
-- `thread_id = chat.id`; private chats only (groups get a short redirect); per-chat exclusive graph invoke queue
+- Private chats only (groups get a short redirect); 20 messages per user per minute (text, voice, and buttons)
+- `thread_id = chat.id`; per-chat exclusive graph invoke queue
+- Conversation and HITL state live in process memory (`MemorySaver` plus a pending-confirm map). A restart clears chats; there is no long-term transcript store. Run a single bot instance.
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
+- At most one Planned meeting per patient: `create_meeting` is blocked until the existing visit is cancelled or rescheduled
 - Supervisor prefetches contact + planned meetings into checkpointed state; booking prepare reuses that snapshot until a successful CRM write dirties it or the snapshot is older than ~5 minutes.
-- `present_availability_slots` uses `search_meetings` free/busy; agent lists times in text (Inline Keyboard temporarily disabled)
+- `present_availability_slots` uses `search_meetings` free/busy; the agent lists times in text (the user types a slot)
 - HITL confirm: tap Yes/No to resume with `Command`. Typing while the confirm card is pending sends the text into the interrupt (`userReply`); the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. The server honors that flag only when a HITL card was already shown on this thread for the same write arguments. Chat text never implicitly cancels.
 - After button Yes/No, the bot removes the inline keyboard, then replies with the agent outcome.
-- Voice notes: Telegraf downloads the OGG, Gemini 3.1 Flash Lite transcribes it (`AUDIO_MODEL` optional), then the same text graph path runs; empty or failed transcription gets a short Ukrainian fallback and does not invoke the graph. Replies are always text.
+- Voice notes up to 60 seconds: Telegraf downloads the OGG, Gemini 3.1 Flash Lite transcribes it (`AUDIO_MODEL` optional), then the same text graph path runs; empty, failed, or longer recordings get a short Ukrainian fallback and do not invoke the graph. Replies are always text.
 
 ## Manual E2E checklist
 
@@ -89,8 +92,8 @@ Meeting tools (booking agent):
 2. Incomplete CRM contact (missing firstName/lastName/phone): collect them at book time, then `update_contact` before confirm
 3. Unknown user: asks phone/name, create/link writes `cTelegram`
 4. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`
-5. Type a slot time from the agent's text list (Inline Keyboard disabled)
-6. Tap Confirm Yes to book; Confirm No cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`
+5. Type a slot time from the agent's text list
+6. Tap Confirm Yes to book; Confirm No cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned visit is refused until the first is cancelled or rescheduled.
 7. After Yes/No, agent continues; button path removes the inline keyboard
 8. Cancel: list upcoming visits → Confirm Yes soft-cancels (`Not Held`)
 9. Reschedule: pick new slot (old slot offered via `excludeMeetingIds`) → Confirm Yes updates times

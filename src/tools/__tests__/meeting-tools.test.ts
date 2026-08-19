@@ -85,7 +85,7 @@ describe("create_meeting HITL interrupt", () => {
 
       const first = await graph.invoke({ result: "" }, config);
       expect(first.__interrupt__).toBeDefined();
-      expect(calls.map((call) => call.name)).toEqual(["get_entity"]);
+      expect(calls.map((call) => call.name)).toEqual(["get_entity", "search_entity"]);
 
       const second = await graph.invoke(
         new Command({ resume: { confirmed: false } }),
@@ -131,7 +131,7 @@ describe("create_meeting HITL interrupt", () => {
       const config = { configurable: { thread_id: "hitl-confirm" } };
 
       await graph.invoke({ result: "" }, config);
-      expect(calls.map((call) => call.name)).toEqual(["get_entity"]);
+      expect(calls.map((call) => call.name)).toEqual(["get_entity", "search_entity"]);
 
       const second = await graph.invoke(
         new Command({ resume: { confirmed: true } }),
@@ -380,6 +380,65 @@ describe("create_meeting HITL interrupt", () => {
       expect(first.__interrupt__).toBeUndefined();
       expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
       expect(JSON.parse(first.result)).toMatchObject({ error: "Not authorized" });
+    });
+  });
+
+  it("rejects create_meeting when the contact already has a Planned visit", async () => {
+    await withTg(async () => {
+      const bookedCallTool = async (name: string, args: Record<string, unknown>) => {
+        calls.push({ name, args });
+        if (name === "get_entity") {
+          return completeContact;
+        }
+        if (name === "search_contacts") {
+          return { contacts: [completeContact] };
+        }
+        if (name === "search_entity") {
+          return {
+            list: [
+              {
+                id: "mtg-existing",
+                name: "Consult: Ada",
+                dateStart: "2026-08-12T10:00:00",
+                dateEnd: "2026-08-12T10:30:00",
+              },
+            ],
+          };
+        }
+        return { success: true, id: "meeting-1" };
+      };
+
+      const [createMeeting] = createMeetingTools({
+        callTool: bookedCallTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const graph = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const first = await graph.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-already-booked" } },
+      );
+      expect(first.__interrupt__).toBeUndefined();
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
+      expect(JSON.parse(first.result)).toMatchObject({
+        error: "Already booked",
+        meetings: [{ id: "mtg-existing" }],
+      });
     });
   });
 });

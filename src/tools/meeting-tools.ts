@@ -18,7 +18,7 @@ import {
   type ConfirmDraft,
   type ConfirmFingerprint,
 } from "./meeting-confirm.js";
-import { createListPlannedMeetingsTool } from "./planned-meetings.js";
+import { createListPlannedMeetingsTool, lookupPlannedMeetings } from "./planned-meetings.js";
 import { getTelegramUserId } from "./telegram-user-context.js";
 
 export type { BookingContext, ListedMeeting } from "./planned-meetings.js";
@@ -184,6 +184,15 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         });
       }
 
+      const planned = await lookupPlannedMeetings(callTool, input.contactId);
+      if (planned && planned.meetings.length > 0) {
+        return JSON.stringify({
+          error: "Already booked",
+          meetings: planned.meetings,
+          hint: "This patient already has a Planned visit. Cancel or reschedule it before booking another.",
+        });
+      }
+
       const dateStart = normalizeLocalIsoDatetime(input.dateStart);
       const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
       const draft = {
@@ -241,7 +250,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons (contact must belong to this Telegram user). After explicit chat affirmation, re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned visit. Call immediately. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons (contact must belong to this Telegram user). After explicit chat affirmation, re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()
