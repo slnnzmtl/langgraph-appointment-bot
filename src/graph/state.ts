@@ -2,7 +2,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 
 import type { ContactLookupContext } from "../tools/contact-tools.js";
-import type { BookingContext } from "../tools/meeting-tools.js";
+import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { ClinicHandoff } from "./types.js";
 

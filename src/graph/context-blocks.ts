@@ -1,5 +1,5 @@
 import type { ContactLookupContext } from "../tools/contact-tools.js";
-import type { BookingContext } from "../tools/meeting-tools.js";
+import type { BookingContext } from "../tools/planned-meetings.js";
 
 export type AgentPrefetchResult = {
   contactContext: ContactLookupContext;
