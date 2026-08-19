@@ -81,6 +81,49 @@ describe("resolveDayTimeRanges", () => {
   it("returns empty when calendar is null", () => {
     expect(resolveDayTimeRanges(null, "2026-08-10")).toEqual([]);
   });
+
+  it("closes an open weekday covered by Non-working reserved time", () => {
+    expect(
+      resolveDayTimeRanges(sampleCalendar, "2026-08-10", [
+        { type: "Non-working", dateStart: "2026-08-10", dateEnd: "2026-08-10" },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("uses Working reserved timeRanges even on a closed weekday", () => {
+    expect(
+      resolveDayTimeRanges(sampleCalendar, "2026-08-09", [
+        {
+          type: "Working",
+          dateStart: "2026-08-09",
+          dateEnd: "2026-08-09",
+          timeRanges: [["10:00", "12:00"]],
+        },
+      ]),
+    ).toEqual([["10:00", "12:00"]]);
+  });
+
+  it("uses calendar default hours when Working reserved time has empty timeRanges", () => {
+    expect(
+      resolveDayTimeRanges(sampleCalendar, "2026-08-09", [
+        { type: "Working", dateStart: "2026-08-09", dateEnd: "2026-08-09", timeRanges: null },
+      ]),
+    ).toEqual([["11:00", "15:00"]]);
+  });
+
+  it("lets Non-working win over Working on the same day", () => {
+    expect(
+      resolveDayTimeRanges(sampleCalendar, "2026-08-10", [
+        {
+          type: "Working",
+          dateStart: "2026-08-10",
+          dateEnd: "2026-08-10",
+          timeRanges: [["09:00", "12:00"]],
+        },
+        { type: "Non-working", dateStart: "2026-08-10", dateEnd: "2026-08-10" },
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe("resolveWeekdayTimeRanges", () => {
@@ -108,6 +151,21 @@ describe("computeFreeSlots", () => {
       dateStart: localIso("2026-08-10", 9, 0),
       dateEnd: localIso("2026-08-10", 9, 30),
     });
+  });
+
+  it("treats EspoCRM 24:00:00 as that calendar date, not the next midnight", () => {
+    const slots = computeFreeSlots({
+      day: "2026-08-27",
+      meetings: [
+        {
+          dateStart: "2026-08-27 24:00:00",
+          dateEnd: "2026-09-02 24:00:00",
+        },
+      ],
+      timeRanges: [["11:00", "15:00"]],
+      stepMinutes: 30,
+    });
+    expect(slots).toEqual([]);
   });
 
   it("supports minute-precision range starts", () => {

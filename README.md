@@ -65,7 +65,7 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 
 Meeting tools (booking agent):
 
-- `present_availability_slots` — free/busy from `search_meetings`; optional `excludeMeetingIds` when rescheduling
+- `present_availability_slots` — free/busy from `search_meetings` and `CReservedTime`; optional `excludeMeetingIds` when rescheduling
 - `create_meeting` — HITL Yes/No, then MCP `create_meeting`
 - `list_planned_meetings` — upcoming Planned meetings for a Contact (`search_entity`)
 - `cancel_meeting` — HITL Yes/No, then soft cancel (`update_meeting` status `Not Held`)
@@ -82,7 +82,7 @@ Meeting tools (booking agent):
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
 - At most one Planned meeting per patient: `create_meeting` is blocked until the existing visit is cancelled or rescheduled
 - Supervisor prefetches contact + planned meetings into checkpointed state; booking prepare reuses that snapshot until a successful CRM write dirties it or the snapshot is older than ~5 minutes.
-- `present_availability_slots` uses `search_meetings` free/busy; the agent lists times in text (the user types a slot)
+- `present_availability_slots` uses `search_meetings` and `CReservedTime` free/busy; the agent lists times in text (the user types a slot)
 - HITL confirm: tap Yes/No to resume with `Command`. Typing while the confirm card is pending sends the text into the interrupt (`userReply`); the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. The server honors that flag only when a HITL card was already shown on this thread for the same write arguments. Chat text never implicitly cancels.
 - After button Yes/No, the bot removes the inline keyboard, then replies with the agent outcome.
 - Voice notes up to 60 seconds: Telegraf downloads the OGG, Gemini 3.1 Flash Lite transcribes it (`AUDIO_MODEL` optional), then the same text graph path runs; empty, failed, or longer recordings get a short Ukrainian fallback and do not invoke the graph. Replies are always text.

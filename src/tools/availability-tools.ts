@@ -17,8 +17,10 @@ import {
   findNextAvailableSlots,
   formatKyivLocalIso,
   resolveDayTimeRanges,
+  type BusyMeeting,
   type TimeRangePair,
   type WorkingTimeCalendarLike,
+  type WorkingTimeRangeLike,
 } from "./availability-slots.js";
 
 const DAY_SCHEMA = z
@@ -29,24 +31,32 @@ const DAY_SCHEMA = z
 /** MCP search_meetings validates limit <= 200. */
 const RANGED_MEETINGS_LIMIT = 200;
 
-const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
+const parseWorkingTimeResult = (
+  raw: unknown,
+): { calendars: WorkingTimeCalendarLike[]; ranges: WorkingTimeRangeLike[] } => {
   let value: unknown = raw;
   if (typeof value === "string") {
     try {
       value = JSON.parse(value) as unknown;
     } catch {
-      return [];
+      return { calendars: [], ranges: [] };
     }
   }
   if (!value || typeof value !== "object") {
-    return [];
+    return { calendars: [], ranges: [] };
   }
-  const calendars = (value as { calendars?: unknown }).calendars;
-  return Array.isArray(calendars) ? (calendars as WorkingTimeCalendarLike[]) : [];
+  const record = value as { calendars?: unknown; ranges?: unknown };
+  return {
+    calendars: Array.isArray(record.calendars)
+      ? (record.calendars as WorkingTimeCalendarLike[])
+      : [],
+    ranges: Array.isArray(record.ranges) ? (record.ranges as WorkingTimeRangeLike[]) : [],
+  };
 };
 
 type WorkingCalendarFetch = {
   calendar: WorkingTimeCalendarLike | null;
+  ranges: WorkingTimeRangeLike[];
   /** CRM missing/failed — open every day with clinic fallback hours. */
   useClinicFallback: boolean;
 };
@@ -58,13 +68,14 @@ const fetchWorkingCalendar = async (
 ): Promise<WorkingCalendarFetch> => {
   try {
     const raw = await callTool("get_working_time", { userId: assignedUserId });
-    const calendar = parseWorkingTimeCalendars(raw)[0] ?? null;
+    const { calendars, ranges } = parseWorkingTimeResult(raw);
+    const calendar = calendars[0] ?? null;
     if (!calendar) {
-      return { calendar: null, useClinicFallback: true };
+      return { calendar: null, ranges: [], useClinicFallback: true };
     }
-    return { calendar, useClinicFallback: false };
+    return { calendar, ranges, useClinicFallback: false };
   } catch {
-    return { calendar: null, useClinicFallback: true };
+    return { calendar: null, ranges: [], useClinicFallback: true };
   }
 };
 
@@ -75,7 +86,30 @@ const resolveRangesForDay = (
   if (fetch.useClinicFallback) {
     return fallbackClinicTimeRanges();
   }
-  return resolveDayTimeRanges(fetch.calendar, day);
+  return resolveDayTimeRanges(fetch.calendar, day, fetch.ranges);
+};
+
+const searchReservedTimes = async (
+  callTool: McpCallTool,
+  assignedUserId: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<BusyMeeting[]> => {
+  try {
+    const raw = await callTool("search_entity", {
+      entityType: "CReservedTime",
+      filters: {
+        assignedUserId,
+        dateStart: { $lte: `${dateTo}T23:59:59` },
+        dateEnd: { $gte: `${dateFrom}T00:00:00` },
+      },
+      select: ["id", "dateStart", "dateEnd"],
+      limit: RANGED_MEETINGS_LIMIT,
+    });
+    return extractMeetingsFromSearchResult(raw);
+  } catch {
+    return [];
+  }
 };
 
 /** Next-available search start: later of startDate and day after afterDate (YYYY-MM-DD compares lexicographically). */
@@ -113,7 +147,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
         const excludeIds = input.excludeMeetingIds;
 
         if (input.date) {
-          const [fetch, raw] = await Promise.all([
+          const [working, raw, reserved] = await Promise.all([
             fetchWorkingCalendar(callTool, assignedUserId),
             callTool("search_meetings", {
               dateFrom: input.date,
@@ -121,15 +155,17 @@ export const createPresentAvailabilitySlotsTool = (options: {
               assignedUserId,
               limit: 100,
             }),
+            searchReservedTimes(callTool, assignedUserId, input.date, input.date),
           ]);
-          const meetings = excludeMeetingsById(
-            extractMeetingsFromSearchResult(raw),
-            excludeIds,
-          );
+          const meetings = [
+            ...excludeMeetingsById(extractMeetingsFromSearchResult(raw), excludeIds),
+            ...reserved,
+          ];
+          const timeRanges = resolveRangesForDay(working, input.date);
           const slots = computeFreeSlots({
             day: input.date,
             meetings,
-            timeRanges: resolveRangesForDay(fetch, input.date),
+            timeRanges,
             stepMinutes,
           });
           trackEvent("availability_presented", {
@@ -148,7 +184,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
           today,
         });
         const end = addCalendarDays(start, MAX_AVAILABILITY_SEARCH_DAYS - 1);
-        const [fetch, raw] = await Promise.all([
+        const [working, raw, reserved] = await Promise.all([
           fetchWorkingCalendar(callTool, assignedUserId),
           callTool("search_meetings", {
             dateFrom: start,
@@ -156,16 +192,18 @@ export const createPresentAvailabilitySlotsTool = (options: {
             assignedUserId,
             limit: RANGED_MEETINGS_LIMIT,
           }),
+          searchReservedTimes(callTool, assignedUserId, start, end),
         ]);
-        const meetings = excludeMeetingsById(
-          extractMeetingsFromSearchResult(raw),
-          excludeIds,
-        );
+        const searchedMeetings = extractMeetingsFromSearchResult(raw);
+        const meetings = [
+          ...excludeMeetingsById(searchedMeetings, excludeIds),
+          ...reserved,
+        ];
         const result = findNextAvailableSlots({
           startDate: start,
           meetings,
           durationMinutes: stepMinutes,
-          resolveTimeRanges: (day) => resolveRangesForDay(fetch, day),
+          resolveTimeRanges: (day) => resolveRangesForDay(working, day),
           now: new Date(),
         });
         trackEvent("availability_presented", {
@@ -177,7 +215,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
         });
         return JSON.stringify({
           ...result,
-          ...(meetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
+          ...(searchedMeetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
         });
       } catch (error) {
         const message = errorMessage(error);
@@ -188,7 +226,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots from CRM meetings (search_meetings). Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so its current slot is free. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, slots }], date, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. List every returned day and all slot labels — do not invent times or claim a day is the only option unless days is empty after afterDate.",
+        "Compute free appointment slots from CRM meetings (search_meetings) and CReservedTime blocks. Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so its current slot is free. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, slots }], date, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. List every returned day and all slot labels — do not invent times or claim a day is the only option unless days is empty after afterDate.",
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",

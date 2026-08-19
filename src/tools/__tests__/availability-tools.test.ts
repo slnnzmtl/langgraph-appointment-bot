@@ -78,9 +78,73 @@ describe("meeting-tools availability", () => {
     expect(
       calls.find((c) => c.name === "get_working_time")?.args,
     ).toEqual({ userId: "user-1" });
+    expect(calls.find((c) => c.name === "search_entity")?.args).toEqual({
+      entityType: "CReservedTime",
+      filters: {
+        assignedUserId: "user-1",
+        dateStart: { $lte: "2026-08-10T23:59:59" },
+        dateEnd: { $gte: "2026-08-10T00:00:00" },
+      },
+      select: ["id", "dateStart", "dateEnd"],
+      limit: 200,
+    });
     expect(parsed.slots[0]?.label).toBe("11:30");
     expect(parsed.slots.some((s) => s.label === "09:00")).toBe(false);
     expect(parsed.slots.some((s) => s.label === "14:30")).toBe(true);
+  });
+
+  it("present_availability_slots applies Non-working reserved time from get_working_time ranges", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return {
+          ...crmCalendar,
+          ranges: [
+            {
+              type: "Non-working",
+              dateStart: "2026-08-10",
+              dateEnd: "2026-08-10",
+            },
+          ],
+        };
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({ date: "2026-08-10" });
+    const parsed = JSON.parse(raw as string) as { slots: Array<{ label: string }> };
+    expect(parsed.slots).toEqual([]);
+  });
+
+  it("present_availability_slots uses Working reserved hours on a closed weekday", async () => {
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return {
+          ...crmCalendar,
+          ranges: [
+            {
+              type: "Working",
+              dateStart: "2026-08-09",
+              dateEnd: "2026-08-09",
+              timeRanges: [["10:00", "11:00"]],
+            },
+          ],
+        };
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({ date: "2026-08-09", durationMinutes: 30 });
+    const parsed = JSON.parse(raw as string) as { slots: Array<{ label: string }> };
+    expect(parsed.slots.map((s) => s.label)).toEqual(["10:00", "10:30"]);
   });
 
   it("present_availability_slots falls back to clinic constants when get_working_time fails", async () => {
@@ -147,6 +211,16 @@ describe("meeting-tools availability", () => {
     expect(search?.args.dateFrom).toBe("2026-08-10");
     expect(search?.args.dateTo).toBe("2026-09-08");
     expect(search?.args.limit).toBe(200);
+    expect(calls.find((c) => c.name === "search_entity")?.args).toEqual({
+      entityType: "CReservedTime",
+      filters: {
+        assignedUserId: "user-1",
+        dateStart: { $lte: "2026-09-08T23:59:59" },
+        dateEnd: { $gte: "2026-08-10T00:00:00" },
+      },
+      select: ["id", "dateStart", "dateEnd"],
+      limit: 200,
+    });
     expect(parsed.date).toBe("2026-08-11");
     expect(parsed.stepMinutes).toBe(60);
     expect(parsed.slots[0]?.label).toBe("11:00");
@@ -353,5 +427,134 @@ describe("present_availability_slots excludeMeetingIds", () => {
       })) as string,
     ) as { slots: Array<{ label: string }> };
     expect(freed.slots.some((s) => s.label === "09:00")).toBe(true);
+  });
+});
+
+describe("present_availability_slots CReservedTime", () => {
+  const openMorning = {
+    success: true,
+    calendars: [
+      {
+        name: "Main",
+        timeRanges: [["09:00", "10:00"]],
+        weekdays: {
+          "0": true,
+          "1": true,
+          "2": true,
+          "3": true,
+          "4": true,
+          "5": true,
+          "6": true,
+        },
+        weekdayTimeRanges: {},
+      },
+    ],
+    ranges: [],
+  };
+
+  it("blocks slots overlapping CReservedTime even when search_meetings is empty", async () => {
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return openMorning;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      if (name === "search_entity") {
+        return {
+          list: [
+            {
+              id: "rt-1",
+              dateStart: "2026-08-10T09:00:00",
+              dateEnd: "2026-08-10T09:30:00",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    };
+
+    const tool = createPresentAvailabilitySlotsTool({
+      callTool,
+      assignedUserId: "user-1",
+    });
+    const parsed = JSON.parse(
+      (await tool.invoke({ date: "2026-08-10", durationMinutes: 30 })) as string,
+    ) as { slots: Array<{ label: string }> };
+
+    expect(parsed.slots.some((s) => s.label === "09:00")).toBe(false);
+    expect(parsed.slots.some((s) => s.label === "09:30")).toBe(true);
+  });
+
+  it("keeps CReservedTime busy when excludeMeetingIds frees a meeting", async () => {
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return openMorning;
+      }
+      if (name === "search_meetings") {
+        return {
+          meetings: [
+            {
+              id: "mtg-busy",
+              status: "Planned",
+              dateStart: "2026-08-10T09:00:00",
+              dateEnd: "2026-08-10T09:30:00",
+            },
+          ],
+        };
+      }
+      if (name === "search_entity") {
+        return {
+          list: [
+            {
+              id: "rt-1",
+              dateStart: "2026-08-10T09:00:00",
+              dateEnd: "2026-08-10T09:30:00",
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    };
+
+    const tool = createPresentAvailabilitySlotsTool({
+      callTool,
+      assignedUserId: "user-1",
+    });
+    const parsed = JSON.parse(
+      (await tool.invoke({
+        date: "2026-08-10",
+        durationMinutes: 30,
+        excludeMeetingIds: ["mtg-busy"],
+      })) as string,
+    ) as { slots: Array<{ label: string }> };
+
+    expect(parsed.slots.some((s) => s.label === "09:00")).toBe(false);
+  });
+
+  it("still offers slots when search_entity CReservedTime fails", async () => {
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return openMorning;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      if (name === "search_entity") {
+        throw new Error("CReservedTime missing");
+      }
+      return { ok: true };
+    };
+
+    const tool = createPresentAvailabilitySlotsTool({
+      callTool,
+      assignedUserId: "user-1",
+    });
+    const parsed = JSON.parse(
+      (await tool.invoke({ date: "2026-08-10", durationMinutes: 30 })) as string,
+    ) as { slots: Array<{ label: string }>; error?: string };
+
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.slots.some((s) => s.label === "09:00")).toBe(true);
   });
 });

@@ -41,6 +41,14 @@ export type WorkingTimeCalendarLike = {
   weekdayTimeRanges?: Record<string, TimeRangePair[] | null>;
 };
 
+/** EspoCRM WorkingTimeRange (Reserved Time): `Working` / `Non-working` date exceptions. */
+export type WorkingTimeRangeLike = {
+  type?: string;
+  dateStart?: string;
+  dateEnd?: string;
+  timeRanges?: TimeRangePair[] | null;
+};
+
 export type ComputeFreeSlotsInput = {
   day: string;
   meetings: BusyMeeting[];
@@ -81,9 +89,13 @@ export const normalizeLocalIsoDatetime = (value: string): string => {
 /** Normalize EspoCRM wall times (`YYYY-MM-DD HH:mm:ss`, ISO, or date-only) for Date.parse. */
 const toMillis = (iso: string): number => {
   const trimmed = iso.trim();
-  const withT = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
-    ? `${trimmed}T00:00:00`
-    : normalizeLocalIsoDatetime(trimmed);
+  // EspoCRM all-day uses 24:00:00 on the calendar date (not ISO next-midnight).
+  const allDay = trimmed.match(/^(\d{4}-\d{2}-\d{2})[ T]24:00(?::00)?$/);
+  const withT = allDay
+    ? `${allDay[1]}T00:00:00`
+    : /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+      ? `${trimmed}T00:00:00`
+      : normalizeLocalIsoDatetime(trimmed);
   const ms = Date.parse(withT);
   if (Number.isNaN(ms)) {
     throw new Error(`Invalid datetime: ${iso}`);
@@ -166,14 +178,51 @@ export const resolveWeekdayTimeRanges = (
   return Array.isArray(calendar.timeRanges) ? calendar.timeRanges : [];
 };
 
+const ymdPrefix = (value: string | undefined): string | null => {
+  if (!value) {
+    return null;
+  }
+  const match = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? null;
+};
+
+const rangeCoversDay = (range: WorkingTimeRangeLike, day: string): boolean => {
+  const start = ymdPrefix(range.dateStart);
+  if (!start) {
+    return false;
+  }
+  const end = ymdPrefix(range.dateEnd) ?? start;
+  return start <= day && day <= end;
+};
+
+const rangeType = (range: WorkingTimeRangeLike): string =>
+  (range.type ?? "").trim().toLowerCase();
+
 /**
  * Resolve open time ranges for a calendar day from a normalized WorkingTimeCalendar.
+ * Reserved Time (`ranges`) overrides weekdays: Non-working closes the day; Working uses
+ * the exception timeRanges, or the calendar default when those are empty.
  * Closed weekdays return []. Prefer weekdayTimeRanges when non-empty, else timeRanges.
  */
 export const resolveDayTimeRanges = (
   calendar: WorkingTimeCalendarLike | null | undefined,
   day: string,
-): TimeRangePair[] => resolveWeekdayTimeRanges(calendar, getKyivWeekdayIndex(day));
+  ranges: WorkingTimeRangeLike[] = [],
+): TimeRangePair[] => {
+  const covering = ranges.filter((range) => rangeCoversDay(range, day));
+  if (covering.some((range) => rangeType(range) === "non-working")) {
+    return [];
+  }
+  const working = covering.find((range) => rangeType(range) === "working");
+  if (working) {
+    const exceptionRanges = working.timeRanges;
+    if (Array.isArray(exceptionRanges) && exceptionRanges.length > 0) {
+      return exceptionRanges;
+    }
+    return Array.isArray(calendar?.timeRanges) ? calendar.timeRanges : [];
+  }
+  return resolveWeekdayTimeRanges(calendar, getKyivWeekdayIndex(day));
+};
 
 /**
  * Build free slots for a calendar day by subtracting busy meetings from open ranges.
