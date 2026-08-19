@@ -33,11 +33,12 @@ export const buildConfirmKeyboard = (): InlineKeyboardMarkup => ({
   ],
 });
 
-/** Convert common Markdown (bold + bullets) to Telegram HTML; escape first. */
+/** Convert common Markdown (bold, links, bullets) to Telegram HTML; escape first. */
 export const formatForTelegram = (text: string): string =>
   text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
     .replace(/^(\*|-) /gm, "• ");

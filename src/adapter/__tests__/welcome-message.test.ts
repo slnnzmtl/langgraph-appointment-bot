@@ -40,6 +40,10 @@ describe("welcome message", () => {
     expect(message).toContain("Скинкери");
     expect(message).toContain("Понеділок–П'ятниця: 11:00–15:00");
     expect(message).toContain("Субота–Неділя: вихідний");
+    expect(message).toContain("вул. Миколаївська 33, м. Білгород-Дністровський");
+    expect(message).toContain(
+      "[Google maps](https://www.google.com/maps/place/Mukolayivska+St,+33,+Bilhorod-Dnistrovs'kyi,+Odes'ka+oblast,+Ukraine,+67701)",
+    );
     expect(message).not.toMatch(/UAH|USD|\$|грн/i);
   });
 
@@ -93,6 +97,9 @@ describe("welcome message", () => {
     expect(html).toContain("<b>Години роботи</b>");
     expect(html).toContain("• Консультація дерматолога-косметолога");
     expect(html).toContain("• Понеділок–П'ятниця: 11:00–15:00");
+    expect(html).toContain(
+      '<a href="https://www.google.com/maps/place/Mukolayivska+St,+33,+Bilhorod-Dnistrovs\'kyi,+Odes\'ka+oblast,+Ukraine,+67701">Google maps</a>',
+    );
   });
 });
 

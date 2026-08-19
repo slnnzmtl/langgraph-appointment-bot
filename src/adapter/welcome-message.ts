@@ -1,7 +1,7 @@
 import { AIMessage } from "@langchain/core/messages";
 
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
-import { CLINIC_ADDRESS } from "../shared/clinic-constants.js";
+import { CLINIC_ADDRESS, CLINIC_MAPS_MARKDOWN } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import {
   resolveWeekdayTimeRanges,
@@ -36,7 +36,8 @@ const WELCOME_PREFIX = `✨ Ласкаво просимо до косметол�
 • Поверхневі та серединні пілінги 🧪
 • Ін'єкційні ліполітики ⏳
 
-📍 ${CLINIC_ADDRESS}`;
+📍 ${CLINIC_ADDRESS}
+${CLINIC_MAPS_MARKDOWN}`;
 
 type DayHours = TimeRangePair[] | "вихідний";
 
@@ -115,7 +116,7 @@ export const loadWelcomeMessage = async (
 };
 
 export const START_FOLLOW_UP =
-  "Хотіли б ви дізнатися деталіше про наші послуги або записатися на прийом? 💬";
+  "Хотіли б ви дізнатися детальніше про наші послуги або записатися на прийом? 💬";
 
 export const buildStartHistoryText = (welcome: string): string =>
   `${welcome}\n\n${START_FOLLOW_UP}`;

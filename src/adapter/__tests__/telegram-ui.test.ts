@@ -36,4 +36,14 @@ describe("formatForTelegram", () => {
   it("leaves mid-line asterisks unchanged", () => {
     expect(formatForTelegram("rate * 2")).toBe("rate * 2");
   });
+
+  it("converts Markdown links to Telegram HTML anchors", () => {
+    expect(
+      formatForTelegram(
+        "[Google maps](https://www.google.com/maps/place/Mukolayivska+St,+33,+Bilhorod-Dnistrovs'kyi,+Odes'ka+oblast,+Ukraine,+67701)",
+      ),
+    ).toBe(
+      '<a href="https://www.google.com/maps/place/Mukolayivska+St,+33,+Bilhorod-Dnistrovs\'kyi,+Odes\'ka+oblast,+Ukraine,+67701">Google maps</a>',
+    );
+  });
 });
