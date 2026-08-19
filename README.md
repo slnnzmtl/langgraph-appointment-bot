@@ -28,7 +28,7 @@ Start the sibling MCP stack first (`espocrm-mcp-server` on network `espocrm-mcp_
 docker compose up -d --build
 ```
 
-Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`.
+Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base.
 
 ## Commands
 
