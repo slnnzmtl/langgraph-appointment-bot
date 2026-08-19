@@ -110,4 +110,40 @@ describe("clinic-adapters", () => {
       'MCP tool "search_entity" timed out after 30000ms',
     );
   });
+
+  it("shutdown aborts in-flight MCP calls and rejects later ones", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "healthy" }), { status: 200 });
+      }
+      const signal = init?.signal;
+      return await new Promise<Response>((_resolve, reject) => {
+        const abort = () => {
+          const error = new Error("The operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapters = await setupClinicAdapters({
+      ...adapterConfig,
+      espocrmMcpUrl: "http://127.0.0.1:3000",
+    });
+
+    const pending = adapters.callTool("search_entity", { entityType: "cService" });
+    await Promise.resolve();
+    await adapters.shutdown();
+
+    await expect(pending).rejects.toThrow("EspoCRM MCP adapters are shut down");
+    await expect(adapters.callTool("list_services", {})).rejects.toThrow(
+      "EspoCRM MCP adapters are shut down",
+    );
+  });
 });

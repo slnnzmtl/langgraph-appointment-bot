@@ -6,6 +6,7 @@ export type { McpCallTool };
 
 export type ClinicAdapters = {
   callTool: McpCallTool;
+  shutdown: () => Promise<void>;
 };
 
 type TextContent = {
@@ -75,31 +76,56 @@ export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdap
     throw new Error(`EspoCRM MCP health check failed (HTTP ${health.status})`);
   }
 
-  return {
-    callTool: withNormalizedClinicPhones(async (name, args) => {
-      let response: Response;
-      try {
-        response = await fetch(`${origin}/tools/${encodeURIComponent(name)}`, {
-          method: "POST",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
-          body: JSON.stringify(args),
-          signal: AbortSignal.timeout(MCP_HTTP_TIMEOUT_MS),
-        });
-      } catch (error) {
-        const aborted =
-          (error instanceof Error && error.name === "TimeoutError") ||
-          (error instanceof Error && error.name === "AbortError");
-        if (aborted) {
-          throw new Error(`MCP tool "${name}" timed out after ${MCP_HTTP_TIMEOUT_MS}ms`);
-        }
-        throw error;
-      }
+  const inflight = new Set<AbortController>();
+  let closed = false;
 
-      const body = await readJson(response);
-      if (!response.ok) {
-        throw new Error(httpErrorMessage(name, response.status, body));
+  const callTool: McpCallTool = withNormalizedClinicPhones(async (name, args) => {
+    if (closed) {
+      throw new Error("EspoCRM MCP adapters are shut down");
+    }
+    const controller = new AbortController();
+    inflight.add(controller);
+    const timer = setTimeout(() => controller.abort(), MCP_HTTP_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await fetch(`${origin}/tools/${encodeURIComponent(name)}`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(args),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (closed) {
+        throw new Error("EspoCRM MCP adapters are shut down");
       }
-      return parseToolResponse(body);
-    }),
+      const aborted =
+        (error instanceof Error && error.name === "TimeoutError") ||
+        (error instanceof Error && error.name === "AbortError") ||
+        controller.signal.aborted;
+      if (aborted) {
+        throw new Error(`MCP tool "${name}" timed out after ${MCP_HTTP_TIMEOUT_MS}ms`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      inflight.delete(controller);
+    }
+
+    const body = await readJson(response);
+    if (!response.ok) {
+      throw new Error(httpErrorMessage(name, response.status, body));
+    }
+    return parseToolResponse(body);
+  });
+
+  return {
+    callTool,
+    shutdown: async () => {
+      closed = true;
+      for (const controller of inflight) {
+        controller.abort();
+      }
+      inflight.clear();
+    },
   };
 };

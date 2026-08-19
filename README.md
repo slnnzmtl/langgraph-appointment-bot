@@ -77,6 +77,7 @@ Meeting tools (booking agent):
 - Private chats only (groups get a short redirect); 20 messages per user per minute (text, voice, and buttons)
 - `thread_id = chat.id`; per-chat exclusive graph invoke queue
 - Conversation and HITL state live in process memory (`MemorySaver` plus a pending-confirm map). A restart clears chats; there is no long-term transcript store. Run a single bot instance.
+- SIGINT/SIGTERM stop Telegram polling, wait for in-flight handler work, then abort in-flight EspoCRM MCP HTTP calls (`shutdownAdapters`). MCP `/health` is checked at process start; later MCP outages fail the tool call (30s timeout).
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
 - At most one Planned meeting per patient: `create_meeting` is blocked until the existing visit is cancelled or rescheduled

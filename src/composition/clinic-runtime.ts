@@ -61,6 +61,6 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     getGraph: () => graph,
     getBootstrap: () => bootstrap,
     getCheckpointer: () => checkpointer,
-    shutdownAdapters: async () => undefined,
+    shutdownAdapters: () => adapters.shutdown(),
   };
 };

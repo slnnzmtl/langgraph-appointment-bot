@@ -432,6 +432,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     bot,
     stop: async (reason = "stop") => {
       bot.stop(reason);
+      await runtime.shutdownAdapters();
       await waitInflight();
     },
   };
