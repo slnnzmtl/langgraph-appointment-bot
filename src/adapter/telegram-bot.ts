@@ -46,6 +46,48 @@ export type ClinicBotHandle = {
 
 const threadChains = new Map<string, Promise<unknown>>();
 
+export type DetachedWorkRunner = {
+  runDetached: (work: () => Promise<void>) => void;
+  waitInflight: () => Promise<void>;
+};
+
+/**
+ * Run handler bodies off Telegraf's poll loop so getUpdates is not blocked on graph/LLM.
+ * Errors are logged here because Telegraf never sees the rejected promise.
+ */
+export const createDetachedWorkRunner = (): DetachedWorkRunner => {
+  const inflight = new Set<Promise<void>>();
+
+  const runDetached = (work: () => Promise<void>): void => {
+    const done: Promise<void> = work().then(
+      () => undefined,
+      (error: unknown) => {
+        console.error("Telegram bot error:", error);
+      },
+    );
+    inflight.add(done);
+    void done.finally(() => {
+      inflight.delete(done);
+    });
+  };
+
+  return {
+    runDetached,
+    waitInflight: async () => {
+      await Promise.all(inflight);
+    },
+  };
+};
+
+/** Telegraf middleware that returns immediately while `handler` runs in the background. */
+export const wrapTelegramHandler = <C>(
+  runDetached: (work: () => Promise<void>) => void,
+  handler: (ctx: C) => Promise<void>,
+): ((ctx: C) => void) =>
+  (ctx) => {
+    runDetached(() => handler(ctx));
+  };
+
 /** Keep Telegram "typing" visible while `work` (graph invoke) is in progress. */
 export const withTypingIndicator = async <T>(
   telegram: Pick<Context["telegram"], "sendChatAction">,
@@ -171,8 +213,11 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
   const { token, runtime } = options;
   const graph = runtime.getGraph();
   const bot = new Telegraf(token);
+  const { runDetached, waitInflight } = createDetachedWorkRunner();
+  const detach = <C>(handler: (ctx: C) => Promise<void>) =>
+    wrapTelegramHandler(runDetached, handler);
 
-  bot.start(async (ctx) => {
+  bot.start(detach(async (ctx) => {
     const chatId = ctx.chat?.id;
     if (chatId === undefined) {
       return;
@@ -187,9 +232,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     await runExclusiveForThread(threadId, () =>
       recordWelcomeInHistory(graph, threadId, buildStartHistoryText(welcome)),
     );
-  });
+  }));
 
-  bot.on("text", async (ctx) => {
+  bot.on("text", detach(async (ctx) => {
     const chatId = ctx.chat?.id;
     const fromId = ctx.from?.id;
     const text = ctx.message.text?.trim();
@@ -207,9 +252,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       ),
     );
     await replyOutbound(ctx, outbound);
-  });
+  }));
 
-  bot.on("voice", async (ctx) => {
+  bot.on("voice", detach(async (ctx) => {
     const chatId = ctx.chat?.id;
     const fromId = ctx.from?.id;
     const voice = ctx.message.voice;
@@ -241,9 +286,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       return handleGraphTextTurn(graph, threadId, String(fromId), transcript);
     });
     await replyOutbound(ctx, outbound);
-  });
+  }));
 
-  bot.on("callback_query", async (ctx) => {
+  bot.on("callback_query", detach(async (ctx) => {
     const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
     const fromId = ctx.from?.id;
     const data = "data" in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
@@ -292,7 +337,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       ),
     );
     await replyOutbound(ctx, outbound);
-  });
+  }));
 
   bot.catch((error: unknown) => {
     console.error("Telegram bot error:", error);
@@ -305,6 +350,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     bot,
     stop: async (reason = "stop") => {
       bot.stop(reason);
+      await waitInflight();
     },
   };
 };

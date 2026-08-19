@@ -1,7 +1,12 @@
 import { Annotation, END, interrupt, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { handleGraphTextTurn, withTypingIndicator } from "../telegram-bot.js";
+import {
+  createDetachedWorkRunner,
+  handleGraphTextTurn,
+  withTypingIndicator,
+  wrapTelegramHandler,
+} from "../telegram-bot.js";
 
 describe("text while HITL pending", () => {
   const InterruptState = Annotation.Root({
@@ -107,5 +112,70 @@ describe("withTypingIndicator", () => {
       async () => "ok",
     );
     expect(result).toBe("ok");
+  });
+});
+
+describe("detached Telegram handlers", () => {
+  it("returns from the Telegraf-facing wrapper before work resolves", async () => {
+    const { runDetached, waitInflight } = createDetachedWorkRunner();
+    let started = false;
+    let finished = false;
+    const handler = wrapTelegramHandler(runDetached, async () => {
+      started = true;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      finished = true;
+    });
+
+    handler(undefined);
+    expect(started).toBe(true);
+    expect(finished).toBe(false);
+
+    await waitInflight();
+    expect(finished).toBe(true);
+  });
+
+  it("runs two detached works concurrently", async () => {
+    const { runDetached, waitInflight } = createDetachedWorkRunner();
+    const order: string[] = [];
+
+    const slow = wrapTelegramHandler(runDetached, async () => {
+      order.push("slow-start");
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      order.push("slow-end");
+    });
+    const fast = wrapTelegramHandler(runDetached, async () => {
+      order.push("fast-start");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("fast-end");
+    });
+
+    slow("chat-a");
+    fast("chat-b");
+    await waitInflight();
+
+    expect(order).toEqual(["slow-start", "fast-start", "fast-end", "slow-end"]);
+  });
+
+  it("logs rejected work and does not surface an unhandled rejection", async () => {
+    const { runDetached, waitInflight } = createDetachedWorkRunner();
+    const error = new Error("graph failed");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      wrapTelegramHandler(runDetached, async () => {
+        throw error;
+      })(undefined);
+      await waitInflight();
+      expect(unhandled).toEqual([]);
+      expect(log).toHaveBeenCalledWith("Telegram bot error:", error);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      log.mockRestore();
+    }
   });
 });
