@@ -214,9 +214,11 @@ describe("meeting-tools availability", () => {
       assignedUserId: "user-1",
     }).filter((t) => t.name === "present_availability_slots");
 
-    // afterDate 2026-08-10 (Mon) → start 2026-08-11 (Tue); calendar open Mon–Fri 11–15
+    // afterDate 2026-08-10 (Mon) → start 2026-08-11 (Tue); calendar open Mon–Fri 11–15.
+    // Pin startDate so the window is not clamped to Kyiv today.
     const raw = await tool!.invoke({
       afterDate: "2026-08-10",
+      startDate: "2026-08-10",
       durationMinutes: 60,
     });
     const parsed = JSON.parse(raw as string) as {

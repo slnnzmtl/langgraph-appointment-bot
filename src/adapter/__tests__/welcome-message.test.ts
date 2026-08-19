@@ -1,8 +1,7 @@
 import { AIMessage } from "@langchain/core/messages";
-import { END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
+import { Annotation, END, MemorySaver, START, StateGraph } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
-import { createClinicStateAnnotation } from "../../graph/state.js";
 import { formatForTelegram } from "../telegram-ui.js";
 import {
   buildStartHistoryText,
@@ -99,7 +98,12 @@ describe("welcome message", () => {
 
 describe("recordWelcomeInHistory", () => {
   it("appends the welcome as an AIMessage on the chat thread", async () => {
-    const state = createClinicStateAnnotation({ messageHistoryMaxTokens: 6000 });
+    const state = Annotation.Root({
+      messages: Annotation<unknown[]>({
+        reducer: (left: unknown[], right: unknown[]) => left.concat(right),
+        default: () => [],
+      }),
+    });
     const graph = new StateGraph(state)
       .addNode("noop", async () => ({}))
       .addEdge(START, "noop")
