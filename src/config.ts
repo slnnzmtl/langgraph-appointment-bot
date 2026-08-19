@@ -7,7 +7,7 @@ export interface AppConfig {
   supervisorModel: string;
   agentModel: string;
   messageHistoryMaxTokens: number;
-  /** SSE endpoint for EspoCRM MCP (e.g. http://espocrm-mcp-server:3000/sse). */
+  /** EspoCRM MCP origin for HTTP `/health` and `/tools` (e.g. http://espocrm-mcp-server:3000). */
   espocrmMcpUrl: string;
   /** Injected into every create_meeting MCP call. */
   assignedUserId: string;

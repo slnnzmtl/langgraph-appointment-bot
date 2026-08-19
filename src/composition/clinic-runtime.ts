@@ -7,7 +7,7 @@ import type { ClinicAgentDefinition } from "../graph/types.js";
 import { SUPERVISOR_PROMPT } from "../prompts/supervisor.js";
 import { clinicAgents } from "./agents.js";
 import { buildClinicAgentTools } from "./clinic-agent-tools.js";
-import { closeClinicAdapters, setupClinicAdapters, type ClinicAdapters } from "./clinic-adapters.js";
+import { setupClinicAdapters, type ClinicAdapters } from "./clinic-adapters.js";
 import {
   buildClinicSupervisorDynamicContext,
   formatKyivSystemMetadata,
@@ -61,6 +61,6 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     getGraph: () => graph,
     getBootstrap: () => bootstrap,
     getCheckpointer: () => checkpointer,
-    shutdownAdapters: () => closeClinicAdapters(adapters),
+    shutdownAdapters: async () => undefined,
   };
 };

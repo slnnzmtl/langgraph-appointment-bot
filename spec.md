@@ -3,7 +3,7 @@
 **1. Core Stack:**
 * Framework: `LangGraph.js` / `@langchain/core`
 * Interface: Telegram Bot API (`telegraf` or `node-telegram-bot-api`)
-* Backend/DB: EspoCRM (accessed strictly via a local MCP server bridge using `@langchain/mcp`)
+* Backend/DB: EspoCRM (sibling MCP HTTP: `GET /health`, `POST /tools/:name`)
 * Validation: `Zod` (for strict tool and state schemas)
 * Model: Fast, strict-tool-calling models (e.g., `GPT-5.6 Luna` or `Gemini 3.5 Flash-Lite` for the Root Router; `GPT-5.6 Terra` or `Claude 5 Sonnet` for the Booking Graph)
 
@@ -34,7 +34,7 @@ interface AgentState {
 
 ## MCP Tool Registry
 
-The Booking node must bind to these specific tools exposed by our EspoCRM MCP server. **Do not write direct REST API wrappers.** Use LangChain's `ToolNode` to invoke these:
+The Booking node must bind to these specific tools exposed by our EspoCRM MCP server. Use LangChain's `ToolNode`; CRM I/O goes through MCP HTTP `/tools/:name`, not EspoCRM REST.
 
 1. `espocrm_find_contact(telegram_id, phone_number)`: Returns contact ID if they exist.
 2. `espocrm_create_contact(first_name, last_name, phone, telegram_id)`: Registers a new patient.

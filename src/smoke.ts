@@ -107,7 +107,7 @@ const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
     throw new Error("Expected MemorySaver checkpointer from createClinicRuntime");
   }
   console.log("✓ Checkpointer attached (MemorySaver)");
-  console.log("✓ EspoCRM MCP adapters connected (stdio)");
+  console.log("✓ EspoCRM MCP adapters connected (HTTP)");
 };
 
 const shortTelegramId = (prefixDigit: string): string =>

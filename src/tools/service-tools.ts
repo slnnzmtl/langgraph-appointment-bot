@@ -133,6 +133,7 @@ export const listServices = async (
   try {
     const result = await callTool("search_entity", {
       entityType: "cService",
+      select: ["id", "name", "duration", "description"],
       limit,
     });
     return toToolResult(compactListServicesResult(result));

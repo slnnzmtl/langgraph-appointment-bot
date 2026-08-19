@@ -1,6 +1,3 @@
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-
 import type { AppConfig } from "../config.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { withNormalizedClinicPhones } from "../shared/phone.js";
@@ -9,13 +6,15 @@ export type { McpCallTool };
 
 export type ClinicAdapters = {
   callTool: McpCallTool;
-  close: () => Promise<void>;
 };
 
 type TextContent = {
   type: string;
   text?: string;
 };
+
+/** Align with EspoCRM MCP `REQUEST_TIMEOUT` (default 30s). */
+const MCP_HTTP_TIMEOUT_MS = 30_000;
 
 const parseToolResponse = (response: unknown): unknown => {
   const content = (response as { content?: TextContent[] }).content;
@@ -32,33 +31,75 @@ const parseToolResponse = (response: unknown): unknown => {
   }
 };
 
+const httpErrorMessage = (name: string, status: number, body: unknown): string => {
+  if (body && typeof body === "object" && !Array.isArray(body)) {
+    const record = body as Record<string, unknown>;
+    const nested = record.error;
+    if (typeof nested === "string" && nested.trim().length > 0) {
+      return nested;
+    }
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      const message = (nested as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message;
+      }
+    }
+    if (typeof record.message === "string" && record.message.trim().length > 0) {
+      return record.message;
+    }
+  }
+  if (typeof body === "string" && body.trim().length > 0) {
+    return body;
+  }
+  return `MCP tool "${name}" failed (HTTP ${status})`;
+};
+
+const readJson = async (response: Response): Promise<unknown> => {
+  const text = await response.text();
+  if (text.length === 0) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+};
+
 export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdapters> => {
-  const transport = new SSEClientTransport(new URL(config.espocrmMcpUrl));
-
-  const client = new Client(
-    { name: "clinic-espocrm-mcp", version: "0.1.0" },
-    { capabilities: {} },
-  );
-
-  await client.connect(transport);
+  const origin = new URL(config.espocrmMcpUrl).origin;
+  const health = await fetch(`${origin}/health`, {
+    signal: AbortSignal.timeout(MCP_HTTP_TIMEOUT_MS),
+  });
+  if (!health.ok) {
+    throw new Error(`EspoCRM MCP health check failed (HTTP ${health.status})`);
+  }
 
   return {
     callTool: withNormalizedClinicPhones(async (name, args) => {
-      const response = await client.callTool({ name, arguments: args });
-      if ((response as { isError?: boolean }).isError) {
-        const text = parseToolResponse(response);
-        throw new Error(
-          typeof text === "string" ? text : `MCP tool "${name}" failed: ${JSON.stringify(text)}`,
-        );
+      let response: Response;
+      try {
+        response = await fetch(`${origin}/tools/${encodeURIComponent(name)}`, {
+          method: "POST",
+          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          body: JSON.stringify(args),
+          signal: AbortSignal.timeout(MCP_HTTP_TIMEOUT_MS),
+        });
+      } catch (error) {
+        const aborted =
+          (error instanceof Error && error.name === "TimeoutError") ||
+          (error instanceof Error && error.name === "AbortError");
+        if (aborted) {
+          throw new Error(`MCP tool "${name}" timed out after ${MCP_HTTP_TIMEOUT_MS}ms`);
+        }
+        throw error;
       }
-      return parseToolResponse(response);
-    }),
-    close: async () => {
-      await client.close();
-    },
-  };
-};
 
-export const closeClinicAdapters = async (adapters: ClinicAdapters): Promise<void> => {
-  await adapters.close().catch(() => undefined);
+      const body = await readJson(response);
+      if (!response.ok) {
+        throw new Error(httpErrorMessage(name, response.status, body));
+      }
+      return parseToolResponse(body);
+    }),
+  };
 };

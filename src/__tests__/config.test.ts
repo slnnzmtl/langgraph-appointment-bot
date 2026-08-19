@@ -4,7 +4,7 @@ import { loadConfig } from "../config.js";
 
 const requiredEnv = {
   GOOGLE_API_KEY: "test-key",
-  ESPOCRM_MCP_URL: "http://espocrm-mcp-server:3000/sse",
+  ESPOCRM_MCP_URL: "http://espocrm-mcp-server:3000",
   ESPOCRM_ASSIGNED_USER_ID: "user-1",
 } as const;
 

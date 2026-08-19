@@ -20,7 +20,11 @@ describe("service-tools", () => {
     const result = await listServices(callTool);
     expect(calls[0]).toEqual({
       name: "search_entity",
-      args: { entityType: "cService", limit: 50 },
+      args: {
+        entityType: "cService",
+        select: ["id", "name", "duration", "description"],
+        limit: 50,
+      },
     });
     expect(JSON.parse(result)).toEqual({ ok: true });
   });
@@ -29,7 +33,11 @@ describe("service-tools", () => {
     await listServices(callTool, 10);
     expect(calls[0]).toEqual({
       name: "search_entity",
-      args: { entityType: "cService", limit: 10 },
+      args: {
+        entityType: "cService",
+        select: ["id", "name", "duration", "description"],
+        limit: 10,
+      },
     });
   });
 
