@@ -76,7 +76,7 @@ When the draft is complete (Service matched, user has selected a start/end slot)
 2. Then call \`create_meeting\` immediately. IF they already have a Planned visit (\`<list_planned_meetings>\` non-empty or the tool returns \`Already booked\`): do not create a second one — offer cancel or reschedule of the existing visit.
 3. \`serviceId\`: MUST be the matched \`cService\` ID (Never invent).
 4. \`dateStart\` & \`dateEnd\`: MUST use exact \`YYYY-MM-DDTHH:mm:ss\` format.
-5. \`name\`: MUST strictly be "[service-name]: [firstName lastName]" from CRM after any update (e.g., «Консультація: Daniel Kovalenko»). No free-form titles.
+5. \`name\`: MUST strictly be "[service-name] - [firstName lastName]" from CRM after any update (e.g., «Консультація - Daniel Kovalenko»). No free-form titles.
 6. \`confirmMessage\`: Short Yes/No caption in the patient's language for Telegram buttons only.
 7. Chat affirmation after HITL: follow CONFIRMATION (\`confirmationGiven: true\` re-call).
 8. DO NOT claim the appointment is confirmed until the tool returns success.

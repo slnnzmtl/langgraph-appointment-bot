@@ -9,6 +9,7 @@ const adapterConfig = {
   messageHistoryMaxTokens: 6000,
   assignedUserId: "user-1",
   geminiContextCacheEnabled: false,
+  espocrmApiKey: "mcp-key",
 } as const;
 
 describe("clinic-adapters", () => {
@@ -20,10 +21,16 @@ describe("clinic-adapters", () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/health")) {
+        expect(init?.headers).toMatchObject({ espocrm_api_key: "mcp-key" });
         return new Response(JSON.stringify({ status: "healthy" }), { status: 200 });
       }
       expect(url).toBe("http://127.0.0.1:3000/tools/search_entity");
       expect(init?.method).toBe("POST");
+      expect(init?.headers).toMatchObject({
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        espocrm_api_key: "mcp-key",
+      });
       expect(JSON.parse(String(init?.body))).toEqual({ entityType: "cService", limit: 50 });
       return new Response(
         JSON.stringify({

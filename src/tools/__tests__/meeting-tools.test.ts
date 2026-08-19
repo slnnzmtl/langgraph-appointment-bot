@@ -143,13 +143,13 @@ describe("create_meeting HITL interrupt", () => {
         name: "Consult",
         dateStart: "2026-08-07T10:00:00",
         dateEnd: "2026-08-07T10:30:00",
-        assignedUserId: "assigned-99",
         parentType: "Contact",
         parentId: "contact-1",
         contactsIds: ["contact-1"],
         cServicesIds: ["svc-1"],
         status: "Planned",
       });
+      expect(createCalls[0]?.args).not.toHaveProperty("assignedUserId");
       expect(JSON.parse(second.result)).toMatchObject({ success: true, id: "meeting-1" });
     });
   });

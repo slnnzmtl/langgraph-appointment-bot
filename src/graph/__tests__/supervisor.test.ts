@@ -247,7 +247,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     meetings: [
       {
         id: "m-1",
-        name: "Консультація: Марія",
+        name: "Консультація - Марія",
         dateStart: "2026-08-12 10:00:00",
         dateEnd: "2026-08-12 10:30:00",
       },
@@ -284,7 +284,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(system).toContain("<contact_info>");
     expect(system).toContain("Марія");
     expect(system).toContain("<list_planned_meetings>");
-    expect(system).toContain("Консультація: Марія");
+    expect(system).toContain("Консультація - Марія");
     expect(update.contactContext).toEqual(listedContact);
     expect(update.bookingContext).toEqual(listedMeetings);
     expect(update.prefetchDirty).toBe(false);

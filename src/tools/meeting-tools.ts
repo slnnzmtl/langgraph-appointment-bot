@@ -256,7 +256,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .string()
           .min(1)
           .describe(
-            'Meeting title as "[service-name]: [firstName lastName]" (e.g. "Консультація: Daniel Kovalenko")',
+            'Meeting title as "[service-name]: [firstName lastName]" (e.g. "Консультація - Daniel Kovalenko")',
           ),
         dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
