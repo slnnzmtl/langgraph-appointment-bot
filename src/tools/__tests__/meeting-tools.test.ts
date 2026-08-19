@@ -6,6 +6,7 @@ import {
   createMeetingTools,
   lookupPlannedMeetings,
   resolveNextAvailableStart,
+  clearPendingConfirmsForTests,
 } from "../meeting-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
@@ -342,6 +343,7 @@ describe("create_meeting HITL interrupt", () => {
 
   afterEach(() => {
     setTrackEventForTests(null);
+    clearPendingConfirmsForTests();
   });
 
   const completeContact = {
@@ -349,12 +351,16 @@ describe("create_meeting HITL interrupt", () => {
     firstName: "Ada",
     lastName: "Lovelace",
     phoneNumber: "+380501112233",
+    cTelegram: "tg-42",
   };
 
   const callTool = async (name: string, args: Record<string, unknown>) => {
     calls.push({ name, args });
     if (name === "get_entity") {
       return completeContact;
+    }
+    if (name === "search_contacts") {
+      return { contacts: [completeContact] };
     }
     return { success: true, id: "meeting-1" };
   };
@@ -490,6 +496,7 @@ describe("create_meeting HITL interrupt", () => {
             firstName: "Daniel",
             lastName: null,
             phoneNumber: "+380501234567",
+            cTelegram: "tg-42",
           };
         }
         return { success: true, id: "meeting-1" };
@@ -538,34 +545,179 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 
-  it("confirmationGiven:true skips interrupt and calls MCP create_meeting", async () => {
+  it("confirmationGiven:true on a first tool call interrupts instead of writing", async () => {
     await withTg(async () => {
       const [createMeeting] = createMeetingTools({
         callTool,
         assignedUserId: "assigned-99",
       }).filter((tool) => tool.name === "create_meeting");
 
-      const raw = await createMeeting!.invoke({
-        name: "Consult",
-        dateStart: "2026-08-07T10:00:00",
-        dateEnd: "2026-08-07T10:30:00",
-        contactId: "contact-1",
-        serviceId: "svc-1",
-        confirmMessage: "Confirm this booking?",
-        confirmationGiven: true,
-      });
+      const graph = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+            confirmationGiven: true,
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const first = await graph.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-first-call-flag" } },
+      );
+      expect(first.__interrupt__).toBeDefined();
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
+    });
+  });
+
+  it("confirmationGiven:true after a pending HITL card writes once", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-chat-confirm" } };
+
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(new Command({ resume: { userReply: "так" } }), config);
+
+      const [createMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const raw = await createMeeting!.invoke(
+        {
+          name: "Consult",
+          dateStart: "2026-08-07T10:00:00",
+          dateEnd: "2026-08-07T10:30:00",
+          contactId: "contact-1",
+          serviceId: "svc-1",
+          confirmMessage: "Confirm this booking?",
+          confirmationGiven: true,
+        },
+        { configurable: { thread_id: "hitl-chat-confirm" } },
+      );
 
       expect(calls.filter((call) => call.name === "create_meeting")).toHaveLength(1);
       expect(JSON.parse(String(raw))).toMatchObject({ success: true, id: "meeting-1" });
+    });
+  });
+
+  it("confirmationGiven:true with different args does not write", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-mismatch" } };
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(new Command({ resume: { userReply: "так" } }), config);
+
+      const [createMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const graph2 = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-08T10:00:00",
+            dateEnd: "2026-08-08T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+            confirmationGiven: true,
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const second = await graph2.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-mismatch" } },
+      );
+      expect(second.__interrupt__).toBeDefined();
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
+    });
+  });
+
+  it("rejects a contact that is not linked to this Telegram user", async () => {
+    await withTg(async () => {
+      const foreignCallTool = async (name: string, args: Record<string, unknown>) => {
+        calls.push({ name, args });
+        if (name === "get_entity") {
+          return {
+            id: "contact-other",
+            firstName: "Other",
+            lastName: "Patient",
+            phoneNumber: "+380501110000",
+            cTelegram: "tg-other",
+          };
+        }
+        if (name === "search_contacts") {
+          return { contacts: [completeContact] };
+        }
+        return { success: true, id: "meeting-1" };
+      };
+
+      const [createMeeting] = createMeetingTools({
+        callTool: foreignCallTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const graph = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-other",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const first = await graph.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-foreign-contact" } },
+      );
+      expect(first.__interrupt__).toBeUndefined();
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
+      expect(JSON.parse(first.result)).toMatchObject({ error: "Not authorized" });
     });
   });
 });
 
 describe("list_planned_meetings", () => {
   it("calls search_entity with Contact parent and Planned filters", async () => {
+    await withTg(async () => {
     const calls: CallRecord[] = [];
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
+      if (name === "get_entity") {
+        return {
+          id: "contact-9",
+          cTelegram: "tg-42",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+        };
+      }
+      if (name === "search_contacts") {
+        return {
+          contacts: [{ id: "contact-9", cTelegram: "tg-42" }],
+        };
+      }
       return {
         success: true,
         list: [
@@ -591,9 +743,9 @@ describe("list_planned_meetings", () => {
       dateFrom: string;
     };
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]?.name).toBe("search_entity");
-    expect(calls[0]?.args).toMatchObject({
+    expect(calls.some((c) => c.name === "search_entity")).toBe(true);
+    const search = calls.find((c) => c.name === "search_entity");
+    expect(search?.args).toMatchObject({
       entityType: "Meeting",
       filters: {
         parentId: "contact-9",
@@ -613,6 +765,7 @@ describe("list_planned_meetings", () => {
         dateEnd: "2026-08-12T10:30:00",
       },
     ]);
+    });
   });
 
   it("lookupPlannedMeetings returns meetings payload and null on throw", async () => {
@@ -657,8 +810,28 @@ describe("cancel_meeting HITL interrupt", () => {
     calls.length = 0;
   });
 
+  afterEach(() => {
+    clearPendingConfirmsForTests();
+  });
+
+  const ownedMeeting = {
+    id: "mtg-1",
+    parentType: "Contact",
+    parentId: "contact-1",
+    contactsIds: ["contact-1"],
+  };
+
   const callTool = async (name: string, args: Record<string, unknown>) => {
     calls.push({ name, args });
+    if (name === "get_entity") {
+      if (args.entityType === "Meeting") {
+        return ownedMeeting;
+      }
+      return { id: "contact-1", cTelegram: "tg-42" };
+    }
+    if (name === "search_contacts") {
+      return { contacts: [{ id: "contact-1", cTelegram: "tg-42" }] };
+    }
     return { success: true };
   };
 
@@ -696,7 +869,7 @@ describe("cancel_meeting HITL interrupt", () => {
         new Command({ resume: { confirmed: false } }),
         config,
       );
-      expect(calls).toHaveLength(0);
+      expect(calls.some((call) => call.name === "update_meeting")).toBe(false);
       expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
     });
   });
@@ -711,9 +884,9 @@ describe("cancel_meeting HITL interrupt", () => {
         new Command({ resume: { confirmed: true } }),
         config,
       );
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.name).toBe("update_meeting");
-      expect(calls[0]?.args).toEqual({
+      expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
+      const update = calls.find((call) => call.name === "update_meeting");
+      expect(update?.args).toEqual({
         meetingId: "mtg-1",
         status: "Not Held",
       });
@@ -721,22 +894,29 @@ describe("cancel_meeting HITL interrupt", () => {
     });
   });
 
-  it("confirmationGiven:true skips interrupt and calls update_meeting", async () => {
+  it("confirmationGiven:true after a pending HITL card calls update_meeting", async () => {
     await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-cancel-chat" } };
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(new Command({ resume: { userReply: "так" } }), config);
+
       const [cancelMeeting] = createMeetingTools({
         callTool,
         assignedUserId: "assigned-99",
       }).filter((tool) => tool.name === "cancel_meeting");
 
-      const raw = await cancelMeeting!.invoke({
-        meetingId: "mtg-1",
-        name: "Consult: Ada",
-        confirmMessage: "Cancel this appointment?",
-        confirmationGiven: true,
-      });
+      const raw = await cancelMeeting!.invoke(
+        {
+          meetingId: "mtg-1",
+          name: "Consult: Ada",
+          confirmMessage: "Cancel this appointment?",
+          confirmationGiven: true,
+        },
+        { configurable: { thread_id: "hitl-cancel-chat" } },
+      );
 
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.name).toBe("update_meeting");
+      expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
       expect(JSON.parse(String(raw))).toMatchObject({ success: true });
     });
   });
@@ -749,8 +929,28 @@ describe("reschedule_meeting HITL interrupt", () => {
     calls.length = 0;
   });
 
+  afterEach(() => {
+    clearPendingConfirmsForTests();
+  });
+
+  const ownedMeeting = {
+    id: "mtg-1",
+    parentType: "Contact",
+    parentId: "contact-1",
+    contactsIds: ["contact-1"],
+  };
+
   const callTool = async (name: string, args: Record<string, unknown>) => {
     calls.push({ name, args });
+    if (name === "get_entity") {
+      if (args.entityType === "Meeting") {
+        return ownedMeeting;
+      }
+      return { id: "contact-1", cTelegram: "tg-42" };
+    }
+    if (name === "search_contacts") {
+      return { contacts: [{ id: "contact-1", cTelegram: "tg-42" }] };
+    }
     return { success: true };
   };
 
@@ -790,7 +990,7 @@ describe("reschedule_meeting HITL interrupt", () => {
         new Command({ resume: { confirmed: false } }),
         config,
       );
-      expect(calls).toHaveLength(0);
+      expect(calls.some((call) => call.name === "update_meeting")).toBe(false);
       expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
     });
   });
@@ -805,9 +1005,9 @@ describe("reschedule_meeting HITL interrupt", () => {
         new Command({ resume: { confirmed: true } }),
         config,
       );
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.name).toBe("update_meeting");
-      expect(calls[0]?.args).toEqual({
+      expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
+      const update = calls.find((call) => call.name === "update_meeting");
+      expect(update?.args).toEqual({
         meetingId: "mtg-1",
         dateStart: "2026-08-14T11:00:00",
         dateEnd: "2026-08-14T11:30:00",
@@ -816,28 +1016,31 @@ describe("reschedule_meeting HITL interrupt", () => {
     });
   });
 
-  it("confirmationGiven:true skips interrupt and updates dates", async () => {
+  it("confirmationGiven:true after a pending HITL card updates dates", async () => {
     await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-reschedule-chat" } };
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(new Command({ resume: { userReply: "так" } }), config);
+
       const [rescheduleMeeting] = createMeetingTools({
         callTool,
         assignedUserId: "assigned-99",
       }).filter((tool) => tool.name === "reschedule_meeting");
 
-      const raw = await rescheduleMeeting!.invoke({
-        meetingId: "mtg-1",
-        name: "Consult: Ada",
-        dateStart: "2026-08-14 11:00:00",
-        dateEnd: "2026-08-14 11:30:00",
-        confirmMessage: "Reschedule to this time?",
-        confirmationGiven: true,
-      });
+      const raw = await rescheduleMeeting!.invoke(
+        {
+          meetingId: "mtg-1",
+          name: "Consult: Ada",
+          dateStart: "2026-08-14 11:00:00",
+          dateEnd: "2026-08-14 11:30:00",
+          confirmMessage: "Reschedule to this time?",
+          confirmationGiven: true,
+        },
+        { configurable: { thread_id: "hitl-reschedule-chat" } },
+      );
 
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.args).toEqual({
-        meetingId: "mtg-1",
-        dateStart: "2026-08-14T11:00:00",
-        dateEnd: "2026-08-14T11:30:00",
-      });
+      expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
       expect(JSON.parse(String(raw))).toMatchObject({ success: true });
     });
   });

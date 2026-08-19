@@ -31,6 +31,8 @@ const GRAPH_RECURSION_LIMIT = 40;
 const TYPING_REFRESH_MS = 4_000;
 const VOICE_EMPTY_FALLBACK =
   "Не вдалося розібрати голосове повідомлення. Напишіть текстом, будь ласка.";
+export const PRIVATE_CHAT_ONLY =
+  "Цей бот працює лише в особистих повідомленнях. Напишіть нам у приватний чат.";
 
 type Graph = ReturnType<ClinicRuntime["getGraph"]>;
 
@@ -209,6 +211,29 @@ const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<voi
   });
 };
 
+const callbackQueryChat = (ctx: Context): { type?: string } | undefined => {
+  const query = ctx.callbackQuery;
+  if (query && "message" in query && query.message && "chat" in query.message) {
+    return query.message.chat;
+  }
+  return undefined;
+};
+
+/** True when the update should be ignored (not a private chat). Replies with a short notice. */
+export const rejectNonPrivateTelegramChat = async (ctx: Context): Promise<boolean> => {
+  const chat = ctx.chat ?? callbackQueryChat(ctx);
+  if (chat?.type === "private") {
+    return false;
+  }
+  if (ctx.callbackQuery) {
+    await ctx.answerCbQuery().catch(() => undefined);
+  }
+  if (ctx.chat) {
+    await ctx.reply(PRIVATE_CHAT_ONLY);
+  }
+  return true;
+};
+
 export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<ClinicBotHandle> => {
   const { token, runtime } = options;
   const graph = runtime.getGraph();
@@ -218,6 +243,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     wrapTelegramHandler(runDetached, handler);
 
   bot.start(detach(async (ctx) => {
+    if (await rejectNonPrivateTelegramChat(ctx)) {
+      return;
+    }
     const chatId = ctx.chat?.id;
     if (chatId === undefined) {
       return;
@@ -235,6 +263,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
   }));
 
   bot.on("text", detach(async (ctx) => {
+    if (await rejectNonPrivateTelegramChat(ctx)) {
+      return;
+    }
     const chatId = ctx.chat?.id;
     const fromId = ctx.from?.id;
     const text = ctx.message.text?.trim();
@@ -255,6 +286,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
   }));
 
   bot.on("voice", detach(async (ctx) => {
+    if (await rejectNonPrivateTelegramChat(ctx)) {
+      return;
+    }
     const chatId = ctx.chat?.id;
     const fromId = ctx.from?.id;
     const voice = ctx.message.voice;
@@ -289,6 +323,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
   }));
 
   bot.on("callback_query", detach(async (ctx) => {
+    if (await rejectNonPrivateTelegramChat(ctx)) {
+      return;
+    }
     const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
     const fromId = ctx.from?.id;
     const data = "data" in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;

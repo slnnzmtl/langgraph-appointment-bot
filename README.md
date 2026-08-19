@@ -74,11 +74,12 @@ Meeting tools (booking agent):
 ## Telegram behaviour
 
 - `/start` replies with a static intro and categorized services (no prices); working hours come from CRM `get_working_time`; the same text is appended to the chat's graph message history as an `AIMessage` so later agent turns see it
-- `thread_id = chat.id`; per-chat exclusive graph invoke queue
+- `thread_id = chat.id`; private chats only (groups get a short redirect); per-chat exclusive graph invoke queue
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
+- Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
 - Supervisor prefetches contact + planned meetings into checkpointed state; booking prepare reuses that snapshot until a successful CRM write dirties it or the snapshot is older than ~5 minutes.
 - `present_availability_slots` uses `search_meetings` free/busy; agent lists times in text (Inline Keyboard temporarily disabled)
-- HITL confirm: tap Yes/No to resume with `Command`. Typing while the confirm card is pending sends the text into the interrupt (`userReply`); the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. Chat text never implicitly cancels.
+- HITL confirm: tap Yes/No to resume with `Command`. Typing while the confirm card is pending sends the text into the interrupt (`userReply`); the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. The server honors that flag only when a HITL card was already shown on this thread for the same write arguments. Chat text never implicitly cancels.
 - After button Yes/No, the bot removes the inline keyboard, then replies with the agent outcome.
 - Voice notes: Telegraf downloads the OGG, Gemini 3.1 Flash Lite transcribes it (`AUDIO_MODEL` optional), then the same text graph path runs; empty or failed transcription gets a short Ukrainian fallback and does not invoke the graph. Replies are always text.
 

@@ -4,9 +4,52 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDetachedWorkRunner,
   handleGraphTextTurn,
+  PRIVATE_CHAT_ONLY,
+  rejectNonPrivateTelegramChat,
   withTypingIndicator,
   wrapTelegramHandler,
 } from "../telegram-bot.js";
+
+describe("private chat restriction", () => {
+  it("replies with a notice and does not proceed for group chats", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const rejected = await rejectNonPrivateTelegramChat({
+      chat: { type: "group", id: -1 },
+      reply,
+    } as never);
+    expect(rejected).toBe(true);
+    expect(reply).toHaveBeenCalledWith(PRIVATE_CHAT_ONLY);
+  });
+
+  it("rejects supergroup and missing chat", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    expect(
+      await rejectNonPrivateTelegramChat({
+        chat: { type: "supergroup", id: -100 },
+        reply,
+      } as never),
+    ).toBe(true);
+    expect(reply).toHaveBeenCalledWith(PRIVATE_CHAT_ONLY);
+
+    reply.mockClear();
+    expect(
+      await rejectNonPrivateTelegramChat({
+        reply,
+      } as never),
+    ).toBe(true);
+    expect(reply).not.toHaveBeenCalled();
+  });
+
+  it("allows private chats through", async () => {
+    const reply = vi.fn();
+    const rejected = await rejectNonPrivateTelegramChat({
+      chat: { type: "private", id: 1 },
+      reply,
+    } as never);
+    expect(rejected).toBe(false);
+    expect(reply).not.toHaveBeenCalled();
+  });
+});
 
 describe("text while HITL pending", () => {
   const InterruptState = Annotation.Root({

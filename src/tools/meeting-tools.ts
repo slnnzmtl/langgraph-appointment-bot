@@ -1,5 +1,5 @@
 import { tool, type StructuredToolInterface } from "@langchain/core/tools";
-import { interrupt } from "@langchain/langgraph";
+import { getConfig, interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 
 import { finishTrackedWrite, trackEvent, trackToolError, type BookingAction, type Tier1EventName } from "../analytics/track.js";
@@ -22,7 +22,12 @@ import {
   type TimeRangePair,
   type WorkingTimeCalendarLike,
 } from "./availability-slots.js";
-import { contactMissingFields } from "./contact-tools.js";
+import {
+  contactMissingFields,
+  lookupContactByTelegram,
+  normalizeContactLookupResult,
+} from "./contact-tools.js";
+import { getTelegramUserId } from "./telegram-user-context.js";
 import { toToolResult } from "./tool-result.js";
 
 export type MeetingToolsOptions = {
@@ -114,13 +119,22 @@ const withUserConfirm = async (
   draft: ConfirmDraft,
   execute: () => Promise<unknown>,
   ctx: ConfirmAnalytics,
+  fingerprint: ConfirmFingerprint,
+  config?: { configurable?: { thread_id?: unknown } },
 ): Promise<string> => {
+  const threadId = threadIdFromRuntime(config);
+  if (threadId) {
+    rememberPendingConfirm(threadId, fingerprint);
+  }
   trackEvent("booking_confirmation_requested", {
     ...hitlProps(ctx),
     outcome: "awaiting",
   });
   const decision = parseConfirmDecision(interrupt({ type: "confirm_booking", draft }));
   if (decision.kind === "confirmed") {
+    if (threadId) {
+      clearPendingConfirm(threadId);
+    }
     return runMeetingWrite(execute);
   }
   if (decision.kind === "chatReply") {
@@ -132,8 +146,11 @@ const withUserConfirm = async (
       awaitingConfirmation: true,
       userReply: decision.userReply,
       draft,
-      hint: "Nothing was written. The user replied in chat instead of tapping Yes/No. If this reply confirms the action, call this tool again with identical arguments plus confirmationGiven true. Otherwise handle their message normally.",
+      hint: "Nothing was written. The user replied in chat instead of tapping Yes/No. If this reply confirms the action, call this tool again with identical arguments plus confirmationGiven true. The server ignores confirmationGiven unless a HITL card was already shown for these same arguments. Otherwise handle their message normally.",
     });
+  }
+  if (threadId) {
+    clearPendingConfirm(threadId);
   }
   trackEvent("booking_declined", {
     ...hitlProps(ctx),
@@ -143,6 +160,21 @@ const withUserConfirm = async (
     cancelled: true,
     message: ctx.cancelledMessage ?? "Cancelled by user.",
   });
+};
+
+const writeAfterChatConfirmOrHitl = async (
+  confirmationGiven: boolean | undefined,
+  fingerprint: ConfirmFingerprint,
+  execute: () => Promise<unknown>,
+  draft: ConfirmDraft,
+  ctx: ConfirmAnalytics,
+  config?: { configurable?: { thread_id?: unknown } },
+): Promise<string> => {
+  const threadId = threadIdFromRuntime(config);
+  if (confirmationGiven && threadId && consumeMatchingPendingConfirm(threadId, fingerprint)) {
+    return runMeetingWrite(execute);
+  }
+  return withUserConfirm(draft, execute, ctx, fingerprint, config);
 };
 
 const DAY_SCHEMA = z
@@ -165,8 +197,160 @@ const CONFIRMATION_GIVEN_SCHEMA = z
   .optional()
   .default(false)
   .describe(
-    "Set true only when the user explicitly confirmed in chat after a prior call showed HITL buttons. Default false: pauses for Yes/No before writing.",
+    "Set true only on a follow-up call after this tool already paused for Yes/No on this thread and the user then affirmed in chat (awaitingConfirmation). Ignored unless a matching pending confirm exists for these same arguments. Never set true on the first call. Default false: pauses for Yes/No before writing.",
   );
+
+/** How long a HITL card remains valid for a chat-text `confirmationGiven` re-call. */
+const PENDING_CONFIRM_TTL_MS = 15 * 60 * 1000;
+
+type ConfirmFingerprint = {
+  action: BookingAction;
+  contactId?: string;
+  meetingId?: string;
+  serviceId?: string;
+  dateStart?: string;
+  dateEnd?: string;
+};
+
+type PendingConfirm = {
+  key: string;
+  expiresAt: number;
+};
+
+const pendingConfirms = new Map<string, PendingConfirm>();
+
+const confirmFingerprintKey = (fp: ConfirmFingerprint): string =>
+  JSON.stringify({
+    action: fp.action,
+    contactId: fp.contactId ?? "",
+    meetingId: fp.meetingId ?? "",
+    serviceId: fp.serviceId ?? "",
+    dateStart: fp.dateStart ?? "",
+    dateEnd: fp.dateEnd ?? "",
+  });
+
+const threadIdFromRuntime = (config?: { configurable?: { thread_id?: unknown } }): string | undefined => {
+  const read = (value: unknown): string | undefined =>
+    typeof value === "string" && value.length > 0 ? value : undefined;
+  const fromArg = read(config?.configurable?.thread_id);
+  if (fromArg) {
+    return fromArg;
+  }
+  try {
+    return read(getConfig()?.configurable?.thread_id);
+  } catch {
+    return undefined;
+  }
+};
+
+const rememberPendingConfirm = (threadId: string, fp: ConfirmFingerprint): void => {
+  pendingConfirms.set(threadId, {
+    key: confirmFingerprintKey(fp),
+    expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
+  });
+};
+
+const clearPendingConfirm = (threadId: string): void => {
+  pendingConfirms.delete(threadId);
+};
+
+/** True when this thread has a non-expired HITL card for these exact write arguments. Consumes it. */
+const consumeMatchingPendingConfirm = (threadId: string, fp: ConfirmFingerprint): boolean => {
+  const pending = pendingConfirms.get(threadId);
+  if (!pending) {
+    return false;
+  }
+  if (pending.expiresAt <= Date.now()) {
+    pendingConfirms.delete(threadId);
+    return false;
+  }
+  if (pending.key !== confirmFingerprintKey(fp)) {
+    return false;
+  }
+  pendingConfirms.delete(threadId);
+  return true;
+};
+
+export const clearPendingConfirmsForTests = (): void => {
+  pendingConfirms.clear();
+};
+
+const NOT_AUTHORIZED = "Not authorized";
+
+const notAuthorizedJson = (hint: string): string =>
+  JSON.stringify({
+    error: NOT_AUTHORIZED,
+    hint,
+  });
+
+const contactIdFromMeeting = (meeting: Record<string, unknown>): string | null => {
+  if (meeting.parentType === "Contact" && typeof meeting.parentId === "string" && meeting.parentId.length > 0) {
+    return meeting.parentId;
+  }
+  const contactsIds = meeting.contactsIds;
+  if (Array.isArray(contactsIds)) {
+    const first = contactsIds.find((id): id is string => typeof id === "string" && id.length > 0);
+    return first ?? null;
+  }
+  return null;
+};
+
+const callerOwnsContact = async (
+  callTool: McpCallTool,
+  contactId: string,
+  fetched?: Record<string, unknown>,
+): Promise<boolean> => {
+  const telegramId = getTelegramUserId();
+  if (typeof fetched?.cTelegram === "string" && fetched.cTelegram === telegramId) {
+    return true;
+  }
+  if (fetched == null) {
+    try {
+      const contact = asJsonRecord(
+        await callTool("get_entity", { entityType: "Contact", entityId: contactId }),
+      );
+      if (typeof contact?.cTelegram === "string" && contact.cTelegram === telegramId) {
+        return true;
+      }
+    } catch {
+      // Fall through to Telegram search.
+    }
+  }
+  const lookup = normalizeContactLookupResult(await lookupContactByTelegram(callTool));
+  return lookup.contacts.some((row) => row.id === contactId);
+};
+
+const requireOwnedContact = async (
+  callTool: McpCallTool,
+  contactId: string,
+  fetched?: Record<string, unknown>,
+): Promise<string | null> => {
+  if (await callerOwnsContact(callTool, contactId, fetched)) {
+    return null;
+  }
+  return notAuthorizedJson(
+    "Use the Contact linked to this Telegram user (find_contact_by_telegram / create_contact / link_telegram_to_contact).",
+  );
+};
+
+const requireOwnedMeeting = async (
+  callTool: McpCallTool,
+  meetingId: string,
+): Promise<string | null> => {
+  let meeting: Record<string, unknown> = {};
+  try {
+    meeting = asJsonRecord(
+      await callTool("get_entity", { entityType: "Meeting", entityId: meetingId }),
+    ) ?? {};
+  } catch {
+    meeting = {};
+  }
+  const contactId = contactIdFromMeeting(meeting);
+  if (!contactId) {
+    return notAuthorizedJson("Resolve meetingId via list_planned_meetings for this Telegram user.");
+  }
+  return requireOwnedContact(callTool, contactId);
+};
 
 const parseWorkingTimeCalendars = (raw: unknown): WorkingTimeCalendarLike[] => {
   let value: unknown = raw;
@@ -435,6 +619,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
 
   const listPlannedMeetings = tool(
     async (input: { contactId: string; dateFrom?: string }) => {
+      const denied = await requireOwnedContact(callTool, input.contactId);
+      if (denied) {
+        return denied;
+      }
       const listed = await lookupPlannedMeetings(callTool, input.contactId, input.dateFrom);
       return JSON.stringify(listed ?? { error: "Unable to list planned meetings", meetings: [] });
     },
@@ -452,17 +640,20 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
   );
 
   const createMeeting = tool(
-    async (input: {
-      name: string;
-      dateStart: string;
-      dateEnd: string;
-      contactId: string;
-      confirmMessage: string;
-      serviceId: string;
-      description?: string;
-      location?: string;
-      confirmationGiven?: boolean;
-    }) => {
+    async (
+      input: {
+        name: string;
+        dateStart: string;
+        dateEnd: string;
+        contactId: string;
+        confirmMessage: string;
+        serviceId: string;
+        description?: string;
+        location?: string;
+        confirmationGiven?: boolean;
+      },
+      config,
+    ) => {
       let contact: Record<string, unknown> = {};
       try {
         contact = asJsonRecord(
@@ -473,6 +664,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         ) ?? {};
       } catch {
         contact = {};
+      }
+      const denied = await requireOwnedContact(callTool, input.contactId, contact);
+      if (denied) {
+        return denied;
       }
       const missing = contactMissingFields(contact);
       if (missing.length > 0) {
@@ -515,22 +710,28 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         service_id: input.serviceId,
         date_start: dateStart,
       };
-      if (input.confirmationGiven) {
-        return finishMeetingMutation(
-          "create_meeting",
-          await runMeetingWrite(execute),
-          "meeting_created",
-          writeProps,
-        );
-      }
+      const fingerprint: ConfirmFingerprint = {
+        action: "create",
+        contactId: input.contactId,
+        serviceId: input.serviceId,
+        dateStart,
+        dateEnd,
+      };
       return finishMeetingMutation(
         "create_meeting",
-        await withUserConfirm(draft, execute, {
-          action: "create",
-          cancelledMessage: "Booking cancelled by user.",
-          contactId: input.contactId,
-          serviceId: input.serviceId,
-        }),
+        await writeAfterChatConfirmOrHitl(
+          input.confirmationGiven,
+          fingerprint,
+          execute,
+          draft,
+          {
+            action: "create",
+            cancelledMessage: "Booking cancelled by user.",
+            contactId: input.contactId,
+            serviceId: input.serviceId,
+          },
+          config,
+        ),
         "meeting_created",
         writeProps,
       );
@@ -538,7 +739,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known. Call immediately. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons (contact must belong to this Telegram user). After explicit chat affirmation, re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()
@@ -559,12 +760,19 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
   );
 
   const cancelMeeting = tool(
-    async (input: {
-      meetingId: string;
-      confirmMessage: string;
-      name?: string;
-      confirmationGiven?: boolean;
-    }) => {
+    async (
+      input: {
+        meetingId: string;
+        confirmMessage: string;
+        name?: string;
+        confirmationGiven?: boolean;
+      },
+      config,
+    ) => {
+      const denied = await requireOwnedMeeting(callTool, input.meetingId);
+      if (denied) {
+        return denied;
+      }
       const draft: ConfirmDraft = {
         confirmMessage: input.confirmMessage.trim(),
         ...(input.name ? { name: input.name } : {}),
@@ -576,21 +784,24 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         });
 
       const writeProps = { meeting_id: input.meetingId };
-      if (input.confirmationGiven) {
-        return finishMeetingMutation(
-          "cancel_meeting",
-          await runMeetingWrite(execute),
-          "meeting_cancelled",
-          writeProps,
-        );
-      }
+      const fingerprint: ConfirmFingerprint = {
+        action: "cancel",
+        meetingId: input.meetingId,
+      };
       return finishMeetingMutation(
         "cancel_meeting",
-        await withUserConfirm(draft, execute, {
-          action: "cancel",
-          cancelledMessage: "Cancellation cancelled by user.",
-          meetingId: input.meetingId,
-        }),
+        await writeAfterChatConfirmOrHitl(
+          input.confirmationGiven,
+          fingerprint,
+          execute,
+          draft,
+          {
+            action: "cancel",
+            cancelledMessage: "Cancellation cancelled by user.",
+            meetingId: input.meetingId,
+          },
+          config,
+        ),
         "meeting_cancelled",
         writeProps,
       );
@@ -598,7 +809,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "cancel_meeting",
       description:
-        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true.",
+        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
@@ -612,14 +823,21 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
   );
 
   const rescheduleMeeting = tool(
-    async (input: {
-      meetingId: string;
-      dateStart: string;
-      dateEnd: string;
-      confirmMessage: string;
-      name?: string;
-      confirmationGiven?: boolean;
-    }) => {
+    async (
+      input: {
+        meetingId: string;
+        dateStart: string;
+        dateEnd: string;
+        confirmMessage: string;
+        name?: string;
+        confirmationGiven?: boolean;
+      },
+      config,
+    ) => {
+      const denied = await requireOwnedMeeting(callTool, input.meetingId);
+      if (denied) {
+        return denied;
+      }
       const dateStart = normalizeLocalIsoDatetime(input.dateStart);
       const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
       const draft: ConfirmDraft = {
@@ -640,21 +858,26 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         date_start: dateStart,
         date_end: dateEnd,
       };
-      if (input.confirmationGiven) {
-        return finishMeetingMutation(
-          "reschedule_meeting",
-          await runMeetingWrite(execute),
-          "meeting_rescheduled",
-          writeProps,
-        );
-      }
+      const fingerprint: ConfirmFingerprint = {
+        action: "reschedule",
+        meetingId: input.meetingId,
+        dateStart,
+        dateEnd,
+      };
       return finishMeetingMutation(
         "reschedule_meeting",
-        await withUserConfirm(draft, execute, {
-          action: "reschedule",
-          cancelledMessage: "Reschedule cancelled by user.",
-          meetingId: input.meetingId,
-        }),
+        await writeAfterChatConfirmOrHitl(
+          input.confirmationGiven,
+          fingerprint,
+          execute,
+          draft,
+          {
+            action: "reschedule",
+            cancelledMessage: "Reschedule cancelled by user.",
+            meetingId: input.meetingId,
+          },
+          config,
+        ),
         "meeting_rescheduled",
         writeProps,
       );
@@ -662,7 +885,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "reschedule_meeting",
       description:
-        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds). Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true.",
+        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds). Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         dateStart: z.string().describe("New start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
