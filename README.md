@@ -4,12 +4,12 @@ Thin LangGraph clinic bot for Telegram. FAQ + booking/cancel/reschedule via Espo
 
 ## Setup
 
-EspoCRM MCP must already be running (HTTP). CRM API secrets live on that service, not this bot.
+EspoCRM MCP must already be running (HTTP). This bot sends `ESPOCRM_API_KEY` as the `espocrm_api_key` header.
 
 ```sh
 pnpm install
 cp .env.example .env
-# set GOOGLE_API_KEY, ESPOCRM_ASSIGNED_USER_ID
+# set GOOGLE_API_KEY, ESPOCRM_API_KEY, ESPOCRM_ASSIGNED_USER_ID
 # set ESPOCRM_MCP_URL=http://127.0.0.1:3000 for local MCP
 # set TELEGRAM_BOT_TOKEN to launch the bot
 # optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
@@ -28,7 +28,7 @@ Start the sibling MCP stack first (`espocrm-mcp-server` on network `espocrm-mcp_
 docker compose up -d --build
 ```
 
-Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base.
+Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base.
 
 ## Commands
 

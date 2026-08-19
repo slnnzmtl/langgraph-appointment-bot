@@ -9,6 +9,8 @@ export interface AppConfig {
   messageHistoryMaxTokens: number;
   /** EspoCRM MCP origin for HTTP `/health` and `/tools` (e.g. http://espocrm-mcp-server:3000). */
   espocrmMcpUrl: string;
+  /** Sent as the `espocrm_api_key` header on MCP HTTP calls. */
+  espocrmApiKey: string;
   /** Injected into every create_meeting MCP call. */
   assignedUserId: string;
   /** Optional; required only when launching the Telegram bot. */
@@ -37,6 +39,7 @@ export const loadConfig = (): AppConfig => {
     agentModel: process.env.AGENT_MODEL ?? defaultModel,
     messageHistoryMaxTokens: getMessageHistoryMaxTokens(),
     espocrmMcpUrl: getRequiredEnv("ESPOCRM_MCP_URL"),
+    espocrmApiKey: getRequiredEnv("ESPOCRM_API_KEY"),
     assignedUserId: getRequiredEnv("ESPOCRM_ASSIGNED_USER_ID"),
     geminiContextCacheEnabled: isGeminiContextCacheEnabled(),
     ...(process.env.TELEGRAM_BOT_TOKEN?.trim()

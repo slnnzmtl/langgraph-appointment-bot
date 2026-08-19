@@ -19,7 +19,7 @@ const listedMeetings: BookingContext = {
   meetings: [
     {
       id: "m-1",
-      name: "Консультація: Daniel",
+      name: "Консультація - Daniel",
       dateStart: "2026-08-17 11:00:00",
       dateEnd: "2026-08-17 11:30:00",
     },

@@ -70,6 +70,7 @@ const readJson = async (response: Response): Promise<unknown> => {
 export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdapters> => {
   const origin = new URL(config.espocrmMcpUrl).origin;
   const health = await fetch(`${origin}/health`, {
+    headers: { Accept: "application/json", espocrm_api_key: config.espocrmApiKey },
     signal: AbortSignal.timeout(MCP_HTTP_TIMEOUT_MS),
   });
   if (!health.ok) {
@@ -90,7 +91,11 @@ export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdap
     try {
       response = await fetch(`${origin}/tools/${encodeURIComponent(name)}`, {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          espocrm_api_key: config.espocrmApiKey,
+        },
         body: JSON.stringify(args),
         signal: controller.signal,
       });
