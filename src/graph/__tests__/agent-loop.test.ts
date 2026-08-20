@@ -80,7 +80,25 @@ describe("formatListedMeetingsContext", () => {
     const block = formatListedMeetingsContext(listedMeetings);
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain("</list_planned_meetings>");
-    expect(block).toContain(JSON.stringify(listedMeetings));
+    expect(block).toContain('"id":"m-1"');
+    expect(block).toContain('"dateStart":"2026-08-17 11:00:00"');
+    expect(block).toContain('"dateFrom":"2026-08-11"');
+  });
+
+  it("adds a ready-to-quote Ukrainian whenLabel so the model does not format dates", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
+      expect(formatListedMeetingsContext(listedMeetings)).toContain(
+        '"whenLabel":"17 серпня (понеділок) о 11:00"',
+      );
+      vi.setSystemTime(new Date("2026-08-16T09:00:00Z"));
+      expect(formatListedMeetingsContext(listedMeetings)).toContain(
+        '"whenLabel":"завтра, 17 серпня (понеділок) о 11:00"',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

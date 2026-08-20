@@ -15,6 +15,7 @@ import {
   extractMeetingsFromSearchResult,
   fallbackClinicTimeRanges,
   findNextAvailableSlots,
+  formatKyivDayLabel,
   formatKyivLocalIso,
   resolveDayTimeRanges,
   type BusyMeeting,
@@ -145,6 +146,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
       try {
         const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
         const excludeIds = input.excludeMeetingIds;
+        const todayKyiv = formatKyivLocalIso(new Date()).slice(0, 10);
 
         if (input.date) {
           const [working, raw, reserved] = await Promise.all([
@@ -174,10 +176,15 @@ export const createPresentAvailabilitySlotsTool = (options: {
             slot_count: slots.length,
             duration_minutes: stepMinutes,
           });
-          return JSON.stringify({ slots, date: input.date, stepMinutes });
+          return JSON.stringify({
+            slots,
+            date: input.date,
+            dayLabel: formatKyivDayLabel(input.date, todayKyiv),
+            stepMinutes,
+          });
         }
 
-        const today = formatKyivLocalIso(new Date()).slice(0, 10);
+        const today = todayKyiv;
         const start = resolveNextAvailableStart({
           ...(input.startDate ? { startDate: input.startDate } : {}),
           ...(input.afterDate ? { afterDate: input.afterDate } : {}),
@@ -215,6 +222,10 @@ export const createPresentAvailabilitySlotsTool = (options: {
         });
         return JSON.stringify({
           ...result,
+          days: result.days.map((day) => ({
+            ...day,
+            dayLabel: formatKyivDayLabel(day.date, todayKyiv),
+          })),
           ...(searchedMeetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
         });
       } catch (error) {
@@ -226,7 +237,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots from CRM meetings (search_meetings) and CReservedTime blocks. Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so its current slot is free. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, slots }], date, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. List every returned day and all slot labels — do not invent times or claim a day is the only option unless days is empty after afterDate.",
+        "Compute free appointment slots from CRM meetings (search_meetings) and CReservedTime blocks. Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so its current slot is free. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, dayLabel, slots }], date, dayLabel, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. Quote dayLabel verbatim as the day heading (already Ukrainian, with сьогодні/завтра resolved) and list every slot label for that day. Do not invent times, reformat dayLabel, or claim a day is the only option unless days is empty after afterDate.",
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",

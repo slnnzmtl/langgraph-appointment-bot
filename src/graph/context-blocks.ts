@@ -1,3 +1,4 @@
+import { formatKyivDateTimeLabel, formatKyivLocalIso } from "../tools/availability-slots.js";
 import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 
@@ -12,7 +13,13 @@ export const formatListedMeetingsContext = (ctx: BookingContext | null | undefin
   if (!ctx) {
     return "";
   }
-  return `<list_planned_meetings>\n${JSON.stringify({ meetings: ctx.meetings, dateFrom: ctx.dateFrom })}\n</list_planned_meetings>`;
+  const today = formatKyivLocalIso(new Date()).slice(0, 10);
+  // whenLabel is precomputed so the model quotes a date instead of formatting one.
+  const meetings = ctx.meetings.map((meeting) => ({
+    ...meeting,
+    whenLabel: formatKyivDateTimeLabel(meeting.dateStart, today),
+  }));
+  return `<list_planned_meetings>\n${JSON.stringify({ meetings, dateFrom: ctx.dateFrom })}\n</list_planned_meetings>`;
 };
 
 export const formatContactContext = (ctx: ContactLookupContext | null | undefined): string => {

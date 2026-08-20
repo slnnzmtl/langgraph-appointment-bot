@@ -322,6 +322,58 @@ export const formatKyivLocalIso = (date: Date): string => {
   return `${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}`;
 };
 
+const UK_MONTHS_GENITIVE = [
+  "січня", "лютого", "березня", "квітня", "травня", "червня",
+  "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
+] as const;
+const UK_WEEKDAYS = [
+  "неділя", "понеділок", "вівторок", "середа", "четвер", "п'ятниця", "субота",
+] as const;
+
+/**
+ * Patient-facing Ukrainian day label for a YYYY-MM-DD day, e.g.
+ * `сьогодні, 20 серпня (четвер)`. Precomputed here so the model quotes it
+ * instead of formatting dates itself.
+ */
+export const formatKyivDayLabel = (day: string, today: string): string => {
+  if (!DAY_RE.test(day)) {
+    return day;
+  }
+  const [, month, date] = day.split("-").map(Number) as [number, number, number];
+  const monthName = UK_MONTHS_GENITIVE[month - 1] ?? "";
+  const weekday = UK_WEEKDAYS[Number(getKyivWeekdayIndex(day))] ?? "";
+  const absolute = `${date} ${monthName} (${weekday})`;
+
+  if (DAY_RE.test(today)) {
+    if (day === today) {
+      return `сьогодні, ${absolute}`;
+    }
+    if (day === addCalendarDays(today, 1)) {
+      return `завтра, ${absolute}`;
+    }
+  }
+  return absolute;
+};
+
+/**
+ * Patient-facing Ukrainian label for a `YYYY-MM-DDTHH:mm:ss` start, e.g.
+ * `завтра, 21 серпня (п'ятниця) о 10:00`.
+ */
+export const formatKyivDateTimeLabel = (dateStart: string, today: string): string => {
+  let normalized: string;
+  try {
+    normalized = normalizeLocalIsoDatetime(dateStart);
+  } catch {
+    return dateStart;
+  }
+  const day = normalized.slice(0, 10);
+  const time = normalized.slice(11, 16);
+  if (!DAY_RE.test(day) || time.length !== 5) {
+    return dateStart;
+  }
+  return `${formatKyivDayLabel(day, today)} о ${time}`;
+};
+
 /** Drop slots whose start is at or before the given Kyiv wall-clock instant. */
 export const filterSlotsAfterNow = (
   slots: AvailabilitySlot[],

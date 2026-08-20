@@ -1,3 +1,5 @@
+import { unescapeModelLineBreaks } from "../shared/message-content.js";
+
 export const CONFIRM_YES = "confirm:yes";
 export const CONFIRM_NO = "confirm:no";
 
@@ -35,7 +37,7 @@ export const buildConfirmKeyboard = (): InlineKeyboardMarkup => ({
 
 /** Convert common Markdown (bold, links, bullets) to Telegram HTML; escape first. */
 export const formatForTelegram = (text: string): string =>
-  text
+  unescapeModelLineBreaks(text)
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

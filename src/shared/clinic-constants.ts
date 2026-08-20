@@ -4,6 +4,11 @@ export const CLINIC_ADDRESS = "вул. Миколаївська 33, м. Білг
 export const CLINIC_MAPS_URL =
   "https://www.google.com/maps/place/Mukolayivska+St,+33,+Bilhorod-Dnistrovs'kyi,+Odes'ka+oblast,+Ukraine,+67701";
 export const CLINIC_MAPS_MARKDOWN = `[Google maps](${CLINIC_MAPS_URL})`;
+/** CRM `cService` id of «Консультація» — the default first visit offered when no service is named. */
+export const CONSULTATION_SERVICE_ID = "683773dc9f1110052";
+/** Patient-facing copy for internal failures (routing, model, or step-limit errors). */
+export const PATIENT_FALLBACK_MESSAGE =
+  "Вибачте, зараз не вдалося обробити запит 🙏 Спробуйте, будь ласка, ще раз за хвилинку.";
 export const CLINIC_OPEN_HOUR = 9;
 export const CLINIC_CLOSE_HOUR = 18;
 export const CLINIC_SLOT_MINUTES = 30;

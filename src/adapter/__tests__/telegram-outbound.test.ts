@@ -66,7 +66,7 @@ describe("interpretInvokeResult reply selection", () => {
     });
 
     expect(result.text).toBe(
-      "Підтвердити запис?\nКонсультація - Daniel\n7 Aug 2026, 09:00–09:30",
+      "Підтвердити запис?\n\nКонсультація - Daniel\n7 Aug 2026, 09:00–09:30",
     );
     expect(result.text).not.toContain("Confirm booking?");
     expect(result.reply_markup?.inline_keyboard.flat().map((b) => b.text)).toEqual([

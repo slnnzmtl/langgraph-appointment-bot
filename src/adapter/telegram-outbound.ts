@@ -181,7 +181,7 @@ const formatConfirmBookingDetails = (draft: ConfirmBookingDraft): string => {
 const formatConfirmBookingCaption = (draft: ConfirmBookingDraft): string => {
   const title = draft.confirmMessage?.trim() || "Confirm booking?";
   const details = formatConfirmBookingDetails(draft);
-  return details.length > 0 ? `${title}\n${details}` : title;
+  return details.length > 0 ? `${title}\n\n${details}` : title;
 };
 
 const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBookingDraft | null => {

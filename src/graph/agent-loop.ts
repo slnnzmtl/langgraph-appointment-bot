@@ -14,6 +14,7 @@ import {
   type ContextCacheHandle,
 } from "@personal-assistant/llm-gemini";
 
+import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import { extractMessageTextContent } from "../shared/message-content.js";
 import {
@@ -210,10 +211,9 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      console.error(`[clinic-${agent.id}] model call failed:`, message);
       return {
-        agentMessages: [
-          new AIMessage(`Unable to run ${agent.name}: ${message}`),
-        ],
+        agentMessages: [new AIMessage(PATIENT_FALLBACK_MESSAGE)],
         stepCount,
       };
     }
@@ -277,12 +277,12 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     if (status === "max_steps") {
       const text = extractMessageTextContent(tagged.content).trim();
-      const message =
-        text.length > 0
-          ? tagged
-          : new AIMessage(
-              `Unable to complete ${agent.name}: exceeded the maximum of ${agent.maxSteps} tool steps.`,
-            );
+      if (text.length === 0) {
+        console.error(
+          `[clinic-${agent.id}] exceeded the maximum of ${agent.maxSteps} tool steps.`,
+        );
+      }
+      const message = text.length > 0 ? tagged : new AIMessage(PATIENT_FALLBACK_MESSAGE);
       return {
         ...cleared,
         lastHandoff,

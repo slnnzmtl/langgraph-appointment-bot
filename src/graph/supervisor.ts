@@ -10,6 +10,7 @@ import {
   type ContextCacheManager,
 } from "@personal-assistant/llm-gemini";
 
+import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
@@ -59,15 +60,14 @@ export const isPrefetchExpired = (
   now = Date.now(),
 ): boolean => fetchedAt == null || now - fetchedAt >= ttlMs;
 
-const routingFailureUpdate = (_reason: string): ClinicStateUpdate => ({
-  next: FINISH_ROUTE,
-  lastHandoff: null,
-  messages: [
-    new AIMessage(
-      "Sorry, I could not route that request. Please try again in a moment.",
-    ),
-  ],
-});
+const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
+  console.error("[clinic-supervisor] routing failure:", reason);
+  return {
+    next: FINISH_ROUTE,
+    lastHandoff: null,
+    messages: [new AIMessage(PATIENT_FALLBACK_MESSAGE)],
+  };
+};
 
 const resolveRoutingDecision = (
   decision: ClinicRoutingDecision,
@@ -203,7 +203,6 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error("[clinic-supervisor] routing failed:", message);
       return { ...routingFailureUpdate(message), ...prefetchUpdate };
     }
 
