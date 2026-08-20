@@ -370,7 +370,7 @@ describe("resolveNextAvailableStart", () => {
 });
 
 describe("present_availability_slots excludeMeetingIds", () => {
-  it("frees the excluded meeting's current slot", async () => {
+  it("does not list the excluded meeting's current start, but frees later times in that block", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {
         return {
@@ -401,7 +401,7 @@ describe("present_availability_slots excludeMeetingIds", () => {
               id: "mtg-busy",
               status: "Planned",
               dateStart: "2026-08-10T09:00:00",
-              dateEnd: "2026-08-10T09:30:00",
+              dateEnd: "2026-08-10T10:00:00",
             },
           ],
         };
@@ -417,7 +417,7 @@ describe("present_availability_slots excludeMeetingIds", () => {
     const blocked = JSON.parse(
       (await tool.invoke({ date: "2026-08-10", durationMinutes: 30 })) as string,
     ) as { slots: Array<{ label: string }> };
-    expect(blocked.slots.some((s) => s.label === "09:00")).toBe(false);
+    expect(blocked.slots.map((s) => s.label)).toEqual([]);
 
     const freed = JSON.parse(
       (await tool.invoke({
@@ -426,7 +426,7 @@ describe("present_availability_slots excludeMeetingIds", () => {
         excludeMeetingIds: ["mtg-busy"],
       })) as string,
     ) as { slots: Array<{ label: string }> };
-    expect(freed.slots.some((s) => s.label === "09:00")).toBe(true);
+    expect(freed.slots.map((s) => s.label)).toEqual(["09:30"]);
   });
 });
 

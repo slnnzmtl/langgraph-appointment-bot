@@ -8,6 +8,11 @@ import {
   type TimeRangePair,
   type WorkingTimeCalendarLike,
 } from "../tools/availability-slots.js";
+import {
+  extractContactIdFromSearchResult,
+  lookupContactByTelegram,
+} from "../tools/contact-tools.js";
+import { lookupPlannedMeetings } from "../tools/planned-meetings.js";
 import { getWorkingTime } from "../tools/service-tools.js";
 
 const DAY_LABELS = ["Неділя", "Понеділок", "Вівторок", "Середа", "Четвер", "П'ятниця", "Субота"] as const;
@@ -113,6 +118,21 @@ export const loadWelcomeMessage = async (
 ): Promise<string> => {
   const raw = await getWorkingTime(callTool, { userId: assignedUserId });
   return buildWelcomeMessage(raw);
+};
+
+/** True when this Telegram user has at least one upcoming Planned meeting. */
+export const hasUpcomingVisit = async (callTool: McpCallTool): Promise<boolean> => {
+  try {
+    const contactJson = await lookupContactByTelegram(callTool);
+    const contactId = extractContactIdFromSearchResult(contactJson);
+    if (!contactId) {
+      return false;
+    }
+    const listed = await lookupPlannedMeetings(callTool, contactId);
+    return (listed?.meetings.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
 };
 
 export const START_FOLLOW_UP =

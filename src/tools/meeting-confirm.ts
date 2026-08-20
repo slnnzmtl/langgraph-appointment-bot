@@ -6,8 +6,8 @@ import { errorMessage } from "../shared/json-record.js";
 import { toToolResult } from "./tool-result.js";
 
 /**
- * HITL resume payloads: Telegram Yes/No buttons send `{ confirmed }`, chat text sent while the
- * confirm card is pending sends `{ userReply }`. Anything else counts as a decline.
+ * HITL resume payloads: Telegram ✅/❌ reply-keyboard taps send `{ confirmed }`, other chat text
+ * while the confirm card is pending sends `{ userReply }`. Anything else counts as a decline.
  */
 type ConfirmDecision =
   | { kind: "confirmed" }
@@ -61,7 +61,7 @@ export const CONFIRM_MESSAGE_SCHEMA = z
   .string()
   .min(1)
   .describe(
-    "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). For HITL button caption only — not for chat text. Ignore supervisor prompt language.",
+    "Short Yes/No question in the patient's chat language (e.g. Підтвердити запис?). Caption for the HITL ✅/❌ reply keyboard only — not for chat text. Ignore supervisor prompt language.",
   );
 
 export const CONFIRMATION_GIVEN_SCHEMA = z
@@ -69,7 +69,7 @@ export const CONFIRMATION_GIVEN_SCHEMA = z
   .optional()
   .default(false)
   .describe(
-    "Set true only on a follow-up call after this tool already paused for Yes/No on this thread and the user then affirmed in chat (awaitingConfirmation). Ignored unless a matching pending confirm exists for these same arguments. Never set true on the first call. Default false: pauses for Yes/No before writing.",
+    "Set true only on a follow-up call after this tool already paused for Yes/No on this thread and the user then affirmed in chat (awaitingConfirmation) instead of tapping ✅. Ignored unless a matching pending confirm exists for these same arguments. Never set true on the first call. Default false: pauses for Yes/No before writing.",
   );
 
 /** How long a HITL card remains valid for a chat-text `confirmationGiven` re-call. */
@@ -179,7 +179,7 @@ const withUserConfirm = async (
       awaitingConfirmation: true,
       userReply: decision.userReply,
       draft,
-      hint: "Nothing was written. The user replied in chat instead of tapping Yes/No. If this reply confirms the action, call this tool again with identical arguments plus confirmationGiven true. The server ignores confirmationGiven unless a HITL card was already shown for these same arguments. Otherwise handle their message normally.",
+      hint: "Nothing was written. The user replied in chat instead of tapping ✅/❌. If this reply confirms the action, call this tool again with identical arguments plus confirmationGiven true. The server ignores confirmationGiven unless a HITL card was already shown for these same arguments. Otherwise handle their message normally.",
     });
   }
   if (threadId) {

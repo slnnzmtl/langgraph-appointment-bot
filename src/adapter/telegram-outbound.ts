@@ -2,14 +2,17 @@ import { extractMessageTextContent } from "../shared/message-content.js";
 import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
 import {
   buildConfirmKeyboard,
-  type InlineKeyboardMarkup,
+  buildReplyKeyboard,
+  extractReplyButtons,
+  withMainMenu,
+  type ReplyKeyboardMarkup,
 } from "./telegram-ui.js";
 
 const CONFIRM_BOOKING_INTERRUPT = "confirm_booking";
 
 export type OutboundReply = {
   text: string;
-  reply_markup?: InlineKeyboardMarkup;
+  reply_markup?: ReplyKeyboardMarkup;
 };
 
 export const isConfirmBookingInterrupt = (value: unknown): boolean =>
@@ -206,7 +209,7 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
 export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const record = (result && typeof result === "object" ? result : {}) as Record<string, unknown>;
   const messages = record.messages;
-  const text = lastUserFacingAiText(messages) || "…";
+  const rawText = lastUserFacingAiText(messages) || "…";
   const confirmDraft = getConfirmBookingDraft(record);
 
   if (confirmDraft) {
@@ -216,5 +219,9 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     };
   }
 
-  return { text };
+  const { text, buttons } = extractReplyButtons(rawText);
+  return {
+    text: text || "…",
+    reply_markup: buildReplyKeyboard(withMainMenu(buttons)),
+  };
 };

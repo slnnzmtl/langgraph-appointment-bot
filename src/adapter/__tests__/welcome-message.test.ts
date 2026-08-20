@@ -5,9 +5,11 @@ import { describe, expect, it } from "vitest";
 import { formatForTelegram } from "../telegram-ui.js";
 import {
   buildStartHistoryText,
+  hasUpcomingVisit,
   loadWelcomeMessage,
   recordWelcomeInHistory,
 } from "../welcome-message.js";
+import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 
 describe("welcome message", () => {
   const crmHours = JSON.stringify({
@@ -126,5 +128,35 @@ describe("recordWelcomeInHistory", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toBeInstanceOf(AIMessage);
     expect(messages[0]?.content).toBe(welcome);
+  });
+});
+
+describe("hasUpcomingVisit", () => {
+  it("is false when there is no contact", async () => {
+    await runWithTelegramUserId("tg-1", async () => {
+      expect(await hasUpcomingVisit(async () => ({ contacts: [] }))).toBe(false);
+    });
+  });
+
+  it("is true when planned meetings exist", async () => {
+    await runWithTelegramUserId("tg-1", async () => {
+      expect(
+        await hasUpcomingVisit(async (name) => {
+          if (name === "search_contacts") {
+            return { success: true, contacts: [{ id: "c-1" }] };
+          }
+          return {
+            list: [
+              {
+                id: "m-1",
+                name: "Consult",
+                dateStart: "2026-08-25T11:00:00",
+                dateEnd: "2026-08-25T11:30:00",
+              },
+            ],
+          };
+        }),
+      ).toBe(true);
+    });
   });
 });

@@ -250,7 +250,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned visit. Call immediately. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL Yes/No buttons (contact must belong to this Telegram user). After explicit chat affirmation, re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned visit. Call immediately on clear book intent — never ask Yes/No in chat first. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL ✅/❌ reply keyboard (contact must belong to this Telegram user). After explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()
@@ -325,7 +325,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "cancel_meeting",
       description:
-        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
+        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Call immediately on clear cancel intent (e.g. «Скасувати візит») — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
@@ -401,7 +401,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "reschedule_meeting",
       description:
-        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds). Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons; after explicit chat affirmation, re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
+        "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds; do not offer the current start). Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Once the new slot is chosen, call immediately — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         dateStart: z.string().describe("New start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),

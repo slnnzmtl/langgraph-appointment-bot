@@ -15,11 +15,13 @@ import {
   type OutboundReply,
 } from "./telegram-outbound.js";
 import {
-  decodeCallbackData,
+  buildDefaultMenuKeyboard,
+  classifyConfirmReply,
   formatForTelegram,
 } from "./telegram-ui.js";
 import {
   buildStartHistoryText,
+  hasUpcomingVisit,
   loadWelcomeMessage,
   recordWelcomeInHistory,
   START_FOLLOW_UP,
@@ -209,8 +211,8 @@ const runGraphExclusive = async (
   );
 
 /**
- * Text turn: when a confirm card is pending, resume it with the user's text in a single invoke so
- * the pending tool call keeps its arguments instead of being cancelled.
+ * Text turn: when a confirm card is pending, resume HITL — ✅/❌ reply-keyboard taps map to
+ * `{ confirmed }`, any other text goes through as `{ userReply }` so the specialist can re-call.
  */
 export const handleGraphTextTurn = async (
   graph: Graph,
@@ -220,6 +222,13 @@ export const handleGraphTextTurn = async (
 ): Promise<OutboundReply> =>
   runGraphExclusive(graph, threadId, telegramUserId, async (config) => {
     if (await hasPendingConfirmBooking(graph, threadId)) {
+      const decision = classifyConfirmReply(text);
+      if (decision.kind === "confirmed") {
+        return graph.invoke(new Command({ resume: { confirmed: true } }) as never, config);
+      }
+      if (decision.kind === "declined") {
+        return graph.invoke(new Command({ resume: { confirmed: false } }) as never, config);
+      }
       return graph.invoke(
         new Command({
           resume: { userReply: text },
@@ -238,22 +247,10 @@ const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<voi
   });
 };
 
-const callbackQueryChat = (ctx: Context): { type?: string } | undefined => {
-  const query = ctx.callbackQuery;
-  if (query && "message" in query && query.message && "chat" in query.message) {
-    return query.message.chat;
-  }
-  return undefined;
-};
-
 /** True when the update should be ignored (not a private chat). Replies with a short notice. */
 export const rejectNonPrivateTelegramChat = async (ctx: Context): Promise<boolean> => {
-  const chat = ctx.chat ?? callbackQueryChat(ctx);
-  if (chat?.type === "private") {
+  if (ctx.chat?.type === "private") {
     return false;
-  }
-  if (ctx.callbackQuery) {
-    await ctx.answerCbQuery().catch(() => undefined);
   }
   if (ctx.chat) {
     await ctx.reply(PRIVATE_CHAT_ONLY);
@@ -267,9 +264,6 @@ const rejectIfRateLimited = async (
 ): Promise<boolean> => {
   if (userId === undefined || takeUserMessageSlot(String(userId))) {
     return false;
-  }
-  if (ctx.callbackQuery) {
-    await ctx.answerCbQuery().catch(() => undefined);
   }
   await ctx.reply(RATE_LIMITED_MESSAGE);
   return true;
@@ -287,15 +281,25 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     if (await rejectNonPrivateTelegramChat(ctx)) {
       return;
     }
+    if (await rejectIfRateLimited(ctx, ctx.from?.id)) {
+      return;
+    }
     const chatId = ctx.chat?.id;
     if (chatId === undefined) {
       return;
     }
 
     const { adapters, config } = runtime.getBootstrap();
-    const welcome = await loadWelcomeMessage(adapters.callTool, config.assignedUserId);
-    await ctx.reply(formatForTelegram(welcome), { parse_mode: "HTML" });
-    await ctx.reply(START_FOLLOW_UP);
+    const fromId = ctx.from?.id;
+    const [hasVisit, welcome] = await Promise.all([
+      fromId === undefined
+        ? Promise.resolve(false)
+        : runWithTelegramUserId(String(fromId), () => hasUpcomingVisit(adapters.callTool)),
+      loadWelcomeMessage(adapters.callTool, config.assignedUserId),
+    ]);
+    const reply_markup = buildDefaultMenuKeyboard(hasVisit);
+    await ctx.reply(formatForTelegram(welcome), { parse_mode: "HTML", reply_markup });
+    await ctx.reply(START_FOLLOW_UP, { reply_markup });
 
     const threadId = String(chatId);
     await runExclusiveForThread(threadId, () =>
@@ -369,55 +373,6 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       }
       return handleGraphTextTurn(graph, threadId, String(fromId), transcript);
     });
-    await replyOutbound(ctx, outbound);
-  }));
-
-  bot.on("callback_query", detach(async (ctx) => {
-    if (await rejectNonPrivateTelegramChat(ctx)) {
-      return;
-    }
-    if (await rejectIfRateLimited(ctx, ctx.from?.id)) {
-      return;
-    }
-    const chatId = ctx.chat?.id ?? ctx.callbackQuery.message?.chat.id;
-    const fromId = ctx.from?.id;
-    const data = "data" in ctx.callbackQuery ? ctx.callbackQuery.data : undefined;
-    if (chatId === undefined || fromId === undefined || !data) {
-      await ctx.answerCbQuery();
-      return;
-    }
-
-    const decoded = decodeCallbackData(data);
-    await ctx.answerCbQuery();
-
-    let input: unknown;
-    if (decoded.kind === "confirm") {
-      const msg = ctx.callbackQuery.message;
-      if (msg && "text" in msg && msg.text) {
-        await ctx.telegram
-          .editMessageText(
-            msg.chat.id,
-            msg.message_id,
-            undefined,
-            msg.text,
-            { reply_markup: { inline_keyboard: [] } },
-          )
-          .catch(() => undefined);
-      }
-      input = new Command({ resume: { confirmed: decoded.confirmed } });
-    } else {
-      await ctx.reply("Unknown button. Please type your request.");
-      return;
-    }
-
-    const outbound = await withTypingIndicator(ctx.telegram, chatId, () =>
-      runGraphExclusive(
-        graph,
-        String(chatId),
-        String(fromId),
-        (config) => graph.invoke(input as never, config),
-      ),
-    );
     await replyOutbound(ctx, outbound);
   }));
 

@@ -392,6 +392,8 @@ export type FindNextAvailableSlotsInput = {
   maxDaysWithSlots?: number;
   durationMinutes?: number;
   now?: Date;
+  /** Slot starts to hide (the visit being moved — still excluded from busy). */
+  omitDateStarts?: string[];
 };
 
 export type AvailableDaySlots = {
@@ -426,6 +428,7 @@ export const findNextAvailableSlots = (
     maxDaysWithSlots = MAX_PROPOSED_AVAILABILITY_DAYS,
     durationMinutes = CLINIC_SLOT_MINUTES,
     now = new Date(),
+    omitDateStarts,
   } = input;
 
   if (!DAY_RE.test(startDate)) {
@@ -455,6 +458,9 @@ export const findNextAvailableSlots = (
 
     if (day === today) {
       slots = filterSlotsAfterNow(slots, now);
+    }
+    if (omitDateStarts && omitDateStarts.length > 0) {
+      slots = omitSlotsAtStarts(slots, omitDateStarts);
     }
 
     if (slots.length > 0) {
@@ -526,4 +532,55 @@ export const excludeMeetingsById = (
   }
   const skip = new Set(excludeIds);
   return meetings.filter((m) => !m.id || !skip.has(m.id));
+};
+
+/** Normalized `dateStart` values of meetings being moved (still treated as free on the calendar). */
+export const startsOfExcludedMeetings = (
+  meetings: BusyMeeting[],
+  excludeIds?: string[],
+): string[] => {
+  if (!excludeIds || excludeIds.length === 0) {
+    return [];
+  }
+  const skip = new Set(excludeIds);
+  const starts: string[] = [];
+  for (const meeting of meetings) {
+    if (!meeting.id || !skip.has(meeting.id)) {
+      continue;
+    }
+    try {
+      starts.push(normalizeLocalIsoDatetime(meeting.dateStart));
+    } catch {
+      // Ignore unparseable CRM timestamps.
+    }
+  }
+  return starts;
+};
+
+/** Hide slots that start at the same wall time as a visit being rescheduled. */
+export const omitSlotsAtStarts = (
+  slots: AvailabilitySlot[],
+  starts: string[],
+): AvailabilitySlot[] => {
+  if (starts.length === 0) {
+    return slots;
+  }
+  const skip = new Set<string>();
+  for (const start of starts) {
+    try {
+      skip.add(normalizeLocalIsoDatetime(start));
+    } catch {
+      // Ignore unparseable values.
+    }
+  }
+  if (skip.size === 0) {
+    return slots;
+  }
+  return slots.filter((slot) => {
+    try {
+      return !skip.has(normalizeLocalIsoDatetime(slot.dateStart));
+    } catch {
+      return true;
+    }
+  });
 };

@@ -77,6 +77,16 @@ describe("per-user message rate limit", () => {
     }
     expect(takeUserMessageSlot("u-1", start + 60_000)).toBe(true);
   });
+
+  it("shares one bucket across text, voice, and /start (same user id)", () => {
+    const start = 3_000_000;
+    for (let i = 0; i < USER_MESSAGE_RATE_LIMIT - 1; i += 1) {
+      expect(takeUserMessageSlot("u-start", start + i)).toBe(true);
+    }
+    // One slot left — a /start (or text/voice) tap consumes it; the next is blocked.
+    expect(takeUserMessageSlot("u-start", start + USER_MESSAGE_RATE_LIMIT)).toBe(true);
+    expect(takeUserMessageSlot("u-start", start + USER_MESSAGE_RATE_LIMIT + 1)).toBe(false);
+  });
 });
 
 describe("voice duration cap", () => {
@@ -118,7 +128,11 @@ describe("text while HITL pending", () => {
     expect(first.__interrupt__).toBeDefined();
 
     const outbound = await handleGraphTextTurn(graph, threadId, "tg-1", "так");
-    expect(outbound.reply_markup).toBeUndefined();
+    expect(outbound.reply_markup).toEqual({
+      keyboard: [[{ text: "Головне меню" }]],
+      resize_keyboard: true,
+      one_time_keyboard: true,
+    });
 
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(snap.next).toEqual([]);
@@ -132,6 +146,38 @@ describe("text while HITL pending", () => {
         (task) => Array.isArray(task.interrupts) && task.interrupts.length > 0,
       ),
     ).toBeFalsy();
+  });
+
+  it("maps ✅/❌ reply-keyboard taps to confirmed resume payloads", async () => {
+    const yesGraph = buildPendingConfirmGraph();
+    const yesThread = "text-hitl-confirm-yes";
+    await yesGraph.invoke(
+      { result: "", messages: [] },
+      { configurable: { thread_id: yesThread } },
+    );
+    await handleGraphTextTurn(yesGraph, yesThread, "tg-1", "✅");
+    const yesSnap = await yesGraph.getState({ configurable: { thread_id: yesThread } });
+    expect(JSON.parse(String(yesSnap.values.result))).toEqual({ confirmed: true });
+
+    const noGraph = buildPendingConfirmGraph();
+    const noThread = "text-hitl-confirm-no";
+    await noGraph.invoke(
+      { result: "", messages: [] },
+      { configurable: { thread_id: noThread } },
+    );
+    await handleGraphTextTurn(noGraph, noThread, "tg-1", "❌");
+    const noSnap = await noGraph.getState({ configurable: { thread_id: noThread } });
+    expect(JSON.parse(String(noSnap.values.result))).toEqual({ confirmed: false });
+
+    const menuGraph = buildPendingConfirmGraph();
+    const menuThread = "text-hitl-confirm-menu";
+    await menuGraph.invoke(
+      { result: "", messages: [] },
+      { configurable: { thread_id: menuThread } },
+    );
+    await handleGraphTextTurn(menuGraph, menuThread, "tg-1", "Головне меню");
+    const menuSnap = await menuGraph.getState({ configurable: { thread_id: menuThread } });
+    expect(JSON.parse(String(menuSnap.values.result))).toEqual({ confirmed: false });
   });
 });
 

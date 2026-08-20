@@ -17,7 +17,9 @@ import {
   findNextAvailableSlots,
   formatKyivDayLabel,
   formatKyivLocalIso,
+  omitSlotsAtStarts,
   resolveDayTimeRanges,
+  startsOfExcludedMeetings,
   type BusyMeeting,
   type TimeRangePair,
   type WorkingTimeCalendarLike,
@@ -159,17 +161,22 @@ export const createPresentAvailabilitySlotsTool = (options: {
             }),
             searchReservedTimes(callTool, assignedUserId, input.date, input.date),
           ]);
+          const searchedMeetings = extractMeetingsFromSearchResult(raw);
+          const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
           const meetings = [
-            ...excludeMeetingsById(extractMeetingsFromSearchResult(raw), excludeIds),
+            ...excludeMeetingsById(searchedMeetings, excludeIds),
             ...reserved,
           ];
           const timeRanges = resolveRangesForDay(working, input.date);
-          const slots = computeFreeSlots({
-            day: input.date,
-            meetings,
-            timeRanges,
-            stepMinutes,
-          });
+          const slots = omitSlotsAtStarts(
+            computeFreeSlots({
+              day: input.date,
+              meetings,
+              timeRanges,
+              stepMinutes,
+            }),
+            omitDateStarts,
+          );
           trackEvent("availability_presented", {
             outcome: "success",
             date: input.date,
@@ -202,6 +209,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
           searchReservedTimes(callTool, assignedUserId, start, end),
         ]);
         const searchedMeetings = extractMeetingsFromSearchResult(raw);
+        const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
         const meetings = [
           ...excludeMeetingsById(searchedMeetings, excludeIds),
           ...reserved,
@@ -212,6 +220,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
           durationMinutes: stepMinutes,
           resolveTimeRanges: (day) => resolveRangesForDay(working, day),
           now: new Date(),
+          omitDateStarts,
         });
         trackEvent("availability_presented", {
           outcome: "success",
@@ -237,7 +246,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots from CRM meetings (search_meetings) and CReservedTime blocks. Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so its current slot is free. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, dayLabel, slots }], date, dayLabel, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. Quote dayLabel verbatim as the day heading (already Ukrainian, with сьогодні/завтра resolved) and list every slot label for that day. Do not invent times, reformat dayLabel, or claim a day is the only option unless days is empty after afterDate.",
+        "Compute free appointment slots from CRM meetings (search_meetings) and CReservedTime blocks. Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so the rest of that visit's block can free other times; the visit's current start is never listed. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, dayLabel, slots }], date, dayLabel, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. Quote dayLabel verbatim as the day heading (already Ukrainian, with сьогодні/завтра resolved) and list every slot label for that day. Do not invent times, reformat dayLabel, or claim a day is the only option unless days is empty after afterDate.",
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
@@ -259,7 +268,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
           .array(z.string().min(1))
           .optional()
           .describe(
-            "Meeting ids to ignore as busy (pass the meeting being rescheduled so its current slot is offered).",
+            "Meeting ids to ignore as busy (pass the meeting being rescheduled so later times in that block can open; its current start is not offered).",
           ),
       }),
     },

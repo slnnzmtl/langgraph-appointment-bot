@@ -10,8 +10,10 @@ import {
   formatKyivLocalIso,
   localIso,
   normalizeLocalIsoDatetime,
+  omitSlotsAtStarts,
   resolveDayTimeRanges,
   resolveWeekdayTimeRanges,
+  startsOfExcludedMeetings,
   type WorkingTimeCalendarLike,
 } from "../availability-slots.js";
 
@@ -330,6 +332,48 @@ describe("excludeMeetingsById", () => {
   });
 });
 
+describe("startsOfExcludedMeetings / omitSlotsAtStarts", () => {
+  it("normalizes Espo wall times and hides those slot starts", () => {
+    expect(
+      startsOfExcludedMeetings(
+        [
+          {
+            id: "keep",
+            dateStart: "2026-08-25T11:00:00",
+            dateEnd: "2026-08-25T11:30:00",
+          },
+          {
+            id: "move",
+            dateStart: "2026-08-25 13:00:00",
+            dateEnd: "2026-08-25T13:30:00",
+          },
+        ],
+        ["move"],
+      ),
+    ).toEqual(["2026-08-25T13:00:00"]);
+
+    expect(
+      omitSlotsAtStarts(
+        [
+          {
+            id: "a",
+            label: "11:00",
+            dateStart: "2026-08-25T11:00:00",
+            dateEnd: "2026-08-25T11:30:00",
+          },
+          {
+            id: "b",
+            label: "13:00",
+            dateStart: "2026-08-25T13:00:00",
+            dateEnd: "2026-08-25T13:30:00",
+          },
+        ],
+        ["2026-08-25 13:00:00"],
+      ).map((s) => s.label),
+    ).toEqual(["11:00"]);
+  });
+});
+
 describe("addCalendarDays", () => {
   it("shifts across month boundaries", () => {
     expect(addCalendarDays("2026-08-31", 1)).toBe("2026-09-01");
@@ -507,5 +551,24 @@ describe("findNextAvailableSlots", () => {
     ]);
     expect(result.date).toBe("2026-08-10");
     expect(result.slots).toEqual(result.days[0]?.slots);
+  });
+
+  it("does not count a day that only has the omitted current start", () => {
+    const tight: WorkingTimeCalendarLike = {
+      timeRanges: [["13:00", "14:00"]],
+      weekdays: openWeekdays,
+      weekdayTimeRanges: calendar.weekdayTimeRanges,
+    };
+    const result = findNextAvailableSlots({
+      startDate: "2026-08-10",
+      meetings: [],
+      resolveTimeRanges: (day) => resolveDayTimeRanges(tight, day),
+      durationMinutes: 60,
+      omitDateStarts: ["2026-08-10T13:00:00"],
+      now: new Date("2026-08-01T10:00:00Z"),
+    });
+
+    expect(result.date).toBe("2026-08-11");
+    expect(result.slots[0]?.label).toBe("13:00");
   });
 });
