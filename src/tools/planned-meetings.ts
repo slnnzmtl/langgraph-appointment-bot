@@ -106,7 +106,7 @@ export const createListPlannedMeetingsTool = (
     {
       name: "list_planned_meetings",
       description:
-        "List upcoming Planned meetings for a Contact (parentId). Use before cancel or reschedule, or when the user asks what is booked. Pass contactId from find_contact_by_telegram / create_contact. Optional dateFrom defaults to Kyiv today. Returns { meetings: [{ id, name, dateStart, dateEnd }] }.",
+        "List upcoming Planned meetings for a Contact (parentId). Use before cancel or reschedule, or when the user asks what is booked. Pass contactId from <contact_info> / create_contact / link_telegram_to_contact. Optional dateFrom defaults to Kyiv today. Returns { meetings: [{ id, name, dateStart, dateEnd }] }.",
       schema: z.object({
         contactId: z.string().min(1).describe("Patient Contact id"),
         dateFrom: DAY_SCHEMA.optional().describe(

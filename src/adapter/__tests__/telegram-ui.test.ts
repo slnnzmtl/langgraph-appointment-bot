@@ -8,6 +8,8 @@ import {
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   MAIN_MENU_LABEL,
+  VISIT_CHANGE_MENU,
+  ensureVisitChangeButtons,
   extractReplyButtons,
   formatForTelegram,
   withMainMenu,
@@ -114,6 +116,49 @@ describe("extractReplyButtons", () => {
       [{ text: "Мій запис" }, { text: "Послуги" }],
       [{ text: "Адреса" }, { text: MAIN_MENU_LABEL }],
     ]);
+  });
+});
+
+describe("ensureVisitChangeButtons", () => {
+  const visitAsk =
+    "Заплановані візити:\n🗓️ Видалення бородавки 1 шт - 3 вересня (четвер) о 11:00\n\nБажаєте перенести або скасувати цей візит?";
+
+  it("injects the visit-change menu when shortcuts are missing", () => {
+    expect(ensureVisitChangeButtons(visitAsk, [])).toEqual([...VISIT_CHANGE_MENU]);
+    expect(ensureVisitChangeButtons("Чим можу допомогти?", [])).toEqual([]);
+  });
+
+  it("injects when the last tap was Мій запис even without the question verbs", () => {
+    const listed =
+      "Заплановані візити:\n🗓️ Видалення бородавки 1 шт - 3 вересня (четвер) о 11:00";
+    expect(ensureVisitChangeButtons(listed, [], "Мій запис")).toEqual([...VISIT_CHANGE_MENU]);
+  });
+
+  it("replaces DEFAULT MENU on a visit-change ask", () => {
+    expect(ensureVisitChangeButtons(visitAsk, ["Мій запис", "Послуги", "Адреса"])).toEqual([
+      ...VISIT_CHANGE_MENU,
+    ]);
+  });
+
+  it("leaves model shortcuts alone when they already include move/cancel", () => {
+    expect(ensureVisitChangeButtons(visitAsk, ["Скасувати", "Ні, дякую"])).toEqual([
+      "Скасувати",
+      "Ні, дякую",
+    ]);
+  });
+
+  it("does not inject on greetings that mention move/cancel as capabilities", () => {
+    const greeting =
+      "Привіт! Я ШІ-асистент клініки. Можу записати, перенести чи скасувати візит.\n\nЧим можу допомогти?";
+    expect(ensureVisitChangeButtons(greeting, ["Записатись", "Послуги", "Адреса"])).toEqual([
+      "Записатись",
+      "Послуги",
+      "Адреса",
+    ]);
+  });
+
+  it("does not inject on unrelated replies", () => {
+    expect(ensureVisitChangeButtons("Підкажіть ваш номер телефону.", [])).toEqual([]);
   });
 });
 

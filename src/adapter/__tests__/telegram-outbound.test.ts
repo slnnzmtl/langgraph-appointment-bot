@@ -89,6 +89,24 @@ describe("interpretInvokeResult reply selection", () => {
     expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
   });
 
+  it("injects visit-change shortcuts when Мій запис has no trailer", () => {
+    const result = interpretInvokeResult({
+      messages: [
+        new HumanMessage("Мій запис"),
+        new AIMessage(
+          "Заплановані візити:\n🗓️ Видалення бородавки 1 шт - 3 вересня (четвер) о 11:00\n\nБажаєте перенести або скасувати цей візит?",
+        ),
+      ],
+    });
+
+    expect(result.text).toContain("Бажаєте перенести або скасувати");
+    expect(result.text).not.toContain("reply_buttons");
+    expect(asReply(result.reply_markup).keyboard).toEqual([
+      [{ text: "Перенести" }, { text: "Скасувати" }],
+      [{ text: "Ні, дякую" }, { text: MAIN_MENU_LABEL }],
+    ]);
+  });
+
   it("uses create_meeting confirmMessage and attaches ✅/❌ reply keyboard", () => {
     const result = interpretInvokeResult({
       messages: [

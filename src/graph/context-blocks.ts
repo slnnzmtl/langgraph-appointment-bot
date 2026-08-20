@@ -7,6 +7,16 @@ export type AgentPrefetchResult = {
   bookingContext: BookingContext | null;
 };
 
+/** CRM titles are "[service-name] - [firstName lastName]"; last " - " is the patient, not the service. */
+export const meetingServiceLabel = (name: string): string => {
+  const separator = name.lastIndexOf(" - ");
+  if (separator <= 0) {
+    return name.trim();
+  }
+  const service = name.slice(0, separator).trim();
+  return service.length > 0 ? service : name.trim();
+};
+
 // Uncached dynamic LLM blocks (Gemini 3 drops synthetic functionCall parts without thoughtSignature).
 
 export const formatListedMeetingsContext = (ctx: BookingContext | null | undefined): string => {
@@ -14,12 +24,23 @@ export const formatListedMeetingsContext = (ctx: BookingContext | null | undefin
     return "";
   }
   const today = formatKyivLocalIso(new Date()).slice(0, 10);
-  // whenLabel is precomputed so the model quotes a date instead of formatting one.
-  const meetings = ctx.meetings.map((meeting) => ({
-    ...meeting,
-    whenLabel: formatKyivDateTimeLabel(meeting.dateStart, today),
-  }));
-  return `<list_planned_meetings>\n${JSON.stringify({ meetings, dateFrom: ctx.dateFrom })}\n</list_planned_meetings>`;
+  // visitLabel / whenLabel are precomputed so the model quotes them instead of inventing a service or date.
+  const meetings = ctx.meetings.map((meeting) => {
+    const whenLabel = formatKyivDateTimeLabel(meeting.dateStart, today);
+    const serviceLabel = meetingServiceLabel(meeting.name);
+    return {
+      ...meeting,
+      serviceLabel,
+      whenLabel,
+      visitLabel: `${serviceLabel} - ${whenLabel}`,
+    };
+  });
+  const body = JSON.stringify({ meetings, dateFrom: ctx.dateFrom });
+  const moveHint =
+    meetings.length > 0
+      ? "\nWhen moving or cancelling, name serviceLabel from this block only — never a procedure from earlier chat."
+      : "";
+  return `<list_planned_meetings>\n${body}${moveHint}\n</list_planned_meetings>`;
 };
 
 export const formatContactContext = (ctx: ContactLookupContext | null | undefined): string => {

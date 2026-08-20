@@ -15,7 +15,6 @@ const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;
 
 const FAQ_TOOL_NAMES = ["list_services", "get_service", "get_working_time"] as const;
 const BOOKING_EXTRA_TOOL_NAMES = [
-  "find_contact_by_telegram",
   "find_contact_by_phone",
   "create_contact",
   "link_telegram_to_contact",

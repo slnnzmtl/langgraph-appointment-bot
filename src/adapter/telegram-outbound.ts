@@ -3,6 +3,7 @@ import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
 import {
   buildConfirmKeyboard,
   buildReplyKeyboard,
+  ensureVisitChangeButtons,
   extractReplyButtons,
   withMainMenu,
   type ReplyKeyboardMarkup,
@@ -49,22 +50,28 @@ const isRoutingLeak = (text: string): boolean => {
   return false;
 };
 
-const lastUserFacingAiText = (messages: unknown): string => {
+const lastVisibleTurn = (messages: unknown): { ai: string; human: string } => {
   if (!Array.isArray(messages)) {
-    return "";
+    return { ai: "", human: "" };
   }
 
   let lastHumanIndex = -1;
+  let human = "";
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const msg = messages[i] as { _getType?: () => string; constructor?: { name?: string } };
+    const msg = messages[i] as {
+      _getType?: () => string;
+      constructor?: { name?: string };
+      content?: unknown;
+    };
     const type = typeof msg._getType === "function" ? msg._getType() : undefined;
     if (type === "human" || msg.constructor?.name === "HumanMessage") {
       lastHumanIndex = i;
+      human = messageText(msg.content);
       break;
     }
   }
 
-  let best = "";
+  let ai = "";
   for (let i = lastHumanIndex + 1; i < messages.length; i += 1) {
     const msg = messages[i] as {
       _getType?: () => string;
@@ -79,12 +86,12 @@ const lastUserFacingAiText = (messages: unknown): string => {
     if (isRoutingLeak(text)) {
       continue;
     }
-    if (text.length > best.length) {
-      best = text;
+    if (text.length > ai.length) {
+      ai = text;
     }
   }
 
-  return best;
+  return { ai, human };
 };
 
 type InterruptItem = { value?: unknown };
@@ -209,7 +216,8 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
 export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const record = (result && typeof result === "object" ? result : {}) as Record<string, unknown>;
   const messages = record.messages;
-  const rawText = lastUserFacingAiText(messages) || "…";
+  const turn = lastVisibleTurn(messages);
+  const rawText = turn.ai || "…";
   const confirmDraft = getConfirmBookingDraft(record);
 
   if (confirmDraft) {
@@ -220,8 +228,11 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
   }
 
   const { text, buttons } = extractReplyButtons(rawText);
+  const visible = text || "…";
   return {
-    text: text || "…",
-    reply_markup: buildReplyKeyboard(withMainMenu(buttons)),
+    text: visible,
+    reply_markup: buildReplyKeyboard(
+      withMainMenu(ensureVisitChangeButtons(visible, buttons, turn.human)),
+    ),
   };
 };

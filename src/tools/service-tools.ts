@@ -128,7 +128,7 @@ const compactGetServiceResult = (result: unknown): unknown => {
 /** Shared by list_services tool. */
 export const listServices = async (
   callTool: McpCallTool,
-  limit = 50,
+  limit = 200,
 ): Promise<string> => {
   try {
     const result = await callTool("search_entity", {
@@ -161,7 +161,7 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
   const { callTool, assignedUserId } = options;
 
   const listServicesTool = tool(
-    async (input: { limit?: number }) => listServices(callTool, input.limit ?? 50),
+    async (input: { limit?: number }) => listServices(callTool, input.limit ?? 200),
     {
       name: "list_services",
       description: "List clinic services (cService) from EspoCRM: names and duration (no pricing — use get_service for prices).",

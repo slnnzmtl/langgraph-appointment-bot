@@ -166,7 +166,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const dynamic = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
       agent.id === BOOKING_AGENT_ID ? formatContactContext(state.contactContext) : "",
-      agent.id === BOOKING_AGENT_ID ? formatListedMeetingsContext(state.bookingContext) : "",
+      formatListedMeetingsContext(state.bookingContext),
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");

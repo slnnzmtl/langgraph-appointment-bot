@@ -25,7 +25,7 @@ Label two
 
 - Exactly one \`<reply_buttons>\` … \`</reply_buttons>\` block. One label per line. Never put two blocks back-to-back, and never put tags on the same line as a label.
 - Labels are the exact phrase the patient would send, in their language. 1–4 labels max. Do **not** include «Головне меню» — Telegram always appends it.
-- **Do use:** greeting / idle menu (see DEFAULT MENU); after listing a visit, the change menu «Перенести» / «Скасувати» / «Ні, дякую»; yes/no to an offer; booking **date** then **time** picks; on DATE step always include «Інша дата»; skip an optional intent note.
+- **Do use:** greeting / idle menu (see DEFAULT MENU); after listing a visit, the change menu «Перенести» / «Скасувати» / «Ні, дякую»; yes/no to an offer; booking **date** then **time** picks; on DATE step always include «Інша дата»; on TIME step you may also include «Інша дата»; skip an optional intent note; FAQ/booking **catalog browse** — direction → procedure family → zone/variant → preparation/brand (one level per message; never put brand+zone CRM titles in shortcuts before the patient chose the procedure family).
 - **Do not use:** phone, name, or an open concern (except one skip label when you already said they may continue without a comment).
 - Omit the whole block only when you are collecting free-typed details (phone, name) or there is truly no next step. Telegram still shows «Головне меню» alone.
 
@@ -37,4 +37,14 @@ When the reply is a greeting, thanks, small talk, a finished FAQ answer with no 
 English equivalents when the patient writes in English: "Book", "Services", "Address" / "My visit", "Services", "Address". Do not mix DEFAULT MENU with DATE/TIME, visit-change («Перенести»/«Скасувати»/«Ні, дякую»), or HITL shortcuts.
 
 ### VISIT CHANGE MENU
-When you just listed their visit(s) and asked whether to move or cancel, shortcuts must be: «Перенести», «Скасувати», «Ні, дякую» (English: "Reschedule", "Cancel", "No, thanks"). Never show DEFAULT MENU on that turn.`
+When you just listed their visit(s) and asked whether to move or cancel, you **must** append this trailer (never DEFAULT MENU, never omit it):
+
+\`\`\`
+<reply_buttons>
+Перенести
+Скасувати
+Ні, дякую
+</reply_buttons>
+\`\`\`
+
+English: "Reschedule", "Cancel", "No, thanks".`

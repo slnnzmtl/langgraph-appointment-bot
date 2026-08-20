@@ -169,14 +169,9 @@ describe("contact-tools", () => {
     });
   });
 
-  it("find_contact_by_telegram uses holder id", async () => {
+  it("lookupContactByTelegram uses holder id", async () => {
     await withTg(async () => {
-      const [find] = createContactTools({ callTool }).filter(
-        (tool) => tool.name === "find_contact_by_telegram",
-      );
-
-      expect(find).toBeDefined();
-      await find!.invoke({});
+      await lookupContactByTelegram(callTool);
 
       expect(calls[0]).toEqual({
         name: "search_contacts",
@@ -323,12 +318,8 @@ describe("contact-tools", () => {
   });
 
   it("throws when telegram user id is unset", async () => {
-    const [find] = createContactTools({ callTool }).filter(
-      (tool) => tool.name === "find_contact_by_telegram",
-    );
-
-    const result = await find!.invoke({});
-    expect(JSON.parse(result as string)).toMatchObject({
+    const result = await lookupContactByTelegram(callTool);
+    expect(JSON.parse(result)).toMatchObject({
       error: expect.stringContaining("Telegram user id is not set"),
     });
   });

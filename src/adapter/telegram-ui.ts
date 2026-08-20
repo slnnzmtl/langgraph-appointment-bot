@@ -10,7 +10,44 @@ export const MAIN_MENU_LABEL = "Головне меню";
 export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
 export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;
 
+/** Visit-change shortcuts after listing upcoming visits (supervisor «Мій запис»). */
+export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "Ні, дякую"] as const;
+export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;
+
 const MAX_REPLY_BUTTONS = 4;
+
+const MOVE_OR_CANCEL_LABEL = new Set<string>([
+  VISIT_CHANGE_MENU[0],
+  VISIT_CHANGE_MENU[1],
+  VISIT_CHANGE_MENU_EN[0],
+  VISIT_CHANGE_MENU_EN[1],
+]);
+
+/** Ask about this visit — not greeting copy like «записати, перенести чи скасувати візит». */
+const ASKS_VISIT_CHANGE =
+  /бажаєте перенести (?:або|чи) скасувати|перенести (?:або|чи) скасувати (?:цей|ваш) візит|would you like to (?:reschedule|move) or cancel|(?:reschedule|move) or cancel this visit/i;
+
+/**
+ * When the model forgot `<reply_buttons>` (or attached DEFAULT MENU) on a visit-change
+ * ask / «Мій запис» listing, inject the visit-change menu.
+ */
+export const ensureVisitChangeButtons = (
+  text: string,
+  buttons: string[],
+  lastUserText = "",
+): string[] => {
+  const listed = /запланован|upcoming visit|scheduled visit/i.test(text) && /🗓️|📅/.test(text);
+  const myVisit = /^(мій запис|my visit)$/i.test(lastUserText.trim());
+  if (
+    !(ASKS_VISIT_CHANGE.test(text) || (myVisit && listed))
+    || buttons.some((label) => MOVE_OR_CANCEL_LABEL.has(label))
+  ) {
+    return buttons;
+  }
+  const english =
+    /reschedule|cancel this visit|move or cancel/i.test(text) && !/перенес|скасув/i.test(text);
+  return [...(english ? VISIT_CHANGE_MENU_EN : VISIT_CHANGE_MENU)];
+};
 
 /** Trailer from the first `<reply_buttons>` to EOF (model may emit one or several blocks). */
 const REPLY_BUTTONS_TRAILER = /(?:\r?\n)*<reply_buttons\b[\s\S]*$/i;

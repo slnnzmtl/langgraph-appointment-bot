@@ -477,6 +477,9 @@ describe("cancel_meeting HITL interrupt", () => {
 
   const ownedMeeting = {
     id: "mtg-1",
+    name: "Консультація - Артем Тест",
+    dateStart: "2026-09-03 11:00:00",
+    dateEnd: "2026-09-03 11:30:00",
     parentType: "Contact",
     parentId: "contact-1",
     contactsIds: ["contact-1"],
@@ -525,13 +528,55 @@ describe("cancel_meeting HITL interrupt", () => {
       const graph = buildGraph();
       const config = { configurable: { thread_id: "hitl-cancel-meeting" } };
 
-      await graph.invoke({ result: "" }, config);
+      const first = await graph.invoke({ result: "" }, config);
+      const interrupt = (first as { __interrupt__?: Array<{ value?: { draft?: Record<string, unknown> } }> })
+        .__interrupt__?.[0]?.value?.draft;
+      expect(interrupt).toMatchObject({
+        confirmMessage: "Cancel this appointment?",
+        name: "Consult: Ada",
+        dateStart: "2026-09-03T11:00:00",
+        dateEnd: "2026-09-03T11:30:00",
+      });
       const second = await graph.invoke(
         new Command({ resume: { confirmed: false } }),
         config,
       );
       expect(calls.some((call) => call.name === "update_meeting")).toBe(false);
       expect(JSON.parse(second.result)).toMatchObject({ cancelled: true });
+    });
+  });
+
+  it("HITL draft fills name and slot from CRM when args omit them", async () => {
+    await withTg(async () => {
+      const [cancelMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "cancel_meeting");
+
+      const graph = new StateGraph(InterruptState)
+        .addNode("cancel", async () => {
+          const result = await cancelMeeting!.invoke({
+            meetingId: "mtg-1",
+            confirmMessage: "Підтвердити скасування візиту?",
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "cancel")
+        .addEdge("cancel", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const first = await graph.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-cancel-crm-dates" } },
+      );
+      const draft = (first as { __interrupt__?: Array<{ value?: { draft?: Record<string, unknown> } }> })
+        .__interrupt__?.[0]?.value?.draft;
+      expect(draft).toMatchObject({
+        confirmMessage: "Підтвердити скасування візиту?",
+        name: "Консультація - Артем Тест",
+        dateStart: "2026-09-03T11:00:00",
+        dateEnd: "2026-09-03T11:30:00",
+      });
     });
   });
 

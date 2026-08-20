@@ -42,7 +42,7 @@ describe("message-trimming", () => {
       new HumanMessage("book"),
       new AIMessage({
         content: "",
-        tool_calls: [{ id: "c1", name: "find_contact_by_telegram", args: {} }],
+        tool_calls: [{ id: "c1", name: "find_contact_by_phone", args: {} }],
       }),
       new ToolMessage({ content: '{"id":"x"}', tool_call_id: "c1" }),
     ];

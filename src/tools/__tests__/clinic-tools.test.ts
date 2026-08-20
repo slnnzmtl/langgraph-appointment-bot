@@ -8,7 +8,6 @@ describe("clinic-tools composition", () => {
   it("booking tools combine contact and meeting tools and exclude FAQ-only tools", () => {
     const names = createBookingTools({ callTool, assignedUserId: "user-1" }).map((t) => t.name);
     expect(names).toEqual([
-      "find_contact_by_telegram",
       "find_contact_by_phone",
       "create_contact",
       "link_telegram_to_contact",

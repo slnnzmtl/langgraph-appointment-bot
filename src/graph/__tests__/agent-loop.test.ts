@@ -74,6 +74,7 @@ describe("formatListedMeetingsContext", () => {
     const block = formatListedMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain('"meetings":[]');
+    expect(block).not.toContain("When moving or cancelling");
   });
 
   it("wraps the list payload for uncached system metadata", () => {
@@ -96,6 +97,36 @@ describe("formatListedMeetingsContext", () => {
       expect(formatListedMeetingsContext(listedMeetings)).toContain(
         '"whenLabel":"завтра, 17 серпня (понеділок) о 11:00"',
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("adds visitLabel from CRM name (service before last ' - '), not chat", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
+      const block = formatListedMeetingsContext(listedMeetings);
+      expect(block).toContain('"serviceLabel":"Консультація"');
+      expect(block).toContain(
+        "When moving or cancelling, name serviceLabel from this block only — never a procedure from earlier chat.",
+      );
+      expect(block).toContain(
+        '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
+      );
+      expect(
+        formatListedMeetingsContext({
+          dateFrom: "2026-08-11",
+          meetings: [
+            {
+              id: "m-2",
+              name: "Контурна пластика - 2 зони - Ada Lovelace",
+              dateStart: "2026-08-17 11:00:00",
+              dateEnd: "2026-08-17 11:30:00",
+            },
+          ],
+        }),
+      ).toContain('"serviceLabel":"Контурна пластика - 2 зони"');
     } finally {
       vi.useRealTimers();
     }
@@ -425,8 +456,8 @@ describe("createAgentLlmNode context cache", () => {
 
     const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
-    expect(faqDynamic.content).toBe("DYNAMIC KYIV");
-    expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
+    expect(faqDynamic.content).toContain("DYNAMIC KYIV");
+    expect(String(faqDynamic.content)).toContain(formatListedMeetingsContext(listedMeetings));
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));

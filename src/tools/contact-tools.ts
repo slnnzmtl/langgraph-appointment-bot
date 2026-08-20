@@ -147,20 +147,6 @@ export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<st
 export const createContactTools = (options: ContactToolsOptions): StructuredToolInterface[] => {
   const { callTool } = options;
 
-  const findContactByTelegram = tool(
-    async (_input: Record<string, never>) => {
-      const result = await lookupContactByTelegram(callTool);
-      trackContactLookup("contact_lookup_telegram", "find_contact_by_telegram", result);
-      return result;
-    },
-    {
-      name: "find_contact_by_telegram",
-      description:
-        "Find EspoCRM contact linked to the current Telegram user id (cTelegram). Uses the injected telegram id, not a model-supplied value.",
-      schema: z.object({}),
-    },
-  );
-
   const findContactByPhone = tool(
     async (input: { phoneNumber: string }) => {
       try {
@@ -308,7 +294,6 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
   );
 
   return [
-    findContactByTelegram,
     findContactByPhone,
     createContact,
     linkTelegramToContact,

@@ -23,7 +23,7 @@ describe("service-tools", () => {
       args: {
         entityType: "cService",
         select: ["id", "name", "duration", "description"],
-        limit: 50,
+        limit: 200,
       },
     });
     expect(JSON.parse(result)).toEqual({ ok: true });

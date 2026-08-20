@@ -110,14 +110,14 @@ const requireOwnedContact = async (
     return null;
   }
   return notAuthorizedJson(
-    "Use the Contact linked to this Telegram user (find_contact_by_telegram / create_contact / link_telegram_to_contact).",
+    "Use the Contact linked to this Telegram user (create_contact / link_telegram_to_contact).",
   );
 };
 
 const requireOwnedMeeting = async (
   callTool: McpCallTool,
   meetingId: string,
-): Promise<string | null> => {
+): Promise<{ meeting: Record<string, unknown> } | { errorJson: string }> => {
   let meeting: Record<string, unknown> = {};
   try {
     meeting = asJsonRecord(
@@ -128,9 +128,54 @@ const requireOwnedMeeting = async (
   }
   const contactId = contactIdFromMeeting(meeting);
   if (!contactId) {
-    return notAuthorizedJson("Resolve meetingId via list_planned_meetings for this Telegram user.");
+    return {
+      errorJson: notAuthorizedJson(
+        "Resolve meetingId via list_planned_meetings for this Telegram user.",
+      ),
+    };
   }
-  return requireOwnedContact(callTool, contactId);
+  const denied = await requireOwnedContact(callTool, contactId);
+  if (denied) {
+    return { errorJson: denied };
+  }
+  return { meeting };
+};
+
+/** Prefer tool args, then CRM meeting fields, for HITL caption details. */
+const confirmDraftFromMeeting = (
+  input: { confirmMessage: string; name?: string; dateStart?: string; dateEnd?: string },
+  meeting: Record<string, unknown>,
+): ConfirmDraft => {
+  const name =
+    input.name?.trim()
+    || (typeof meeting.name === "string" ? meeting.name.trim() : "")
+    || undefined;
+  let dateStart: string | undefined;
+  let dateEnd: string | undefined;
+  try {
+    if (input.dateStart) {
+      dateStart = normalizeLocalIsoDatetime(input.dateStart);
+    } else if (typeof meeting.dateStart === "string") {
+      dateStart = normalizeLocalIsoDatetime(meeting.dateStart);
+    }
+  } catch {
+    dateStart = undefined;
+  }
+  try {
+    if (input.dateEnd) {
+      dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
+    } else if (typeof meeting.dateEnd === "string") {
+      dateEnd = normalizeLocalIsoDatetime(meeting.dateEnd);
+    }
+  } catch {
+    dateEnd = undefined;
+  }
+  return {
+    confirmMessage: input.confirmMessage.trim(),
+    ...(name ? { name } : {}),
+    ...(dateStart ? { dateStart } : {}),
+    ...(dateEnd ? { dateEnd } : {}),
+  };
 };
 
 export const createMeetingTools = (options: MeetingToolsOptions): StructuredToolInterface[] => {
@@ -256,7 +301,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .string()
           .min(1)
           .describe(
-            'Meeting title as "[service-name]: [firstName lastName]" (e.g. "Консультація - Daniel Kovalenko")',
+            'Meeting title as "[service-name] - [firstName lastName]" (e.g. "Консультація - Daniel Kovalenko")',
           ),
         dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
@@ -281,18 +326,17 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         meetingId: string;
         confirmMessage: string;
         name?: string;
+        dateStart?: string;
+        dateEnd?: string;
         confirmationGiven?: boolean;
       },
       config,
     ) => {
-      const denied = await requireOwnedMeeting(callTool, input.meetingId);
-      if (denied) {
-        return denied;
+      const owned = await requireOwnedMeeting(callTool, input.meetingId);
+      if ("errorJson" in owned) {
+        return owned.errorJson;
       }
-      const draft: ConfirmDraft = {
-        confirmMessage: input.confirmMessage.trim(),
-        ...(input.name ? { name: input.name } : {}),
-      };
+      const draft = confirmDraftFromMeeting(input, owned.meeting);
       const execute = () =>
         callTool("update_meeting", {
           meetingId: input.meetingId,
@@ -325,7 +369,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "cancel_meeting",
       description:
-        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Call immediately on clear cancel intent (e.g. «Скасувати візит») — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
+        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Pass name and dateStart/dateEnd from list_planned_meetings when known (HITL caption); CRM fills gaps. Call immediately on clear cancel intent (e.g. «Скасувати візит») — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
@@ -333,6 +377,14 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .string()
           .optional()
           .describe("Meeting name for the Yes/No caption (from list_planned_meetings)"),
+        dateStart: z
+          .string()
+          .optional()
+          .describe("Visit start YYYY-MM-DDTHH:mm:ss from list_planned_meetings (HITL caption)"),
+        dateEnd: z
+          .string()
+          .optional()
+          .describe("Visit end YYYY-MM-DDTHH:mm:ss from list_planned_meetings (HITL caption)"),
         confirmationGiven: CONFIRMATION_GIVEN_SCHEMA,
       }),
     },
@@ -350,18 +402,21 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       },
       config,
     ) => {
-      const denied = await requireOwnedMeeting(callTool, input.meetingId);
-      if (denied) {
-        return denied;
+      const owned = await requireOwnedMeeting(callTool, input.meetingId);
+      if ("errorJson" in owned) {
+        return owned.errorJson;
       }
       const dateStart = normalizeLocalIsoDatetime(input.dateStart);
       const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
-      const draft: ConfirmDraft = {
-        confirmMessage: input.confirmMessage.trim(),
-        dateStart,
-        dateEnd,
-        ...(input.name ? { name: input.name } : {}),
-      };
+      const draft = confirmDraftFromMeeting(
+        {
+          confirmMessage: input.confirmMessage,
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          dateStart,
+          dateEnd,
+        },
+        owned.meeting,
+      );
       const execute = () =>
         callTool("update_meeting", {
           meetingId: input.meetingId,
