@@ -51,7 +51,11 @@ describe("create_meeting HITL interrupt", () => {
     return { success: true, id: "meeting-1" };
   };
 
-  const buildGraph = (dates?: { dateStart: string; dateEnd: string }) => {
+  const buildGraph = (options?: {
+    dateStart?: string;
+    dateEnd?: string;
+    description?: string;
+  }) => {
     const [createMeeting] = createMeetingTools({
       callTool,
       assignedUserId: "assigned-99",
@@ -65,11 +69,12 @@ describe("create_meeting HITL interrupt", () => {
       .addNode("book", async () => {
         const result = await createMeeting.invoke({
           name: "Consult",
-          dateStart: dates?.dateStart ?? "2026-08-07T10:00:00",
-          dateEnd: dates?.dateEnd ?? "2026-08-07T10:30:00",
+          dateStart: options?.dateStart ?? "2026-08-07T10:00:00",
+          dateEnd: options?.dateEnd ?? "2026-08-07T10:30:00",
           contactId: "contact-1",
           serviceId: "svc-1",
           confirmMessage: "Confirm this booking?",
+          ...(options?.description ? { description: options.description } : {}),
         });
         return { result: String(result) };
       })
@@ -147,10 +152,26 @@ describe("create_meeting HITL interrupt", () => {
         parentId: "contact-1",
         contactsIds: ["contact-1"],
         cServicesIds: ["svc-1"],
+        assignedUserId: "assigned-99",
         status: "Planned",
       });
-      expect(createCalls[0]?.args).not.toHaveProperty("assignedUserId");
       expect(JSON.parse(second.result)).toMatchObject({ success: true, id: "meeting-1" });
+    });
+  });
+
+  it("forwards description to MCP create_meeting when provided", async () => {
+    await withTg(async () => {
+      const graph = buildGraph({
+        description: "Пацієнт звернувся щодо бородавок; хоче консультацію.",
+      });
+      const config = { configurable: { thread_id: "hitl-description" } };
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(new Command({ resume: { confirmed: true } }), config);
+
+      const createCall = calls.find((call) => call.name === "create_meeting");
+      expect(createCall?.args).toMatchObject({
+        description: "Пацієнт звернувся щодо бородавок; хоче консультацію.",
+      });
     });
   });
 

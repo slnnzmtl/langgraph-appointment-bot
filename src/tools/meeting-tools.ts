@@ -250,7 +250,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned visit. Call immediately. Requires confirmMessage (patient language). First call pauses for HITL Yes/No buttons (contact must belong to this Telegram user). After explicit chat affirmation, re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned visit. Call immediately. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL Yes/No buttons (contact must belong to this Telegram user). After explicit chat affirmation, re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()
@@ -263,7 +263,12 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         contactId: z.string().min(1).describe("Patient Contact id"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
         serviceId: z.string().min(1).describe("Required cService entity id (resolve via list_services)"),
-        description: z.string().optional(),
+        description: z
+          .string()
+          .optional()
+          .describe(
+            "Ukrainian 1–2 sentence intent summary for clinic staff from this chat (concern, area, named procedure). Translate into Ukrainian if needed. Omit when the patient gave no intent. Never invent details; never put this in confirmMessage or the patient chat reply.",
+          ),
         location: z.string().optional(),
         confirmationGiven: CONFIRMATION_GIVEN_SCHEMA,
       }),
