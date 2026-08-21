@@ -60,7 +60,7 @@ export type ComputeFreeSlotsInput = {
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^(\d{1,2}):(\d{2})$/;
-const BUSY_STATUSES = new Set(["Planned", "Held"]);
+const BUSY_STATUSES = new Set(["Planned", "Held", "Confirmed"]);
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
 
@@ -226,7 +226,7 @@ export const resolveDayTimeRanges = (
 
 /**
  * Build free slots for a calendar day by subtracting busy meetings from open ranges.
- * Only Planned/Held meetings block time; Not Held is ignored.
+ * Only Planned/Held/Confirmed meetings block time; Not Held is ignored.
  */
 export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot[] => {
   const {

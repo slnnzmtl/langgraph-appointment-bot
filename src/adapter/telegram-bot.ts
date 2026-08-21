@@ -8,13 +8,21 @@ import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
+import type { McpCallTool } from "../shared/mcp.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
+import {
+  REMINDER_CONFIRMED_ACK,
+  REMINDER_DECLINED_ACK,
+  setReminderConfirmPending,
+  takeReminderConfirm,
+} from "./reminder-webhook.js";
 import {
   interpretInvokeResult,
   isConfirmBookingInterrupt,
   type OutboundReply,
 } from "./telegram-outbound.js";
 import {
+  buildConfirmKeyboard,
   buildDefaultMenuKeyboard,
   classifyConfirmReply,
   formatForTelegram,
@@ -321,12 +329,53 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       return;
     }
 
+    const telegramUserId = String(fromId);
+    const reminderDecision = takeReminderConfirm(telegramUserId, text);
+    if (reminderDecision) {
+      const { adapters } = runtime.getBootstrap();
+      const callTool = adapters.callTool as McpCallTool;
+      try {
+        for (const meetingId of reminderDecision.meetingIds) {
+          await callTool("update_meeting", {
+            meetingId,
+            status: reminderDecision.status,
+          });
+        }
+      } catch (error: unknown) {
+        console.error("Reminder confirm CRM update failed:", error);
+        setReminderConfirmPending(telegramUserId, reminderDecision.meetingIds);
+        const detail = error instanceof Error ? error.message : "";
+        const outsideHours = /outside working hours/i.test(detail);
+        await ctx.reply(
+          formatForTelegram(
+            outsideHours
+              ? "Не вдалося оновити візит: у CRM час поза робочим графіком. Адміністратор має дозволити зміну статусу або перенести візит у робочі години."
+              : "Вибачте, не вдалося оновити візит. Спробуйте ще раз.",
+          ),
+          {
+            parse_mode: "HTML",
+            reply_markup: buildConfirmKeyboard(),
+          },
+        );
+        return;
+      }
+      const confirmed = reminderDecision.status === "Confirmed";
+      await ctx.reply(
+        formatForTelegram(confirmed ? REMINDER_CONFIRMED_ACK : REMINDER_DECLINED_ACK),
+        {
+          parse_mode: "HTML",
+          reply_markup: buildDefaultMenuKeyboard(confirmed),
+        },
+      );
+      return;
+    }
+
     const threadId = String(chatId);
     const outbound = await withTypingIndicator(ctx.telegram, chatId, () =>
       handleGraphTextTurn(
         graph,
         threadId,
-        String(fromId),
+        telegramUserId,
         text,
       ),
     );
@@ -380,8 +429,16 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     console.error("Telegram bot error:", error);
   });
 
-  await bot.launch();
-  console.log("Telegram bot polling started.");
+  // Telegraf `launch()` only settles when polling stops. Resolve once getMe succeeds
+  // (onLaunch callback) so callers can start the reminder webhook without waiting forever.
+  await new Promise<void>((resolve, reject) => {
+    void bot
+      .launch({}, () => {
+        console.log("Telegram bot polling started.");
+        resolve();
+      })
+      .catch(reject);
+  });
 
   return {
     bot,

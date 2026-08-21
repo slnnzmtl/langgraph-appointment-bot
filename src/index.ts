@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { getDefaultProjectName, isTracingEnabled } from "langsmith";
 
+import { launchReminderWebhook } from "./adapter/reminder-webhook.js";
 import { launchClinicBot } from "./adapter/telegram-bot.js";
 import { applyTracingPrivacyDefaults } from "./analytics/track.js";
 import { loadConfig } from "./config.js";
@@ -9,6 +10,7 @@ import { createClinicRuntime } from "./composition/clinic-runtime.js";
 /**
  * Entrypoint: boots the clinic LangGraph runtime.
  * When TELEGRAM_BOT_TOKEN is set, starts telegraf long polling.
+ * When WEBHOOK_SECRET is also set, listens for tomorrow-reminder POSTs.
  */
 const main = async (): Promise<void> => {
   const config = loadConfig();
@@ -42,8 +44,26 @@ const main = async (): Promise<void> => {
     runtime,
   });
 
+  let webhookClose: (() => Promise<void>) | undefined;
+  if (config.webhookSecret) {
+    const port = Number(process.env.WEBHOOK_PORT) || 8080;
+    const webhook = await launchReminderWebhook({
+      bot: handle.bot,
+      secret: config.webhookSecret,
+      port,
+    });
+    webhookClose = webhook.close;
+  } else {
+    console.log(
+      "WEBHOOK_SECRET not set — Telegram polling only. Set WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder.",
+    );
+  }
+
   const shutdown = async (signal: string): Promise<void> => {
     console.log(`Received ${signal}, shutting down…`);
+    if (webhookClose) {
+      await webhookClose();
+    }
     await handle.stop(signal);
     await runtime.shutdownAdapters();
     process.exit(0);

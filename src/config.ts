@@ -15,6 +15,8 @@ export interface AppConfig {
   assignedUserId: string;
   /** Optional; required only when launching the Telegram bot. */
   telegramBotToken?: string;
+  /** Optional; required with telegramBotToken to listen for tomorrow-reminder POSTs. */
+  webhookSecret?: string;
   /** Explicit Gemini CachedContent for supervisor/agent prompts. Default on. */
   geminiContextCacheEnabled: boolean;
 }
@@ -44,6 +46,9 @@ export const loadConfig = (): AppConfig => {
     geminiContextCacheEnabled: isGeminiContextCacheEnabled(),
     ...(process.env.TELEGRAM_BOT_TOKEN?.trim()
       ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN.trim() }
+      : {}),
+    ...(process.env.WEBHOOK_SECRET?.trim()
+      ? { webhookSecret: process.env.WEBHOOK_SECRET.trim() }
       : {}),
   };
 };

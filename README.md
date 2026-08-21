@@ -12,6 +12,7 @@ cp .env.example .env
 # set GOOGLE_API_KEY, ESPOCRM_API_KEY, ESPOCRM_ASSIGNED_USER_ID
 # set ESPOCRM_MCP_URL=http://127.0.0.1:3000 for local MCP
 # set TELEGRAM_BOT_TOKEN to launch the bot
+# optional: WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder (compose: 127.0.0.1:8080)
 # optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
 # optional LangSmith: LANGSMITH_TRACING=true LANGSMITH_API_KEY= LANGSMITH_PROJECT=clinic-appointment-bot
 ```
@@ -29,6 +30,36 @@ docker compose up -d --build
 ```
 
 Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base.
+
+### Tomorrow-reminder webhook
+
+When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also listens for `POST /webhooks/tomorrow-reminder` (default port `8080`, override with `WEBHOOK_PORT`). Compose maps **`127.0.0.1:8080:8080`** so the port is not reachable from the public internet. Use a long random `WEBHOOK_SECRET` (header `X-Webhook-Secret`).
+
+**Public HTTPS (Caddy on this host):** EspoCRM should call:
+
+`https://fedchenko.slnnzmtl.xyz/webhooks/tomorrow-reminder`
+
+Host Caddy ([`deploy/Caddyfile`](deploy/Caddyfile) → `/etc/caddy/Caddyfile`) terminates TLS, allowlists EspoCRM egress **IPv4** `91.99.109.18`, and reverse-proxies the same path to `http://127.0.0.1:8080`. Other client IPs and paths get `403`. Caddy binds `13.140.158.49` only so it does not clash with Tailscale on `:443`. After editing the repo file, copy it to `/etc/caddy/Caddyfile` (do not symlink under `/root` — the `caddy` user cannot read it) and `systemctl restart caddy`.
+
+```sh
+# Loopback (on the bot host) — evening-before HITL needs id (+ status)
+curl -sS -X POST http://127.0.0.1:8080/webhooks/tomorrow-reminder \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+  -d '{"telegramId":"123456789","meetings":[{"id":"meetIdHere","name":"Консультація","dateStart":"2026-08-22T10:00:00","status":"Planned"}]}'
+
+# From EspoCRM (91.99.109.18)
+curl -sS -X POST https://fedchenko.slnnzmtl.xyz/webhooks/tomorrow-reminder \
+  -H "Content-Type: application/json" \
+  -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
+  -d '{"telegramId":"123456789","meetings":[{"id":"meetIdHere","name":"Консультація","dateStart":"2026-08-22T10:00:00","status":"Planned"}]}'
+```
+
+Body: `telegramId` (string or number) and `meetings` (at least one `{ name, dateStart }`; optional `id` / `meetingId` / `status`). Success: `{ "ok": true, "hitl": boolean }`. EspoCRM controls **when** the webhook fires (minutes before, evening before, etc.); the bot adapts the Ukrainian intro from each meeting’s `dateStart` vs Kyiv now («через N хв», «сьогодні», «завтра», or a generic line). `dateStart` may be Kyiv wall time without a zone, or ISO-8601 with `Z` / ±offset (converted to Europe/Kyiv for copy).
+
+**Evening-before HITL:** when a meeting is Kyiv **tomorrow**, status is **Planned** (or omitted), and `id` (or `meetingId`) is present, the bot sends ✅/❌ and sets CRM status to `Confirmed` (✅) or `Not Held` (❌). Without `id`, response is still `{ "ok": true, "hitl": false }` (notify-only). «Головне меню» dismisses the confirm card without changing CRM. Already-`Confirmed` visits get a notify-only reminder (no keyboard). EspoCRM evening-before POSTs must include Meeting `id` and preferably `status`.
+
+If CRM returns **409** «This meeting is outside working hours», status updates are blocked by a Meeting save hook whenever `dateStart` is outside the Working Time Calendar (here 11:00–15:00). Confirm/cancel cannot succeed for those visits until the hook skips **status-only** updates (or honors `X-Skip-Working-Hours-Check` from MCP) or the visit is moved into working hours.
 
 ## Commands
 

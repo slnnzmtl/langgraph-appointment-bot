@@ -253,6 +253,23 @@ describe("computeFreeSlots", () => {
     expect(slots.map((s) => s.label)).toEqual(["09:00", "09:30"]);
   });
 
+  it("treats Confirmed meetings as busy", () => {
+    const slots = computeFreeSlots({
+      day: "2026-08-10",
+      meetings: [
+        {
+          status: "Confirmed",
+          dateStart: localIso("2026-08-10", 9, 0),
+          dateEnd: localIso("2026-08-10", 10, 0),
+        },
+      ],
+      timeRanges: [["09:00", "10:00"]],
+      stepMinutes: 30,
+    });
+
+    expect(slots).toEqual([]);
+  });
+
   it("caps presented slots", () => {
     const slots = computeFreeSlots({
       day: "2026-08-10",

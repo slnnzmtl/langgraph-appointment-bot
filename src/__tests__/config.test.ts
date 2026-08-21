@@ -16,6 +16,7 @@ const envKeys = [
   "SUPERVISOR_MODEL",
   "AGENT_MODEL",
   "TELEGRAM_BOT_TOKEN",
+  "WEBHOOK_SECRET",
   "MESSAGE_HISTORY_MAX_TOKENS",
 ] as const;
 
@@ -51,5 +52,17 @@ describe("loadConfig", () => {
     expect(loadConfig().geminiContextCacheEnabled).toBe(false);
     process.env.GEMINI_CONTEXT_CACHE = "false";
     expect(loadConfig().geminiContextCacheEnabled).toBe(false);
+  });
+
+  it("omits webhookSecret when WEBHOOK_SECRET is unset", () => {
+    applyRequiredEnv();
+    delete process.env.WEBHOOK_SECRET;
+    expect(loadConfig().webhookSecret).toBeUndefined();
+  });
+
+  it("loads webhookSecret from WEBHOOK_SECRET", () => {
+    applyRequiredEnv();
+    process.env.WEBHOOK_SECRET = "  reminder-secret  ";
+    expect(loadConfig().webhookSecret).toBe("reminder-secret");
   });
 });

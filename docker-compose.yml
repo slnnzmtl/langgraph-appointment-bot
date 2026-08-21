@@ -9,6 +9,9 @@ services:
       NODE_ENV: production
       TZ: Europe/Kyiv
       ESPOCRM_MCP_URL: http://espocrm-mcp-server:3000
+    # Loopback only — do not use 8080:8080 (that binds 0.0.0.0). Terminate TLS on a host proxy → 127.0.0.1:8080.
+    ports:
+      - "127.0.0.1:8080:8080"
     networks:
       - espocrm-mcp_default
 
