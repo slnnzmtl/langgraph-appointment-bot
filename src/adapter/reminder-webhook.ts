@@ -53,7 +53,7 @@ export type ReminderSendMessage = (
 ) => Promise<unknown>;
 
 export const REMINDER_HITL_QUESTION =
-  "Підтвердіть візит на завтра: ✅ прийдете, ❌ скасувати.";
+  "Підтвердіть візит: ✅ прийдете, ❌ скасувати.";
 export const REMINDER_CONFIRM_TTL_MS = 15 * 60 * 1000;
 
 export const REMINDER_CONFIRMED_ACK = "Дякуємо! Візит підтверджено.";
@@ -77,11 +77,8 @@ export const clearReminderConfirmsForTests = (): void => {
   pendingReminderConfirms.clear();
 };
 
-/** Evening-before HITL: Kyiv tomorrow, Planned (or omitted), and a meeting id. */
-export const needsEveningBeforeHitl = (
-  meeting: ReminderMeeting,
-  now = new Date(),
-): boolean => {
+/** Reminder HITL: Planned (or omitted status) with a meeting id — not Confirmed. */
+export const needsEveningBeforeHitl = (meeting: ReminderMeeting): boolean => {
   if (!meeting.id?.trim()) {
     return false;
   }
@@ -91,22 +88,11 @@ export const needsEveningBeforeHitl = (
   if (meeting.status !== undefined && meeting.status !== "Planned") {
     return false;
   }
-  try {
-    const today = formatKyivLocalIso(now).slice(0, 10);
-    const { day } = resolveMeetingStartInKyiv(meeting.dateStart);
-    return day === addCalendarDays(today, 1);
-  } catch {
-    return false;
-  }
+  return true;
 };
 
-export const listEveningBeforeHitlMeetingIds = (
-  meetings: ReminderMeeting[],
-  now = new Date(),
-): string[] =>
-  meetings
-    .filter((meeting) => needsEveningBeforeHitl(meeting, now))
-    .map((meeting) => meeting.id!.trim());
+export const listEveningBeforeHitlMeetingIds = (meetings: ReminderMeeting[]): string[] =>
+  meetings.filter(needsEveningBeforeHitl).map((meeting) => meeting.id!.trim());
 
 export const setReminderConfirmPending = (
   telegramId: string,
@@ -307,7 +293,7 @@ export const formatReminderMessage = (
   return [intro, "", ...lines].join("\n");
 };
 
-/** Append evening-before Yes/No question when HITL is required. */
+/** Append Yes/No question when reminder HITL is required. */
 export const formatReminderHitlMessage = (
   meetings: ReminderMeeting[],
   now = new Date(),
@@ -408,27 +394,18 @@ export const createReminderWebhookHandler = (
 
     const hitlIds = listEveningBeforeHitlMeetingIds(parsed.data.meetings);
     if (hitlIds.length === 0) {
-      const tomorrowWithoutId = parsed.data.meetings.filter((meeting) => {
+      const plannedWithoutId = parsed.data.meetings.filter((meeting) => {
         if (meeting.id?.trim()) {
           return false;
         }
         if (meeting.status === "Confirmed") {
           return false;
         }
-        if (meeting.status !== undefined && meeting.status !== "Planned") {
-          return false;
-        }
-        try {
-          const today = formatKyivLocalIso(new Date()).slice(0, 10);
-          const { day } = resolveMeetingStartInKyiv(meeting.dateStart);
-          return day === addCalendarDays(today, 1);
-        } catch {
-          return false;
-        }
+        return meeting.status === undefined || meeting.status === "Planned";
       });
-      if (tomorrowWithoutId.length > 0) {
+      if (plannedWithoutId.length > 0) {
         console.warn(
-          `Reminder HITL skipped for telegramId=${parsed.data.telegramId}: tomorrow meeting(s) missing id (send id or meetingId).`,
+          `Reminder HITL skipped for telegramId=${parsed.data.telegramId}: Planned meeting(s) missing id (send id or meetingId).`,
         );
       }
     }

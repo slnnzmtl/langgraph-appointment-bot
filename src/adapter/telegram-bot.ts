@@ -344,19 +344,10 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       } catch (error: unknown) {
         console.error("Reminder confirm CRM update failed:", error);
         setReminderConfirmPending(telegramUserId, reminderDecision.meetingIds);
-        const detail = error instanceof Error ? error.message : "";
-        const outsideHours = /outside working hours/i.test(detail);
-        await ctx.reply(
-          formatForTelegram(
-            outsideHours
-              ? "Не вдалося оновити візит: у CRM час поза робочим графіком. Адміністратор має дозволити зміну статусу або перенести візит у робочі години."
-              : "Вибачте, не вдалося оновити візит. Спробуйте ще раз.",
-          ),
-          {
-            parse_mode: "HTML",
-            reply_markup: buildConfirmKeyboard(),
-          },
-        );
+        await ctx.reply(formatForTelegram("Вибачте, не вдалося оновити візит. Спробуйте ще раз."), {
+          parse_mode: "HTML",
+          reply_markup: buildConfirmKeyboard(),
+        });
         return;
       }
       const confirmed = reminderDecision.status === "Confirmed";

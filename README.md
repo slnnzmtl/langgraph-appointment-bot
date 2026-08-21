@@ -42,7 +42,7 @@ When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also li
 Host Caddy ([`deploy/Caddyfile`](deploy/Caddyfile) → `/etc/caddy/Caddyfile`) terminates TLS, allowlists EspoCRM egress **IPv4** `91.99.109.18`, and reverse-proxies the same path to `http://127.0.0.1:8080`. Other client IPs and paths get `403`. Caddy binds `13.140.158.49` only so it does not clash with Tailscale on `:443`. After editing the repo file, copy it to `/etc/caddy/Caddyfile` (do not symlink under `/root` — the `caddy` user cannot read it) and `systemctl restart caddy`.
 
 ```sh
-# Loopback (on the bot host) — evening-before HITL needs id (+ status)
+# Loopback (on the bot host) — HITL needs id (+ status Planned)
 curl -sS -X POST http://127.0.0.1:8080/webhooks/tomorrow-reminder \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
@@ -57,9 +57,7 @@ curl -sS -X POST https://fedchenko.slnnzmtl.xyz/webhooks/tomorrow-reminder \
 
 Body: `telegramId` (string or number) and `meetings` (at least one `{ name, dateStart }`; optional `id` / `meetingId` / `status`). Success: `{ "ok": true, "hitl": boolean }`. EspoCRM controls **when** the webhook fires (minutes before, evening before, etc.); the bot adapts the Ukrainian intro from each meeting’s `dateStart` vs Kyiv now («через N хв», «сьогодні», «завтра», or a generic line). `dateStart` may be Kyiv wall time without a zone, or ISO-8601 with `Z` / ±offset (converted to Europe/Kyiv for copy).
 
-**Evening-before HITL:** when a meeting is Kyiv **tomorrow**, status is **Planned** (or omitted), and `id` (or `meetingId`) is present, the bot sends ✅/❌ and sets CRM status to `Confirmed` (✅) or `Not Held` (❌). Without `id`, response is still `{ "ok": true, "hitl": false }` (notify-only). «Головне меню» dismisses the confirm card without changing CRM. Already-`Confirmed` visits get a notify-only reminder (no keyboard). EspoCRM evening-before POSTs must include Meeting `id` and preferably `status`.
-
-If CRM returns **409** «This meeting is outside working hours», status updates are blocked by a Meeting save hook whenever `dateStart` is outside the Working Time Calendar (here 11:00–15:00). Confirm/cancel cannot succeed for those visits until the hook skips **status-only** updates (or honors `X-Skip-Working-Hours-Check` from MCP) or the visit is moved into working hours.
+**Reminder HITL:** when status is **Planned** (or omitted) and `id` (or `meetingId`) is present, the bot sends ✅/❌ and sets CRM status to `Confirmed` (✅) or `Not Held` (❌). Without `id`, response is still `{ "ok": true, "hitl": false }` (notify-only). «Головне меню» dismisses the confirm card without changing CRM. Already-`Confirmed` visits get a notify-only reminder (no keyboard). EspoCRM reminder POSTs must include Meeting `id` and preferably `status`.
 
 ## Commands
 

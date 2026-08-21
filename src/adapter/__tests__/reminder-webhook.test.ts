@@ -114,43 +114,47 @@ describe("needsEveningBeforeHitl", () => {
     clearReminderConfirmsForTests();
   });
 
-  it("is true for Kyiv tomorrow Planned meetings with an id", () => {
-    const now = new Date("2026-08-21T20:00:00+03:00");
-    const tomorrow = kyivCalendarDate(now, 1);
+  it("is true for Planned meetings with an id (any dateStart)", () => {
     expect(
-      needsEveningBeforeHitl(
-        { id: "m-1", name: "A", dateStart: `${tomorrow}T10:00:00`, status: "Planned" },
-        now,
-      ),
+      needsEveningBeforeHitl({
+        id: "m-1",
+        name: "A",
+        dateStart: "2026-08-21T21:00:00",
+        status: "Planned",
+      }),
     ).toBe(true);
     expect(
-      needsEveningBeforeHitl(
-        { id: "m-2", name: "B", dateStart: `${tomorrow}T11:00:00` },
-        now,
-      ),
+      needsEveningBeforeHitl({
+        id: "m-2",
+        name: "B",
+        dateStart: "2026-08-22T11:00:00",
+      }),
     ).toBe(true);
   });
 
-  it("is false for Confirmed, same-day, or missing id", () => {
-    const now = new Date("2026-08-21T20:00:00+03:00");
-    const tomorrow = kyivCalendarDate(now, 1);
+  it("is false for Confirmed, other statuses, or missing id", () => {
     expect(
-      needsEveningBeforeHitl(
-        { id: "m-1", name: "A", dateStart: `${tomorrow}T10:00:00`, status: "Confirmed" },
-        now,
-      ),
+      needsEveningBeforeHitl({
+        id: "m-1",
+        name: "A",
+        dateStart: "2026-08-22T10:00:00",
+        status: "Confirmed",
+      }),
     ).toBe(false);
     expect(
-      needsEveningBeforeHitl(
-        { id: "m-1", name: "A", dateStart: "2026-08-21T21:00:00", status: "Planned" },
-        now,
-      ),
+      needsEveningBeforeHitl({
+        id: "m-1",
+        name: "A",
+        dateStart: "2026-08-22T10:00:00",
+        status: "Held",
+      }),
     ).toBe(false);
     expect(
-      needsEveningBeforeHitl(
-        { name: "A", dateStart: `${tomorrow}T10:00:00`, status: "Planned" },
-        now,
-      ),
+      needsEveningBeforeHitl({
+        name: "A",
+        dateStart: "2026-08-22T10:00:00",
+        status: "Planned",
+      }),
     ).toBe(false);
   });
 });
@@ -386,12 +390,11 @@ describe("createReminderWebhookHandler", () => {
     ]);
   });
 
-  it("returns 200 with confirm keyboard for tomorrow Planned meetings with id", async () => {
+  it("returns 200 with confirm keyboard for Planned meetings with id", async () => {
     const sendMessage = vi.fn<ReminderSendMessage>().mockResolvedValue({});
     const server = await listen(sendMessage);
     close = server.close;
 
-    const tomorrow = kyivCalendarDate(new Date(), 1);
     const response = await fetch(`${server.baseUrl}${REMINDER_WEBHOOK_PATH}`, {
       method: "POST",
       headers: {
@@ -404,7 +407,7 @@ describe("createReminderWebhookHandler", () => {
           {
             id: "meet-1",
             name: "Консультація",
-            dateStart: `${tomorrow}T10:00:00`,
+            dateStart: "2026-08-21T21:00:00",
             status: "Planned",
           },
         ],
