@@ -12,6 +12,8 @@ import {
   reminderPayloadSchema,
   REMINDER_HITL_QUESTION,
   REMINDER_WEBHOOK_PATH,
+  resolveMeetingStartInKyiv,
+  setReminderConfirmPending,
   takeReminderConfirm,
   type ReminderSendMessage,
 } from "../reminder-webhook.js";
@@ -395,6 +397,8 @@ describe("createReminderWebhookHandler", () => {
     const server = await listen(sendMessage);
     close = server.close;
 
+    const tomorrow = kyivCalendarDate(new Date(), 1);
+    const dateStart = `${tomorrow}T21:00:00`;
     const response = await fetch(`${server.baseUrl}${REMINDER_WEBHOOK_PATH}`, {
       method: "POST",
       headers: {
@@ -407,7 +411,7 @@ describe("createReminderWebhookHandler", () => {
           {
             id: "meet-1",
             name: "Консультація",
-            dateStart: "2026-08-21T21:00:00",
+            dateStart,
             status: "Planned",
           },
         ],
@@ -424,6 +428,12 @@ describe("createReminderWebhookHandler", () => {
     ]);
     expect(takeReminderConfirm("42", CONFIRM_YES_LABEL)).toEqual({
       meetingIds: ["meet-1"],
+      meetings: [
+        {
+          id: "meet-1",
+          utcMs: resolveMeetingStartInKyiv(dateStart).utcMs,
+        },
+      ],
       status: "Confirmed",
     });
   });
@@ -505,9 +515,83 @@ describe("createReminderWebhookHandler", () => {
     });
     expect(takeReminderConfirm("99", CONFIRM_NO_LABEL)).toEqual({
       meetingIds: ["a", "b"],
+      meetings: [
+        { id: "a", utcMs: resolveMeetingStartInKyiv(`${tomorrow}T09:00:00`).utcMs },
+        { id: "b", utcMs: resolveMeetingStartInKyiv(`${tomorrow}T11:00:00`).utcMs },
+      ],
       status: "Not Held",
     });
     expect(takeReminderConfirm("99", CONFIRM_YES_LABEL)).toBeNull();
+  });
+
+  it("keeps HITL pending until visit start (hour-before tap still works)", () => {
+    const startMs = Date.parse("2026-08-23T16:00:00+03:00");
+    const sentAt = Date.parse("2026-08-23T14:00:00+03:00");
+    setReminderConfirmPending("7", [{ id: "meet-1", utcMs: startMs }]);
+    expect(takeReminderConfirm("7", CONFIRM_YES_LABEL, sentAt + 22 * 60 * 1000)).toEqual({
+      meetingIds: ["meet-1"],
+      meetings: [{ id: "meet-1", utcMs: startMs }],
+      status: "Confirmed",
+    });
+  });
+
+  it("expires reminder HITL at visit start", () => {
+    const startMs = Date.parse("2026-08-23T11:00:00+03:00");
+    setReminderConfirmPending("8", [{ id: "meet-1", utcMs: startMs }]);
+    expect(takeReminderConfirm("8", CONFIRM_YES_LABEL, startMs)).toBeNull();
+    expect(takeReminderConfirm("8", CONFIRM_YES_LABEL, startMs + 1)).toBeNull();
+  });
+
+  it("replaces pending start when a later HITL POST has a new dateStart", async () => {
+    const sendMessage = vi.fn<ReminderSendMessage>().mockResolvedValue({});
+    const server = await listen(sendMessage);
+    close = server.close;
+
+    await fetch(`${server.baseUrl}${REMINDER_WEBHOOK_PATH}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": SECRET,
+      },
+      body: JSON.stringify({
+        telegramId: "55",
+        meetings: [
+          {
+            id: "meet-1",
+            name: "A",
+            dateStart: "2026-08-23T11:00:00",
+            status: "Planned",
+          },
+        ],
+      }),
+    });
+
+    await fetch(`${server.baseUrl}${REMINDER_WEBHOOK_PATH}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Webhook-Secret": SECRET,
+      },
+      body: JSON.stringify({
+        telegramId: "55",
+        meetings: [
+          {
+            id: "meet-1",
+            name: "A",
+            dateStart: "2026-08-23T15:00:00",
+            status: "Planned",
+          },
+        ],
+      }),
+    });
+
+    const newStart = resolveMeetingStartInKyiv("2026-08-23T15:00:00").utcMs;
+    const afterOldStart = resolveMeetingStartInKyiv("2026-08-23T11:00:00").utcMs + 1;
+    expect(takeReminderConfirm("55", CONFIRM_YES_LABEL, afterOldStart)).toEqual({
+      meetingIds: ["meet-1"],
+      meetings: [{ id: "meet-1", utcMs: newStart }],
+      status: "Confirmed",
+    });
   });
 
   it("returns 404 for other paths", async () => {

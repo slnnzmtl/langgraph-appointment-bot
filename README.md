@@ -57,7 +57,7 @@ curl -sS -X POST https://fedchenko.slnnzmtl.xyz/webhooks/tomorrow-reminder \
 
 Body: `telegramId` (string or number) and `meetings` (at least one `{ name, dateStart }`; optional `id` / `meetingId` / `status`). Success: `{ "ok": true, "hitl": boolean }`. EspoCRM controls **when** the webhook fires (minutes before, evening before, etc.); the bot adapts the Ukrainian intro from each meeting’s `dateStart` vs Kyiv now («через N хв», «сьогодні», «завтра», or a generic line). `dateStart` may be Kyiv wall time without a zone, or ISO-8601 with `Z` / ±offset (converted to Europe/Kyiv for copy).
 
-**Reminder HITL:** when status is **Planned** (or omitted) and `id` (or `meetingId`) is present, the bot sends ✅/❌ and sets CRM status to `Confirmed` (✅) or `Not Held` (❌). Without `id`, response is still `{ "ok": true, "hitl": false }` (notify-only). «Головне меню» dismisses the confirm card without changing CRM. Already-`Confirmed` visits get a notify-only reminder (no keyboard). EspoCRM reminder POSTs must include Meeting `id` and preferably `status`.
+**Reminder HITL:** when status is **Planned** (or omitted) and `id` (or `meetingId`) is present, the bot sends ✅/❌ and sets CRM status to `Confirmed` (✅) or `Not Held` (❌). Pending confirm lasts until that visit’s **start** (`dateStart` from the last HITL reminder); a new HITL POST (e.g. after reschedule) replaces pending. Without `id`, response is still `{ "ok": true, "hitl": false }` (notify-only). «Головне меню» dismisses the confirm card without changing CRM. Already-`Confirmed` visits get a notify-only reminder (no keyboard). EspoCRM reminder POSTs must include Meeting `id` and preferably `status`.
 
 ## Commands
 

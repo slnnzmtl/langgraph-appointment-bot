@@ -13,6 +13,7 @@ import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
 import {
   REMINDER_CONFIRMED_ACK,
   REMINDER_DECLINED_ACK,
+  REMINDER_STALE_CONFIRM,
   setReminderConfirmPending,
   takeReminderConfirm,
 } from "./reminder-webhook.js";
@@ -26,6 +27,7 @@ import {
   buildDefaultMenuKeyboard,
   classifyConfirmReply,
   formatForTelegram,
+  MAIN_MENU_LABEL,
 } from "./telegram-ui.js";
 import {
   buildStartHistoryText,
@@ -343,7 +345,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
         }
       } catch (error: unknown) {
         console.error("Reminder confirm CRM update failed:", error);
-        setReminderConfirmPending(telegramUserId, reminderDecision.meetingIds);
+        setReminderConfirmPending(telegramUserId, reminderDecision.meetings);
         await ctx.reply(formatForTelegram("Вибачте, не вдалося оновити візит. Спробуйте ще раз."), {
           parse_mode: "HTML",
           reply_markup: buildConfirmKeyboard(),
@@ -362,6 +364,18 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     }
 
     const threadId = String(chatId);
+    const confirmTap = classifyConfirmReply(text);
+    const isReminderConfirmTap =
+      confirmTap.kind === "confirmed" ||
+      (confirmTap.kind === "declined" && text.replace(/\uFE0F|\uFE0E/g, "") !== MAIN_MENU_LABEL);
+    if (isReminderConfirmTap && !(await hasPendingConfirmBooking(graph, threadId))) {
+      await ctx.reply(formatForTelegram(REMINDER_STALE_CONFIRM), {
+        parse_mode: "HTML",
+        reply_markup: buildDefaultMenuKeyboard(true),
+      });
+      return;
+    }
+
     const outbound = await withTypingIndicator(ctx.telegram, chatId, () =>
       handleGraphTextTurn(
         graph,

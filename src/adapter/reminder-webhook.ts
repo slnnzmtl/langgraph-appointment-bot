@@ -54,21 +54,29 @@ export type ReminderSendMessage = (
 
 export const REMINDER_HITL_QUESTION =
   "Підтвердіть візит: ✅ прийдете, ❌ скасувати.";
-export const REMINDER_CONFIRM_TTL_MS = 15 * 60 * 1000;
 
 export const REMINDER_CONFIRMED_ACK = "Дякуємо! Візит підтверджено.";
 export const REMINDER_DECLINED_ACK = "Візит скасовано.";
+export const REMINDER_STALE_CONFIRM =
+  "Це підтвердження вже неактивне. Напишіть «Мій запис», щоб підтвердити або скасувати візит.";
 
 export type ReminderConfirmStatus = "Confirmed" | "Not Held";
 
+/** One Planned meeting held for ✅/❌ until its start (utcMs from last HITL webhook). */
+export type ReminderPendingMeeting = {
+  id: string;
+  utcMs: number;
+};
+
 export type ReminderConfirmDecision = {
   meetingIds: string[];
+  /** Same starts as consumed; re-arm on CRM update failure. */
+  meetings: ReminderPendingMeeting[];
   status: ReminderConfirmStatus;
 };
 
 type PendingReminderConfirm = {
-  meetingIds: string[];
-  expiresAt: number;
+  meetings: ReminderPendingMeeting[];
 };
 
 const pendingReminderConfirms = new Map<string, PendingReminderConfirm>();
@@ -93,55 +101,6 @@ export const needsEveningBeforeHitl = (meeting: ReminderMeeting): boolean => {
 
 export const listEveningBeforeHitlMeetingIds = (meetings: ReminderMeeting[]): string[] =>
   meetings.filter(needsEveningBeforeHitl).map((meeting) => meeting.id!.trim());
-
-export const setReminderConfirmPending = (
-  telegramId: string,
-  meetingIds: string[],
-  now = Date.now(),
-): void => {
-  const ids = [...new Set(meetingIds.map((id) => id.trim()).filter(Boolean))];
-  if (ids.length === 0) {
-    return;
-  }
-  pendingReminderConfirms.set(telegramId, {
-    meetingIds: ids,
-    expiresAt: now + REMINDER_CONFIRM_TTL_MS,
-  });
-};
-
-/**
- * Consume a pending evening-before confirm for ✅ / ❌.
- * «Головне меню» clears the pending card without CRM update (returns null; chat continues).
- * Other chat text leaves the pending card in place (returns null).
- */
-export const takeReminderConfirm = (
-  telegramId: string,
-  text: string,
-  now = Date.now(),
-): ReminderConfirmDecision | null => {
-  const pending = pendingReminderConfirms.get(telegramId);
-  if (!pending) {
-    return null;
-  }
-  if (pending.expiresAt <= now) {
-    pendingReminderConfirms.delete(telegramId);
-    return null;
-  }
-  const trimmed = text.trim();
-  if (trimmed === MAIN_MENU_LABEL) {
-    pendingReminderConfirms.delete(telegramId);
-    return null;
-  }
-  const decision = classifyConfirmReply(trimmed);
-  if (decision.kind === "chat") {
-    return null;
-  }
-  pendingReminderConfirms.delete(telegramId);
-  return {
-    meetingIds: pending.meetingIds,
-    status: decision.kind === "confirmed" ? "Confirmed" : "Not Held",
-  };
-};
 
 /** UTC offset of `timeZone` at `instantMs` (ms to add to UTC to get wall clock as UTC components). */
 const timeZoneOffsetMs = (instantMs: number, timeZone: string): number => {
@@ -230,6 +189,84 @@ export const resolveMeetingStartInKyiv = (dateStart: string): MeetingStartKyiv =
     time: kyivWallIso.slice(11, 16),
     utcMs: kyivLocalIsoToUtcMs(kyivWallIso),
     kyivWallIso,
+  };
+};
+
+/** Build pending HITL rows from webhook meetings (skip unparseable dateStart). */
+export const reminderPendingFromHitlMeetings = (
+  meetings: ReminderMeeting[],
+): ReminderPendingMeeting[] => {
+  const byId = new Map<string, number>();
+  for (const meeting of meetings) {
+    if (!needsEveningBeforeHitl(meeting)) {
+      continue;
+    }
+    const id = meeting.id!.trim();
+    try {
+      byId.set(id, resolveMeetingStartInKyiv(meeting.dateStart).utcMs);
+    } catch {
+      // skip — do not invent a TTL
+    }
+  }
+  return [...byId.entries()].map(([id, utcMs]) => ({ id, utcMs }));
+};
+
+/** Replace pending HITL for this Telegram user (last HITL POST wins). */
+export const setReminderConfirmPending = (
+  telegramId: string,
+  meetings: ReminderPendingMeeting[],
+): void => {
+  const byId = new Map<string, number>();
+  for (const meeting of meetings) {
+    const id = meeting.id.trim();
+    if (!id || !Number.isFinite(meeting.utcMs)) {
+      continue;
+    }
+    byId.set(id, meeting.utcMs);
+  }
+  if (byId.size === 0) {
+    return;
+  }
+  pendingReminderConfirms.set(telegramId, {
+    meetings: [...byId.entries()].map(([id, utcMs]) => ({ id, utcMs })),
+  });
+};
+
+/**
+ * Consume a pending reminder confirm for ✅ / ❌.
+ * Valid until each meeting’s stored start (utcMs from last HITL webhook).
+ * «Головне меню» clears without CRM update. Other chat leaves pending in place.
+ */
+export const takeReminderConfirm = (
+  telegramId: string,
+  text: string,
+  now = Date.now(),
+): ReminderConfirmDecision | null => {
+  const pending = pendingReminderConfirms.get(telegramId);
+  if (!pending) {
+    return null;
+  }
+  const stillFuture = pending.meetings.filter((meeting) => meeting.utcMs > now);
+  if (stillFuture.length === 0) {
+    pendingReminderConfirms.delete(telegramId);
+    return null;
+  }
+  const trimmed = text.trim();
+  if (trimmed === MAIN_MENU_LABEL) {
+    pendingReminderConfirms.delete(telegramId);
+    return null;
+  }
+  const decision = classifyConfirmReply(trimmed);
+  if (decision.kind === "chat") {
+    // Drop expired siblings; keep still-future ids for a later tap.
+    pendingReminderConfirms.set(telegramId, { meetings: stillFuture });
+    return null;
+  }
+  pendingReminderConfirms.delete(telegramId);
+  return {
+    meetingIds: stillFuture.map((meeting) => meeting.id),
+    meetings: stillFuture,
+    status: decision.kind === "confirmed" ? "Confirmed" : "Not Held",
   };
 };
 
@@ -392,8 +429,8 @@ export const createReminderWebhookHandler = (
       return;
     }
 
-    const hitlIds = listEveningBeforeHitlMeetingIds(parsed.data.meetings);
-    if (hitlIds.length === 0) {
+    const hitlPending = reminderPendingFromHitlMeetings(parsed.data.meetings);
+    if (hitlPending.length === 0) {
       const plannedWithoutId = parsed.data.meetings.filter((meeting) => {
         if (meeting.id?.trim()) {
           return false;
@@ -410,7 +447,7 @@ export const createReminderWebhookHandler = (
       }
     }
     const text = formatForTelegram(
-      hitlIds.length > 0
+      hitlPending.length > 0
         ? formatReminderHitlMessage(parsed.data.meetings)
         : formatReminderMessage(parsed.data.meetings),
     );
@@ -418,7 +455,7 @@ export const createReminderWebhookHandler = (
       await sendMessage(parsed.data.telegramId, text, {
         parse_mode: "HTML",
         reply_markup:
-          hitlIds.length > 0 ? buildConfirmKeyboard() : buildDefaultMenuKeyboard(true),
+          hitlPending.length > 0 ? buildConfirmKeyboard() : buildDefaultMenuKeyboard(true),
       });
     } catch (error: unknown) {
       console.error("Reminder Telegram send failed:", error);
@@ -426,11 +463,11 @@ export const createReminderWebhookHandler = (
       return;
     }
 
-    if (hitlIds.length > 0) {
-      setReminderConfirmPending(parsed.data.telegramId, hitlIds);
+    if (hitlPending.length > 0) {
+      setReminderConfirmPending(parsed.data.telegramId, hitlPending);
     }
 
-    writeJson(res, 200, { ok: true, hitl: hitlIds.length > 0 });
+    writeJson(res, 200, { ok: true, hitl: hitlPending.length > 0 });
   };
 };
 

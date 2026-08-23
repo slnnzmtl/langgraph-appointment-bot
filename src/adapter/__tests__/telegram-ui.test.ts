@@ -32,6 +32,8 @@ describe("telegram-ui confirm reply keyboard", () => {
     expect(classifyConfirmReply(MAIN_MENU_LABEL)).toEqual({ kind: "declined" });
     expect(classifyConfirmReply("так")).toEqual({ kind: "chat" });
     expect(classifyConfirmReply("ні")).toEqual({ kind: "chat" });
+    expect(classifyConfirmReply("✅\uFE0F")).toEqual({ kind: "confirmed" });
+    expect(classifyConfirmReply("❌\uFE0F")).toEqual({ kind: "declined" });
   });
 });
 

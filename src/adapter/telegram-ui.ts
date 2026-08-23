@@ -76,7 +76,7 @@ export type ConfirmReplyDecision =
 
 /** Map HITL reply-keyboard taps (or free text) while a confirm card is pending. */
 export const classifyConfirmReply = (text: string): ConfirmReplyDecision => {
-  const trimmed = text.trim();
+  const trimmed = text.trim().replace(/\uFE0F|\uFE0E/g, "");
   if (trimmed === CONFIRM_YES_LABEL) {
     return { kind: "confirmed" };
   }
