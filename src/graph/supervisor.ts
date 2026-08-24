@@ -213,6 +213,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           ...prefetched,
           prefetchDirty: false,
           prefetchFetchedAt: Date.now(),
+          availabilityContext: null,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

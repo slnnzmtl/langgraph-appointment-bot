@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   createPresentAvailabilitySlotsTool,
+  normalizePresentAvailabilityResult,
   resolveNextAvailableStart,
 } from "../availability-tools.js";
 
@@ -556,5 +557,115 @@ describe("present_availability_slots CReservedTime", () => {
 
     expect(parsed.error).toBeUndefined();
     expect(parsed.slots.some((s) => s.label === "09:00")).toBe(true);
+  });
+});
+
+describe("normalizePresentAvailabilityResult", () => {
+  it("normalizes undated days[] payloads", () => {
+    const raw = JSON.stringify({
+      days: [
+        {
+          date: "2026-08-25",
+          dayLabel: "25 серпня (вівторок)",
+          slots: [
+            {
+              label: "11:00",
+              dateStart: "2026-08-25T11:00:00",
+              dateEnd: "2026-08-25T11:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      excludeMeetingIds: ["m-1"],
+      truncated: true,
+    });
+    expect(normalizePresentAvailabilityResult(raw)).toEqual({
+      days: [
+        {
+          date: "2026-08-25",
+          dayLabel: "25 серпня (вівторок)",
+          slots: [
+            {
+              id: "2026-08-25T11:00:00",
+              label: "11:00",
+              dateStart: "2026-08-25T11:00:00",
+              dateEnd: "2026-08-25T11:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      excludeMeetingIds: ["m-1"],
+      truncated: true,
+    });
+  });
+
+  it("wraps dated single-day payloads", () => {
+    const raw = JSON.stringify({
+      date: "2026-08-25",
+      dayLabel: "25 серпня (вівторок)",
+      slots: [
+        {
+          label: "11:00",
+          dateStart: "2026-08-25T11:00:00",
+          dateEnd: "2026-08-25T11:30:00",
+        },
+      ],
+      stepMinutes: 45,
+    });
+    expect(normalizePresentAvailabilityResult(raw)?.days[0]?.date).toBe("2026-08-25");
+    expect(normalizePresentAvailabilityResult(raw)?.stepMinutes).toBe(45);
+  });
+
+  it("returns null for error payloads", () => {
+    expect(normalizePresentAvailabilityResult(JSON.stringify({ error: "fail", slots: [] }))).toBeNull();
+  });
+});
+
+describe("present_availability_slots excludeMeetingIds echo", () => {
+  it("echoes excludeMeetingIds in tool JSON", async () => {
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return {
+          calendars: [
+            {
+              weekdays: {
+                monday: true,
+                tuesday: true,
+                wednesday: true,
+                thursday: true,
+                friday: true,
+              },
+              weekdayTimeRanges: {
+                monday: [["09:00", "18:00"]],
+                tuesday: [["09:00", "18:00"]],
+                wednesday: [["09:00", "18:00"]],
+                thursday: [["09:00", "18:00"]],
+                friday: [["09:00", "18:00"]],
+              },
+            },
+          ],
+        };
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      if (name === "search_entity") {
+        return { list: [] };
+      }
+      return {};
+    };
+
+    const tool = createPresentAvailabilitySlotsTool({
+      callTool,
+      assignedUserId: "user-1",
+    });
+    const raw = await tool.invoke({
+      date: "2026-08-25",
+      excludeMeetingIds: ["m-busy"],
+    });
+    const parsed = JSON.parse(raw as string) as { excludeMeetingIds?: string[] };
+    expect(parsed.excludeMeetingIds).toEqual(["m-busy"]);
   });
 });

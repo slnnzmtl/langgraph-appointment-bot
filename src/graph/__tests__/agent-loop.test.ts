@@ -5,8 +5,9 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentFinalizeNode, createAgentPrepareNode, crmWriteDirtiesPrefetch } from "../agent-loop.js";
+import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, classifyMeetingMutationToolMessage, crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../agent-loop.js";
 import {
+  formatAvailabilityContext,
   formatContactContext,
   formatListedMeetingsContext,
 } from "../context-blocks.js";
@@ -39,6 +40,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   lastHandoff: null,
   bookingContext: null,
   contactContext: null,
+  availabilityContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
   ...overrides,
@@ -300,6 +302,130 @@ describe("crmWriteDirtiesPrefetch", () => {
   });
 });
 
+describe("availability context helpers", () => {
+  const sampleAvailability = {
+    days: [
+      {
+        date: "2026-08-25",
+        dayLabel: "25 серпня (вівторок)",
+        slots: [
+          {
+            id: "s1",
+            label: "11:00",
+            dateStart: "2026-08-25T11:00:00",
+            dateEnd: "2026-08-25T11:30:00",
+          },
+        ],
+      },
+    ],
+    stepMinutes: 30,
+  };
+
+  it("classifies meeting mutation outcomes", () => {
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ id: "m-new" }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ),
+    ).toBe("committed");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ error: "CRM down" }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ),
+    ).toBe("failed");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ error: "Contact incomplete" }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ),
+    ).toBe("blocked");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ awaitingConfirmation: true }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ),
+    ).toBe("pending");
+  });
+
+  it("clears availability on committed or failed meeting mutations only", () => {
+    expect(
+      meetingMutationClearsAvailability([
+        new ToolMessage({
+          content: JSON.stringify({ id: "m-new" }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ]),
+    ).toBe(true);
+    expect(
+      meetingMutationClearsAvailability([
+        new ToolMessage({
+          content: JSON.stringify({ error: "Slot taken" }),
+          tool_call_id: "1",
+          name: "reschedule_meeting",
+        }),
+      ]),
+    ).toBe(true);
+    expect(
+      meetingMutationClearsAvailability([
+        new ToolMessage({
+          content: JSON.stringify({ error: "Contact incomplete" }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ]),
+    ).toBe(false);
+    expect(
+      meetingMutationClearsAvailability([
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-1" }),
+          tool_call_id: "1",
+          name: "update_contact",
+        }),
+      ]),
+    ).toBe(false);
+  });
+
+  it("captures present_availability_slots from tool messages", () => {
+    expect(
+      captureAvailabilityFromMessages([
+        new ToolMessage({
+          content: JSON.stringify({
+            days: sampleAvailability.days,
+            stepMinutes: 30,
+            excludeMeetingIds: ["m-1"],
+          }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+      ]),
+    ).toEqual({
+      days: sampleAvailability.days,
+      stepMinutes: 30,
+      excludeMeetingIds: ["m-1"],
+    });
+  });
+
+  it("formatAvailabilityContext wraps JSON in availability tags", () => {
+    const block = formatAvailabilityContext(sampleAvailability);
+    expect(block).toContain("<availability>");
+    expect(block).toContain("2026-08-25T11:00:00");
+  });
+});
+
 describe("createAgentLlmNode context cache", () => {
   const sampleTool = tool(async () => "ok", {
     name: "list_services",
@@ -479,6 +605,10 @@ describe("createAgentLlmNode context cache", () => {
         agentMessages: [new HumanMessage("скасуй")],
         bookingContext: listedMeetings,
         contactContext: listedContact,
+        availabilityContext: {
+          days: [{ date: "2026-08-25", slots: [] }],
+          stepMinutes: 30,
+        },
         next: "booking",
       }),
     );
@@ -489,9 +619,63 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(faqDynamic.content)).toContain(formatListedMeetingsContext(listedMeetings, "faq"));
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
     expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
+    expect(String(faqDynamic.content)).not.toContain("<availability>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));
+    expect(String(bookingDynamic.content)).toContain("<availability>");
+  });
+
+  it("omits availability block on booking in-turn continuation", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "STATIC BOOKING",
+      maxSteps: 10,
+    };
+
+    const bookingNode = createAgentLlmNode({
+      agent: bookingAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await bookingNode(
+      clinicState({
+        agentMessages: [
+          new HumanMessage("book"),
+          new ToolMessage({
+            content: JSON.stringify({ days: [] }),
+            tool_call_id: "1",
+            name: "present_availability_slots",
+          }),
+        ],
+        stepCount: 1,
+        availabilityContext: {
+          days: [{ date: "2026-08-25", slots: [] }],
+          stepMinutes: 30,
+        },
+        next: "booking",
+      }),
+    );
+
+    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(bookingDynamic.content)).not.toContain("<availability>");
   });
 
   it("invalidates and retries once on CachedContent not found", async () => {

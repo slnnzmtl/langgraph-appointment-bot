@@ -18,6 +18,7 @@ import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import { extractMessageTextContent, extractReplyButtons } from "../shared/message-content.js";
 import {
+  formatAvailabilityContext,
   formatContactContext,
   formatListedMeetingsContext,
 } from "./context-blocks.js";
@@ -31,6 +32,10 @@ import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
 import { BOOKING_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import {
+  normalizePresentAvailabilityResult,
+  type AvailabilityContext,
+} from "../tools/availability-tools.js";
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
@@ -54,6 +59,66 @@ const PREFETCH_INVALIDATING_TOOLS = new Set([
   "cancel_meeting",
   "reschedule_meeting",
 ]);
+
+const MEETING_MUTATION_TOOLS = new Set([
+  "create_meeting",
+  "cancel_meeting",
+  "reschedule_meeting",
+]);
+
+const BLOCKED_MEETING_ERRORS = new Set([
+  "Contact incomplete",
+  "Already booked",
+  "Not authorized",
+]);
+
+export type MeetingMutationOutcome = "committed" | "pending" | "blocked" | "failed" | null;
+
+export const classifyMeetingMutationToolMessage = (
+  message: ToolMessage,
+): MeetingMutationOutcome => {
+  const name = message.name;
+  if (!name || !MEETING_MUTATION_TOOLS.has(name)) {
+    return null;
+  }
+  const body = extractMessageTextContent(message.content).trim();
+  if (body.startsWith("Error:")) {
+    return "failed";
+  }
+  const record = asJsonRecord(body);
+  if (!record) {
+    return "committed";
+  }
+  if (record.cancelled === true || record.awaitingConfirmation === true) {
+    return "pending";
+  }
+  if (typeof record.error === "string") {
+    return BLOCKED_MEETING_ERRORS.has(record.error) ? "blocked" : "failed";
+  }
+  return "committed";
+};
+
+export const meetingMutationClearsAvailability = (messages: BaseMessage[]): boolean =>
+  messages.some((message) => {
+    if (!(message instanceof ToolMessage)) {
+      return false;
+    }
+    const outcome = classifyMeetingMutationToolMessage(message);
+    return outcome === "committed" || outcome === "failed";
+  });
+
+export const captureAvailabilityFromMessages = (
+  messages: BaseMessage[],
+): AvailabilityContext | null | undefined => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof ToolMessage) || message.name !== "present_availability_slots") {
+      continue;
+    }
+    return normalizePresentAvailabilityResult(extractMessageTextContent(message.content)) ?? undefined;
+  }
+  return undefined;
+};
 
 export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
@@ -163,16 +228,18 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const stepCount = isContinuation ? state.stepCount + 1 : 1;
 
     const staticPrompt = agent.systemPrompt.trim();
-    const dynamic = [
+    const dynamicParts = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
       agent.id === BOOKING_AGENT_ID ? formatContactContext(state.contactContext) : "",
       formatListedMeetingsContext(
         state.bookingContext,
         agent.id === BOOKING_AGENT_ID ? "booking" : "faq",
       ),
-    ]
-      .filter((part) => part.length > 0)
-      .join("\n\n");
+    ];
+    if (agent.id === BOOKING_AGENT_ID && !isContinuation) {
+      dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
+    }
+    const dynamic = dynamicParts.filter((part) => part.length > 0).join("\n\n");
 
     try {
       let handle: ContextCacheHandle | null = null;
@@ -236,11 +303,22 @@ export const createAgentToolsNode = (tools: StructuredToolInterface[]) => {
       }
     ).run({ messages: state.agentMessages }, config);
 
-    if (crmWriteDirtiesPrefetch(result.messages)) {
-      return { agentMessages: result.messages, prefetchDirty: true };
+    const update: ClinicStateUpdate = { agentMessages: result.messages };
+
+    if (meetingMutationClearsAvailability(result.messages)) {
+      update.availabilityContext = null;
+    } else {
+      const captured = captureAvailabilityFromMessages(result.messages);
+      if (captured !== undefined) {
+        update.availabilityContext = captured;
+      }
     }
 
-    return { agentMessages: result.messages };
+    if (crmWriteDirtiesPrefetch(result.messages)) {
+      update.prefetchDirty = true;
+    }
+
+    return update;
   };
 };
 

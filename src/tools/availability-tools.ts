@@ -6,7 +6,7 @@ import {
   CLINIC_SLOT_MINUTES,
   MAX_AVAILABILITY_SEARCH_DAYS,
 } from "../shared/clinic-constants.js";
-import { errorMessage } from "../shared/json-record.js";
+import { asJsonRecord, errorMessage } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import {
   addCalendarDays,
@@ -20,11 +20,109 @@ import {
   omitSlotsAtStarts,
   resolveDayTimeRanges,
   startsOfExcludedMeetings,
+  type AvailabilitySlot,
   type BusyMeeting,
   type TimeRangePair,
   type WorkingTimeCalendarLike,
   type WorkingTimeRangeLike,
 } from "./availability-slots.js";
+
+export type AvailabilityContext = {
+  days: Array<{ date: string; dayLabel?: string; slots: AvailabilitySlot[] }>;
+  stepMinutes: number;
+  excludeMeetingIds?: string[];
+  truncated?: boolean;
+};
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const parseAvailabilitySlot = (value: unknown): AvailabilitySlot | null => {
+  const record = asJsonRecord(value);
+  if (!record) {
+    return null;
+  }
+  if (
+    typeof record.label !== "string"
+    || typeof record.dateStart !== "string"
+    || typeof record.dateEnd !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id: typeof record.id === "string" ? record.id : record.dateStart,
+    label: record.label,
+    dateStart: record.dateStart,
+    dateEnd: record.dateEnd,
+  };
+};
+
+const parseAvailabilityDays = (
+  value: unknown,
+): Array<{ date: string; dayLabel?: string; slots: AvailabilitySlot[] }> => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const days: Array<{ date: string; dayLabel?: string; slots: AvailabilitySlot[] }> = [];
+  for (const entry of value) {
+    const record = asJsonRecord(entry);
+    if (!record || typeof record.date !== "string" || !DAY_RE.test(record.date)) {
+      continue;
+    }
+    const slots = Array.isArray(record.slots)
+      ? record.slots.map(parseAvailabilitySlot).filter((slot): slot is AvailabilitySlot => slot != null)
+      : [];
+    days.push({
+      date: record.date,
+      ...(typeof record.dayLabel === "string" ? { dayLabel: record.dayLabel } : {}),
+      slots,
+    });
+  }
+  return days;
+};
+
+/** Normalize a successful present_availability_slots tool payload for checkpoint reuse. */
+export const normalizePresentAvailabilityResult = (raw: string): AvailabilityContext | null => {
+  const record = asJsonRecord(raw);
+  if (!record || typeof record.error === "string") {
+    return null;
+  }
+
+  const stepMinutes =
+    typeof record.stepMinutes === "number" ? record.stepMinutes : CLINIC_SLOT_MINUTES;
+  const truncated = record.truncated === true;
+  const excludeMeetingIds = Array.isArray(record.excludeMeetingIds)
+    ? record.excludeMeetingIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : undefined;
+
+  if (Array.isArray(record.days)) {
+    const days = parseAvailabilityDays(record.days);
+    return {
+      days,
+      stepMinutes,
+      ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
+      ...(truncated ? { truncated } : {}),
+    };
+  }
+
+  if (typeof record.date === "string" && DAY_RE.test(record.date) && Array.isArray(record.slots)) {
+    const slots = record.slots
+      .map(parseAvailabilitySlot)
+      .filter((slot): slot is AvailabilitySlot => slot != null);
+    return {
+      days: [
+        {
+          date: record.date,
+          ...(typeof record.dayLabel === "string" ? { dayLabel: record.dayLabel } : {}),
+          slots,
+        },
+      ],
+      stepMinutes,
+      ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
+    };
+  }
+
+  return null;
+};
 
 const DAY_SCHEMA = z
   .string()
@@ -188,6 +286,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
             date: input.date,
             dayLabel: formatKyivDayLabel(input.date, todayKyiv),
             stepMinutes,
+            ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
           });
         }
 
@@ -235,6 +334,8 @@ export const createPresentAvailabilitySlotsTool = (options: {
             ...day,
             dayLabel: formatKyivDayLabel(day.date, todayKyiv),
           })),
+          stepMinutes,
+          ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
           ...(searchedMeetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
         });
       } catch (error) {
@@ -246,7 +347,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots from CRM meetings (search_meetings) and CReservedTime blocks. Pass date for one day, or omit date to find the next open days with free slots (up to 5 days; optional startDate / afterDate). Use afterDate when the user wants other dates after a proposed day (коли ще / покажи ще / another day) — set afterDate to the last proposed YYYY-MM-DD. When rescheduling, pass excludeMeetingIds with the meeting being moved so the rest of that visit's block can free other times; the visit's current start is never listed. Always pass durationMinutes from the matched service when known. Returns JSON { days: [{ date, dayLabel, slots }], date, dayLabel, slots, stepMinutes, searchedDays? }. Prefer days[]; date/slots mirror the first day. Quote dayLabel verbatim as the day heading (already Ukrainian, with сьогодні/завтра resolved) and list every slot label for that day. Do not invent times, reformat dayLabel, or claim a day is the only option unless days is empty after afterDate.",
+        "Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Reuse <availability> in context when days[] already covers the patient's choice — call only when the block is missing, the day is not listed, they want other dates (afterDate / «Інша дата»), stepMinutes differs, excludeMeetingIds differs (MOVE), truncated and they want more, or create_meeting/reschedule_meeting failed because the slot was taken. Returns JSON { days: [{ date, dayLabel, slots }], stepMinutes, excludeMeetingIds?, truncated? }.",
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",

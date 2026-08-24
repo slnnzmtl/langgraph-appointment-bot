@@ -32,6 +32,28 @@ export type MeetingToolsOptions = {
 const skipHitlPending = (record: Record<string, unknown>): boolean =>
   record.cancelled === true || record.awaitingConfirmation === true;
 
+const BLOCKED_BOOKING_ERRORS = new Set(["Contact incomplete", "Already booked", "Not authorized"]);
+
+const SLOT_REFETCH_HINT =
+  "That time may already be booked. Call present_availability_slots with the same durationMinutes (and excludeMeetingIds when moving), then offer other times — do not retry the same dateStart/dateEnd.";
+
+const augmentBookingSlotError = (
+  toolName: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
+  raw: string,
+): string => {
+  if (toolName !== "create_meeting" && toolName !== "reschedule_meeting") {
+    return raw;
+  }
+  const record = asJsonRecord(raw);
+  if (!record || typeof record.error !== "string") {
+    return raw;
+  }
+  if (skipHitlPending(record) || BLOCKED_BOOKING_ERRORS.has(record.error)) {
+    return raw;
+  }
+  return JSON.stringify({ ...record, hint: SLOT_REFETCH_HINT });
+};
+
 const finishMeetingMutation = (
   toolName: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
   raw: string,
@@ -43,7 +65,7 @@ const finishMeetingMutation = (
 ): string =>
   finishTrackedWrite(
     toolName,
-    raw,
+    augmentBookingSlotError(toolName, raw),
     (entityId) => {
       const meetingId =
         typeof successProps.meeting_id === "string" ? successProps.meeting_id : entityId;

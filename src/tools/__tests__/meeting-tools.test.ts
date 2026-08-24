@@ -159,6 +159,59 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 
+  it("adds refetch hint when MCP create_meeting fails after confirm", async () => {
+    await withTg(async () => {
+      const failingCallTool = async (name: string, args: Record<string, unknown>) => {
+        calls.push({ name, args });
+        if (name === "get_entity") {
+          return completeContact;
+        }
+        if (name === "search_contacts") {
+          return { contacts: [completeContact] };
+        }
+        if (name === "search_entity") {
+          return { list: [] };
+        }
+        if (name === "create_meeting") {
+          throw new Error("Slot already booked");
+        }
+        return { success: true, id: "meeting-1" };
+      };
+
+      const [createMeeting] = createMeetingTools({
+        callTool: failingCallTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      if (!createMeeting) {
+        throw new Error("create_meeting tool missing");
+      }
+
+      const graph = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting.invoke({
+            name: "Consult - Ada Lovelace",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm?",
+          });
+          return { result };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const config = { configurable: { thread_id: "hitl-slot-taken" } };
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(new Command({ resume: { confirmed: true } }), config);
+      const parsed = JSON.parse(second.result) as { error?: string; hint?: string };
+      expect(parsed.error).toContain("Slot already booked");
+      expect(parsed.hint).toContain("present_availability_slots");
+    });
+  });
+
   it("forwards description to MCP create_meeting when provided", async () => {
     await withTg(async () => {
       const graph = buildGraph({

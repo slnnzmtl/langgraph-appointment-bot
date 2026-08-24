@@ -31,6 +31,7 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   lastHandoff: null,
   bookingContext: null,
   contactContext: null,
+  availabilityContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
   ...overrides,
@@ -316,6 +317,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.bookingContext).toEqual(listedMeetings);
     expect(update.prefetchDirty).toBe(false);
     expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
+    expect(update.availabilityContext).toBeNull();
   });
 
   it("reuses checkpointed prefetch when fresh and not dirty", async () => {
@@ -347,6 +349,36 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     const system = String((messages[0] as SystemMessage).content);
     expect(system).toContain("Марія");
     expect(system).toContain("<list_planned_meetings>");
+  });
+
+  it("clears availabilityContext when prefetch refetches", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+      prefetchTtlMs: 1_000,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("привіт")],
+        contactContext: { contacts: [{ id: "stale" }] },
+        bookingContext: listedMeetings,
+        availabilityContext: {
+          days: [{ date: "2026-08-25", slots: [] }],
+          stepMinutes: 30,
+        },
+        prefetchFetchedAt: Date.now() - 1_000,
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.availabilityContext).toBeNull();
   });
 
   it("refetches on Мій запис even when prefetch is fresh", async () => {
