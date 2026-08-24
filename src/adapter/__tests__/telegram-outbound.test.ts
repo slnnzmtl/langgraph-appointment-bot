@@ -30,6 +30,27 @@ describe("interpretInvokeResult reply selection", () => {
     expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
   });
 
+  it("uses lastHandoff.replyButtons when history no longer has a trailer", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "FINISH",
+        agentName: "supervisor",
+        status: "ok",
+        replyButtons: ["Записатись", "Послуги", "Адреса"],
+      },
+      messages: [
+        new HumanMessage("Головне меню"),
+        new AIMessage("Привіт, Тест! Я ШІ-асистент клініки."),
+      ],
+    });
+
+    expect(result.text).toBe("Привіт, Тест! Я ШІ-асистент клініки.");
+    expect(asReply(result.reply_markup).keyboard).toEqual([
+      [{ text: "Записатись" }, { text: "Послуги" }],
+      [{ text: "Адреса" }, { text: MAIN_MENU_LABEL }],
+    ]);
+  });
+
   it("strips reply shortcuts and attaches date or time reply keyboards", () => {
     const dates = interpretInvokeResult({
       messages: [

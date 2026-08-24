@@ -70,6 +70,30 @@ export type ContactLookupContext = {
   error?: string;
 };
 
+const CONTACT_CONTEXT_FIELDS = [
+  "id",
+  "firstName",
+  "lastName",
+  "phoneNumber",
+  "cTelegram",
+] as const;
+
+const CONTACT_SEARCH_SELECT = [...CONTACT_CONTEXT_FIELDS];
+
+/** Keep only booking-relevant CRM fields plus missingFields for LLM context. */
+export const pruneContactRow = (contact: Record<string, unknown>): Record<string, unknown> => {
+  const pruned: Record<string, unknown> = {};
+  for (const field of CONTACT_CONTEXT_FIELDS) {
+    if (field in contact) {
+      pruned[field] = contact[field];
+    }
+  }
+  pruned.missingFields = Array.isArray(contact.missingFields)
+    ? contact.missingFields
+    : contactMissingFields(pruned);
+  return pruned;
+};
+
 export const normalizeContactLookupResult = (contactJson: string): ContactLookupContext => {
   let value: unknown;
   try {
@@ -85,10 +109,12 @@ export const normalizeContactLookupResult = (contactJson: string): ContactLookup
     return { contacts: [], error: record.error };
   }
   const rows = contactRowsFromSearch(record) ?? [];
-  const contacts = rows.filter(
-    (item): item is Record<string, unknown> =>
-      Boolean(item) && typeof item === "object" && !Array.isArray(item),
-  );
+  const contacts = rows
+    .filter(
+      (item): item is Record<string, unknown> =>
+        Boolean(item) && typeof item === "object" && !Array.isArray(item),
+    )
+    .map(pruneContactRow);
   return { contacts };
 };
 
@@ -137,7 +163,11 @@ export const extractContactIdFromSearchResult = (contactJson: string): string | 
 export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<string> => {
   try {
     const cTelegram = getTelegramUserId();
-    const result = await callTool("search_contacts", { cTelegram, limit: 5 });
+    const result = await callTool("search_contacts", {
+      cTelegram,
+      limit: 5,
+      select: CONTACT_SEARCH_SELECT,
+    });
     return annotateContactSearchResult(result);
   } catch (error) {
     return JSON.stringify({ error: errorMessage(error) });
@@ -154,6 +184,7 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
           await callTool("search_contacts", {
             phoneNumber: input.phoneNumber,
             limit: 5,
+            select: CONTACT_SEARCH_SELECT,
           }),
         );
         trackContactLookup("contact_lookup_phone", "find_contact_by_phone", result, {

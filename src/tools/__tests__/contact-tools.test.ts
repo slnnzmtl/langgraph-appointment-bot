@@ -175,7 +175,11 @@ describe("contact-tools", () => {
 
       expect(calls[0]).toEqual({
         name: "search_contacts",
-        args: { cTelegram: "tg-42", limit: 5 },
+        args: {
+          cTelegram: "tg-42",
+          limit: 5,
+          select: ["id", "firstName", "lastName", "phoneNumber", "cTelegram"],
+        },
       });
     });
   });
@@ -234,6 +238,14 @@ describe("contact-tools", () => {
       (tool) => tool.name === "find_contact_by_phone",
     );
     const result = await find!.invoke({ phoneNumber: "+380501112233" });
+    expect(calls[0]).toEqual({
+      name: "search_contacts",
+      args: {
+        phoneNumber: "+380501112233",
+        limit: 5,
+        select: ["id", "firstName", "lastName", "phoneNumber", "cTelegram"],
+      },
+    });
     expect(JSON.parse(result as string)).toMatchObject({
       contacts: [{ missingFields: ["lastName"] }],
     });
@@ -244,7 +256,11 @@ describe("contact-tools", () => {
       const result = await lookupContactByTelegram(callTool);
       expect(calls[0]).toEqual({
         name: "search_contacts",
-        args: { cTelegram: "tg-42", limit: 5 },
+        args: {
+          cTelegram: "tg-42",
+          limit: 5,
+          select: ["id", "firstName", "lastName", "phoneNumber", "cTelegram"],
+        },
       });
       expect(JSON.parse(result)).toEqual({ ok: true });
     });
@@ -285,10 +301,39 @@ describe("contact-tools", () => {
 
   it("normalizeContactLookupResult maps list key and empty contacts", () => {
     expect(normalizeContactLookupResult(JSON.stringify({ list: [{ id: "c-2" }] }))).toEqual({
-      contacts: [{ id: "c-2" }],
+      contacts: [{ id: "c-2", missingFields: ["firstName", "lastName", "phoneNumber"] }],
     });
     expect(normalizeContactLookupResult(JSON.stringify({ contacts: [] }))).toEqual({
       contacts: [],
+    });
+  });
+
+  it("normalizeContactLookupResult drops CRM audit fields", () => {
+    const raw = JSON.stringify({
+      contacts: [
+        {
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          cTelegram: "tg-42",
+          emailAddress: "ada@example.com",
+          createdAt: "2026-01-01",
+          teamsIds: ["t-1"],
+        },
+      ],
+    });
+    expect(normalizeContactLookupResult(raw)).toEqual({
+      contacts: [
+        {
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          cTelegram: "tg-42",
+          missingFields: [],
+        },
+      ],
     });
   });
 

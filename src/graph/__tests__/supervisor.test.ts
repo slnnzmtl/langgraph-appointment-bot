@@ -20,7 +20,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS } =
+const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking } =
   await import("../supervisor.js");
 
 const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
@@ -215,6 +215,31 @@ describe("createClinicSupervisorNode context cache", () => {
     expect((update.messages?.[0] as AIMessage).content).toBe("Uncached reply");
   });
 
+  it("strips reply_buttons from FINISH history and keeps labels on lastHandoff", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply:
+        "Привіт, Тест!\n\n<reply_buttons>\nЗаписатись\nПослуги\nАдреса\n</reply_buttons>",
+    });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({ messages: [new HumanMessage("Головне меню")] }),
+    );
+
+    expect(String(update.messages?.[0]?.content)).toBe("Привіт, Тест!");
+    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "FINISH",
+      status: "ok",
+      replyButtons: ["Записатись", "Послуги", "Адреса"],
+    });
+  });
+
   it("routes to booking without rewriting a specialist prompt", async () => {
     invoke.mockResolvedValue({ next: "booking", reply: "ignored when delegating" });
     const node = createClinicSupervisorNode({
@@ -284,7 +309,9 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(system).toContain("<contact_info>");
     expect(system).toContain("Марія");
     expect(system).toContain("<list_planned_meetings>");
-    expect(system).toContain("Консультація - Марія");
+    expect(system).toContain("visitLabels");
+    expect(system).toContain("Консультація");
+    expect(system).not.toContain('"id":"m-1"');
     expect(update.contactContext).toEqual(listedContact);
     expect(update.bookingContext).toEqual(listedMeetings);
     expect(update.prefetchDirty).toBe(false);
@@ -515,5 +542,156 @@ describe("isPrefetchExpired", () => {
     const now = 10_000;
     expect(isPrefetchExpired(now - PREFETCH_TTL_MS + 1, PREFETCH_TTL_MS, now)).toBe(false);
     expect(isPrefetchExpired(now - PREFETCH_TTL_MS, PREFETCH_TTL_MS, now)).toBe(true);
+  });
+});
+
+describe("shouldContinueInBooking", () => {
+  const bookingOffer = (labels: string[]) =>
+    new AIMessage(
+      `Який день?\n<reply_buttons>\n${labels.join("\n")}\n</reply_buttons>`,
+    );
+
+  it("is true when last handoff is booking/ok and the human taps an offered label", () => {
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          messages: [bookingOffer(["25 серпня", "3 вересня", "Інша дата"]), new HumanMessage("25 серпня")],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is true when reply buttons were stripped from checkpointed history", () => {
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("Так"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for supervisor-owned labels even when they appear in the trailer", () => {
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          messages: [
+            bookingOffer(["Так", "Обрати іншу процедуру"]),
+            new HumanMessage("Обрати іншу процедуру"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          messages: [
+            bookingOffer(["Мій запис", "Послуги", "Адреса"]),
+            new HumanMessage("Послуги"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for free text and for non-booking handoffs", () => {
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          messages: [bookingOffer(["25 серпня"]), new HumanMessage("а скільки коштує?")],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+          messages: [bookingOffer(["25 серпня"]), new HumanMessage("25 серпня")],
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("createClinicSupervisorNode sticky booking continue", () => {
+  const invoke = vi.fn();
+  const bindRoutingTools = vi.fn(() => ({ invoke }));
+  const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
+
+  beforeEach(() => {
+    invoke.mockReset();
+    bindRoutingTools.mockClear();
+    invoke.mockResolvedValue({ next: "faq", reply: "should not be used" });
+  });
+
+  it("skips the LLM and routes to booking when a booking shortcut is tapped", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+        messages: [
+          new AIMessage(
+            "Який день?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>",
+          ),
+          new HumanMessage("25 серпня"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update).toMatchObject({
+      next: "booking",
+      lastHandoff: null,
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      prefetchDirty: false,
+    });
+    expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
+  });
+
+  it("still calls the LLM for free text after a booking turn", async () => {
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+        messages: [
+          new AIMessage(
+            "Який день?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>",
+          ),
+          new HumanMessage("а скільки коштує консультація?"),
+        ],
+      }),
+    );
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("faq");
   });
 });

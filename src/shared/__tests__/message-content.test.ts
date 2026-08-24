@@ -1,6 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { unescapeModelLineBreaks } from "../message-content.js";
+import { replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
+
+describe("replyButtonLabels", () => {
+  it("prefers stored labels over a message trailer", () => {
+    expect(
+      replyButtonLabels(
+        ["Записатись", "Послуги"],
+        "Hi\n<reply_buttons>\nIgnored\n</reply_buttons>",
+      ),
+    ).toEqual(["Записатись", "Послуги"]);
+  });
+
+  it("falls back to parsing the trailer when stored labels are missing", () => {
+    expect(
+      replyButtonLabels(undefined, "Pick?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>"),
+    ).toEqual(["25 серпня", "Інша дата"]);
+  });
+
+  it("returns an empty list when neither source has buttons", () => {
+    expect(replyButtonLabels(undefined, "Just text")).toEqual([]);
+    expect(replyButtonLabels([], "Just text")).toEqual([]);
+  });
+});
 
 describe("unescapeModelLineBreaks", () => {
   it("leaves real newlines alone", () => {

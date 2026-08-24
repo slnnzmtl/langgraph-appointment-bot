@@ -21,4 +21,6 @@ export type ClinicHandoff = {
   agentId: string;
   agentName: string;
   status: ClinicHandoffStatus;
+  /** Labels from the last agent reply trailer (stripped from checkpointed text). */
+  replyButtons?: string[];
 };

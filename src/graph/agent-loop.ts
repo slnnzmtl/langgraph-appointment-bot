@@ -16,7 +16,7 @@ import {
 
 import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
-import { extractMessageTextContent } from "../shared/message-content.js";
+import { extractMessageTextContent, extractReplyButtons } from "../shared/message-content.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
@@ -166,7 +166,10 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const dynamic = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
       agent.id === BOOKING_AGENT_ID ? formatContactContext(state.contactContext) : "",
-      formatListedMeetingsContext(state.bookingContext),
+      formatListedMeetingsContext(
+        state.bookingContext,
+        agent.id === BOOKING_AGENT_ID ? "booking" : "faq",
+      ),
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");
@@ -265,10 +268,20 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
+    const { text, buttons } = extractReplyButtons(extractMessageTextContent(tagged.content));
+    const replyMessage =
+      buttons.length > 0
+        ? new AIMessage({
+            content: text,
+            additional_kwargs: tagged.additional_kwargs,
+            response_metadata: tagged.response_metadata,
+          })
+        : tagged;
     const lastHandoff = {
       agentId: agent.id,
       agentName: agent.name,
       status,
+      ...(buttons.length > 0 ? { replyButtons: buttons } : {}),
     };
 
     if (status === "empty") {
@@ -276,20 +289,19 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     }
 
     if (status === "max_steps") {
-      const text = extractMessageTextContent(tagged.content).trim();
-      if (text.length === 0) {
+      const replyText = extractMessageTextContent(replyMessage.content).trim();
+      if (replyText.length === 0) {
         console.error(
           `[clinic-${agent.id}] exceeded the maximum of ${agent.maxSteps} tool steps.`,
         );
       }
-      const message = text.length > 0 ? tagged : new AIMessage(PATIENT_FALLBACK_MESSAGE);
       return {
         ...cleared,
         lastHandoff,
         messages: [
-          message instanceof AIMessage
-            ? tagRuntimeAgentMessage(message, agent.id)
-            : message,
+          replyText.length > 0
+            ? replyMessage
+            : tagRuntimeAgentMessage(new AIMessage(PATIENT_FALLBACK_MESSAGE), agent.id),
         ],
       };
     }
@@ -297,7 +309,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     return {
       ...cleared,
       lastHandoff,
-      messages: [tagged],
+      messages: [replyMessage],
     };
   };
 

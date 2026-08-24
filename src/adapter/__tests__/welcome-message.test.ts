@@ -8,6 +8,7 @@ import {
   hasUpcomingVisit,
   loadWelcomeMessage,
   recordWelcomeInHistory,
+  WELCOME_HISTORY_MARKER,
 } from "../welcome-message.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 
@@ -121,6 +122,8 @@ describe("recordWelcomeInHistory", () => {
 
     const threadId = "welcome-history-1";
     const welcome = buildStartHistoryText("Clinic intro");
+    expect(welcome).toContain(WELCOME_HISTORY_MARKER);
+    expect(welcome).not.toContain("Clinic intro");
     await recordWelcomeInHistory(graph, threadId, welcome);
 
     const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
@@ -128,6 +131,7 @@ describe("recordWelcomeInHistory", () => {
     expect(messages).toHaveLength(1);
     expect(messages[0]).toBeInstanceOf(AIMessage);
     expect(messages[0]?.content).toBe(welcome);
+    expect(String(messages[0]?.content)).toContain(WELCOME_HISTORY_MARKER);
   });
 });
 

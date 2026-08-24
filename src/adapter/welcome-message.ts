@@ -131,8 +131,13 @@ export const hasUpcomingVisit = async (callTool: McpCallTool): Promise<boolean> 
 export const START_FOLLOW_UP =
   "Хотіли б ви дізнатися детальніше про наші послуги або записатися на прийом? 💬";
 
-export const buildStartHistoryText = (welcome: string): string =>
-  `${welcome}\n\n${START_FOLLOW_UP}`;
+/** Compact marker stored in checkpointed history instead of the full patient-visible welcome. */
+export const WELCOME_HISTORY_MARKER =
+  "[Welcome already sent: who I am, what I can do, address, working hours. Do not greet again.]";
+
+/** History text for /start — patient still sees the full welcome via ctx.reply. */
+export const buildStartHistoryText = (_welcome?: string): string =>
+  `${WELCOME_HISTORY_MARKER}\n\n${START_FOLLOW_UP}`;
 
 type Graph = ReturnType<ClinicRuntime["getGraph"]>;
 

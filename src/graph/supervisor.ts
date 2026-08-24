@@ -11,8 +11,15 @@ import {
   type ContextCacheManager,
 } from "@personal-assistant/llm-gemini";
 
-import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
-import { extractMessageTextContent } from "../shared/message-content.js";
+import {
+  PATIENT_FALLBACK_MESSAGE,
+  SUPERVISOR_OWNED_REPLY_LABELS,
+} from "../shared/clinic-constants.js";
+import {
+  extractMessageTextContent,
+  extractReplyButtons,
+  replyButtonLabels,
+} from "../shared/message-content.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
@@ -30,6 +37,7 @@ import {
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
+  BOOKING_AGENT_ID,
   FINISH_ROUTE,
   type ClinicAgentDefinition,
   type ILLMConnector,
@@ -62,6 +70,33 @@ export const isPrefetchExpired = (
   now = Date.now(),
 ): boolean => fetchedAt == null || now - fetchedAt >= ttlMs;
 
+/**
+ * Skip the supervisor LLM when the patient taps a shortcut the booking agent
+ * just offered (date/time/Так/Інша дата/Перенести/Скасувати). Supervisor-owned
+ * labels and free text still go through the LLM.
+ */
+export const shouldContinueInBooking = (state: ClinicState): boolean => {
+  if (state.lastHandoff?.agentId !== BOOKING_AGENT_ID || state.lastHandoff.status !== "ok") {
+    return false;
+  }
+
+  const lastHuman = [...state.messages].reverse().find((m) => m instanceof HumanMessage);
+  if (!lastHuman) {
+    return false;
+  }
+  const humanText = extractMessageTextContent(lastHuman.content).trim();
+  if (!humanText || SUPERVISOR_OWNED_REPLY_LABELS.has(humanText)) {
+    return false;
+  }
+
+  const lastAi = [...state.messages].reverse().find((m) => m instanceof AIMessage);
+  const labels = replyButtonLabels(
+    state.lastHandoff.replyButtons,
+    lastAi ? extractMessageTextContent(lastAi.content) : undefined,
+  );
+  return labels.includes(humanText);
+};
+
 const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
   console.error("[clinic-supervisor] routing failure:", reason);
   return {
@@ -89,10 +124,19 @@ const resolveRoutingDecision = (
       return routingFailureUpdate("FINISH without reply");
     }
 
+    const { text, buttons } = extractReplyButtons(reply);
     return {
       next: FINISH_ROUTE,
-      lastHandoff: null,
-      messages: [new AIMessage(reply)],
+      lastHandoff:
+        buttons.length > 0
+          ? {
+              agentId: FINISH_ROUTE,
+              agentName: "supervisor",
+              status: "ok",
+              replyButtons: buttons,
+            }
+          : null,
+      messages: [new AIMessage(text)],
     };
   }
 
@@ -176,10 +220,18 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       }
     }
 
+    if (shouldContinueInBooking(state)) {
+      return {
+        next: BOOKING_AGENT_ID,
+        lastHandoff: null,
+        ...prefetchUpdate,
+      };
+    }
+
     const dynamic = [
       options.buildSupervisorDynamicContext?.().trim() ?? "",
-      formatContactContext(contactContext),
-      formatListedMeetingsContext(bookingContext),
+      formatContactContext(contactContext, "greeting"),
+      formatListedMeetingsContext(bookingContext, "supervisor"),
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");

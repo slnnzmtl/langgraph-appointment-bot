@@ -17,3 +17,32 @@ export const MAX_PRESENTED_SLOTS = 12;
 export const MAX_AVAILABILITY_SEARCH_DAYS = 30;
 /** How many open days with free slots to return in one next-available search. */
 export const MAX_PROPOSED_AVAILABILITY_DAYS = 5;
+
+/** Always appended last on every reply keyboard (back to idle DEFAULT MENU). */
+export const MAIN_MENU_LABEL = "Головне меню";
+
+export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
+export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;
+
+/** Visit-change shortcuts after listing upcoming visits (supervisor «Мій запис»). */
+export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "Ні, дякую"] as const;
+export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;
+
+/**
+ * Labels the supervisor must route itself — never sticky-continue into booking.
+ * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,
+ * and soft declines after a move/cancel offer.
+ */
+export const SUPERVISOR_OWNED_REPLY_LABELS = new Set<string>([
+  MAIN_MENU_LABEL,
+  ...DEFAULT_MENU_NO_VISITS,
+  ...DEFAULT_MENU_HAS_VISITS,
+  "Book",
+  "Services",
+  "Address",
+  "My visit",
+  "Обрати іншу процедуру",
+  "Choose another procedure",
+  VISIT_CHANGE_MENU[2],
+  VISIT_CHANGE_MENU_EN[2],
+]);

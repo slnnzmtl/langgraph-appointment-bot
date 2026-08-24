@@ -5,7 +5,7 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentPrepareNode, crmWriteDirtiesPrefetch } from "../agent-loop.js";
+import { createAgentFinalizeNode, createAgentPrepareNode, crmWriteDirtiesPrefetch } from "../agent-loop.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
@@ -86,16 +86,18 @@ describe("formatListedMeetingsContext", () => {
     expect(block).toContain('"dateFrom":"2026-08-11"');
   });
 
-  it("adds a ready-to-quote Ukrainian whenLabel so the model does not format dates", () => {
+  it("adds a ready-to-quote Ukrainian visitLabel so the model does not format dates", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
       expect(formatListedMeetingsContext(listedMeetings)).toContain(
-        '"whenLabel":"17 серпня (понеділок) о 11:00"',
+        '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
       );
+      expect(formatListedMeetingsContext(listedMeetings)).not.toContain('"whenLabel"');
+      expect(formatListedMeetingsContext(listedMeetings)).not.toContain('"serviceLabel"');
       vi.setSystemTime(new Date("2026-08-16T09:00:00Z"));
       expect(formatListedMeetingsContext(listedMeetings)).toContain(
-        '"whenLabel":"завтра, 17 серпня (понеділок) о 11:00"',
+        '"visitLabel":"Консультація - завтра, 17 серпня (понеділок) о 11:00"',
       );
     } finally {
       vi.useRealTimers();
@@ -107,9 +109,8 @@ describe("formatListedMeetingsContext", () => {
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
       const block = formatListedMeetingsContext(listedMeetings);
-      expect(block).toContain('"serviceLabel":"Консультація"');
       expect(block).toContain(
-        "When moving or cancelling, name serviceLabel from this block only — never a procedure from earlier chat.",
+        "When moving or cancelling, quote visitLabel from this block only — never a procedure from earlier chat.",
       );
       expect(block).toContain(
         '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
@@ -126,7 +127,33 @@ describe("formatListedMeetingsContext", () => {
             },
           ],
         }),
-      ).toContain('"serviceLabel":"Контурна пластика - 2 зони"');
+      ).toContain('"visitLabel":"Контурна пластика - 2 зони - 17 серпня (понеділок) о 11:00"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("faq mode emits only has/none", () => {
+    expect(formatListedMeetingsContext(null, "faq")).toBe(
+      "<planned_visits>none</planned_visits>",
+    );
+    expect(formatListedMeetingsContext({ meetings: [], dateFrom: "2026-08-11" }, "faq")).toBe(
+      "<planned_visits>none</planned_visits>",
+    );
+    expect(formatListedMeetingsContext(listedMeetings, "faq")).toBe(
+      "<planned_visits>has</planned_visits>",
+    );
+  });
+
+  it("supervisor mode emits visitLabels only", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
+      const block = formatListedMeetingsContext(listedMeetings, "supervisor");
+      expect(block).toContain('"visitLabels"');
+      expect(block).toContain("Консультація - 17 серпня (понеділок) о 11:00");
+      expect(block).not.toContain('"id"');
+      expect(block).not.toContain('"dateStart"');
     } finally {
       vi.useRealTimers();
     }
@@ -387,7 +414,9 @@ describe("createAgentLlmNode context cache", () => {
     expect(bindTools).toHaveBeenCalledTimes(1);
     const messages = cachedInvoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(HumanMessage);
-    expect((messages[0] as HumanMessage).content).toBe("DYNAMIC KYIV");
+    expect((messages[0] as HumanMessage).content).toBe(
+      "DYNAMIC KYIV\n\n<planned_visits>none</planned_visits>",
+    );
     expect(messages.some((m) => m instanceof SystemMessage)).toBe(false);
     expect(manager.getOrCreate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -457,8 +486,9 @@ describe("createAgentLlmNode context cache", () => {
     const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
     expect(faqDynamic.content).toContain("DYNAMIC KYIV");
-    expect(String(faqDynamic.content)).toContain(formatListedMeetingsContext(listedMeetings));
+    expect(String(faqDynamic.content)).toContain(formatListedMeetingsContext(listedMeetings, "faq"));
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
+    expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));
@@ -587,5 +617,38 @@ describe("createAgentLlmNode context cache", () => {
     expect(manager.getOrCreate).toHaveBeenCalledWith(
       expect.objectContaining({ displayName: "clinic-booking" }),
     );
+  });
+});
+
+describe("createAgentFinalizeNode", () => {
+  const agent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Books visits",
+    systemPrompt: "book",
+    maxSteps: 8,
+  };
+
+  it("strips reply_buttons from checkpointed history and stores labels on lastHandoff", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Підібрати вільний час на консультацію?\n\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    const stored = update.messages?.[0] as AIMessage;
+    expect(String(stored.content)).toBe("Підібрати вільний час на консультацію?");
+    expect(String(stored.content)).not.toContain("reply_buttons");
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "booking",
+      status: "ok",
+      replyButtons: ["Так", "Обрати іншу процедуру"],
+    });
   });
 });

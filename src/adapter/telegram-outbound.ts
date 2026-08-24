@@ -1,10 +1,13 @@
-import { extractMessageTextContent } from "../shared/message-content.js";
+import {
+  extractMessageTextContent,
+  extractReplyButtons,
+  replyButtonLabels,
+} from "../shared/message-content.js";
 import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
 import {
   buildConfirmKeyboard,
   buildReplyKeyboard,
   ensureVisitChangeButtons,
-  extractReplyButtons,
   withMainMenu,
   type ReplyKeyboardMarkup,
 } from "./telegram-ui.js";
@@ -227,7 +230,11 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     };
   }
 
-  const { text, buttons } = extractReplyButtons(rawText);
+  const { text } = extractReplyButtons(rawText);
+  const buttons = replyButtonLabels(
+    (record.lastHandoff as { replyButtons?: unknown } | undefined)?.replyButtons,
+    rawText,
+  );
   const visible = text || "…";
   return {
     text: visible,
