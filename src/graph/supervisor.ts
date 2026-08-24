@@ -21,9 +21,8 @@ import {
   replyButtonLabels,
 } from "../shared/message-content.js";
 import {
-  formatContactContext,
-  formatListedMeetingsContext,
-  type AgentPrefetchResult,
+  formatGreetingContact,
+  formatSupervisorVisitLabels,
 } from "./context-blocks.js";
 import {
   buildCachedMessages,
@@ -39,6 +38,7 @@ import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
   FINISH_ROUTE,
+  type AgentPrefetchResult,
   type ClinicAgentDefinition,
   type ILLMConnector,
 } from "./types.js";
@@ -231,8 +231,8 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
 
     const dynamic = [
       options.buildSupervisorDynamicContext?.().trim() ?? "",
-      formatContactContext(contactContext, "greeting"),
-      formatListedMeetingsContext(bookingContext, "supervisor"),
+      formatGreetingContact(contactContext),
+      formatSupervisorVisitLabels(bookingContext),
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");

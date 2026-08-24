@@ -26,7 +26,8 @@ export const getKyivYmd = (date: Date): KyivYmd => {
   };
 };
 
-/** YYYY-MM-DD in Europe/Kyiv, optionally shifted by whole calendar days. */
+/** YYYY-MM-DD in Europe/Kyiv, optionally shifted by whole calendar days.
+ * Same calendar day as `kyivToday` / `formatKyivLocalIso` in availability-slots for offset 0. */
 export const kyivCalendarDate = (date: Date, offsetDays = 0): string => {
   const { year, month, day } = getKyivYmd(date);
   const shifted = new Date(Date.UTC(year, month - 1, day + offsetDays, 12, 0, 0));

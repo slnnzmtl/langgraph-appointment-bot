@@ -45,11 +45,11 @@ export const createClinicStateAnnotation = ({
       default: () => null,
     }),
     bookingContext: Annotation<BookingContext | null>({
-      reducer: (_left, right) => right ?? null,
+      reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
     contactContext: Annotation<ContactLookupContext | null>({
-      reducer: (_left, right) => right ?? null,
+      reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
     availabilityContext: Annotation<AvailabilityContext | null>({

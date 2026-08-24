@@ -27,7 +27,7 @@ import {
   routeAfterAgentTools,
   toolsNodeName,
 } from "./agent-loop.js";
-import type { AgentPrefetchResult } from "./context-blocks.js";
+import type { AgentPrefetchResult } from "./types.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
   PREFETCH_TTL_MS,

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { trackEvent, trackToolError } from "../analytics/track.js";
 import {
   CLINIC_SLOT_MINUTES,
+  CONTEXT_TAGS,
   MAX_AVAILABILITY_SEARCH_DAYS,
 } from "../shared/clinic-constants.js";
 import { asJsonRecord, errorMessage } from "../shared/json-record.js";
@@ -16,7 +17,7 @@ import {
   fallbackClinicTimeRanges,
   findNextAvailableSlots,
   formatKyivDayLabel,
-  formatKyivLocalIso,
+  kyivToday,
   omitSlotsAtStarts,
   resolveDayTimeRanges,
   startsOfExcludedMeetings,
@@ -246,7 +247,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
       try {
         const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
         const excludeIds = input.excludeMeetingIds;
-        const todayKyiv = formatKyivLocalIso(new Date()).slice(0, 10);
+        const todayKyiv = kyivToday();
 
         if (input.date) {
           const [working, raw, reserved] = await Promise.all([
@@ -347,7 +348,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        "Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Reuse <availability> in context when days[] already covers the patient's choice — call only when the block is missing, the day is not listed, they want other dates (afterDate / «Інша дата»), stepMinutes differs, excludeMeetingIds differs (MOVE), truncated and they want more, or create_meeting/reschedule_meeting failed because the slot was taken. Returns JSON { days: [{ date, dayLabel, slots }], stepMinutes, excludeMeetingIds?, truncated? }.",
+        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Reuse <${CONTEXT_TAGS.availability}> in context when days[] already covers the patient's choice — call only when the block is missing, the day is not listed, they want other dates (afterDate / «Інша дата»), stepMinutes differs, excludeMeetingIds differs (MOVE), truncated and they want more, or create_meeting/reschedule_meeting failed because the slot was taken. Returns JSON { days: [{ date, dayLabel, slots }], stepMinutes, excludeMeetingIds?, truncated? }.`,
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",

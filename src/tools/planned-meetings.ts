@@ -2,7 +2,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { McpCallTool } from "../shared/mcp.js";
-import { formatKyivLocalIso, normalizeLocalIsoDatetime } from "./availability-slots.js";
+import { formatKyivLocalIso, normalizeLocalIsoDatetime, kyivToday } from "./availability-slots.js";
 
 const DAY_SCHEMA = z
   .string()
@@ -85,7 +85,7 @@ export const lookupPlannedMeetings = async (
   dateFrom?: string,
 ): Promise<BookingContext | null> => {
   try {
-    const from = dateFrom ?? formatKyivLocalIso(new Date()).slice(0, 10);
+    const from = dateFrom ?? kyivToday();
     const raw = await callTool("search_entity", {
       entityType: "Meeting",
       filters: {

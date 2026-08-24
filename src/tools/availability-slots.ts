@@ -323,6 +323,9 @@ export const formatKyivLocalIso = (date: Date): string => {
   return `${byType.year}-${byType.month}-${byType.day}T${byType.hour}:${byType.minute}:${byType.second}`;
 };
 
+/** Kyiv calendar day `YYYY-MM-DD` for an instant (same clock as formatKyivLocalIso). */
+export const kyivToday = (now = new Date()): string => formatKyivLocalIso(now).slice(0, 10);
+
 const UK_MONTHS_GENITIVE = [
   "січня", "лютого", "березня", "квітня", "травня", "червня",
   "липня", "серпня", "вересня", "жовтня", "листопада", "грудня",
@@ -436,7 +439,7 @@ export const findNextAvailableSlots = (
     throw new Error(`startDate must be YYYY-MM-DD, got: ${startDate}`);
   }
 
-  const today = formatKyivLocalIso(now).slice(0, 10);
+  const today = kyivToday(now);
   const horizon = Math.max(1, maxDays);
   const dayCap = Math.max(1, maxDaysWithSlots);
   const days: AvailableDaySlots[] = [];

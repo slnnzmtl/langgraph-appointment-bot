@@ -9,9 +9,11 @@ import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFro
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   formatAvailabilityContext,
+  formatBookingMeetingsContext,
   formatContactContext,
-  formatListedMeetingsContext,
+  formatPlannedVisitsFlag,
   formatServicesContext,
+  formatSupervisorVisitLabels,
 } from "../context-blocks.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
@@ -70,20 +72,20 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
 
 const { createAgentLlmNode } = await import("../agent-loop.js");
 
-describe("formatListedMeetingsContext", () => {
+describe("formatBookingMeetingsContext", () => {
   it("returns an empty string when context is missing", () => {
-    expect(formatListedMeetingsContext(null)).toBe("");
+    expect(formatBookingMeetingsContext(null)).toBe("");
   });
 
   it("renders an empty meetings list so the model does not re-fetch", () => {
-    const block = formatListedMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
+    const block = formatBookingMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain('"meetings":[]');
     expect(block).not.toContain("When moving or cancelling");
   });
 
   it("wraps the list payload for uncached system metadata", () => {
-    const block = formatListedMeetingsContext(listedMeetings);
+    const block = formatBookingMeetingsContext(listedMeetings);
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain("</list_planned_meetings>");
     expect(block).toContain('"id":"m-1"');
@@ -95,13 +97,13 @@ describe("formatListedMeetingsContext", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      expect(formatListedMeetingsContext(listedMeetings)).toContain(
+      expect(formatBookingMeetingsContext(listedMeetings)).toContain(
         '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
       );
-      expect(formatListedMeetingsContext(listedMeetings)).not.toContain('"whenLabel"');
-      expect(formatListedMeetingsContext(listedMeetings)).not.toContain('"serviceLabel"');
+      expect(formatBookingMeetingsContext(listedMeetings)).not.toContain('"whenLabel"');
+      expect(formatBookingMeetingsContext(listedMeetings)).not.toContain('"serviceLabel"');
       vi.setSystemTime(new Date("2026-08-16T09:00:00Z"));
-      expect(formatListedMeetingsContext(listedMeetings)).toContain(
+      expect(formatBookingMeetingsContext(listedMeetings)).toContain(
         '"visitLabel":"Консультація - завтра, 17 серпня (понеділок) о 11:00"',
       );
     } finally {
@@ -113,7 +115,7 @@ describe("formatListedMeetingsContext", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      const block = formatListedMeetingsContext(listedMeetings);
+      const block = formatBookingMeetingsContext(listedMeetings);
       expect(block).toContain(
         "When moving or cancelling, quote visitLabel from this block only — never a procedure from earlier chat.",
       );
@@ -121,7 +123,7 @@ describe("formatListedMeetingsContext", () => {
         '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
       );
       expect(
-        formatListedMeetingsContext({
+        formatBookingMeetingsContext({
           dateFrom: "2026-08-11",
           meetings: [
             {
@@ -137,24 +139,28 @@ describe("formatListedMeetingsContext", () => {
       vi.useRealTimers();
     }
   });
+});
 
-  it("faq mode emits only has/none", () => {
-    expect(formatListedMeetingsContext(null, "faq")).toBe(
+describe("formatPlannedVisitsFlag", () => {
+  it("emits only has/none", () => {
+    expect(formatPlannedVisitsFlag(null)).toBe(
       "<planned_visits>none</planned_visits>",
     );
-    expect(formatListedMeetingsContext({ meetings: [], dateFrom: "2026-08-11" }, "faq")).toBe(
+    expect(formatPlannedVisitsFlag({ meetings: [], dateFrom: "2026-08-11" })).toBe(
       "<planned_visits>none</planned_visits>",
     );
-    expect(formatListedMeetingsContext(listedMeetings, "faq")).toBe(
+    expect(formatPlannedVisitsFlag(listedMeetings)).toBe(
       "<planned_visits>has</planned_visits>",
     );
   });
+});
 
-  it("supervisor mode emits visitLabels only", () => {
+describe("formatSupervisorVisitLabels", () => {
+  it("emits visitLabels only", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      const block = formatListedMeetingsContext(listedMeetings, "supervisor");
+      const block = formatSupervisorVisitLabels(listedMeetings);
       expect(block).toContain('"visitLabels"');
       expect(block).toContain("Консультація - 17 серпня (понеділок) о 11:00");
       expect(block).not.toContain('"id"');
@@ -162,6 +168,10 @@ describe("formatListedMeetingsContext", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("returns an empty string when context is missing", () => {
+    expect(formatSupervisorVisitLabels(null)).toBe("");
   });
 });
 
@@ -749,14 +759,14 @@ describe("createAgentLlmNode context cache", () => {
     const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
     expect(faqDynamic.content).toContain("DYNAMIC KYIV");
-    expect(String(faqDynamic.content)).toContain(formatListedMeetingsContext(listedMeetings, "faq"));
+    expect(String(faqDynamic.content)).toContain(formatPlannedVisitsFlag(listedMeetings));
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
     expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
     expect(String(faqDynamic.content)).not.toContain("<availability>");
     expect(String(faqDynamic.content)).not.toContain("<list_services>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
-    expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));
+    expect(bookingDynamic.content).toContain(formatBookingMeetingsContext(listedMeetings));
     expect(String(bookingDynamic.content)).toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });

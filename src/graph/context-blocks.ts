@@ -1,15 +1,11 @@
-import { formatKyivDateTimeLabel, formatKyivLocalIso } from "../tools/availability-slots.js";
+import { CONTEXT_TAGS } from "../shared/clinic-constants.js";
+import { formatKyivDateTimeLabel, kyivToday } from "../tools/availability-slots.js";
 import type { AvailabilityContext } from "../tools/availability-tools.js";
 import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 
-export type AgentPrefetchResult = {
-  contactContext: ContactLookupContext;
-  bookingContext: BookingContext | null;
-};
-
-export type MeetingsContextMode = "booking" | "faq" | "supervisor";
+export { CONTEXT_TAGS };
 
 /** CRM titles are "[service-name] - [firstName lastName]"; last " - " is the patient, not the service. */
 export const meetingServiceLabel = (name: string): string => {
@@ -32,26 +28,37 @@ const visitLabelForMeeting = (
 
 // Uncached dynamic LLM blocks (Gemini 3 drops synthetic functionCall parts without thoughtSignature).
 
-export const formatListedMeetingsContext = (
-  ctx: BookingContext | null | undefined,
-  mode: MeetingsContextMode = "booking",
-): string => {
-  if (mode === "faq") {
-    const has = (ctx?.meetings.length ?? 0) > 0;
-    return `<planned_visits>${has ? "has" : "none"}</planned_visits>`;
-  }
+const block = (tag: string, payload: unknown, trailer = ""): string =>
+  `<${tag}>\n${JSON.stringify(payload)}${trailer}\n</${tag}>`;
 
+/** FAQ-only flag for DEFAULT MENU («Записатись» vs «Мій запис»). Emits even when ctx is null. */
+export const formatPlannedVisitsFlag = (
+  ctx: BookingContext | null | undefined,
+): string => {
+  const has = (ctx?.meetings.length ?? 0) > 0;
+  return `<${CONTEXT_TAGS.plannedVisits}>${has ? "has" : "none"}</${CONTEXT_TAGS.plannedVisits}>`;
+};
+
+/** Supervisor: visitLabels only (no meeting ids). */
+export const formatSupervisorVisitLabels = (
+  ctx: BookingContext | null | undefined,
+): string => {
   if (!ctx) {
     return "";
   }
+  const today = kyivToday();
+  const visitLabels = ctx.meetings.map((meeting) => visitLabelForMeeting(meeting, today));
+  return block(CONTEXT_TAGS.meetings, { visitLabels });
+};
 
-  const today = formatKyivLocalIso(new Date()).slice(0, 10);
-
-  if (mode === "supervisor") {
-    const visitLabels = ctx.meetings.map((meeting) => visitLabelForMeeting(meeting, today));
-    return `<list_planned_meetings>\n${JSON.stringify({ visitLabels })}\n</list_planned_meetings>`;
+/** Booking: full meetings with precomputed visitLabel. */
+export const formatBookingMeetingsContext = (
+  ctx: BookingContext | null | undefined,
+): string => {
+  if (!ctx) {
+    return "";
   }
-
+  const today = kyivToday();
   // visitLabel is precomputed so the model quotes it instead of inventing a service or date.
   const meetings = ctx.meetings.map((meeting) => ({
     id: meeting.id,
@@ -60,35 +67,40 @@ export const formatListedMeetingsContext = (
     dateEnd: meeting.dateEnd,
     visitLabel: visitLabelForMeeting(meeting, today),
   }));
-  const body = JSON.stringify({ meetings, dateFrom: ctx.dateFrom });
   const moveHint =
     meetings.length > 0
       ? "\nWhen moving or cancelling, quote visitLabel from this block only — never a procedure from earlier chat."
       : "";
-  return `<list_planned_meetings>\n${body}${moveHint}\n</list_planned_meetings>`;
+  return block(CONTEXT_TAGS.meetings, { meetings, dateFrom: ctx.dateFrom }, moveHint);
 };
 
+/** Booking: full CRM contact record (never leaks internal error strings). */
 export const formatContactContext = (
   ctx: ContactLookupContext | null | undefined,
-  mode: "full" | "greeting" = "full",
 ): string => {
   if (!ctx) {
     return "";
   }
-  if (mode === "greeting") {
-    const firstName = ctx.contacts[0]?.firstName;
-    const payload = {
-      firstName:
-        typeof firstName === "string" && firstName.trim().length > 0 ? firstName.trim() : null,
-    };
-    return `<contact_info>\n${JSON.stringify(payload)}\n</contact_info>`;
-  }
-  // Project explicitly — never leak internal error strings into the prompt.
   const payload = {
     contacts: ctx.contacts,
     ...(ctx.error ? { lookupFailed: true } : {}),
   };
-  return `<contact_info>\n${JSON.stringify(payload)}\n</contact_info>`;
+  return block(CONTEXT_TAGS.contact, payload);
+};
+
+/** Supervisor: firstName only for the greeting. */
+export const formatGreetingContact = (
+  ctx: ContactLookupContext | null | undefined,
+): string => {
+  if (!ctx) {
+    return "";
+  }
+  const firstName = ctx.contacts[0]?.firstName;
+  const payload = {
+    firstName:
+      typeof firstName === "string" && firstName.trim().length > 0 ? firstName.trim() : null,
+  };
+  return block(CONTEXT_TAGS.contact, payload);
 };
 
 export const formatAvailabilityContext = (
@@ -97,7 +109,7 @@ export const formatAvailabilityContext = (
   if (!ctx) {
     return "";
   }
-  return `<availability>\n${JSON.stringify(ctx)}\n</availability>`;
+  return block(CONTEXT_TAGS.availability, ctx);
 };
 
 export const formatServicesContext = (
@@ -106,5 +118,5 @@ export const formatServicesContext = (
   if (!ctx) {
     return "";
   }
-  return `<list_services>\n${JSON.stringify(ctx)}\n</list_services>`;
+  return block(CONTEXT_TAGS.services, ctx);
 };

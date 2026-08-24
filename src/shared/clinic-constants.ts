@@ -24,6 +24,15 @@ export const MAIN_MENU_LABEL = "Головне меню";
 export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
 export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;
 
+/** XML tag names for dynamic LLM context blocks (formatters + tool reuse hints). */
+export const CONTEXT_TAGS = {
+  contact: "contact_info",
+  meetings: "list_planned_meetings",
+  plannedVisits: "planned_visits",
+  availability: "availability",
+  services: "list_services",
+} as const;
+
 /** Visit-change shortcuts after listing upcoming visits (supervisor «Мій запис»). */
 export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "Ні, дякую"] as const;
 export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;

@@ -23,8 +23,9 @@ import {
 } from "../shared/message-content.js";
 import {
   formatAvailabilityContext,
+  formatBookingMeetingsContext,
   formatContactContext,
-  formatListedMeetingsContext,
+  formatPlannedVisitsFlag,
   formatServicesContext,
 } from "./context-blocks.js";
 import {
@@ -127,31 +128,30 @@ const toolRanThisTurn = (messages: BaseMessage[], toolName: string): boolean =>
     (message) => message instanceof ToolMessage && toolMessageName(message) === toolName,
   );
 
-export const captureAvailabilityFromMessages = (
+export const captureLatestToolContext = <T>(
   messages: BaseMessage[],
-): AvailabilityContext | null | undefined => {
+  toolName: string,
+  normalize: (raw: string) => T | null,
+): T | null | undefined => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (toolMessageName(message) !== "present_availability_slots") {
+    if (!message || toolMessageName(message) !== toolName) {
       continue;
     }
-    return normalizePresentAvailabilityResult(extractRawMessageText(message.content)) ?? undefined;
+    return normalize(extractRawMessageText(message.content)) ?? undefined;
   }
   return undefined;
 };
 
+export const captureAvailabilityFromMessages = (
+  messages: BaseMessage[],
+): AvailabilityContext | null | undefined =>
+  captureLatestToolContext(messages, "present_availability_slots", normalizePresentAvailabilityResult);
+
 export const captureServicesFromMessages = (
   messages: BaseMessage[],
-): ServicesContext | null | undefined => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (toolMessageName(message) !== "list_services") {
-      continue;
-    }
-    return normalizeListServicesResult(extractRawMessageText(message.content)) ?? undefined;
-  }
-  return undefined;
-};
+): ServicesContext | null | undefined =>
+  captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
 export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
@@ -264,10 +264,9 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const dynamicParts = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
       agent.id === BOOKING_AGENT_ID ? formatContactContext(state.contactContext) : "",
-      formatListedMeetingsContext(
-        state.bookingContext,
-        agent.id === BOOKING_AGENT_ID ? "booking" : "faq",
-      ),
+      agent.id === BOOKING_AGENT_ID
+        ? formatBookingMeetingsContext(state.bookingContext)
+        : formatPlannedVisitsFlag(state.bookingContext),
     ];
     // Skip when the tool already ran this turn — its ToolMessage is in agentMessages.
     if (

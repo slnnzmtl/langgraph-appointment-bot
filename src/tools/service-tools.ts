@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import type { McpCallTool } from "../shared/mcp.js";
 import { asJsonRecord } from "../shared/json-record.js";
+import { CONTEXT_TAGS } from "../shared/clinic-constants.js";
 import { toToolResult } from "./tool-result.js";
 
 const USD_UAH_URL =
@@ -221,7 +222,7 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
     {
       name: "list_services",
       description:
-        "List clinic services (cService) from EspoCRM: names and duration (no pricing — use get_service for prices). Reuse <list_services> in context when list[] already covers the patient's choice — call only when the block is missing or empty.",
+        `List clinic services (cService) from EspoCRM: names and duration (no pricing — use get_service for prices). Reuse <${CONTEXT_TAGS.services}> in context when list[] already covers the patient's choice — call only when the block is missing or empty.`,
       schema: z.object({
         limit: z.number().int().min(1).max(200).optional().describe("Max services to return"),
       }),

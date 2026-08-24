@@ -27,8 +27,8 @@ describe("prefetchBookingContext", () => {
             {
               id: "m-1",
               name: "Consult",
-              dateStart: "2026-08-17 11:00:00",
-              dateEnd: "2026-08-17 11:30:00",
+              dateStart: "2027-01-15 11:00:00",
+              dateEnd: "2027-01-15 11:30:00",
             },
           ],
         };
@@ -43,8 +43,8 @@ describe("prefetchBookingContext", () => {
       {
         id: "m-1",
         name: "Consult",
-        dateStart: "2026-08-17 11:00:00",
-        dateEnd: "2026-08-17 11:30:00",
+        dateStart: "2027-01-15 11:00:00",
+        dateEnd: "2027-01-15 11:30:00",
       },
     ]);
   });
