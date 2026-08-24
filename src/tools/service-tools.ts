@@ -2,6 +2,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { McpCallTool } from "../shared/mcp.js";
+import { asJsonRecord } from "../shared/json-record.js";
 import { toToolResult } from "./tool-result.js";
 
 const USD_UAH_URL =
@@ -19,6 +20,45 @@ export type GetWorkingTimeArgs = {
   name?: string;
   limit?: number;
   offset?: number;
+};
+
+export type ServicesContext = {
+  list: Array<{
+    id: string;
+    name: string;
+    duration?: number;
+    description?: string;
+  }>;
+  total?: number;
+};
+
+/** Normalize a successful list_services tool payload for checkpoint reuse. */
+export const normalizeListServicesResult = (raw: string): ServicesContext | null => {
+  const record = asJsonRecord(raw);
+  if (!record || typeof record.error === "string" || !Array.isArray(record.list)) {
+    return null;
+  }
+
+  const list: ServicesContext["list"] = [];
+  for (const entry of record.list) {
+    const row = asJsonRecord(entry);
+    if (!row || typeof row.id !== "string" || typeof row.name !== "string") {
+      continue;
+    }
+    list.push({
+      id: row.id,
+      name: row.name,
+      ...(row.duration !== undefined && row.duration !== null ? { duration: Number(row.duration) } : {}),
+      ...(typeof row.description === "string" && row.description.length > 0
+        ? { description: row.description }
+        : {}),
+    });
+  }
+
+  return {
+    list,
+    ...(typeof record.total === "number" ? { total: record.total } : {}),
+  };
 };
 
 /** Keep booking-relevant service fields; drop CRM audit metadata and empty description. */
@@ -164,7 +204,8 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
     async (input: { limit?: number }) => listServices(callTool, input.limit ?? 200),
     {
       name: "list_services",
-      description: "List clinic services (cService) from EspoCRM: names and duration (no pricing — use get_service for prices).",
+      description:
+        "List clinic services (cService) from EspoCRM: names and duration (no pricing — use get_service for prices). Reuse <list_services> in context when list[] already covers the patient's choice — call only when the block is missing or empty.",
       schema: z.object({
         limit: z.number().int().min(1).max(200).optional().describe("Max services to return"),
       }),

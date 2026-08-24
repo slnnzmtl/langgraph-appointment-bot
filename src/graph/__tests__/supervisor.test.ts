@@ -32,6 +32,7 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   bookingContext: null,
   contactContext: null,
   availabilityContext: null,
+  servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
   ...overrides,
@@ -318,6 +319,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.prefetchDirty).toBe(false);
     expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
     expect(update.availabilityContext).toBeNull();
+    expect(update.servicesContext).toBeUndefined();
   });
 
   it("reuses checkpointed prefetch when fresh and not dirty", async () => {
@@ -351,7 +353,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(system).toContain("<list_planned_meetings>");
   });
 
-  it("clears availabilityContext when prefetch refetches", async () => {
+  it("clears availabilityContext but keeps servicesContext when prefetch refetches", async () => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,
       bookingContext: listedMeetings,
@@ -373,12 +375,17 @@ describe("createClinicSupervisorNode patient prefetch", () => {
           days: [{ date: "2026-08-25", slots: [] }],
           stepMinutes: 30,
         },
+        servicesContext: {
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+          total: 1,
+        },
         prefetchFetchedAt: Date.now() - 1_000,
       }),
     );
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
+    expect(update.servicesContext).toBeUndefined();
   });
 
   it("refetches on Мій запис even when prefetch is fresh", async () => {

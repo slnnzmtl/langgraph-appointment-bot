@@ -16,11 +16,16 @@ import {
 
 import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
-import { extractMessageTextContent, extractReplyButtons } from "../shared/message-content.js";
+import {
+  extractMessageTextContent,
+  extractRawMessageText,
+  extractReplyButtons,
+} from "../shared/message-content.js";
 import {
   formatAvailabilityContext,
   formatContactContext,
   formatListedMeetingsContext,
+  formatServicesContext,
 } from "./context-blocks.js";
 import {
   buildCachedMessages,
@@ -31,11 +36,15 @@ import { tagRuntimeAgentMessage } from "./sub-agent-messages.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import { BOOKING_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
 import {
   normalizePresentAvailabilityResult,
   type AvailabilityContext,
 } from "../tools/availability-tools.js";
+import {
+  normalizeListServicesResult,
+  type ServicesContext,
+} from "../tools/service-tools.js";
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
@@ -107,15 +116,33 @@ export const meetingMutationClearsAvailability = (messages: BaseMessage[]): bool
     return outcome === "committed" || outcome === "failed";
   });
 
+const toolMessageName = (message: BaseMessage): string | undefined => {
+  const name = (message as { name?: unknown }).name;
+  return typeof name === "string" ? name : undefined;
+};
+
 export const captureAvailabilityFromMessages = (
   messages: BaseMessage[],
 ): AvailabilityContext | null | undefined => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!(message instanceof ToolMessage) || message.name !== "present_availability_slots") {
+    if (toolMessageName(message) !== "present_availability_slots") {
       continue;
     }
-    return normalizePresentAvailabilityResult(extractMessageTextContent(message.content)) ?? undefined;
+    return normalizePresentAvailabilityResult(extractRawMessageText(message.content)) ?? undefined;
+  }
+  return undefined;
+};
+
+export const captureServicesFromMessages = (
+  messages: BaseMessage[],
+): ServicesContext | null | undefined => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (toolMessageName(message) !== "list_services") {
+      continue;
+    }
+    return normalizeListServicesResult(extractRawMessageText(message.content)) ?? undefined;
   }
   return undefined;
 };
@@ -239,6 +266,9 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     if (agent.id === BOOKING_AGENT_ID && !isContinuation) {
       dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
     }
+    if ((agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID) && !isContinuation) {
+      dynamicParts.push(formatServicesContext(state.servicesContext));
+    }
     const dynamic = dynamicParts.filter((part) => part.length > 0).join("\n\n");
 
     try {
@@ -308,10 +338,15 @@ export const createAgentToolsNode = (tools: StructuredToolInterface[]) => {
     if (meetingMutationClearsAvailability(result.messages)) {
       update.availabilityContext = null;
     } else {
-      const captured = captureAvailabilityFromMessages(result.messages);
-      if (captured !== undefined) {
-        update.availabilityContext = captured;
+      const capturedAvailability = captureAvailabilityFromMessages(result.messages);
+      if (capturedAvailability !== undefined) {
+        update.availabilityContext = capturedAvailability;
       }
+    }
+
+    const capturedServices = captureServicesFromMessages(result.messages);
+    if (capturedServices !== undefined) {
+      update.servicesContext = capturedServices;
     }
 
     if (crmWriteDirtiesPrefetch(result.messages)) {

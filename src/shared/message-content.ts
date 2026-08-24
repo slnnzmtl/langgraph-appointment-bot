@@ -20,17 +20,16 @@ export const unescapeModelLineBreaks = (text: string): string => {
   return result.replace(/<br\s*\/?>/gi, "\n");
 };
 
-export const extractMessageTextContent = (content: BaseMessage["content"]): string => {
+/** Concatenate message content without Gemini \\n decoding — safe for tool JSON. */
+export const extractRawMessageText = (content: BaseMessage["content"]): string => {
   if (typeof content === "string") {
-    return unescapeModelLineBreaks(content);
+    return content;
   }
 
   if (Array.isArray(content)) {
-    return unescapeModelLineBreaks(
-      content
-        .map((part) => (typeof part === "string" ? part : part.type === "text" ? part.text : ""))
-        .join("\n"),
-    );
+    return content
+      .map((part) => (typeof part === "string" ? part : part.type === "text" ? part.text : ""))
+      .join("\n");
   }
 
   if (content == null) {
@@ -39,6 +38,9 @@ export const extractMessageTextContent = (content: BaseMessage["content"]): stri
 
   return JSON.stringify(content);
 };
+
+export const extractMessageTextContent = (content: BaseMessage["content"]): string =>
+  unescapeModelLineBreaks(extractRawMessageText(content));
 
 export const extractNonTextContentParts = (
   content: BaseMessage["content"],

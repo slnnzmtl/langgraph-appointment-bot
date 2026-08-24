@@ -1,8 +1,38 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 
-import { createReadTools, getWorkingTime, listServices } from "../service-tools.js";
+import { createReadTools, getWorkingTime, listServices, normalizeListServicesResult } from "../service-tools.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
+
+describe("normalizeListServicesResult", () => {
+  it("parses compact list_services payloads", () => {
+    expect(
+      normalizeListServicesResult(
+        JSON.stringify({
+          total: 2,
+          list: [
+            { id: "svc-1", name: "Консультація", duration: 30 },
+            { id: "svc-2", name: "Біоревіталізація", duration: 60, description: "Neuvia" },
+          ],
+        }),
+      ),
+    ).toEqual({
+      total: 2,
+      list: [
+        { id: "svc-1", name: "Консультація", duration: 30 },
+        { id: "svc-2", name: "Біоревіталізація", duration: 60, description: "Neuvia" },
+      ],
+    });
+  });
+
+  it("returns null for error payloads", () => {
+    expect(normalizeListServicesResult(JSON.stringify({ error: "CRM down" }))).toBeNull();
+  });
+
+  it("returns null for unparseable payloads", () => {
+    expect(normalizeListServicesResult("not json")).toBeNull();
+  });
+});
 
 describe("service-tools", () => {
   const calls: CallRecord[] = [];

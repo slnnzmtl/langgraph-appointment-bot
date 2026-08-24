@@ -5,11 +5,13 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, classifyMeetingMutationToolMessage, crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../agent-loop.js";
+import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../agent-loop.js";
+import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   formatAvailabilityContext,
   formatContactContext,
   formatListedMeetingsContext,
+  formatServicesContext,
 } from "../context-blocks.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
@@ -41,6 +43,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   bookingContext: null,
   contactContext: null,
   availabilityContext: null,
+  servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
   ...overrides,
@@ -426,6 +429,134 @@ describe("availability context helpers", () => {
   });
 });
 
+describe("services context helpers", () => {
+  const sampleServices = {
+    list: [
+      { id: "svc-1", name: "Консультація", duration: 30 },
+      { id: "svc-2", name: "Біоревіталізація", duration: 60, description: "Neuvia" },
+    ],
+    total: 2,
+  };
+
+  it("captures list_services payloads that contain JSON-escaped newlines", () => {
+    const payload = {
+      list: [
+        {
+          id: "svc-1",
+          name: "Пілінг",
+          duration: 60,
+          description: "Line 1\nLine 2",
+        },
+      ],
+      total: 1,
+    };
+    const raw = JSON.stringify(payload);
+    expect(() => JSON.parse(extractMessageTextContent(raw))).toThrow();
+    expect(
+      captureServicesFromMessages([
+        new ToolMessage({
+          content: raw,
+          tool_call_id: "1",
+          name: "list_services",
+        }),
+      ]),
+    ).toEqual(payload);
+  });
+
+  it("captures list_services from tool messages", () => {
+    expect(
+      captureServicesFromMessages([
+        new ToolMessage({
+          content: JSON.stringify(sampleServices),
+          tool_call_id: "1",
+          name: "list_services",
+        }),
+      ]),
+    ).toEqual(sampleServices);
+  });
+
+  it("returns undefined for list_services error payloads", () => {
+    expect(
+      captureServicesFromMessages([
+        new ToolMessage({
+          content: JSON.stringify({ error: "CRM down" }),
+          tool_call_id: "1",
+          name: "list_services",
+        }),
+      ]),
+    ).toBeUndefined();
+  });
+
+  it("formatServicesContext wraps JSON in list_services tags", () => {
+    const block = formatServicesContext(sampleServices);
+    expect(block).toContain("<list_services>");
+    expect(block).toContain("svc-1");
+  });
+});
+
+describe("createAgentToolsNode services capture", () => {
+  it("captures servicesContext from list_services", async () => {
+    const listTool = tool(
+      async () =>
+        JSON.stringify({
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+          total: 1,
+        }),
+      {
+        name: "list_services",
+        description: "List services",
+        schema: z.object({}),
+      },
+    );
+
+    const toolsNode = createAgentToolsNode([listTool]);
+    const update = await toolsNode(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "list_services", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.servicesContext).toEqual({
+      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+      total: 1,
+    });
+  });
+
+  it("does not clear servicesContext on update_contact", async () => {
+    const updateTool = tool(async () => JSON.stringify({ id: "c-1" }), {
+      name: "update_contact",
+      description: "Update contact",
+      schema: z.object({ firstName: z.string().optional() }),
+    });
+
+    const toolsNode = createAgentToolsNode([updateTool]);
+    const update = await toolsNode(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "1", name: "update_contact", args: { firstName: "Ada" }, type: "tool_call" },
+            ],
+          }),
+        ],
+        servicesContext: {
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+        },
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.servicesContext).toBeUndefined();
+  });
+});
+
 describe("createAgentLlmNode context cache", () => {
   const sampleTool = tool(async () => "ok", {
     name: "list_services",
@@ -620,10 +751,123 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
     expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
     expect(String(faqDynamic.content)).not.toContain("<availability>");
+    expect(String(faqDynamic.content)).not.toContain("<list_services>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatListedMeetingsContext(listedMeetings));
     expect(String(bookingDynamic.content)).toContain("<availability>");
+    expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+  });
+
+  it("appends list_services block to FAQ and booking on first LLM step", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "STATIC BOOKING",
+      maxSteps: 10,
+    };
+
+    const sampleServices = {
+      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+      total: 1,
+    };
+
+    const faqNode = createAgentLlmNode({
+      agent: faqAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+    const bookingNode = createAgentLlmNode({
+      agent: bookingAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await faqNode(
+      clinicState({
+        agentMessages: [new HumanMessage("Послуги")],
+        servicesContext: sampleServices,
+        next: "faq",
+      }),
+    );
+    await bookingNode(
+      clinicState({
+        agentMessages: [new HumanMessage("Записатись")],
+        servicesContext: sampleServices,
+        next: "booking",
+      }),
+    );
+
+    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(faqDynamic.content)).toContain("<list_services>");
+    expect(String(faqDynamic.content)).toContain("svc-1");
+    expect(String(bookingDynamic.content)).toContain("<list_services>");
+    expect(String(bookingDynamic.content)).toContain("svc-1");
+  });
+
+  it("omits list_services block on in-turn continuation", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const faqNode = createAgentLlmNode({
+      agent: faqAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await faqNode(
+      clinicState({
+        agentMessages: [
+          new HumanMessage("Послуги"),
+          new ToolMessage({
+            content: JSON.stringify({ list: [{ id: "svc-1", name: "Консультація" }] }),
+            tool_call_id: "1",
+            name: "list_services",
+          }),
+        ],
+        stepCount: 1,
+        servicesContext: {
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+        },
+        next: "faq",
+      }),
+    );
+
+    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(faqDynamic.content)).not.toContain("<list_services>");
   });
 
   it("omits availability block on booking in-turn continuation", async () => {

@@ -1,6 +1,8 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { tool } from "@langchain/core/tools";
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";

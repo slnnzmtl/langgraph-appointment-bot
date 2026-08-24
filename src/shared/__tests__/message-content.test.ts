@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
+import { extractMessageTextContent, extractRawMessageText, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
 
 describe("replyButtonLabels", () => {
   it("prefers stored labels over a message trailer", () => {
@@ -21,6 +21,15 @@ describe("replyButtonLabels", () => {
   it("returns an empty list when neither source has buttons", () => {
     expect(replyButtonLabels(undefined, "Just text")).toEqual([]);
     expect(replyButtonLabels([], "Just text")).toEqual([]);
+  });
+});
+
+describe("extractRawMessageText", () => {
+  it("does not decode JSON escaped newlines", () => {
+    const json = JSON.stringify({ description: "a\nb" });
+    expect(extractRawMessageText(json)).toBe(json);
+    expect(JSON.parse(extractRawMessageText(json))).toEqual({ description: "a\nb" });
+    expect(() => JSON.parse(extractMessageTextContent(json))).toThrow();
   });
 });
 

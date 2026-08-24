@@ -1,6 +1,7 @@
 import { formatKyivDateTimeLabel, formatKyivLocalIso } from "../tools/availability-slots.js";
 import type { AvailabilityContext } from "../tools/availability-tools.js";
 import type { ContactLookupContext } from "../tools/contact-tools.js";
+import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 
 export type AgentPrefetchResult = {
@@ -92,4 +93,13 @@ export const formatAvailabilityContext = (
     return "";
   }
   return `<availability>\n${JSON.stringify(ctx)}\n</availability>`;
+};
+
+export const formatServicesContext = (
+  ctx: ServicesContext | null | undefined,
+): string => {
+  if (!ctx) {
+    return "";
+  }
+  return `<list_services>\n${JSON.stringify(ctx)}\n</list_services>`;
 };
