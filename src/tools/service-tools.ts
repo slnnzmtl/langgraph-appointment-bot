@@ -22,6 +22,11 @@ export type GetWorkingTimeArgs = {
   offset?: number;
 };
 
+/** Max rows kept in checkpointed / prompt `<list_services>` context. */
+export const SERVICES_CONTEXT_MAX_ROWS = 60;
+/** Max description chars kept per service in context. */
+export const SERVICES_CONTEXT_DESC_MAX = 160;
+
 export type ServicesContext = {
   list: Array<{
     id: string;
@@ -30,6 +35,15 @@ export type ServicesContext = {
     description?: string;
   }>;
   total?: number;
+  truncated?: boolean;
+};
+
+const truncateServiceDescription = (value: string): string => {
+  const trimmed = value.trim();
+  if (trimmed.length <= SERVICES_CONTEXT_DESC_MAX) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, SERVICES_CONTEXT_DESC_MAX - 1)}…`;
 };
 
 /** Normalize a successful list_services tool payload for checkpoint reuse. */
@@ -49,15 +63,17 @@ export const normalizeListServicesResult = (raw: string): ServicesContext | null
       id: row.id,
       name: row.name,
       ...(row.duration !== undefined && row.duration !== null ? { duration: Number(row.duration) } : {}),
-      ...(typeof row.description === "string" && row.description.length > 0
-        ? { description: row.description }
+      ...(typeof row.description === "string" && row.description.trim().length > 0
+        ? { description: truncateServiceDescription(row.description) }
         : {}),
     });
   }
 
+  const truncated = list.length > SERVICES_CONTEXT_MAX_ROWS;
   return {
-    list,
+    list: truncated ? list.slice(0, SERVICES_CONTEXT_MAX_ROWS) : list,
     ...(typeof record.total === "number" ? { total: record.total } : {}),
+    ...(truncated ? { truncated: true } : {}),
   };
 };
 

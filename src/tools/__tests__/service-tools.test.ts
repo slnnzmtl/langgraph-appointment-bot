@@ -32,6 +32,23 @@ describe("normalizeListServicesResult", () => {
   it("returns null for unparseable payloads", () => {
     expect(normalizeListServicesResult("not json")).toBeNull();
   });
+
+  it("caps rows and truncates long descriptions", () => {
+    const longDescription = "x".repeat(200);
+    const list = Array.from({ length: 65 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+      description: index === 0 ? longDescription : undefined,
+    }));
+
+    const normalized = normalizeListServicesResult(JSON.stringify({ total: 65, list }));
+    expect(normalized).not.toBeNull();
+    expect(normalized!.list).toHaveLength(60);
+    expect(normalized!.truncated).toBe(true);
+    expect(normalized!.total).toBe(65);
+    expect(normalized!.list[0]?.description).toHaveLength(160);
+    expect(normalized!.list[0]?.description?.endsWith("…")).toBe(true);
+  });
 });
 
 describe("service-tools", () => {

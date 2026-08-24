@@ -179,14 +179,16 @@ describe("formatContactContext", () => {
   it("renders error lookups as a completed prefetch block", () => {
     const block = formatContactContext({ contacts: [], error: "CRM down" });
     expect(block).toContain("<contact_info>");
-    expect(block).toContain('"error":"CRM down"');
+    expect(block).toContain('"lookupFailed":true');
+    expect(block).not.toContain("CRM down");
   });
 
   it("wraps the contact payload for uncached system metadata", () => {
     const block = formatContactContext(listedContact);
     expect(block).toContain("<contact_info>");
     expect(block).toContain("</contact_info>");
-    expect(block).toContain(JSON.stringify(listedContact));
+    expect(block).toContain(JSON.stringify({ contacts: listedContact.contacts }));
+    expect(block).not.toContain("lookupFailed");
   });
 });
 
@@ -827,7 +829,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(bookingDynamic.content)).toContain("svc-1");
   });
 
-  it("omits list_services block on in-turn continuation", async () => {
+  it("omits list_services block when list_services already ran this turn", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -870,7 +872,63 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(faqDynamic.content)).not.toContain("<list_services>");
   });
 
-  it("omits availability block on booking in-turn continuation", async () => {
+  it("keeps availability block when a different tool ran this turn", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "STATIC BOOKING",
+      maxSteps: 10,
+    };
+
+    const bookingNode = createAgentLlmNode({
+      agent: bookingAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await bookingNode(
+      clinicState({
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new ToolMessage({
+            content: JSON.stringify({ list: [{ id: "svc-1", name: "Консультація" }] }),
+            tool_call_id: "1",
+            name: "list_services",
+          }),
+        ],
+        stepCount: 1,
+        availabilityContext: {
+          days: [{ date: "2026-08-25", slots: [] }],
+          stepMinutes: 30,
+        },
+        servicesContext: {
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+        },
+        next: "booking",
+      }),
+    );
+
+    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(bookingDynamic.content)).toContain("<availability>");
+    expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+  });
+
+  it("omits availability block when present_availability_slots already ran this turn", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",

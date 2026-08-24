@@ -30,9 +30,9 @@ Label two
 - Omit the whole block only when you are collecting free-typed details (phone, name) or there is truly no next step. Telegram still shows «Головне меню» alone.
 
 ### DEFAULT MENU (no other question this turn)
-When the reply is a greeting, thanks, small talk, a finished FAQ answer with no follow-up choice, or any other turn that is **not** mid-ladder asking for a day/time/detail/yes-no — and you are **not** offering to move/cancel a listed visit — use this menu from \`<list_planned_meetings>\` or \`<planned_visits>\`:
-- **No upcoming visits** (list empty/absent, or \`<planned_visits>none</planned_visits>\`): «Записатись», «Послуги», «Адреса»
-- **Has at least one upcoming visit** (list non-empty, or \`<planned_visits>has</planned_visits>\`): «Мій запис», «Послуги», «Адреса»
+When the reply is a greeting, thanks, small talk, a finished FAQ answer with no follow-up choice, or any other turn that is **not** mid-ladder asking for a day/time/detail/yes-no — and you are **not** offering to move/cancel a listed visit — pick the menu from the visits block in your context (whatever tag your agent receives):
+- **No upcoming visits** (visits block empty, absent, or marked none): «Записатись», «Послуги», «Адреса»
+- **Has at least one upcoming visit** (visits block non-empty, or marked has): «Мій запис», «Послуги», «Адреса»
 
 English equivalents when the patient writes in English: "Book", "Services", "Address" / "My visit", "Services", "Address". Do not mix DEFAULT MENU with DATE/TIME, visit-change («Перенести»/«Скасувати»/«Ні, дякую»), or HITL shortcuts.
 

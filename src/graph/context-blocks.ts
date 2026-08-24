@@ -83,7 +83,12 @@ export const formatContactContext = (
     };
     return `<contact_info>\n${JSON.stringify(payload)}\n</contact_info>`;
   }
-  return `<contact_info>\n${JSON.stringify(ctx)}\n</contact_info>`;
+  // Project explicitly — never leak internal error strings into the prompt.
+  const payload = {
+    contacts: ctx.contacts,
+    ...(ctx.error ? { lookupFailed: true } : {}),
+  };
+  return `<contact_info>\n${JSON.stringify(payload)}\n</contact_info>`;
 };
 
 export const formatAvailabilityContext = (

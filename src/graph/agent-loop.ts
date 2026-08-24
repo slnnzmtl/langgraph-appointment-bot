@@ -121,6 +121,12 @@ const toolMessageName = (message: BaseMessage): string | undefined => {
   return typeof name === "string" ? name : undefined;
 };
 
+/** True when a ToolMessage for this tool is already in the current agent turn. */
+const toolRanThisTurn = (messages: BaseMessage[], toolName: string): boolean =>
+  messages.some(
+    (message) => message instanceof ToolMessage && toolMessageName(message) === toolName,
+  );
+
 export const captureAvailabilityFromMessages = (
   messages: BaseMessage[],
 ): AvailabilityContext | null | undefined => {
@@ -263,10 +269,17 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
         agent.id === BOOKING_AGENT_ID ? "booking" : "faq",
       ),
     ];
-    if (agent.id === BOOKING_AGENT_ID && !isContinuation) {
+    // Skip when the tool already ran this turn — its ToolMessage is in agentMessages.
+    if (
+      agent.id === BOOKING_AGENT_ID
+      && !toolRanThisTurn(state.agentMessages, "present_availability_slots")
+    ) {
       dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
     }
-    if ((agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID) && !isContinuation) {
+    if (
+      (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
+      && !toolRanThisTurn(state.agentMessages, "list_services")
+    ) {
       dynamicParts.push(formatServicesContext(state.servicesContext));
     }
     const dynamic = dynamicParts.filter((part) => part.length > 0).join("\n\n");

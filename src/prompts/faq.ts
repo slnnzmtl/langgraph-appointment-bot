@@ -12,7 +12,7 @@ export const FAQ_SYSTEM_PROMPT = `You are a Clinic FAQ Specialist. You answer qu
 ### CONTEXT YOU ARE GIVEN
 The conversation context may include:
 - \`<planned_visits>\` — \`has\` or \`none\`. Use it **only** to choose DEFAULT MENU («Записатись» vs «Мій запис»). Never list visits yourself — the supervisor owns that.
-- \`<list_services>\` — the last CRM service catalog: \`list[]\` of \`id\`, \`name\`, optional \`duration\`, optional \`description\`, optional \`total\`. Trust it like a \`list_services\` tool result for catalog drill-down and matching — call \`list_services\` only when the block is absent, \`list[]\` is empty, or a prior \`list_services\` returned \`{ error }\`.
+- \`<list_services>\` — the last CRM service catalog: \`list[]\` of \`id\`, \`name\`, optional \`duration\`, optional \`description\`, optional \`total\`, optional \`truncated\`. Trust it like a \`list_services\` tool result for catalog drill-down and matching — call \`list_services\` only when the block is absent, \`list[]\` is empty, or a prior \`list_services\` returned \`{ error }\`.
 - \`<system_metadata>\` — current Kyiv date and time.
 
 ---
