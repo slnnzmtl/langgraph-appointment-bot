@@ -322,6 +322,82 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(system).toContain("<list_planned_meetings>");
   });
 
+  it("refetches on Мій запис even when prefetch is fresh", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Мій запис")],
+        contactContext: { contacts: [{ id: "stale" }] },
+        bookingContext: null,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.contactContext).toEqual(listedContact);
+    expect(update.bookingContext).toEqual(listedMeetings);
+    expect(update.prefetchDirty).toBe(false);
+    expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
+  });
+
+  it("refetches on Мій запис when it is the last of consecutive human messages", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    await node(
+      supervisorState({
+        messages: [new HumanMessage("привіт"), new HumanMessage("Мій запис")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+  });
+
+  it("refetches on My visit even when prefetch is fresh", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    await node(
+      supervisorState({
+        messages: [new HumanMessage("My visit")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+  });
+
   it("refetches when prefetchFetchedAt is missing", async () => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,

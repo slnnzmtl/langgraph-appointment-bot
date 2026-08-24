@@ -315,6 +315,7 @@ export const formatKyivLocalIso = (date: Date): string => {
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
+    hourCycle: "h23",
   }).formatToParts(date);
   const byType = Object.fromEntries(
     parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),

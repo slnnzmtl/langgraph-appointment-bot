@@ -2,7 +2,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import type { McpCallTool } from "../shared/mcp.js";
-import { formatKyivLocalIso } from "./availability-slots.js";
+import { formatKyivLocalIso, normalizeLocalIsoDatetime } from "./availability-slots.js";
 
 const DAY_SCHEMA = z
   .string()
@@ -64,6 +64,21 @@ const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] =
   return out;
 };
 
+/** Keep meetings whose start is still after Kyiv now; keep unparseable dateStart. */
+const filterUpcomingMeetings = (
+  meetings: ListedMeeting[],
+  now = new Date(),
+): ListedMeeting[] => {
+  const nowIso = formatKyivLocalIso(now);
+  return meetings.filter((meeting) => {
+    try {
+      return normalizeLocalIsoDatetime(meeting.dateStart) > nowIso;
+    } catch {
+      return true;
+    }
+  });
+};
+
 export const lookupPlannedMeetings = async (
   callTool: McpCallTool,
   contactId: string,
@@ -84,7 +99,10 @@ export const lookupPlannedMeetings = async (
       order: "asc",
       limit: 50,
     });
-    return { meetings: extractPlannedMeetingsFromEntityResult(raw), dateFrom: from };
+    return {
+      meetings: filterUpcomingMeetings(extractPlannedMeetingsFromEntityResult(raw)),
+      dateFrom: from,
+    };
   } catch {
     return null;
   }

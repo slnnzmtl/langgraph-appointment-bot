@@ -417,6 +417,7 @@ describe("filterSlotsAfterNow", () => {
     // 2026-08-10 12:00:00+03:00 Kyiv ≈ 09:00 UTC
     const now = new Date("2026-08-10T09:00:00Z");
     expect(formatKyivLocalIso(now).startsWith("2026-08-10T")).toBe(true);
+    expect(formatKyivLocalIso(new Date("2026-08-23T17:53:00Z"))).toBe("2026-08-23T20:53:00");
     expect(filterSlotsAfterNow(slots, now).map((s) => s.label)).toEqual(["14:00"]);
   });
 });

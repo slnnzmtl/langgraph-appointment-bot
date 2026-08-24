@@ -1,5 +1,6 @@
 import {
   AIMessage,
+  HumanMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -11,6 +12,7 @@ import {
 } from "@personal-assistant/llm-gemini";
 
 import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
+import { extractMessageTextContent } from "../shared/message-content.js";
 import {
   formatContactContext,
   formatListedMeetingsContext,
@@ -140,9 +142,23 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     let contactContext = state.contactContext;
     let bookingContext = state.bookingContext;
     let prefetchUpdate: ClinicStateUpdate = {};
+    // Match the last HumanMessage in state (not stripped history — consecutive humans are merged there).
+    const lastHuman = [...state.messages].reverse().find((m) => m instanceof HumanMessage);
+    const lastHumanText = lastHuman
+      ? extractMessageTextContent(lastHuman.content).trim()
+      : "";
+    const lastHumanLine =
+      lastHumanText
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .at(-1) ?? "";
+    // «Мій запис» must always refetch — reminder HITL does not set prefetchDirty.
+    const forcePrefetch = /^(мій запис|my visit)$/i.test(lastHumanLine);
     const reusePrefetch =
       state.contactContext != null
       && !state.prefetchDirty
+      && !forcePrefetch
       && !isPrefetchExpired(state.prefetchFetchedAt, ttlMs);
     if (options.prefetch && !reusePrefetch) {
       try {

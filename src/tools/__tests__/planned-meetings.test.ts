@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMeetingTools } from "../meeting-tools.js";
 import { lookupPlannedMeetings } from "../planned-meetings.js";
@@ -10,6 +10,16 @@ const withTg = <T>(fn: () => Promise<T> | T): Promise<T> | T =>
   runWithTelegramUserId("tg-42", fn);
 
 describe("list_planned_meetings", () => {
+  beforeEach(() => {
+    // 2026-08-23 14:00 Kyiv (UTC+3) ≈ 11:00 UTC
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-23T11:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("calls search_entity with Contact parent and Planned filters", async () => {
     await withTg(async () => {
       const calls: CallRecord[] = [];
@@ -35,8 +45,8 @@ describe("list_planned_meetings", () => {
             {
               id: "mtg-1",
               name: "Consult: Ada",
-              dateStart: "2026-08-12T10:00:00",
-              dateEnd: "2026-08-12T10:30:00",
+              dateStart: "2026-08-23T16:00:00",
+              dateEnd: "2026-08-23T16:30:00",
               status: "Planned",
             },
           ],
@@ -72,8 +82,8 @@ describe("list_planned_meetings", () => {
         {
           id: "mtg-1",
           name: "Consult: Ada",
-          dateStart: "2026-08-12T10:00:00",
-          dateEnd: "2026-08-12T10:30:00",
+          dateStart: "2026-08-23T16:00:00",
+          dateEnd: "2026-08-23T16:30:00",
         },
       ]);
     });
@@ -86,8 +96,8 @@ describe("list_planned_meetings", () => {
           {
             id: "mtg-1",
             name: "Consult: Ada",
-            dateStart: "2026-08-12T10:00:00",
-            dateEnd: "2026-08-12T10:30:00",
+            dateStart: "2026-08-23T16:00:00",
+            dateEnd: "2026-08-23T16:30:00",
           },
         ],
       }),
@@ -99,8 +109,8 @@ describe("list_planned_meetings", () => {
         {
           id: "mtg-1",
           name: "Consult: Ada",
-          dateStart: "2026-08-12T10:00:00",
-          dateEnd: "2026-08-12T10:30:00",
+          dateStart: "2026-08-23T16:00:00",
+          dateEnd: "2026-08-23T16:30:00",
         },
       ],
       dateFrom: "2026-08-10",
@@ -111,5 +121,79 @@ describe("list_planned_meetings", () => {
         throw new Error("CRM down");
       }, "contact-9"),
     ).toBeNull();
+  });
+
+  it("drops a 16:45 Kyiv visit when now is 20:53 Kyiv", async () => {
+    vi.setSystemTime(new Date("2026-08-23T17:53:00Z"));
+    const listed = await lookupPlannedMeetings(
+      async () => ({
+        list: [
+          {
+            id: "past",
+            name: "Consultation",
+            dateStart: "2026-08-23 16:45:00",
+            dateEnd: "2026-08-23 17:15:00",
+          },
+          {
+            id: "future",
+            name: "Later",
+            dateStart: "2026-08-23T21:00:00",
+            dateEnd: "2026-08-23T21:30:00",
+          },
+        ],
+      }),
+      "contact-9",
+      "2026-08-23",
+    );
+    expect(listed?.meetings.map((m) => m.id)).toEqual(["future"]);
+  });
+
+  it("drops meetings whose dateStart is not after Kyiv now", async () => {
+    const listed = await lookupPlannedMeetings(
+      async () => ({
+        list: [
+          {
+            id: "past",
+            name: "Ended",
+            dateStart: "2026-08-23T13:00:00",
+            dateEnd: "2026-08-23T13:30:00",
+          },
+          {
+            id: "future",
+            name: "Later",
+            dateStart: "2026-08-23T16:00:00",
+            dateEnd: "2026-08-23T16:30:00",
+          },
+        ],
+      }),
+      "contact-9",
+      "2026-08-23",
+    );
+    expect(listed?.meetings.map((m) => m.id)).toEqual(["future"]);
+  });
+
+  it("keeps meetings with unparseable dateStart", async () => {
+    const listed = await lookupPlannedMeetings(
+      async () => ({
+        list: [
+          {
+            id: "bad",
+            name: "Odd",
+            dateStart: "not-a-datetime",
+            dateEnd: "2026-08-23T16:30:00",
+          },
+        ],
+      }),
+      "contact-9",
+      "2026-08-23",
+    );
+    expect(listed?.meetings).toEqual([
+      {
+        id: "bad",
+        name: "Odd",
+        dateStart: "not-a-datetime",
+        dateEnd: "2026-08-23T16:30:00",
+      },
+    ]);
   });
 });
