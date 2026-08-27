@@ -225,6 +225,20 @@ describe("createAgentPrepareNode", () => {
     expect(agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
     expect(update.contactContext).toBeUndefined();
     expect(update.bookingContext).toBeUndefined();
+    expect(update.servicesContext).toBeNull();
+  });
+
+  it("does not clear servicesContext when preparing FAQ", async () => {
+    const prepare = createAgentPrepareNode("faq");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Послуги")],
+        servicesContext: {
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+        },
+      }),
+    );
+    expect(update.servicesContext).toBeUndefined();
   });
 
   it("passes full thread history including other agents' replies", async () => {
@@ -507,7 +521,7 @@ describe("services context helpers", () => {
 });
 
 describe("createAgentToolsNode services capture", () => {
-  it("captures servicesContext from list_services", async () => {
+  it("captures servicesContext from list_services on FAQ", async () => {
     const listTool = tool(
       async () =>
         JSON.stringify({
@@ -521,7 +535,7 @@ describe("createAgentToolsNode services capture", () => {
       },
     );
 
-    const toolsNode = createAgentToolsNode([listTool]);
+    const toolsNode = createAgentToolsNode([listTool], "faq");
     const update = await toolsNode(
       clinicState({
         agentMessages: [
@@ -540,6 +554,36 @@ describe("createAgentToolsNode services capture", () => {
     });
   });
 
+  it("does not capture servicesContext from list_services on booking", async () => {
+    const listTool = tool(
+      async () =>
+        JSON.stringify({
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+          total: 1,
+        }),
+      {
+        name: "list_services",
+        description: "List services",
+        schema: z.object({}),
+      },
+    );
+
+    const toolsNode = createAgentToolsNode([listTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "list_services", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.servicesContext).toBeUndefined();
+  });
+
   it("does not clear servicesContext on update_contact", async () => {
     const updateTool = tool(async () => JSON.stringify({ id: "c-1" }), {
       name: "update_contact",
@@ -547,7 +591,7 @@ describe("createAgentToolsNode services capture", () => {
       schema: z.object({ firstName: z.string().optional() }),
     });
 
-    const toolsNode = createAgentToolsNode([updateTool]);
+    const toolsNode = createAgentToolsNode([updateTool], "faq");
     const update = await toolsNode(
       clinicState({
         agentMessages: [
@@ -771,7 +815,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });
 
-  it("appends list_services block to FAQ and booking on first LLM step", async () => {
+  it("appends list_services to FAQ only, never to booking", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -835,8 +879,49 @@ describe("createAgentLlmNode context cache", () => {
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
     expect(String(faqDynamic.content)).toContain("<list_services>");
     expect(String(faqDynamic.content)).toContain("svc-1");
-    expect(String(bookingDynamic.content)).toContain("<list_services>");
-    expect(String(bookingDynamic.content)).toContain("svc-1");
+    expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+  });
+
+  it("still appends list_services to FAQ when availabilityContext is set", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const sampleServices = {
+      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+      total: 1,
+    };
+
+    const faqNode = createAgentLlmNode({
+      agent: faqAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await faqNode(
+      clinicState({
+        agentMessages: [new HumanMessage("Послуги")],
+        servicesContext: sampleServices,
+        availabilityContext: {
+          days: [{ date: "2026-09-04", slots: [] }],
+          stepMinutes: 30,
+        },
+        next: "faq",
+      }),
+    );
+
+    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(faqDynamic.content)).toContain("<list_services>");
   });
 
   it("omits list_services block when list_services already ran this turn", async () => {

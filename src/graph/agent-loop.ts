@@ -208,10 +208,12 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (_agentId: string) =>
+export const createAgentPrepareNode = (agentId: string) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => ({
     agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
     stepCount: 0,
+    // Drop leftover FAQ catalog so booking/cancel turns do not bill or show it.
+    ...(agentId === BOOKING_AGENT_ID ? { servicesContext: null } : {}),
   });
 
 export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
@@ -276,7 +278,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
       dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
     }
     if (
-      (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
+      agent.id === FAQ_AGENT_ID
       && !toolRanThisTurn(state.agentMessages, "list_services")
     ) {
       dynamicParts.push(formatServicesContext(state.servicesContext));
@@ -332,7 +334,10 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
   };
 };
 
-export const createAgentToolsNode = (tools: StructuredToolInterface[]) => {
+export const createAgentToolsNode = (
+  tools: StructuredToolInterface[],
+  agentId?: string,
+) => {
   const toolNode = new ToolNode(tools);
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
@@ -356,9 +361,12 @@ export const createAgentToolsNode = (tools: StructuredToolInterface[]) => {
       }
     }
 
-    const capturedServices = captureServicesFromMessages(result.messages);
-    if (capturedServices !== undefined) {
-      update.servicesContext = capturedServices;
+    // Catalog checkpoint is FAQ-only («Обрати іншу процедуру» browse).
+    if (agentId === FAQ_AGENT_ID) {
+      const capturedServices = captureServicesFromMessages(result.messages);
+      if (capturedServices !== undefined) {
+        update.servicesContext = capturedServices;
+      }
     }
 
     if (crmWriteDirtiesPrefetch(result.messages)) {

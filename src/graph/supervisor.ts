@@ -14,6 +14,8 @@ import {
 import {
   PATIENT_FALLBACK_MESSAGE,
   SUPERVISOR_OWNED_REPLY_LABELS,
+  VISIT_CHANGE_MENU,
+  VISIT_CHANGE_MENU_EN,
 } from "../shared/clinic-constants.js";
 import {
   extractMessageTextContent,
@@ -53,6 +55,14 @@ export type SupervisorContextCacheOptions = {
 
 export const PREFETCH_TTL_MS = 5 * 60 * 1000;
 
+/** Move/cancel after «Мій запис» — supervisor prompt routes these to booking unconditionally. */
+const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
+  VISIT_CHANGE_MENU[0],
+  VISIT_CHANGE_MENU[1],
+  VISIT_CHANGE_MENU_EN[0],
+  VISIT_CHANGE_MENU_EN[1],
+]);
+
 export type CreateClinicSupervisorNodeOptions = {
   agents: ClinicAgentDefinition[];
   supervisorLlm: ILLMConnector;
@@ -70,6 +80,21 @@ export const isPrefetchExpired = (
   ttlMs: number,
   now = Date.now(),
 ): boolean => fetchedAt == null || now - fetchedAt >= ttlMs;
+
+const lastHumanLineFromMessages = (messages: BaseMessage[]): string => {
+  const lastHuman = [...messages].reverse().find((m) => m instanceof HumanMessage);
+  if (!lastHuman) {
+    return "";
+  }
+  const text = extractMessageTextContent(lastHuman.content).trim();
+  return (
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .at(-1) ?? ""
+  );
+};
 
 /**
  * Skip the supervisor LLM when the patient taps a shortcut the specialist just
@@ -110,15 +135,24 @@ export const shouldContinueInBooking = (state: ClinicState): boolean =>
 export const shouldContinueInFaq = (state: ClinicState): boolean =>
   shouldContinueInSpecialist(state, FAQ_AGENT_ID);
 
+/** True when the latest human line is Перенести / Скасувати (or EN). */
+export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
+  VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages));
+
 /** Agent id to sticky-continue into, or null when the supervisor LLM must run. */
 export const stickyContinueAgentId = (
   state: ClinicState,
 ): typeof FAQ_AGENT_ID | typeof BOOKING_AGENT_ID | null => {
-  const agentId = state.lastHandoff?.agentId;
-  if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
-    return null;
+  // After «Мій запис» (FINISH), adapter may inject visit-change buttons without
+  // storing them on lastHandoff — key on the human label, not stored buttons.
+  if (isVisitChangeRouteLabel(state)) {
+    return BOOKING_AGENT_ID;
   }
-  return shouldContinueInSpecialist(state, agentId) ? agentId : null;
+  const agentId = state.lastHandoff?.agentId;
+  if (agentId === FAQ_AGENT_ID || agentId === BOOKING_AGENT_ID) {
+    return shouldContinueInSpecialist(state, agentId) ? agentId : null;
+  }
+  return null;
 };
 
 const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
@@ -211,16 +245,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     let bookingContext = state.bookingContext;
     let prefetchUpdate: ClinicStateUpdate = {};
     // Match the last HumanMessage in state (not stripped history — consecutive humans are merged there).
-    const lastHuman = [...state.messages].reverse().find((m) => m instanceof HumanMessage);
-    const lastHumanText = lastHuman
-      ? extractMessageTextContent(lastHuman.content).trim()
-      : "";
-    const lastHumanLine =
-      lastHumanText
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0)
-        .at(-1) ?? "";
+    const lastHumanLine = lastHumanLineFromMessages(state.messages);
     // «Мій запис» must always refetch — reminder HITL does not set prefetchDirty.
     const forcePrefetch = /^(мій запис|my visit)$/i.test(lastHumanLine);
     const reusePrefetch =

@@ -20,7 +20,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq } =
+const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, stickyContinueAgentId } =
   await import("../supervisor.js");
 
 const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
@@ -884,5 +884,118 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
+  });
+});
+
+describe("stickyContinueAgentId visit-change after FINISH", () => {
+  it("routes Скасувати and Перенести to booking without needing stored buttons", () => {
+    expect(
+      stickyContinueAgentId(
+        supervisorState({
+          lastHandoff: {
+            agentId: "FINISH",
+            agentName: "supervisor",
+            status: "ok",
+            replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
+          },
+          messages: [
+            new AIMessage("Бажаєте перенести або скасувати цей візит?"),
+            new HumanMessage("Скасувати"),
+          ],
+        }),
+      ),
+    ).toBe("booking");
+    expect(
+      stickyContinueAgentId(
+        supervisorState({
+          lastHandoff: null,
+          messages: [
+            new AIMessage("Заплановані візити: консультація — 21 серпня о 11:00 🗓️"),
+            new HumanMessage("Перенести"),
+          ],
+        }),
+      ),
+    ).toBe("booking");
+    expect(
+      stickyContinueAgentId(
+        supervisorState({
+          lastHandoff: null,
+          messages: [new HumanMessage("Cancel")],
+        }),
+      ),
+    ).toBe("booking");
+  });
+
+  it("does not sticky-route Ні, дякую (supervisor-owned)", () => {
+    expect(
+      stickyContinueAgentId(
+        supervisorState({
+          lastHandoff: {
+            agentId: "FINISH",
+            agentName: "supervisor",
+            status: "ok",
+            replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
+          },
+          messages: [new HumanMessage("Ні, дякую")],
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("createClinicSupervisorNode visit-change sticky", () => {
+  const invoke = vi.fn();
+  const bindRoutingTools = vi.fn(() => ({ invoke }));
+  const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
+
+  beforeEach(() => {
+    invoke.mockReset();
+    bindRoutingTools.mockClear();
+    invoke.mockResolvedValue({ next: "faq", reply: "should not be used" });
+  });
+
+  it("skips the LLM and routes Скасувати to booking after a FINISH visit list", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      bookingContext: {
+        meetings: [
+          {
+            id: "m-1",
+            name: "Консультація - Ada",
+            dateStart: "2026-08-21 11:00:00",
+            dateEnd: "2026-08-21 11:30:00",
+          },
+        ],
+        dateFrom: "2026-08-11",
+      },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "FINISH",
+          agentName: "supervisor",
+          status: "ok",
+        },
+        messages: [
+          new AIMessage("Заплановані візити: консультація — 21 серпня о 11:00 🗓️"),
+          new HumanMessage("Скасувати"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update).toMatchObject({
+      next: "booking",
+      lastHandoff: null,
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+    });
   });
 });

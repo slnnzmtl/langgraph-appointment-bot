@@ -126,7 +126,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             : {}),
         }),
       )
-      .addNode(toolsNode, createAgentToolsNode(tools))
+      .addNode(toolsNode, createAgentToolsNode(tools, agent.id))
       .addNode(finalize, createAgentFinalizeNode(agent))
       .addEdge(prepare, llm)
       .addConditionalEdges(
