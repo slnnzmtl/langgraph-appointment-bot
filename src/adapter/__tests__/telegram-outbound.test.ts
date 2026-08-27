@@ -6,13 +6,36 @@ import {
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   MAIN_MENU_LABEL,
+  VISIT_CHANGE_MENU,
   type ReplyKeyboardMarkup,
 } from "../telegram-ui.js";
 
 const asReply = (markup: unknown): ReplyKeyboardMarkup => markup as ReplyKeyboardMarkup;
 
 describe("interpretInvokeResult reply selection", () => {
-  it("prefers the substantive specialist reply over routing leaks and short supervisor meta", () => {
+  it("prefers lastHandoff.replyText over a longer AI message in history", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "Підкажіть ваш номер телефону.",
+        replyButtons: undefined,
+      },
+      messages: [
+        new HumanMessage("11:00"),
+        new AIMessage(
+          "Найближчі вільні дні для консультації 🗓️\n- 25 серпня\n- 3 вересня\n\nЯкий день вам зручний?",
+        ),
+        new AIMessage("Підкажіть ваш номер телефону."),
+      ],
+    });
+
+    expect(result.text).toBe("Підкажіть ваш номер телефону.");
+    expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
+  });
+
+  it("falls back to longest visible AI text when lastHandoff has no replyText", () => {
     const result = interpretInvokeResult({
       messages: [
         new HumanMessage("show services"),
@@ -25,9 +48,7 @@ describe("interpretInvokeResult reply selection", () => {
     });
 
     expect(result.text).toContain("Service A");
-    expect(result.text).not.toBe("next=FINISH");
     expect(result.text).not.toBe("I have provided the list above.");
-    expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
   });
 
   it("uses lastHandoff.replyButtons when history no longer has a trailer", () => {
@@ -36,6 +57,7 @@ describe("interpretInvokeResult reply selection", () => {
         agentId: "FINISH",
         agentName: "supervisor",
         status: "ok",
+        replyText: "Привіт, Тест! Я ШІ-асистент клініки.",
         replyButtons: ["Записатись", "Послуги", "Адреса"],
       },
       messages: [
@@ -51,17 +73,20 @@ describe("interpretInvokeResult reply selection", () => {
     ]);
   });
 
-  it("strips reply shortcuts and attaches date or time reply keyboards", () => {
+  it("attaches date or time reply keyboards from lastHandoff", () => {
     const dates = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyButtons: ["25 серпня", "3 вересня", "4 вересня", "Інша дата"],
+      },
       messages: [
         new HumanMessage("коли можна"),
-        new AIMessage(
-          "Який день вам зручний?\n\n<reply_buttons>\n25 серпня\n3 вересня\n4 вересня\nІнша дата\n</reply_buttons>",
-        ),
+        new AIMessage("Який день вам зручний?"),
       ],
     });
     expect(dates.text).toBe("Який день вам зручний?");
-    expect(dates.text).not.toContain("reply_buttons");
     expect(asReply(dates.reply_markup).keyboard).toEqual([
       [{ text: "25 серпня" }, { text: "3 вересня" }],
       [{ text: "4 вересня" }, { text: "Інша дата" }],
@@ -69,11 +94,15 @@ describe("interpretInvokeResult reply selection", () => {
     ]);
 
     const times = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyButtons: ["11:00", "13:00"],
+      },
       messages: [
         new HumanMessage("25 серпня"),
-        new AIMessage(
-          "Який час вам зручний?\n\n<reply_buttons>\n11:00\n13:00\n</reply_buttons>",
-        ),
+        new AIMessage("Який час вам зручний?"),
         new ToolMessage({
           tool_call_id: "slots-1",
           name: "present_availability_slots",
@@ -110,8 +139,14 @@ describe("interpretInvokeResult reply selection", () => {
     expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
   });
 
-  it("injects visit-change shortcuts when Мій запис has no trailer", () => {
+  it("renders visit-change shortcuts from lastHandoff after Мій запис", () => {
     const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "FINISH",
+        agentName: "supervisor",
+        status: "ok",
+        replyButtons: [...VISIT_CHANGE_MENU],
+      },
       messages: [
         new HumanMessage("Мій запис"),
         new AIMessage(
@@ -121,7 +156,6 @@ describe("interpretInvokeResult reply selection", () => {
     });
 
     expect(result.text).toContain("Бажаєте перенести або скасувати");
-    expect(result.text).not.toContain("reply_buttons");
     expect(asReply(result.reply_markup).keyboard).toEqual([
       [{ text: "Перенести" }, { text: "Скасувати" }],
       [{ text: "Ні, дякую" }, { text: MAIN_MENU_LABEL }],
@@ -132,9 +166,7 @@ describe("interpretInvokeResult reply selection", () => {
     const result = interpretInvokeResult({
       messages: [
         new HumanMessage("9:00 консультація"),
-        new AIMessage(
-          "Ignoring this text.\n<reply_buttons>\nТак\n</reply_buttons>",
-        ),
+        new AIMessage("Ignoring this text."),
       ],
       __interrupt__: [
         {

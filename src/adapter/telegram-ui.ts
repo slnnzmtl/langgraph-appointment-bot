@@ -21,39 +21,6 @@ export { extractReplyButtons, type ExtractedReplyButtons } from "../shared/messa
 export const CONFIRM_YES_LABEL = "✅";
 export const CONFIRM_NO_LABEL = "❌";
 
-const MOVE_OR_CANCEL_LABEL = new Set<string>([
-  VISIT_CHANGE_MENU[0],
-  VISIT_CHANGE_MENU[1],
-  VISIT_CHANGE_MENU_EN[0],
-  VISIT_CHANGE_MENU_EN[1],
-]);
-
-/** Ask about this visit — not greeting copy like «записати, перенести чи скасувати візит». */
-const ASKS_VISIT_CHANGE =
-  /бажаєте перенести (?:або|чи) скасувати|перенести (?:або|чи) скасувати (?:цей|ваш) візит|would you like to (?:reschedule|move) or cancel|(?:reschedule|move) or cancel this visit/i;
-
-/**
- * When the model forgot `<reply_buttons>` (or attached DEFAULT MENU) on a visit-change
- * ask / «Мій запис» listing, inject the visit-change menu.
- */
-export const ensureVisitChangeButtons = (
-  text: string,
-  buttons: string[],
-  lastUserText = "",
-): string[] => {
-  const listed = /запланован|upcoming visit|scheduled visit/i.test(text) && /🗓️|📅/.test(text);
-  const myVisit = /^(мій запис|my visit)$/i.test(lastUserText.trim());
-  if (
-    !(ASKS_VISIT_CHANGE.test(text) || (myVisit && listed))
-    || buttons.some((label) => MOVE_OR_CANCEL_LABEL.has(label))
-  ) {
-    return buttons;
-  }
-  const english =
-    /reschedule|cancel this visit|move or cancel/i.test(text) && !/перенес|скасув/i.test(text);
-  return [...(english ? VISIT_CHANGE_MENU_EN : VISIT_CHANGE_MENU)];
-};
-
 export type KeyboardButton = {
   text: string;
 };

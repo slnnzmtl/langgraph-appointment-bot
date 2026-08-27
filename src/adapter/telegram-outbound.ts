@@ -1,13 +1,11 @@
 import {
   extractMessageTextContent,
-  extractReplyButtons,
   replyButtonLabels,
 } from "../shared/message-content.js";
 import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
 import {
   buildConfirmKeyboard,
   buildReplyKeyboard,
-  ensureVisitChangeButtons,
   withMainMenu,
   type ReplyKeyboardMarkup,
 } from "./telegram-ui.js";
@@ -53,13 +51,12 @@ const isRoutingLeak = (text: string): boolean => {
   return false;
 };
 
-const lastVisibleTurn = (messages: unknown): { ai: string; human: string } => {
+const lastVisibleAiText = (messages: unknown): string => {
   if (!Array.isArray(messages)) {
-    return { ai: "", human: "" };
+    return "";
   }
 
   let lastHumanIndex = -1;
-  let human = "";
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i] as {
       _getType?: () => string;
@@ -69,7 +66,6 @@ const lastVisibleTurn = (messages: unknown): { ai: string; human: string } => {
     const type = typeof msg._getType === "function" ? msg._getType() : undefined;
     if (type === "human" || msg.constructor?.name === "HumanMessage") {
       lastHumanIndex = i;
-      human = messageText(msg.content);
       break;
     }
   }
@@ -94,7 +90,7 @@ const lastVisibleTurn = (messages: unknown): { ai: string; human: string } => {
     }
   }
 
-  return { ai, human };
+  return ai;
 };
 
 type InterruptItem = { value?: unknown };
@@ -218,9 +214,9 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
 
 export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const record = (result && typeof result === "object" ? result : {}) as Record<string, unknown>;
-  const messages = record.messages;
-  const turn = lastVisibleTurn(messages);
-  const rawText = turn.ai || "…";
+  const handoff = record.lastHandoff as
+    | { replyButtons?: unknown; replyText?: unknown }
+    | undefined;
   const confirmDraft = getConfirmBookingDraft(record);
 
   if (confirmDraft) {
@@ -230,16 +226,12 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     };
   }
 
-  const { text } = extractReplyButtons(rawText);
-  const buttons = replyButtonLabels(
-    (record.lastHandoff as { replyButtons?: unknown } | undefined)?.replyButtons,
-    rawText,
-  );
-  const visible = text || "…";
+  const handoffText =
+    typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
+  const visible = handoffText || lastVisibleAiText(record.messages) || "…";
+  const buttons = replyButtonLabels(handoff?.replyButtons);
   return {
     text: visible,
-    reply_markup: buildReplyKeyboard(
-      withMainMenu(ensureVisitChangeButtons(visible, buttons, turn.human)),
-    ),
+    reply_markup: buildReplyKeyboard(withMainMenu(buttons)),
   };
 };

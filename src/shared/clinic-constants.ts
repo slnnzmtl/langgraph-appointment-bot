@@ -16,10 +16,12 @@ export const MAX_PRESENTED_SLOTS = 12;
 /** Max calendar days to scan when looking for the next free appointment day. */
 export const MAX_AVAILABILITY_SEARCH_DAYS = 30;
 /** How many open days with free slots to return in one next-available search. */
-export const MAX_PROPOSED_AVAILABILITY_DAYS = 5;
+export const MAX_PROPOSED_AVAILABILITY_DAYS = 3;
 
 /** Always appended last on every reply keyboard (back to idle DEFAULT MENU). */
 export const MAIN_MENU_LABEL = "Головне меню";
+/** DATE-step extra shortcut; TIME step may include it too. */
+export const OTHER_DATE_LABEL = "Інша дата";
 
 export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
 export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;

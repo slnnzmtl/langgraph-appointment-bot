@@ -33,6 +33,17 @@ describe("trackEvent", () => {
     expect(seen).toEqual([{ name: "contact_created", props: { contact_id: "c-1" } }]);
   });
 
+  it("accepts reply_menu_filled as a Tier1 event", () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
+    trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
+    expect(seen).toEqual([
+      { name: "reply_menu_filled", props: { menu: "visit_change", reason: "omitted" } },
+    ]);
+  });
+
   it("no-ops when ANALYTICS_DISABLED=1", () => {
     process.env.ANALYTICS_DISABLED = "1";
     const seen: Captured[] = [];

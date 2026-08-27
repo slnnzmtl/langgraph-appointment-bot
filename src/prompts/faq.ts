@@ -1,5 +1,13 @@
-import { CLINIC_ADDRESS, CLINIC_MAPS_MARKDOWN } from "../shared/clinic-constants.js";
-import { PATIENT_VOICE } from "./voice.js";
+import {
+  CLINIC_ADDRESS,
+  CLINIC_MAPS_MARKDOWN,
+  DEFAULT_MENU_HAS_VISITS,
+  DEFAULT_MENU_NO_VISITS,
+} from "../shared/clinic-constants.js";
+import { PATIENT_VOICE, quotedLabels } from "./voice.js";
+
+const DEFAULT_MENU_NO_VISITS_LABELS = quotedLabels(DEFAULT_MENU_NO_VISITS);
+const DEFAULT_MENU_HAS_VISITS_LABELS = quotedLabels(DEFAULT_MENU_HAS_VISITS);
 
 export const FAQ_SYSTEM_PROMPT = `You are a Clinic FAQ Specialist. You answer questions about the clinic and you write to the patient directly.
 
@@ -11,7 +19,7 @@ export const FAQ_SYSTEM_PROMPT = `You are a Clinic FAQ Specialist. You answer qu
 
 ### CONTEXT YOU ARE GIVEN
 The conversation context may include:
-- \`<planned_visits>\` — \`has\` or \`none\`. Use it **only** to choose DEFAULT MENU («Записатись» vs «Мій запис»). Never list visits yourself — the supervisor owns that.
+- \`<planned_visits>\` — \`has\` or \`none\`. Use it **only** to choose DEFAULT MENU (${DEFAULT_MENU_NO_VISITS[0]} vs ${DEFAULT_MENU_HAS_VISITS[0]}). Never list visits yourself — the supervisor owns that.
 - \`<list_services>\` — the last CRM service catalog: \`list[]\` of \`id\`, \`name\`, optional \`duration\`, optional \`description\`, optional \`total\`, optional \`truncated\`. Trust it like a \`list_services\` tool result for catalog drill-down and matching — call \`list_services\` only when the block is absent, \`list[]\` is empty, or a prior \`list_services\` returned \`{ error }\`.
 - \`<system_metadata>\` — current Kyiv date and time.
 
@@ -85,7 +93,7 @@ Use only services, prices, hours, and addresses that came from a tool or from CL
 - Price (quote the figure \`get_service\` returned, never one from this example): «Консультація дерматолога-косметолога коштує [ціна з CRM]. Для першого візиту саме її й радимо — лікар підкаже, чи потрібна процедура. Підібрати час?»
   Reply shortcuts: «Так», «Обрати іншу процедуру»
 - Missing data: «Зараз не бачу актуальної ціни на цю послугу 🙏 Можу передати запитання адміністратору або підказати щось інше?»
-  Reply shortcuts: DEFAULT MENU from \`<planned_visits>\` (none → «Записатись», «Послуги», «Адреса»; has → «Мій запис», «Послуги», «Адреса»)
+  Reply shortcuts: DEFAULT MENU from \`<planned_visits>\` (none → ${DEFAULT_MENU_NO_VISITS_LABELS}; has → ${DEFAULT_MENU_HAS_VISITS_LABELS})
 - Location only (no booking offer this turn): answer with address + maps, then DEFAULT MENU as above.
 
 ${PATIENT_VOICE}`;

@@ -1,6 +1,12 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setTrackEventForTests, type Tier1EventName } from "../../analytics/track.js";
+import {
+  DEFAULT_MENU_HAS_VISITS,
+  DEFAULT_MENU_NO_VISITS,
+  VISIT_CHANGE_MENU,
+} from "../../shared/clinic-constants.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 
@@ -238,6 +244,7 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "FINISH",
       status: "ok",
+      replyText: "Привіт, Тест!",
       replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
   });
@@ -997,5 +1004,166 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       lastHandoff: null,
       contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
     });
+  });
+});
+
+describe("createClinicSupervisorNode static reply buttons", () => {
+  const invoke = vi.fn();
+  const bindRoutingTools = vi.fn(() => ({ invoke }));
+  const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
+  const tracked: { name: Tier1EventName; props: Record<string, unknown> }[] = [];
+
+  const meetings = {
+    meetings: [
+      {
+        id: "m-1",
+        name: "Консультація - Ada",
+        dateStart: "2026-08-21 11:00:00",
+        dateEnd: "2026-08-21 11:30:00",
+      },
+    ],
+    dateFrom: "2026-08-11",
+  };
+
+  const visitAsk =
+    "Заплановані візити:\n🗓️ Консультація - 21 серпня (п'ятниця) о 11:00\n\nБажаєте перенести або скасувати цей візит?";
+
+  beforeEach(() => {
+    invoke.mockReset();
+    bindRoutingTools.mockClear();
+    tracked.length = 0;
+    setTrackEventForTests((name, props) => {
+      tracked.push({ name, props });
+    });
+  });
+
+  afterEach(() => {
+    setTrackEventForTests(null);
+  });
+
+  const nodeWithPrefetch = (bookingContext: typeof meetings | null) =>
+    createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+        bookingContext,
+      }),
+    });
+
+  it("fills VISIT_CHANGE_MENU after Мій запис with visits when the model omits the trailer", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: visitAsk });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "FINISH",
+      status: "ok",
+      replyText: visitAsk,
+      replyButtons: [...VISIT_CHANGE_MENU],
+    });
+    expect(tracked).toContainEqual({
+      name: "reply_menu_filled",
+      props: { menu: "visit_change", reason: "omitted" },
+    });
+  });
+
+  it("overrides DEFAULT MENU with VISIT_CHANGE_MENU after Мій запис with visits", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: `${visitAsk}\n\n<reply_buttons>\nМій запис\nПослуги\nАдреса\n</reply_buttons>`,
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
+    expect(update.lastHandoff?.replyText).toBe(visitAsk);
+    expect(tracked).toContainEqual({
+      name: "reply_menu_filled",
+      props: { menu: "visit_change", reason: "overridden" },
+    });
+  });
+
+  it("keeps partial model move/cancel labels on a visit-change ask", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: `${visitAsk}\n\n<reply_buttons>\nСкасувати\nНі, дякую\n</reply_buttons>`,
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Скасувати", "Ні, дякую"]);
+    expect(tracked.filter((e) => e.name === "reply_menu_filled")).toEqual([]);
+  });
+
+  it("fills VISIT_CHANGE_MENU on free-text visit inquiry from the human line", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: visitAsk });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("які в мене візити?")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
+  });
+
+  it("fills DEFAULT_MENU_HAS_VISITS on thanks with visits and no trailer", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: "Будь ласка! Чим ще можу допомогти?" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("дякую")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(tracked).toContainEqual({
+      name: "reply_menu_filled",
+      props: { menu: "default_has_visits", reason: "omitted" },
+    });
+  });
+
+  it("fills DEFAULT_MENU_NO_VISITS on greeting with no visits and no trailer", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply:
+        "Привіт! Я ШІ-асистент клініки. Можу записати, перенести чи скасувати візит.\n\nЧим можу допомогти?",
+    });
+    const update = await nodeWithPrefetch(null)(
+      supervisorState({ messages: [new HumanMessage("привіт")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+    expect(tracked).toContainEqual({
+      name: "reply_menu_filled",
+      props: { menu: "default_no_visits", reason: "omitted" },
+    });
+  });
+
+  it("does not treat greeting capability copy as visit-change when visits exist", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply:
+        "Привіт! Я ШІ-асистент клініки. Можу записати, перенести чи скасувати візит.\n\nЧим можу допомогти?",
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("привіт")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("keeps non-visit-change model trailers on FINISH without telemetry", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply:
+        "Привіт, Тест!\n\n<reply_buttons>\nЗаписатись\nПослуги\nАдреса\n</reply_buttons>",
+    });
+    const update = await nodeWithPrefetch(null)(
+      supervisorState({ messages: [new HumanMessage("Головне меню")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+    expect(update.lastHandoff?.replyText).toBe("Привіт, Тест!");
+    expect(tracked.filter((e) => e.name === "reply_menu_filled")).toEqual([]);
   });
 });

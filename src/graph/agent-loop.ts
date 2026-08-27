@@ -412,10 +412,12 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
             response_metadata: tagged.response_metadata,
           })
         : tagged;
+    const replyText = extractMessageTextContent(replyMessage.content).trim();
     const lastHandoff = {
       agentId: agent.id,
       agentName: agent.name,
       status,
+      ...(replyText.length > 0 ? { replyText } : {}),
       ...(buttons.length > 0 ? { replyButtons: buttons } : {}),
       ...(yieldToSupervisor ? { yieldToSupervisor: true } : {}),
     };
@@ -425,7 +427,6 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     }
 
     if (status === "max_steps") {
-      const replyText = extractMessageTextContent(replyMessage.content).trim();
       if (replyText.length === 0) {
         console.error(
           `[clinic-${agent.id}] exceeded the maximum of ${agent.maxSteps} tool steps.`,

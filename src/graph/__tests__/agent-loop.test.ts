@@ -1229,6 +1229,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "booking",
       status: "ok",
+      replyText: "Підібрати вільний час на консультацію?",
       replyButtons: ["Так", "Обрати іншу процедуру"],
     });
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
@@ -1260,6 +1261,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "faq",
       status: "ok",
+      replyText: "Записати вас на консультацію?",
       replyButtons: ["Так", "Обрати іншу процедуру"],
       yieldToSupervisor: true,
     });
@@ -1287,6 +1289,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "faq",
       status: "ok",
+      replyText: "Done.",
       yieldToSupervisor: true,
     });
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
