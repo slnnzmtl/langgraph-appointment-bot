@@ -26,6 +26,8 @@ export type ClinicHandoff = {
   status: ClinicHandoffStatus;
   /** Labels from the last agent reply trailer (stripped from checkpointed text). */
   replyButtons?: string[];
+  /** When true, the next patient message must go through the supervisor. */
+  yieldToSupervisor?: boolean;
 };
 
 /** Contact + upcoming meetings loaded at supervisor entry (TTL / dirty-gated). */

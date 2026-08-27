@@ -37,6 +37,7 @@ import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
+  FAQ_AGENT_ID,
   FINISH_ROUTE,
   type AgentPrefetchResult,
   type ClinicAgentDefinition,
@@ -71,12 +72,18 @@ export const isPrefetchExpired = (
 ): boolean => fetchedAt == null || now - fetchedAt >= ttlMs;
 
 /**
- * Skip the supervisor LLM when the patient taps a shortcut the booking agent
- * just offered (date/time/Так/Інша дата/Перенести/Скасувати). Supervisor-owned
- * labels and free text still go through the LLM.
+ * Skip the supervisor LLM when the patient taps a shortcut the specialist just
+ * offered. Supervisor-owned labels, free text, and yielded handoffs still go
+ * through the LLM.
  */
-export const shouldContinueInBooking = (state: ClinicState): boolean => {
-  if (state.lastHandoff?.agentId !== BOOKING_AGENT_ID || state.lastHandoff.status !== "ok") {
+export const shouldContinueInSpecialist = (
+  state: ClinicState,
+  agentId: string,
+): boolean => {
+  if (state.lastHandoff?.agentId !== agentId || state.lastHandoff.status !== "ok") {
+    return false;
+  }
+  if (state.lastHandoff.yieldToSupervisor) {
     return false;
   }
 
@@ -95,6 +102,23 @@ export const shouldContinueInBooking = (state: ClinicState): boolean => {
     lastAi ? extractMessageTextContent(lastAi.content) : undefined,
   );
   return labels.includes(humanText);
+};
+
+export const shouldContinueInBooking = (state: ClinicState): boolean =>
+  shouldContinueInSpecialist(state, BOOKING_AGENT_ID);
+
+export const shouldContinueInFaq = (state: ClinicState): boolean =>
+  shouldContinueInSpecialist(state, FAQ_AGENT_ID);
+
+/** Agent id to sticky-continue into, or null when the supervisor LLM must run. */
+export const stickyContinueAgentId = (
+  state: ClinicState,
+): typeof FAQ_AGENT_ID | typeof BOOKING_AGENT_ID | null => {
+  const agentId = state.lastHandoff?.agentId;
+  if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
+    return null;
+  }
+  return shouldContinueInSpecialist(state, agentId) ? agentId : null;
 };
 
 const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
@@ -221,9 +245,10 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       }
     }
 
-    if (shouldContinueInBooking(state)) {
+    const stickyNext = stickyContinueAgentId(state);
+    if (stickyNext) {
       return {
-        next: BOOKING_AGENT_ID,
+        next: stickyNext,
         lastHandoff: null,
         ...prefetchUpdate,
       };

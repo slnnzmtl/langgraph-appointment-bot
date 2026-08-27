@@ -20,7 +20,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking } =
+const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq } =
   await import("../supervisor.js");
 
 const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
@@ -662,6 +662,158 @@ describe("shouldContinueInBooking", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+describe("shouldContinueInFaq", () => {
+  const faqOffer = (labels: string[]) =>
+    new AIMessage(
+      `Який напрямок?\n<reply_buttons>\n${labels.join("\n")}\n</reply_buttons>`,
+    );
+
+  it("is true when last handoff is faq/ok and the human taps an offered catalog label", () => {
+    expect(
+      shouldContinueInFaq(
+        supervisorState({
+          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+          messages: [
+            faqOffer(["Ін'єкційні процедури", "Консультації та діагностика"]),
+            new HumanMessage("Ін'єкційні процедури"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is true when reply buttons were stripped from checkpointed history", () => {
+    expect(
+      shouldContinueInFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            replyButtons: ["ботулінотерапія", "збільшення губ"],
+          },
+          messages: [
+            new AIMessage("Яка процедура вас цікавить?"),
+            new HumanMessage("ботулінотерапія"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false when lastHandoff yielded to supervisor", () => {
+    expect(
+      shouldContinueInFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            yieldToSupervisor: true,
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Записати вас на консультацію?"),
+            new HumanMessage("Так"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for supervisor-owned labels, free text, and non-faq handoffs", () => {
+    expect(
+      shouldContinueInFaq(
+        supervisorState({
+          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+          messages: [
+            faqOffer(["Записатись", "Послуги", "Адреса"]),
+            new HumanMessage("Послуги"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldContinueInFaq(
+        supervisorState({
+          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+          messages: [faqOffer(["ботулінотерапія"]), new HumanMessage("а скільки коштує?")],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldContinueInFaq(
+        supervisorState({
+          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          messages: [faqOffer(["ботулінотерапія"]), new HumanMessage("ботулінотерапія")],
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("createClinicSupervisorNode sticky faq continue", () => {
+  const invoke = vi.fn();
+  const bindRoutingTools = vi.fn(() => ({ invoke }));
+  const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
+
+  beforeEach(() => {
+    invoke.mockReset();
+    bindRoutingTools.mockClear();
+    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
+  });
+
+  it("skips the LLM and routes to faq when a catalog shortcut is tapped", async () => {
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+        messages: [
+          new AIMessage(
+            "Який напрямок?\n<reply_buttons>\nІн'єкційні процедури\n</reply_buttons>",
+          ),
+          new HumanMessage("Ін'єкційні процедури"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update).toMatchObject({ next: "faq", lastHandoff: null });
+  });
+
+  it("still calls the LLM after a yielded FAQ consultation offer", async () => {
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          yieldToSupervisor: true,
+          replyButtons: ["Так", "Обрати іншу процедуру"],
+        },
+        messages: [
+          new AIMessage("Записати вас на консультацію?"),
+          new HumanMessage("Так"),
+        ],
+      }),
+    );
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
   });
 });
 

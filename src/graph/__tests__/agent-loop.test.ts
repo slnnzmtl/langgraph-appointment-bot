@@ -1146,5 +1146,64 @@ describe("createAgentFinalizeNode", () => {
       status: "ok",
       replyButtons: ["Так", "Обрати іншу процедуру"],
     });
+    expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+  });
+
+  it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Записати вас на консультацію?\n<yield_to_supervisor/>\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    const stored = update.messages?.[0] as AIMessage;
+    expect(String(stored.content)).toBe("Записати вас на консультацію?");
+    expect(String(stored.content)).not.toContain("yield_to_supervisor");
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "faq",
+      status: "ok",
+      replyButtons: ["Так", "Обрати іншу процедуру"],
+      yieldToSupervisor: true,
+    });
+  });
+
+  it("strips a yield-only trailer with no reply_buttons", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [new AIMessage("Done.\n<yield_to_supervisor/>")],
+      }),
+    );
+
+    const stored = update.messages?.[0] as AIMessage;
+    expect(String(stored.content)).toBe("Done.");
+    expect(String(stored.content)).not.toContain("yield_to_supervisor");
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "faq",
+      status: "ok",
+      yieldToSupervisor: true,
+    });
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 });

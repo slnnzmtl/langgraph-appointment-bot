@@ -393,9 +393,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
-    const { text, buttons } = extractReplyButtons(extractMessageTextContent(tagged.content));
+    const { text, buttons, yieldToSupervisor } = extractReplyButtons(
+      extractMessageTextContent(tagged.content),
+    );
     const replyMessage =
-      buttons.length > 0
+      buttons.length > 0 || yieldToSupervisor
         ? new AIMessage({
             content: text,
             additional_kwargs: tagged.additional_kwargs,
@@ -407,6 +409,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       agentName: agent.name,
       status,
       ...(buttons.length > 0 ? { replyButtons: buttons } : {}),
+      ...(yieldToSupervisor ? { yieldToSupervisor: true } : {}),
     };
 
     if (status === "empty") {

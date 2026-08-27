@@ -65,19 +65,34 @@ const REPLY_BUTTONS_TRAILER = /(?:\r?\n)*<reply_buttons\b[\s\S]*$/i;
 
 const REPLY_BUTTON_TAG = /<\/?reply_buttons\b[^>]*>/gi;
 
+const YIELD_TO_SUPERVISOR_TAG = /<yield_to_supervisor\s*\/?>/gi;
+
 export type ExtractedReplyButtons = {
   text: string;
   buttons: string[];
+  /** When true, the next patient message must go through the supervisor. */
+  yieldToSupervisor: boolean;
 };
 
-/** Strip a trailing `<reply_buttons>` trailer and return up to 4 unique labels. */
+const stripYieldToSupervisorTags = (raw: string): { cleaned: string; yieldToSupervisor: boolean } => {
+  const yieldToSupervisor = YIELD_TO_SUPERVISOR_TAG.test(raw);
+  YIELD_TO_SUPERVISOR_TAG.lastIndex = 0;
+  const cleaned = raw
+    .replace(YIELD_TO_SUPERVISOR_TAG, "")
+    .replace(/(?:\r?\n){3,}/g, "\n\n")
+    .trimEnd();
+  return { cleaned, yieldToSupervisor };
+};
+
+/** Strip trailing yield / `<reply_buttons>` trailers and return up to 4 unique labels. */
 export const extractReplyButtons = (raw: string): ExtractedReplyButtons => {
-  const match = raw.match(REPLY_BUTTONS_TRAILER);
+  const { cleaned, yieldToSupervisor } = stripYieldToSupervisorTags(raw);
+  const match = cleaned.match(REPLY_BUTTONS_TRAILER);
   if (!match || match.index === undefined) {
-    return { text: raw, buttons: [] };
+    return { text: cleaned, buttons: [], yieldToSupervisor };
   }
 
-  const before = raw.slice(0, match.index).trimEnd();
+  const before = cleaned.slice(0, match.index).trimEnd();
   const trailer = match[0];
   // When a closing tag exists, labels stop at the last one; any prose after it
   // stays in the visible reply instead of becoming a button label.
@@ -111,7 +126,7 @@ export const extractReplyButtons = (raw: string): ExtractedReplyButtons => {
   const text = after.length > 0
     ? (before.length > 0 ? `${before}\n\n${after}` : after)
     : before;
-  return { text, buttons };
+  return { text, buttons, yieldToSupervisor };
 };
 
 /** Prefer checkpointed `lastHandoff.replyButtons`; fall back to a message trailer. */
