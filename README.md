@@ -1,6 +1,8 @@
 # Clinic Appointment Bot
 
-Thin LangGraph clinic bot for Telegram. FAQ + booking/cancel/reschedule via EspoCRM MCP, Gemini supervisor routing, telegraf long polling with HITL Yes/No confirm.
+Telegram AI for a cosmetic clinic. Patients chat in private Telegram; the bot answers clinic FAQ and books / moves / cancels visits in EspoCRM via MCP (Gemini supervisor + FAQ / booking specialists, telegraf long polling, HITL ✅/❌). Ukrainian-first; replies in the patient’s language.
+
+Product topology, routing, and change map: [AGENT.md](AGENT.md).
 
 ## Setup
 
@@ -37,9 +39,9 @@ When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also li
 
 **Public HTTPS (Caddy on this host):** EspoCRM should call:
 
-`https://fedchenko.slnnzmtl.xyz/webhooks/tomorrow-reminder`
+`https://<public-host>/webhooks/tomorrow-reminder`
 
-Host Caddy ([`deploy/Caddyfile`](deploy/Caddyfile) → `/etc/caddy/Caddyfile`) terminates TLS, allowlists EspoCRM egress **IPv4** `91.99.109.18`, and reverse-proxies the same path to `http://127.0.0.1:8080`. Other client IPs and paths get `403`. Caddy binds `13.140.158.49` only so it does not clash with Tailscale on `:443`. After editing the repo file, copy it to `/etc/caddy/Caddyfile` (do not symlink under `/root` — the `caddy` user cannot read it) and `systemctl restart caddy`.
+Host Caddy ([`deploy/Caddyfile`](deploy/Caddyfile) → `/etc/caddy/Caddyfile`) terminates TLS, allowlists EspoCRM egress **IPv4**, and reverse-proxies the same path to `http://127.0.0.1:8080`. Other client IPs and paths get `403`. Bind Caddy to the public IPv4 only so it does not clash with Tailscale on `:443`. After editing the repo file, copy it to `/etc/caddy/Caddyfile` (do not symlink under `/root` — the `caddy` user cannot read it) and `systemctl restart caddy`.
 
 ```sh
 # Loopback (on the bot host) — HITL needs id (+ status Planned)
@@ -48,8 +50,8 @@ curl -sS -X POST http://127.0.0.1:8080/webhooks/tomorrow-reminder \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
   -d '{"telegramId":"123456789","meetings":[{"id":"meetIdHere","name":"Консультація","dateStart":"2026-08-22T10:00:00","status":"Planned"}]}'
 
-# From EspoCRM (91.99.109.18)
-curl -sS -X POST https://fedchenko.slnnzmtl.xyz/webhooks/tomorrow-reminder \
+# From EspoCRM (allowlisted egress IP)
+curl -sS -X POST https://<public-host>/webhooks/tomorrow-reminder \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
   -d '{"telegramId":"123456789","meetings":[{"id":"meetIdHere","name":"Консультація","dateStart":"2026-08-22T10:00:00","status":"Planned"}]}'
@@ -76,33 +78,36 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 
 ## Layout
 
-- `src/graph/` — thin LangGraph (supervisor + faq/booking agent loops)
-- `src/composition/` — runtime wiring, MCP adapters, build-time agents
-- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs)
+- `AGENT.md` — product map (agents, routing, write/HITL invariants, where to edit)
+- `src/graph/` — LangGraph (supervisor + faq/booking loops, sticky routing, prefetch)
+- `src/composition/` — runtime wiring, MCP adapters, agent defs (`maxSteps`)
+- `src/prompts/` — supervisor / FAQ / booking plus shared `PATIENT_VOICE` in `voice.ts`
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
-- `src/adapter/` — telegraf bot (`telegram-bot.ts`) + keyboard helpers (`telegram-ui.ts`)
-- `src/prompts/` — supervisor / FAQ / booking prompts plus the shared `PATIENT_VOICE` block in `voice.ts` (source of truth with `src/composition/agents.ts`)
-- `packages/llm-gemini` — Gemini connector + explicit context cache for supervisor routing (`GEMINI_CONTEXT_CACHE`, default on)
+- `src/adapter/` — telegraf (`telegram-bot.ts`), keyboards (`telegram-ui.ts`), `/start` welcome, reminder webhook
+- `src/shared/` — clinic constants (address, consultation id, menu labels), helpers
+- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs)
+- `packages/llm-gemini` — Gemini connector + explicit context cache (`GEMINI_CONTEXT_CACHE`, default on)
 
 ## FAQ / services
 
-- Catalog questions (`list_services`): short categorized summary; **no prices** in the tool payload or reply
-- Pricing: `get_service` for the matched service only; quote only what the user asked for
-- USD → UAH: when CRM `priceCurrency` is USD, `get_service` fetches `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) and attaches `priceUah`; FAQ quotes it only if the user asks in UAH (FX failure → native USD, no invented rates)
+- Catalog (`list_services`): grouped summary; **no prices** in the tool payload or reply. Closes with a consultation offer («Так» / «Обрати іншу процедуру»). «Обрати іншу процедуру» drills the catalog one level per message (FAQ), then offers to book that procedure.
+- Pricing: `get_service` for the matched service only; quote only what the user asked for.
+- USD → UAH: when CRM `priceCurrency` is USD, `get_service` fetches `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) and attaches `priceUah`; FAQ quotes it only if the user asks in UAH (FX failure → native USD, no invented rates).
 
 ## Booking tools
 
-Meeting tools (booking agent):
+Default visit is **Консультація** unless the patient is sure about a named procedure (or FAQ already chose one). Catalog browse is FAQ; booking may `list_services` once to match a typed CRM name.
 
 - `present_availability_slots` — free/busy from `search_meetings` and `CReservedTime`; optional `excludeMeetingIds` when rescheduling (current start is not listed)
 - `create_meeting` — HITL Yes/No, then MCP `create_meeting`
 - `list_planned_meetings` — upcoming Planned meetings for a Contact (`search_entity`)
 - `cancel_meeting` — HITL Yes/No, then soft cancel (`update_meeting` status `Not Held`)
 - `reschedule_meeting` — HITL Yes/No, then in-place `dateStart`/`dateEnd` update
+- Contact tools (`find_contact_by_phone`, `create_contact`, `link_telegram_to_contact`, `update_contact`) — identity; phone/name only after a slot is chosen
 
 ## Telegram behaviour
 
-- `/start` replies with a static intro and categorized services (no prices); working hours come from CRM `get_working_time`; the same text is appended to the chat's graph message history as an `AIMessage` so later agent turns see it. Both `/start` messages attach the **DEFAULT MENU** reply keyboard (no visits → «Записатись», «Послуги», «Адреса»; has a visit → «Мій запис», «Послуги», «Адреса»; plus «Головне меню»), using a Telegram contact + planned-meetings lookup.
+- `/start` sends two messages: a static intro (identity, capabilities, medical disclaimer, address) plus CRM working hours from `get_working_time`, then a short follow-up. Both attach **DEFAULT MENU** (no visits → «Записатись», «Послуги», «Адреса»; has a visit → «Мій запис», «Послуги», «Адреса»; plus «Головне меню»), using a Telegram contact + planned-meetings lookup. Checkpointed history stores `WELCOME_HISTORY_MARKER` + the follow-up, not the full welcome, so later hellos stay short.
 - Private chats only (groups get a short redirect); 20 messages per user per minute (text, voice, `/start`, and reply-keyboard taps)
 - `thread_id = chat.id`; per-chat exclusive graph invoke queue
 - Conversation and HITL state live in process memory (`MemorySaver` plus a pending-confirm map). A restart clears chats; there is no long-term transcript store. Run a single bot instance.
@@ -111,21 +116,26 @@ Meeting tools (booking agent):
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
 - At most one Planned meeting per patient: `create_meeting` is blocked until the existing visit is cancelled or rescheduled
 - Supervisor prefetches contact + planned meetings into checkpointed state; booking prepare reuses that snapshot until a successful CRM write dirties it or the snapshot is older than ~5 minutes.
-- `present_availability_slots` uses `search_meetings` and `CReservedTime` free/busy; the agent offers dates then times via reply shortcuts (the user may still type a slot). Ukrainian date labels are precomputed in TS (`dayLabel` per day, `whenLabel` per planned meeting) so the model quotes them instead of formatting dates itself
-- When the next step is a short choice, the agent may append a hidden `<reply_buttons>` trailer; the adapter strips it and shows a one-time Telegram **reply keyboard**. Tapping a label sends that text as a normal message. Every keyboard ends with **«Головне меню»** (adapter-appended, including HITL and turns with no other shortcuts). Idle/greeting **DEFAULT MENU**: no visits → «Записатись», «Послуги», «Адреса»; has a visit → «Мій запис», «Послуги», «Адреса». After «Мій запис» lists the visit and offers a change: «Перенести», «Скасувати», «Ні, дякую». Mid-booking uses date/time shortcuts (dates plus «Інша дата», then times). «Головне меню» routes to a short idle reply with DEFAULT MENU; during HITL it declines the write.
+- Sticky routing: tapping a shortcut the specialist just offered continues in that agent (skips the supervisor LLM). FAQ book-handoff offers include a hidden `<yield_to_supervisor/>` so «Так» is re-routed to booking. «Перенести» / «Скасувати» go to booking even after a FINISH visit list.
+- `present_availability_slots` uses `search_meetings` and `CReservedTime` free/busy; the agent offers dates then times via reply shortcuts (the user may still type a slot). Ukrainian date labels are precomputed in TS (`dayLabel` per day, `whenLabel` / `visitLabel` per planned meeting) so the model quotes them instead of formatting dates itself
+- When the next step is a short choice, the agent may append a hidden `<reply_buttons>` trailer; the adapter strips it and shows a one-time Telegram **reply keyboard**. Tapping a label sends that text as a normal message. Every keyboard ends with **«Головне меню»** (adapter-appended, including HITL and turns with no other shortcuts). Supervisor **FINISH** does not emit that trailer: the server attaches DEFAULT MENU or VISIT CHANGE («Перенести», «Скасувати», «Ні, дякую»). Mid-booking uses date/time shortcuts (dates plus «Інша дата», then times). «Головне меню» routes to a short idle reply with DEFAULT MENU; during HITL it declines the write. English aliases (Book / Services / Address / …) are recognized for routing.
+- Book/move success includes clinic address + Maps; cancel does not.
 - Internal failures (routing, model call, step limit) reply with `PATIENT_FALLBACK_MESSAGE`; the raw error goes to the log only
-- HITL confirm: meeting writes pause on a one-time **reply keyboard** with ✅ / ❌ (replaces any prior date/time shortcuts). The agent must call the write tool on the same turn as a clear book/cancel/move intent — never a prior chat «підтвердити?». Tapping ✅ / ❌ resumes with `Command({ confirmed })`. Other text while the card is pending goes into the interrupt as `userReply`; the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. The server honors that flag only when a HITL card was already shown on this thread for the same write arguments. Chat text never implicitly cancels.
+- HITL confirm: meeting writes pause on a one-time **reply keyboard** with ✅ / ❌ (~15 min pending; replaces any prior date/time shortcuts). The agent must call the write tool on the same turn as a clear book/cancel/move intent — never a prior chat «підтвердити?». Tapping ✅ / ❌ resumes with `Command({ confirmed })`. Other text while the card is pending goes into the interrupt as `userReply`; the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. The server honors that flag only when a HITL card was already shown on this thread for the same write arguments. Chat text never implicitly cancels.
 - Voice notes up to 60 seconds: Telegraf downloads the OGG, Gemini 3.1 Flash Lite transcribes it (`AUDIO_MODEL` optional), then the same text graph path runs; empty, failed, or longer recordings get a short Ukrainian fallback and do not invoke the graph. Replies are always text.
 
 ## Manual E2E checklist
 
-1. Known Telegram user: booking skips phone/name after `cTelegram` lookup
-2. Incomplete CRM contact (missing firstName/lastName/phone): collect them at book time, then `update_contact` before confirm
-3. Unknown user: asks phone/name, create/link writes `cTelegram`
-4. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`
-5. Pick a date shortcut, then a time shortcut (or type a slot time from the agent's text list)
-6. Tap ✅ to book; ❌ cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned visit is refused until the first is cancelled or rescheduled.
-7. After ✅/❌, agent continues; the next outbound reply replaces the reply keyboard
-8. Cancel: list upcoming visits → ✅ soft-cancels (`Not Held`)
-9. Reschedule: pick a *different* slot (`excludeMeetingIds` frees the old block but does not list the current start) → ✅ updates times
-10. No recursion-limit loops after clarifying questions
+1. `/start`: full welcome + hours (no service catalog), follow-up, DEFAULT MENU; a later «Привіт» is a short hello, not a second intro
+2. Known Telegram user: booking skips phone/name after `cTelegram` lookup (details only after a slot if CRM fields are missing)
+3. Incomplete CRM contact (missing firstName/lastName/phone): collect them at book time, then `update_contact` before confirm
+4. Unknown user: asks phone/name after a slot, create/link writes `cTelegram`
+5. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`. «Послуги» → consultation offer; «Обрати іншу процедуру» drills one catalog level per message
+6. «Записатись» offers consultation («Так» / «Обрати іншу процедуру») before dates
+7. Pick a date shortcut, then a time shortcut (or type a slot time from the agent's text list)
+8. Tap ✅ to book; ❌ cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned visit is refused until the first is cancelled or rescheduled. Success message includes address + Maps
+9. After ✅/❌, agent continues; the next outbound reply replaces the reply keyboard
+10. «Мій запис» lists visits with VISIT CHANGE; «Перенести» / «Скасувати» go to booking
+11. Cancel: list upcoming visits → ✅ soft-cancels (`Not Held`)
+12. Reschedule: pick a *different* slot (`excludeMeetingIds` frees the old block but does not list the current start) → ✅ updates times
+13. No recursion-limit loops after clarifying questions
