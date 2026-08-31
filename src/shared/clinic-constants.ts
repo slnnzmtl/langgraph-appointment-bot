@@ -22,6 +22,7 @@ export const MAX_PROPOSED_AVAILABILITY_DAYS = 3;
 export const MAIN_MENU_LABEL = "Головне меню";
 /** DATE-step extra shortcut; TIME step may include it too. */
 export const OTHER_DATE_LABEL = "Інша дата";
+export const OTHER_DATE_LABEL_EN = "Another date";
 
 export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
 export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;

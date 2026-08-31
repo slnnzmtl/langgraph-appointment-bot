@@ -193,4 +193,23 @@ describe("interpretInvokeResult reply selection", () => {
     ]);
     expect(asReply(result.reply_markup).one_time_keyboard).toBe(true);
   });
+
+  it("strips an empty reply_buttons trailer from visible text", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText:
+          "To proceed with the booking, I need your contact details. Could you please provide your phone number?\n<reply_buttons>\n</reply_buttons>",
+      },
+      messages: [],
+    });
+
+    expect(result.text).toBe(
+      "To proceed with the booking, I need your contact details. Could you please provide your phone number?",
+    );
+    expect(result.text).not.toContain("reply_buttons");
+    expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
+  });
 });

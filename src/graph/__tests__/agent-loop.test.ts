@@ -1235,6 +1235,26 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
+  it("strips an empty reply_buttons trailer from checkpointed history", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Could you please provide your phone number?\n<reply_buttons>\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    const stored = update.messages?.[0] as AIMessage;
+    expect(String(stored.content)).toBe("Could you please provide your phone number?");
+    expect(String(stored.content)).not.toContain("reply_buttons");
+    expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",

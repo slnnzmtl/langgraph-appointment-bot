@@ -1,5 +1,6 @@
 import {
   extractMessageTextContent,
+  extractReplyButtons,
   replyButtonLabels,
 } from "../shared/message-content.js";
 import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
@@ -229,9 +230,10 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const handoffText =
     typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
   const visible = handoffText || lastVisibleAiText(record.messages) || "…";
-  const buttons = replyButtonLabels(handoff?.replyButtons);
+  const stripped = extractReplyButtons(visible);
+  const buttons = replyButtonLabels(handoff?.replyButtons, visible);
   return {
-    text: visible,
+    text: stripped.text || "…",
     reply_markup: buildReplyKeyboard(withMainMenu(buttons)),
   };
 };

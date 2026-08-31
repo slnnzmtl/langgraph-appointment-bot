@@ -401,11 +401,10 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
-    const { text, buttons, yieldToSupervisor } = extractReplyButtons(
-      extractMessageTextContent(tagged.content),
-    );
+    const rawText = extractMessageTextContent(tagged.content);
+    const { text, buttons, yieldToSupervisor } = extractReplyButtons(rawText);
     const replyMessage =
-      buttons.length > 0 || yieldToSupervisor
+      text !== rawText || buttons.length > 0 || yieldToSupervisor
         ? new AIMessage({
             content: text,
             additional_kwargs: tagged.additional_kwargs,

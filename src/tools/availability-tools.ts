@@ -6,6 +6,8 @@ import {
   CLINIC_SLOT_MINUTES,
   CONTEXT_TAGS,
   MAX_AVAILABILITY_SEARCH_DAYS,
+  OTHER_DATE_LABEL,
+  OTHER_DATE_LABEL_EN,
 } from "../shared/clinic-constants.js";
 import { asJsonRecord, errorMessage } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
@@ -348,7 +350,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Reuse <${CONTEXT_TAGS.availability}> in context when days[] already covers the patient's choice — call only when the block is missing, the day is not listed, they want other dates (afterDate / «Інша дата»), stepMinutes differs, excludeMeetingIds differs (MOVE), truncated and they want more, or create_meeting/reschedule_meeting failed because the slot was taken. Returns JSON { days: [{ date, dayLabel, slots }], stepMinutes, excludeMeetingIds?, truncated? }. After you show days or times to the patient, that same reply must include a <reply_buttons> trailer with those day or HH:mm labels (DATE always ends with «Інша дата»); listing them only as bullets is not enough.`,
+        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Reuse <${CONTEXT_TAGS.availability}> in context when days[] already covers the patient's choice — call only when the block is missing, the day is not listed, they want other dates (afterDate / «${OTHER_DATE_LABEL}» / "${OTHER_DATE_LABEL_EN}" — always a new search, afterDate = last day in days[]), stepMinutes differs, excludeMeetingIds differs (MOVE), truncated and they want more, or create_meeting/reschedule_meeting failed because the slot was taken. Returns JSON { days: [{ date, dayLabel, slots }], stepMinutes, excludeMeetingIds?, truncated? }. After you show days or times to the patient, that same reply must include a <reply_buttons> trailer with those day or HH:mm labels (DATE always ends with «${OTHER_DATE_LABEL}» or "${OTHER_DATE_LABEL_EN}"); listing them only as bullets is not enough.`,
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
@@ -357,7 +359,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
           "When date is omitted: first day of the next-available search (default Kyiv today).",
         ),
         afterDate: DAY_SCHEMA.optional().describe(
-          "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates (коли ще / покажи ще). If both afterDate and startDate are set, the later day wins.",
+          "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates («Інша дата» / Another date / коли ще / покажи ще). afterDate is the last offered day, or the specific day they rejected. If both afterDate and startDate are set, the later day wins.",
         ),
         durationMinutes: z
           .number()
