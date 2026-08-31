@@ -473,8 +473,8 @@ describe("create_meeting HITL interrupt", () => {
               {
                 id: "mtg-existing",
                 name: "Consult: Ada",
-                dateStart: "2026-08-12T10:00:00",
-                dateEnd: "2026-08-12T10:30:00",
+                dateStart: "2026-09-12T10:00:00",
+                dateEnd: "2026-09-12T10:30:00",
               },
             ],
           };
@@ -512,6 +512,7 @@ describe("create_meeting HITL interrupt", () => {
       expect(JSON.parse(first.result)).toMatchObject({
         error: "Already booked",
         meetings: [{ id: "mtg-existing" }],
+        hint: "This patient already has a Planned visit. Cancel it, then book the new one — do not offer to reschedule.",
       });
     });
   });

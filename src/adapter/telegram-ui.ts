@@ -1,9 +1,6 @@
 import {
-  DEFAULT_MENU_HAS_VISITS,
-  DEFAULT_MENU_NO_VISITS,
   MAIN_MENU_LABEL,
-  VISIT_CHANGE_MENU,
-  VISIT_CHANGE_MENU_EN,
+  defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 import { unescapeModelLineBreaks } from "../shared/message-content.js";
 
@@ -13,6 +10,7 @@ export {
   MAIN_MENU_LABEL,
   VISIT_CHANGE_MENU,
   VISIT_CHANGE_MENU_EN,
+  defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 
 export { extractReplyButtons, type ExtractedReplyButtons } from "../shared/message-content.js";
@@ -73,9 +71,7 @@ export const buildReplyKeyboard = (labels: string[]): ReplyKeyboardMarkup => {
 };
 
 export const buildDefaultMenuKeyboard = (hasVisit: boolean): ReplyKeyboardMarkup =>
-  buildReplyKeyboard(
-    withMainMenu([...(hasVisit ? DEFAULT_MENU_HAS_VISITS : DEFAULT_MENU_NO_VISITS)]),
-  );
+  buildReplyKeyboard(withMainMenu([...defaultMenuLabels(hasVisit)]));
 
 /** Convert common Markdown (bold, links, bullets) to Telegram HTML; escape first. */
 export const formatForTelegram = (text: string): string =>

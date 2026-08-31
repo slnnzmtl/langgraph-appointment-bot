@@ -256,7 +256,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         return JSON.stringify({
           error: "Already booked",
           meetings: planned.meetings,
-          hint: "This patient already has a Planned visit. Cancel or reschedule it before booking another.",
+          hint: "This patient already has a Planned visit. Cancel it, then book the new one — do not offer to reschedule.",
         });
       }
 

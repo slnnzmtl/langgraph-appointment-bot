@@ -33,6 +33,14 @@ describe("clinic routing schema", () => {
     expect(schema.parse({ next: "booking" }).next).toBe("booking");
   });
 
+  it("accepts optional FINISH menu", () => {
+    const schema = buildClinicRoutingSchema(agents);
+    expect(schema.parse({ next: "FINISH", reply: "Hi", menu: "default" }).menu).toBe("default");
+    expect(schema.parse({ next: "FINISH", reply: "Visits", menu: "visit_change" }).menu).toBe(
+      "visit_change",
+    );
+  });
+
   it("normalizes reply placeholders", () => {
     expect(normalizeSupervisorReply("  hi  ")).toBe("hi");
     expect(normalizeSupervisorReply("null")).toBeUndefined();

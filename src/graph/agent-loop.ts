@@ -14,7 +14,23 @@ import {
   type ContextCacheHandle,
 } from "@personal-assistant/llm-gemini";
 
-import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
+import { stripToolNoiseFromMessages } from "./supervisor-history.js";
+import type { SupervisorContextCacheOptions } from "./supervisor.js";
+import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import {
+  normalizePresentAvailabilityResult,
+  type AvailabilityContext,
+} from "../tools/availability-tools.js";
+import {
+  normalizeListServicesResult,
+  type ServicesContext,
+} from "../tools/service-tools.js";
+import {
+  BOOKING_REPLACE_MENU,
+  PATIENT_FALLBACK_MESSAGE,
+  defaultMenuLabels,
+} from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import {
   extractMessageTextContent,
@@ -33,19 +49,11 @@ import {
   buildUncachedMessages,
 } from "./gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { tagRuntimeAgentMessage } from "./sub-agent-messages.js";
-import { stripToolNoiseFromMessages } from "./supervisor-history.js";
-import type { SupervisorContextCacheOptions } from "./supervisor.js";
-import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
 import {
-  normalizePresentAvailabilityResult,
-  type AvailabilityContext,
-} from "../tools/availability-tools.js";
-import {
-  normalizeListServicesResult,
-  type ServicesContext,
-} from "../tools/service-tools.js";
+  isModelFailureMessage,
+  tagModelFailureMessage,
+  tagRuntimeAgentMessage,
+} from "./sub-agent-messages.js";
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
@@ -176,12 +184,32 @@ export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
     return record.cancelled !== true && record.awaitingConfirmation !== true;
   });
 
+export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
+      continue;
+    }
+    const body = extractMessageTextContent(message.content).trim();
+    if (body.startsWith("Error:")) {
+      return false;
+    }
+    const record = asJsonRecord(body);
+    return record?.error === "Already booked";
+  }
+  return false;
+};
+
 const resolveHandoffStatus = (
   message: AIMessage,
   stepCount: number,
   maxSteps: number,
   agentMessages: BaseMessage[],
 ): ClinicHandoffStatus => {
+  if (isModelFailureMessage(message)) {
+    return "error";
+  }
+
   if (stepCount >= maxSteps) {
     return "max_steps";
   }
@@ -327,7 +355,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[clinic-${agent.id}] model call failed:`, message);
       return {
-        agentMessages: [new AIMessage(PATIENT_FALLBACK_MESSAGE)],
+        agentMessages: [tagModelFailureMessage(new AIMessage(PATIENT_FALLBACK_MESSAGE))],
         stepCount,
       };
     }
@@ -412,12 +440,39 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           })
         : tagged;
     const replyText = extractMessageTextContent(replyMessage.content).trim();
+
+    // Model failure: deliver via handoff only — do not persist into conversation history.
+    if (status === "error" && isModelFailureMessage(tagged)) {
+      const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+      return {
+        ...cleared,
+        lastHandoff: {
+          agentId: agent.id,
+          agentName: agent.name,
+          status: "error",
+          replyText: PATIENT_FALLBACK_MESSAGE,
+          replyButtons: [...defaultMenuLabels(hasVisit)],
+        },
+      };
+    }
+
+    let replyButtons = buttons;
+    // When the model emitted no shortcuts, code owns DEFAULT / REPLACE for booking.
+    if (replyButtons.length === 0 && replyText.length > 0) {
+      if (agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages)) {
+        replyButtons = [...BOOKING_REPLACE_MENU];
+      } else if (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID) {
+        const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+        replyButtons = [...defaultMenuLabels(hasVisit)];
+      }
+    }
+
     const lastHandoff = {
       agentId: agent.id,
       agentName: agent.name,
       status,
       ...(replyText.length > 0 ? { replyText } : {}),
-      ...(buttons.length > 0 ? { replyButtons: buttons } : {}),
+      ...(replyButtons.length > 0 ? { replyButtons } : {}),
       ...(yieldToSupervisor ? { yieldToSupervisor: true } : {}),
     };
 

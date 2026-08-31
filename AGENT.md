@@ -28,7 +28,7 @@ Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HT
 | Greeting, routing ladder, FINISH menus | `src/prompts/supervisor.ts` |
 | Catalog / prices / location / yield tag | `src/prompts/faq.ts` |
 | Booking ladder, HITL wording, slot UX | `src/prompts/booking.ts` |
-| Shared patient voice + `<reply_buttons>` rules | `src/prompts/voice.ts` (imported into each prompt so it stays in the Gemini cache) |
+| Shared patient voice sections + `<reply_buttons>` rules | `src/prompts/voice.ts` (composed per agent into the Gemini cache) |
 | Sticky continue, FINISH button attach, prefetch | `src/graph/` (`supervisor.ts`, `agent-loop.ts`, `state.ts`) |
 | CRM tools, HITL pause, free/busy, E.164 | `src/tools/` |
 | Keyboards, `/start`, voice, rate limit, reminder | `src/adapter/` |
@@ -44,9 +44,9 @@ Do not add a third specialist, a second booking path, or a parallel keyboard for
 Only agent that greets. Each turn: `faq` / `booking` (empty `reply`; specialist sees full history) or `FINISH` (answer itself). No CRM tools.
 
 - Prefetches contact + planned meetings into checkpointed state.
-- On FINISH, the **server** attaches DEFAULT MENU or VISIT CHANGE. The model must not emit `<reply_buttons>`.
+- On FINISH, the model sets `menu` (`default` or `visit_change`) and writes patient text only — **no** `<reply_buttons>` trailer. The graph attaches DEFAULT MENU or VISIT CHANGE from `menu` + `bookingContext`. The adapter still appends «Головне меню». `/start` and reminders use `buildDefaultMenuKeyboard`.
 - `/start` stores `WELCOME_HISTORY_MARKER` in history, not the full welcome text (`src/adapter/welcome-message.ts`). Later hellos stay short.
-- Key labels: «Записатись» → booking; «Послуги» / «Обрати іншу процедуру» / «Адреса» → faq; «Мій запис» → FINISH (list visits); «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting.
+- Key labels: «Записатись» → booking; «Послуги» / «Обрати іншу процедуру» / «Адреса» → faq; «Мій запис» → FINISH (list visits, `menu=visit_change`); «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting.
 
 ### Sticky routing
 
@@ -54,7 +54,7 @@ After an FAQ/booking handoff, tapping a shortcut the specialist just offered con
 
 - FAQ book-handoff offers («Так» after consultation / book-this-procedure) append `<yield_to_supervisor/>` so the tap is re-routed to booking.
 - Catalog drill-down taps stay in FAQ (no yield tag).
-- «Перенести» / «Скасувати» sticky-route to booking even after a FINISH visit list.
+- «Перенести» / «Скасувати» sticky-route to booking even after a FINISH visit list or an Already-booked replace offer.
 
 ### FAQ (read-only, `maxSteps` 4)
 
@@ -81,7 +81,7 @@ One ladder step per message: **service → time → details → optional intent 
 Rules:
 
 - Default service is **Консультація** (`CONSULTATION_SERVICE_ID`) unless the patient is sure about a named procedure (or FAQ already chose one).
-- At most **one Planned meeting**. Only Planned / Held / Confirmed block free/busy.
+- At most **one Planned meeting**. Only Planned / Held / Confirmed block free/busy. A second booking is refused until the existing visit is **cancelled** (then the new slot can be booked). Reschedule is only offered when the patient explicitly asks about their visit («Мій запис»), not during a new-booking conflict.
 - Collect phone/name only after a slot is chosen; incomplete contacts get `update_contact` before confirm. Phones must be E.164.
 - Book/move success includes address + Maps; cancel does not. Never put address in `confirmMessage`.
 - Slots are Europe/Kyiv. Quote TS `dayLabel` / `whenLabel` / `visitLabel`; never invent dates.
@@ -98,11 +98,13 @@ Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph re
 
 ## Menus
 
-Hidden `<reply_buttons>` trailers become one-time Telegram reply keyboards. Adapter always appends «Головне меню». English aliases (Book / Services / Address / …) are recognized for routing.
+Hidden `<reply_buttons>` trailers become one-time Telegram reply keyboards. Adapter always appends «Головне меню». English aliases (Book / Services / Address / …) are recognized for inbound routing; keyboards the graph attaches are Ukrainian-only.
 
-- **DEFAULT MENU:** no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса».
-- **VISIT CHANGE:** «Перенести», «Скасувати», «Ні, дякую».
-- Mid-flow: date labels + «Інша дата», then HH:mm; FAQ yes/no and catalog levels as needed.
+- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or specialist finalize when the model omits a trailer.
+- **VISIT CHANGE** (code-owned): «Перенести», «Скасувати», «Ні, дякую» — supervisor `menu=visit_change` after listing visits for «Мій запис» / a visit inquiry (falls back to DEFAULT when the list is empty).
+- **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` and the model emitted no trailer (never «Перенести» here). After «Скасувати», cancel then book the new slot.
+- **BOOKING OFFER** (model trailer): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no (FAQ adds `<yield_to_supervisor/>`).
+- Mid-flow (model trailer): date labels + «Інша дата», then HH:mm; FAQ catalog levels; booking STEP INTENT skip («Продовжити без коментаря»).
 
 ## Code map
 

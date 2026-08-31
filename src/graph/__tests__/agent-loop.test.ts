@@ -142,15 +142,15 @@ describe("formatBookingMeetingsContext", () => {
 });
 
 describe("formatPlannedVisitsFlag", () => {
-  it("emits only has/none", () => {
+  it("emits visits has/none under the meetings tag", () => {
     expect(formatPlannedVisitsFlag(null)).toBe(
-      "<planned_visits>none</planned_visits>",
+      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
     expect(formatPlannedVisitsFlag({ meetings: [], dateFrom: "2026-08-11" })).toBe(
-      "<planned_visits>none</planned_visits>",
+      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
     expect(formatPlannedVisitsFlag(listedMeetings)).toBe(
-      "<planned_visits>has</planned_visits>",
+      '<list_planned_meetings>\n{"visits":"has"}\n</list_planned_meetings>',
     );
   });
 });
@@ -728,7 +728,7 @@ describe("createAgentLlmNode context cache", () => {
     const messages = cachedInvoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(HumanMessage);
     expect((messages[0] as HumanMessage).content).toBe(
-      "DYNAMIC KYIV\n\n<planned_visits>none</planned_visits>",
+      'DYNAMIC KYIV\n\n<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
     expect(messages.some((m) => m instanceof SystemMessage)).toBe(false);
     expect(manager.getOrCreate).toHaveBeenCalledWith(
@@ -805,7 +805,8 @@ describe("createAgentLlmNode context cache", () => {
     expect(faqDynamic.content).toContain("DYNAMIC KYIV");
     expect(String(faqDynamic.content)).toContain(formatPlannedVisitsFlag(listedMeetings));
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
-    expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
+    expect(String(faqDynamic.content)).not.toContain('"visitLabel"');
+    expect(String(faqDynamic.content)).not.toContain('"meetings"');
     expect(String(faqDynamic.content)).not.toContain("<availability>");
     expect(String(faqDynamic.content)).not.toContain("<list_services>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
@@ -813,6 +814,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(bookingDynamic.content).toContain(formatBookingMeetingsContext(listedMeetings));
     expect(String(bookingDynamic.content)).toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+    expect(String(bookingDynamic.content)).not.toContain('"visits"');
   });
 
   it("appends list_services to FAQ only, never to booking", async () => {
@@ -1235,7 +1237,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
-  it("strips an empty reply_buttons trailer from checkpointed history", () => {
+  it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1252,7 +1254,71 @@ describe("createAgentFinalizeNode", () => {
     expect(String(stored.content)).toBe("Could you please provide your phone number?");
     expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+  });
+
+  it("attaches REPLACE when create_meeting returned Already booked and no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "create_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "Already booked",
+              meetings: [{ id: "m-1", name: "Консультація - Ada", dateStart: "2026-09-04 11:00:00" }],
+            }),
+            tool_call_id: "1",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            "У вас вже є запланований візит. Бажаєте скасувати поточний і записати нову?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Скасувати", "Ні, дякую"]);
+    expect(update.lastHandoff?.status).toBe("ok");
+  });
+
+  it("delivers model-failure fallback via handoff only (no history, no sticky ok)", async () => {
+    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
+    const bindTools = vi.fn(() => ({
+      invoke: vi.fn(async () => {
+        throw new Error("model down");
+      }),
+    }));
+    const model = { bindTools } as unknown as BaseChatModel;
+    const llm = createAgentLlmNode({
+      agent,
+      model,
+      tools: [],
+      formatSystemMetadata: () => "DYN",
+    });
+    const llmUpdate = await llm(
+      clinicState({ agentMessages: [new HumanMessage("hi")], next: "booking" }),
+    );
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: llmUpdate.stepCount ?? 1,
+        agentMessages: llmUpdate.agentMessages as never,
+      }),
+    );
+
+    expect(update.messages).toBeUndefined();
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "booking",
+      status: "error",
+      replyText: PATIENT_FALLBACK_MESSAGE,
+      replyButtons: ["Записатись", "Послуги", "Адреса"],
+    });
   });
 
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
@@ -1287,7 +1353,7 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("strips a yield-only trailer with no reply_buttons", () => {
+  it("strips a yield-only trailer and attaches DEFAULT MENU for faq", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -1311,7 +1377,7 @@ describe("createAgentFinalizeNode", () => {
       status: "ok",
       replyText: "Done.",
       yieldToSupervisor: true,
+      replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 });

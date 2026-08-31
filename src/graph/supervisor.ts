@@ -11,21 +11,20 @@ import {
   type ContextCacheManager,
 } from "@personal-assistant/llm-gemini";
 
-import { trackEvent } from "../analytics/track.js";
 import {
-  DEFAULT_MENU_HAS_VISITS,
-  DEFAULT_MENU_NO_VISITS,
   PATIENT_FALLBACK_MESSAGE,
   SUPERVISOR_OWNED_REPLY_LABELS,
   VISIT_CHANGE_MENU,
   VISIT_CHANGE_MENU_EN,
+  BOOKING_REPLACE_MENU,
+  BOOKING_REPLACE_MENU_EN,
+  defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 import {
   extractMessageTextContent,
   extractReplyButtons,
   replyButtonLabels,
 } from "../shared/message-content.js";
-import type { BookingContext } from "../tools/planned-meetings.js";
 import {
   formatGreetingContact,
   formatSupervisorVisitLabels,
@@ -59,74 +58,15 @@ export type SupervisorContextCacheOptions = {
 
 export const PREFETCH_TTL_MS = 5 * 60 * 1000;
 
-/** Move/cancel after «Мій запис» — supervisor prompt routes these to booking unconditionally. */
+/** Move/cancel after «Мій запис», or cancel-and-rebook after Already booked — sticky to booking. */
 const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
   VISIT_CHANGE_MENU[0],
   VISIT_CHANGE_MENU[1],
   VISIT_CHANGE_MENU_EN[0],
   VISIT_CHANGE_MENU_EN[1],
+  BOOKING_REPLACE_MENU[0],
+  BOOKING_REPLACE_MENU_EN[0],
 ]);
-
-const MOVE_OR_CANCEL_LABEL = new Set<string>(VISIT_CHANGE_ROUTE_LABELS);
-
-const isMyVisitLine = (line: string): boolean => /^(мій запис|my visit)$/i.test(line.trim());
-
-/** Patient asks what is booked — not greetings/thanks that never mention visits. */
-const humanAsksAboutVisits = (line: string): boolean =>
-  /(?:мій запис|my visit|які?\s+(?:в\s+мене\s+)?візит|мо[їи]\s+візит|запланован\w*\s+візит|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)/i
-    .test(line.trim());
-
-type FinishButtonContext = {
-  lastHumanLine: string;
-  bookingContext: BookingContext | null | undefined;
-};
-
-type FilledMenu = "visit_change" | "default_has_visits" | "default_no_visits";
-
-const sameLabels = (a: string[], b: string[]): boolean =>
-  a.length === b.length && a.every((label, i) => label === b[i]);
-
-const menuKindFor = (buttons: string[], hasVisits: boolean): FilledMenu => {
-  if (buttons.some((label) => MOVE_OR_CANCEL_LABEL.has(label))) {
-    return "visit_change";
-  }
-  return hasVisits ? "default_has_visits" : "default_no_visits";
-};
-
-/**
- * Server-owned static menus for supervisor FINISH. Visit-change when the patient
- * asked about their visit(s); otherwise DEFAULT MENU when the model omitted
- * (or keep model labels when already correct).
- */
-const resolveSupervisorReplyButtons = (
-  modelButtons: string[],
-  ctx: FinishButtonContext,
-): string[] => {
-  const hasVisits = (ctx.bookingContext?.meetings.length ?? 0) > 0;
-  const wantsVisitChange =
-    hasVisits
-    && (isMyVisitLine(ctx.lastHumanLine) || humanAsksAboutVisits(ctx.lastHumanLine));
-
-  let replyButtons: string[];
-  if (wantsVisitChange) {
-    replyButtons = modelButtons.some((label) => MOVE_OR_CANCEL_LABEL.has(label))
-      ? modelButtons
-      : [...VISIT_CHANGE_MENU];
-  } else if (modelButtons.length > 0) {
-    replyButtons = modelButtons;
-  } else {
-    replyButtons = [...(hasVisits ? DEFAULT_MENU_HAS_VISITS : DEFAULT_MENU_NO_VISITS)];
-  }
-
-  if (!sameLabels(replyButtons, modelButtons)) {
-    trackEvent("reply_menu_filled", {
-      menu: menuKindFor(replyButtons, hasVisits),
-      reason: modelButtons.length === 0 ? "omitted" : "overridden",
-    });
-  }
-
-  return replyButtons;
-};
 
 export type CreateClinicSupervisorNodeOptions = {
   agents: ClinicAgentDefinition[];
@@ -200,7 +140,7 @@ export const shouldContinueInBooking = (state: ClinicState): boolean =>
 export const shouldContinueInFaq = (state: ClinicState): boolean =>
   shouldContinueInSpecialist(state, FAQ_AGENT_ID);
 
-/** True when the latest human line is Перенести / Скасувати (or EN). */
+/** True when the latest human line is Перенести / Скасувати / cancel-and-rebook (or EN). */
 export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
   VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages));
 
@@ -208,8 +148,8 @@ export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
 export const stickyContinueAgentId = (
   state: ClinicState,
 ): typeof FAQ_AGENT_ID | typeof BOOKING_AGENT_ID | null => {
-  // Belt-and-suspenders: Перенести / Скасувати still route to booking when
-  // lastHandoff is missing (FINISH normally stores visit-change buttons).
+  // Belt-and-suspenders: Перенести / Скасувати / cancel-and-rebook still route to
+  // booking when lastHandoff is missing (FINISH or replace menus store those buttons).
   if (isVisitChangeRouteLabel(state)) {
     return BOOKING_AGENT_ID;
   }
@@ -224,8 +164,13 @@ const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
   console.error("[clinic-supervisor] routing failure:", reason);
   return {
     next: FINISH_ROUTE,
-    lastHandoff: null,
-    messages: [new AIMessage(PATIENT_FALLBACK_MESSAGE)],
+    lastHandoff: {
+      agentId: FINISH_ROUTE,
+      agentName: "supervisor",
+      status: "error",
+      replyText: PATIENT_FALLBACK_MESSAGE,
+      replyButtons: [...defaultMenuLabels(false)],
+    },
   };
 };
 
@@ -233,7 +178,7 @@ const resolveRoutingDecision = (
   decision: ClinicRoutingDecision,
   state: ClinicState,
   enabledIds: Set<string>,
-  finishCtx: FinishButtonContext,
+  bookingContext: ClinicState["bookingContext"],
 ): ClinicStateUpdate => {
   if (decision.next === FINISH_ROUTE) {
     const reply = normalizeSupervisorReply(decision.reply);
@@ -248,8 +193,14 @@ const resolveRoutingDecision = (
       return routingFailureUpdate("FINISH without reply");
     }
 
-    const { text, buttons: modelButtons } = extractReplyButtons(reply);
-    const replyButtons = resolveSupervisorReplyButtons(modelButtons, finishCtx);
+    // Strip any stray model trailer; code owns FINISH keyboards from menu + bookingContext.
+    const { text } = extractReplyButtons(reply);
+    const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+    const replyButtons =
+      decision.menu === "visit_change" && hasVisit
+        ? [...VISIT_CHANGE_MENU]
+        : [...defaultMenuLabels(hasVisit)];
+
     return {
       next: FINISH_ROUTE,
       lastHandoff: {
@@ -391,10 +342,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     }
 
     return {
-      ...resolveRoutingDecision(decision, state, enabledIds, {
-        lastHumanLine,
-        bookingContext,
-      }),
+      ...resolveRoutingDecision(decision, state, enabledIds, bookingContext),
       ...prefetchUpdate,
     };
   };
