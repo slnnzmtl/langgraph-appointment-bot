@@ -313,7 +313,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
 
     const threadId = String(chatId);
     await runExclusiveForThread(threadId, () =>
-      recordWelcomeInHistory(graph, threadId, buildStartHistoryText(welcome)),
+      recordWelcomeInHistory(graph, threadId, buildStartHistoryText()),
     );
   }));
 

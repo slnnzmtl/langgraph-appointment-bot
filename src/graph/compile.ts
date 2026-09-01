@@ -107,7 +107,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const finalize = finalizeNodeName(agent.id);
 
     graph = graph
-      .addNode(prepare, createAgentPrepareNode(agent.id))
+      .addNode(prepare, createAgentPrepareNode())
       .addNode(
         llm,
         createAgentLlmNode({
@@ -126,7 +126,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             : {}),
         }),
       )
-      .addNode(toolsNode, createAgentToolsNode(tools, agent.id))
+      .addNode(toolsNode, createAgentToolsNode(tools))
       .addNode(finalize, createAgentFinalizeNode(agent))
       .addEdge(prepare, llm)
       .addConditionalEdges(

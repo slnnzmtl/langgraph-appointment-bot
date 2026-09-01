@@ -2,7 +2,6 @@ import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { stripToolNoiseFromMessages } from "../supervisor-history.js";
-import { tagRuntimeAgentMessage } from "../sub-agent-messages.js";
 
 describe("stripToolNoiseFromMessages", () => {
   it("drops ToolMessages", () => {
@@ -37,14 +36,12 @@ describe("stripToolNoiseFromMessages", () => {
     expect(ai.tool_calls ?? []).toHaveLength(0);
   });
 
-  it("keeps cross-agent human/AI turns", () => {
-    const faqReply = tagRuntimeAgentMessage(new AIMessage("hours are 9-18"), "faq");
-    const bookingReply = tagRuntimeAgentMessage(new AIMessage("what day?"), "booking");
+  it("keeps human/AI turns across the thread", () => {
     const messages = [
       new HumanMessage("hours?"),
-      faqReply,
+      new AIMessage("hours are 9-18"),
       new HumanMessage("book tomorrow"),
-      bookingReply,
+      new AIMessage("what day?"),
       new HumanMessage("10:00"),
     ];
 

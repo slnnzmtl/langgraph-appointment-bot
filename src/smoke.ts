@@ -275,12 +275,12 @@ const main = async (): Promise<void> => {
       const result = await graph.invoke(
         { messages: [new HumanMessage("What are your clinic hours?")] },
         {
-          configurable: { thread_id: `smoke-faq-${randomUUID().slice(0, 8)}` },
+          configurable: { thread_id: `smoke-booking-${randomUUID().slice(0, 8)}` },
           runName: "clinic-turn",
           tags: ["smoke"],
           metadata: {
-            telegram_user_id: "smoke-faq",
-            chat_id: "smoke-faq",
+            telegram_user_id: "smoke-booking",
+            chat_id: "smoke-booking",
             source: "smoke",
           },
         },

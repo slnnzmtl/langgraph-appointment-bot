@@ -191,7 +191,7 @@ describe("formatContactContext", () => {
 
 describe("createAgentPrepareNode", () => {
   it("keeps original human message without synthetic ToolMessages or CRM writes", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createAgentPrepareNode();
 
     const update = await prepare(
       clinicState({
@@ -216,7 +216,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("does not clear servicesContext when preparing booking", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createAgentPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Book tomorrow")],
@@ -228,22 +228,16 @@ describe("createAgentPrepareNode", () => {
     expect(update.servicesContext).toBeUndefined();
   });
 
-  it("passes full thread history including other agents' replies", async () => {
-    const prepare = createAgentPrepareNode("booking");
-    const faqReply = new AIMessage({
-      content: "hours are 9-18",
-      additional_kwargs: { runtimeAgentId: "faq" },
-    });
-    const bookingReply = new AIMessage({
-      content: "what day?",
-      additional_kwargs: { runtimeAgentId: "booking" },
-    });
+  it("passes full thread history into agentMessages", async () => {
+    const prepare = createAgentPrepareNode();
+    const hoursReply = new AIMessage("hours are 9-18");
+    const bookingReply = new AIMessage("what day?");
 
     const update = await prepare(
       clinicState({
         messages: [
           new HumanMessage("hours?"),
-          faqReply,
+          hoursReply,
           new HumanMessage("book tomorrow"),
           bookingReply,
           new HumanMessage("10:00"),
@@ -522,7 +516,7 @@ describe("createAgentToolsNode services capture", () => {
       },
     );
 
-    const toolsNode = createAgentToolsNode([listTool], "booking");
+    const toolsNode = createAgentToolsNode([listTool]);
     const update = await toolsNode(
       clinicState({
         agentMessages: [
@@ -548,7 +542,7 @@ describe("createAgentToolsNode services capture", () => {
       schema: z.object({ firstName: z.string().optional() }),
     });
 
-    const toolsNode = createAgentToolsNode([updateTool], "booking");
+    const toolsNode = createAgentToolsNode([updateTool]);
     const update = await toolsNode(
       clinicState({
         agentMessages: [
@@ -776,7 +770,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(bookingDynamic.content)).toContain("svc-1");
   });
 
-  it("omits list_services from booking when availabilityContext has days", async () => {
+  it("omits list_services when availabilityContext has days (booking step or mid-booking info question)", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -798,6 +792,11 @@ describe("createAgentLlmNode context cache", () => {
       total: 1,
     };
 
+    const availabilityWithDays = {
+      days: [{ date: "2026-09-04", slots: [{ label: "11:00", dateStart: "2026-09-04T11:00:00", dateEnd: "2026-09-04T11:30:00" }] }],
+      stepMinutes: 30,
+    };
+
     const bookingNode = createAgentLlmNode({
       agent: bookingAgent,
       model,
@@ -810,21 +809,21 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    await bookingNode(
-      clinicState({
-        agentMessages: [new HumanMessage("4 вересня")],
-        servicesContext: sampleServices,
-        availabilityContext: {
-          days: [{ date: "2026-09-04", slots: [{ label: "11:00", dateStart: "2026-09-04T11:00:00", dateEnd: "2026-09-04T11:30:00" }] }],
-          stepMinutes: 30,
-        },
-        next: "booking",
-      }),
-    );
+    for (const humanText of ["4 вересня", "Послуги"]) {
+      cachedInvoke.mockClear();
+      await bookingNode(
+        clinicState({
+          agentMessages: [new HumanMessage(humanText)],
+          servicesContext: sampleServices,
+          availabilityContext: availabilityWithDays,
+          next: "booking",
+        }),
+      );
 
-    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    expect(String(bookingDynamic.content)).toContain("<availability>");
-    expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+      const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+      expect(String(bookingDynamic.content)).toContain("<availability>");
+      expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+    }
   });
 
   it("omits list_services block when list_services already ran this turn", async () => {

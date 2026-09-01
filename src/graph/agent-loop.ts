@@ -54,7 +54,6 @@ import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import {
   isModelFailureMessage,
   tagModelFailureMessage,
-  tagRuntimeAgentMessage,
 } from "./sub-agent-messages.js";
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
@@ -357,7 +356,7 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (_agentId: string) =>
+export const createAgentPrepareNode = () =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => ({
     agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
     stepCount: 0,
@@ -478,10 +477,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
   };
 };
 
-export const createAgentToolsNode = (
-  tools: StructuredToolInterface[],
-  _agentId?: string,
-) => {
+export const createAgentToolsNode = (tools: StructuredToolInterface[]) => {
   const toolNode = new ToolNode(tools);
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
@@ -534,27 +530,24 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...cleared,
         lastHandoff: {
           agentId: agent.id,
-          agentName: agent.name,
           status: "empty",
         },
       };
     }
 
-    const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
-    const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
-    const rawText = extractMessageTextContent(tagged.content);
+    const status = resolveHandoffStatus(lastMessage, stepCount, agent.maxSteps, agentMessages);
+    const rawText = extractMessageTextContent(lastMessage.content);
     const { text, buttons } = extractReplyButtons(rawText);
     let replyText = text.trim();
     let replyButtons = buttons;
 
     // Model failure: deliver via handoff only — do not persist into conversation history.
-    if (status === "error" && isModelFailureMessage(tagged)) {
+    if (status === "error" && isModelFailureMessage(lastMessage)) {
       const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
       return {
         ...cleared,
         lastHandoff: {
           agentId: agent.id,
-          agentName: agent.name,
           status: "error",
           replyText: PATIENT_FALLBACK_MESSAGE,
           replyButtons: [...defaultMenuLabels(hasVisit)],
@@ -578,19 +571,18 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     }
 
     const replyMessage =
-      replyText !== extractMessageTextContent(tagged.content).trim()
+      replyText !== extractMessageTextContent(lastMessage.content).trim()
         || buttons.length > 0
         || slotOffer != null
         ? new AIMessage({
             content: replyText,
-            additional_kwargs: tagged.additional_kwargs,
-            response_metadata: tagged.response_metadata,
+            additional_kwargs: lastMessage.additional_kwargs,
+            response_metadata: lastMessage.response_metadata,
           })
-        : tagged;
+        : lastMessage;
 
     const lastHandoff = {
       agentId: agent.id,
-      agentName: agent.name,
       status,
       ...(replyText.length > 0 ? { replyText } : {}),
       ...(replyButtons.length > 0 ? { replyButtons } : {}),
@@ -612,7 +604,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         messages: [
           replyText.length > 0
             ? replyMessage
-            : tagRuntimeAgentMessage(new AIMessage(PATIENT_FALLBACK_MESSAGE), agent.id),
+            : new AIMessage(PATIENT_FALLBACK_MESSAGE),
         ],
       };
     }

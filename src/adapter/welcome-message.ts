@@ -136,7 +136,7 @@ export const WELCOME_HISTORY_MARKER =
   "[Welcome already sent: who I am, what I can do, address, working hours. Do not greet again.]";
 
 /** History text for /start — patient still sees the full welcome via ctx.reply. */
-export const buildStartHistoryText = (_welcome?: string): string =>
+export const buildStartHistoryText = (): string =>
   `${WELCOME_HISTORY_MARKER}\n\n${START_FOLLOW_UP}`;
 
 type Graph = ReturnType<ClinicRuntime["getGraph"]>;

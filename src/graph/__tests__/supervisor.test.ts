@@ -594,7 +594,7 @@ describe("shouldContinueInSpecialist", () => {
     expect(
       shouldContinueInSpecialist(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: { agentId: "booking", status: "ok" },
           messages: [bookingOffer(["25 серпня", "3 вересня", "Інша дата"]), new HumanMessage("25 серпня")],
         }),
         "booking",
@@ -608,7 +608,6 @@ describe("shouldContinueInSpecialist", () => {
         supervisorState({
           lastHandoff: {
             agentId: "booking",
-            agentName: "Booking",
             status: "ok",
             replyButtons: ["Так", "Обрати іншу процедуру"],
           },
@@ -626,7 +625,7 @@ describe("shouldContinueInSpecialist", () => {
     expect(
       shouldContinueInSpecialist(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: { agentId: "booking", status: "ok" },
           messages: [
             bookingOffer(["Так", "Обрати іншу процедуру"]),
             new HumanMessage("Обрати іншу процедуру"),
@@ -638,7 +637,7 @@ describe("shouldContinueInSpecialist", () => {
     expect(
       shouldContinueInSpecialist(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: { agentId: "booking", status: "ok" },
           messages: [
             bookingOffer(["Ін'єкційні процедури", "Консультації та діагностика"]),
             new HumanMessage("Ін'єкційні процедури"),
@@ -653,7 +652,7 @@ describe("shouldContinueInSpecialist", () => {
     expect(
       shouldContinueInSpecialist(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: { agentId: "booking", status: "ok" },
           messages: [
             bookingOffer(["Мій запис", "Послуги", "Адреса"]),
             new HumanMessage("Послуги"),
@@ -668,7 +667,7 @@ describe("shouldContinueInSpecialist", () => {
     expect(
       shouldContinueInSpecialist(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: { agentId: "booking", status: "ok" },
           messages: [bookingOffer(["25 серпня"]), new HumanMessage("а скільки коштує?")],
         }),
         "booking",
@@ -679,7 +678,6 @@ describe("shouldContinueInSpecialist", () => {
         supervisorState({
           lastHandoff: {
             agentId: "FINISH",
-            agentName: "supervisor",
             status: "ok",
             replyButtons: ["25 серпня"],
           },
@@ -716,7 +714,7 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     const update = await node(
       supervisorState({
-        lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+        lastHandoff: { agentId: "booking", status: "ok" },
         messages: [
           new AIMessage(
             "Який день?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>",
@@ -748,7 +746,6 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
       supervisorState({
         lastHandoff: {
           agentId: "booking",
-          agentName: "Booking",
           status: "ok",
           replyButtons: ["Так", "Обрати іншу процедуру"],
         },
@@ -772,7 +769,7 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     const update = await node(
       supervisorState({
-        lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+        lastHandoff: { agentId: "booking", status: "ok" },
         messages: [
           new AIMessage(
             "Який день?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>",
@@ -794,7 +791,6 @@ describe("stickyContinueAgentId visit-change after FINISH", () => {
         supervisorState({
           lastHandoff: {
             agentId: "FINISH",
-            agentName: "supervisor",
             status: "ok",
             replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
           },
@@ -832,7 +828,6 @@ describe("stickyContinueAgentId visit-change after FINISH", () => {
         supervisorState({
           lastHandoff: {
             agentId: "FINISH",
-            agentName: "supervisor",
             status: "ok",
             replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
           },
@@ -880,7 +875,6 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       supervisorState({
         lastHandoff: {
           agentId: "FINISH",
-          agentName: "supervisor",
           status: "ok",
         },
         messages: [

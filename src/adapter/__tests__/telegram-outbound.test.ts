@@ -17,7 +17,6 @@ describe("interpretInvokeResult reply selection", () => {
     const result = interpretInvokeResult({
       lastHandoff: {
         agentId: "booking",
-        agentName: "Booking",
         status: "ok",
         replyText: "Підкажіть ваш номер телефону.",
         replyButtons: undefined,
@@ -55,7 +54,6 @@ describe("interpretInvokeResult reply selection", () => {
     const result = interpretInvokeResult({
       lastHandoff: {
         agentId: "FINISH",
-        agentName: "supervisor",
         status: "ok",
         replyText: "Привіт, Тест! Я ШІ-асистент клініки.",
         replyButtons: ["Записатись", "Послуги", "Адреса"],
@@ -77,7 +75,6 @@ describe("interpretInvokeResult reply selection", () => {
     const dates = interpretInvokeResult({
       lastHandoff: {
         agentId: "booking",
-        agentName: "Booking",
         status: "ok",
         replyButtons: ["25 серпня", "3 вересня", "4 вересня", "Інша дата"],
       },
@@ -96,7 +93,6 @@ describe("interpretInvokeResult reply selection", () => {
     const times = interpretInvokeResult({
       lastHandoff: {
         agentId: "booking",
-        agentName: "Booking",
         status: "ok",
         replyButtons: ["11:00", "13:00"],
       },
@@ -143,7 +139,6 @@ describe("interpretInvokeResult reply selection", () => {
     const result = interpretInvokeResult({
       lastHandoff: {
         agentId: "FINISH",
-        agentName: "supervisor",
         status: "ok",
         replyButtons: [...VISIT_CHANGE_MENU],
       },
@@ -198,7 +193,6 @@ describe("interpretInvokeResult reply selection", () => {
     const result = interpretInvokeResult({
       lastHandoff: {
         agentId: "booking",
-        agentName: "Booking",
         status: "ok",
         replyText:
           "To proceed with the booking, I need your contact details. Could you please provide your phone number?\n<reply_buttons>\n</reply_buttons>",

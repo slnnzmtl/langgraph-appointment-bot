@@ -132,7 +132,7 @@ const compactListServicesResult = (result: unknown): unknown => {
   return compact;
 };
 
-/** Keep FAQ-relevant get_service fields; drop CRM audit and relation metadata. */
+/** Keep patient-facing get_service fields; drop CRM audit and relation metadata. */
 const compactGetServiceResult = (result: unknown): unknown => {
   let value: unknown = result;
   if (typeof value === "string") {

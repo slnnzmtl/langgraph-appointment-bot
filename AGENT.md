@@ -56,7 +56,7 @@ After a booking handoff, tapping a shortcut the specialist just offered continue
 
 ### Booking (read/write + FAQ, `maxSteps` 10)
 
-Answers clinic info and books visits. One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Information turns (hours, catalog, prices, location, help choosing) answer that topic and stop. Reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK). Always receives full contact + meetings context.
+Answers clinic info and books visits. One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Information turns (hours, catalog, prices, location, help choosing) answer that topic and stop. Reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures at BOOK, or a mid-booking catalog/price/help question, may call `list_services` once). Always receives full contact + meetings context.
 
 | Tool | Role |
 | --- | --- |

@@ -154,7 +154,6 @@ const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
     next: FINISH_ROUTE,
     lastHandoff: {
       agentId: FINISH_ROUTE,
-      agentName: "supervisor",
       status: "error",
       replyText: PATIENT_FALLBACK_MESSAGE,
       replyButtons: [...defaultMenuLabels(false)],
@@ -193,7 +192,6 @@ const resolveRoutingDecision = (
       next: FINISH_ROUTE,
       lastHandoff: {
         agentId: FINISH_ROUTE,
-        agentName: "supervisor",
         status: "ok",
         replyText: text,
         replyButtons,
