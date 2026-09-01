@@ -262,8 +262,10 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     let prefetchUpdate: ClinicStateUpdate = {};
     // Match the last HumanMessage in state (not stripped history — consecutive humans are merged there).
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
-    // «Мій запис» must always refetch — reminder HITL does not set prefetchDirty.
-    const forcePrefetch = /^(мій запис|my visit)$/i.test(lastHumanLine);
+    // These labels must always refetch — reminder HITL does not set prefetchDirty.
+    const forcePrefetch = /^(мій запис|my visit|головне меню|main menu|скасувати|cancel)$/i.test(
+      lastHumanLine,
+    );
     const reusePrefetch =
       state.contactContext != null
       && !state.prefetchDirty

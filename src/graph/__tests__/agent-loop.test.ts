@@ -337,6 +337,15 @@ describe("crmWriteDirtiesPrefetch", () => {
     expect(
       crmWriteDirtiesPrefetch([
         new ToolMessage({
+          content: JSON.stringify({ error: "Not authorized" }),
+          tool_call_id: "1",
+          name: "cancel_meeting",
+        }),
+      ]),
+    ).toBe(true);
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
           content: JSON.stringify({ slots: [] }),
           tool_call_id: "1",
           name: "present_availability_slots",

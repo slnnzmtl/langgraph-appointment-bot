@@ -302,7 +302,7 @@ export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
       return true;
     }
     if (typeof record.error === "string") {
-      return false;
+      return name === "cancel_meeting";
     }
     return record.cancelled !== true && record.awaitingConfirmation !== true;
   });

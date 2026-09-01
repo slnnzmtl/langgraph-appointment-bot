@@ -471,6 +471,64 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(prefetch).toHaveBeenCalledOnce();
   });
 
+  it("refetches on Головне меню even when prefetch is fresh", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Головне меню")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.bookingContext?.meetings).toEqual([]);
+  });
+
+  it("refetches on Скасувати even when prefetch is fresh", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Скасувати")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+        lastHandoff: {
+          agentId: "supervisor",
+          agentName: "supervisor",
+          status: "ok",
+          replyText: "visit list",
+          replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
+        },
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.bookingContext?.meetings).toEqual([]);
+    expect(update.next).toBe("booking");
+  });
+
   it("refetches when prefetchFetchedAt is missing", async () => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,

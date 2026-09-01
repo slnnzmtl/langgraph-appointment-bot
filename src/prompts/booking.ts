@@ -150,7 +150,9 @@ When \`create_meeting\` or \`reschedule_meeting\` returns \`{ error }\` after th
 ### UKRAINIAN EXAMPLES
 Visible Ukrainian is tone and shape (not text to copy). Trailers marked below **are** to copy.
 - Offering the usual first visit (STEP SERVICE — before any dates):
-«Для першого візиту радимо консультацію: лікар огляне шкіру та підбере процедуру 🌿 Підібрати вільний час на консультацію?»
+«Для першого візиту радимо консультацію: лікар огляне шкіру та підбере процедуру 
+
+Підібрати вільний час на консультацію?»
 <reply_buttons>
 ${BOOKING_OFFER_MENU_LINES}
 </reply_buttons>
