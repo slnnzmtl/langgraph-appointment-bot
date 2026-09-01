@@ -71,6 +71,11 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
+const trackEvent = vi.fn();
+vi.mock("../../analytics/track.js", () => ({
+  trackEvent: (...args: unknown[]) => trackEvent(...args),
+}));
+
 const { createAgentLlmNode } = await import("../agent-loop.js");
 
 describe("formatBookingMeetingsContext", () => {
@@ -1112,6 +1117,10 @@ describe("createAgentFinalizeNode", () => {
     maxSteps: 8,
   };
 
+  beforeEach(() => {
+    trackEvent.mockClear();
+  });
+
   it("strips reply_buttons from checkpointed history and stores labels on lastHandoff", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
@@ -1373,6 +1382,48 @@ describe("createAgentFinalizeNode", () => {
 
     expect(update.lastHandoff?.replyText).toContain("Який саме напрямок");
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("emits reply_menu_filled with model trailer source when the model emits buttons", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Підібрати вільний час на консультацію?\n\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(trackEvent).toHaveBeenCalledWith("reply_menu_filled", {
+      model_trailer: true,
+      graph_override: false,
+      button_count: 2,
+      source: "model",
+    });
+  });
+
+  it("emits reply_menu_filled with none source when catalog drill-down has no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Ось основні напрями послуг нашої клініки 🌿\n\nЯкий саме напрямок вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(trackEvent).toHaveBeenCalledWith("reply_menu_filled", {
+      model_trailer: false,
+      graph_override: false,
+      button_count: 0,
+      source: "none",
+    });
   });
 });
 

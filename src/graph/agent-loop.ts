@@ -31,6 +31,7 @@ import {
   normalizeListServicesResult,
   type ServicesContext,
 } from "../tools/service-tools.js";
+import { trackEvent } from "../analytics/track.js";
 import {
   BOOKING_REPLACE_MENU,
   OTHER_DATE_LABEL,
@@ -560,6 +561,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
     const slotOffer = resolveAvailabilityOffer(agentMessages, state.availabilityContext);
+    const modelTrailerCount = buttons.length;
     if (slotOffer) {
       replyText = slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
@@ -568,6 +570,24 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       if (createMeetingAlreadyBooked(agentMessages)) {
         replyButtons = [...BOOKING_REPLACE_MENU];
       }
+    }
+
+    if ((status === "ok" || status === "max_steps") && replyText.length > 0) {
+      const graphOverride =
+        slotOffer != null
+        || (modelTrailerCount === 0 && replyButtons.length > 0 && createMeetingAlreadyBooked(agentMessages));
+      trackEvent("reply_menu_filled", {
+        model_trailer: modelTrailerCount > 0,
+        graph_override: graphOverride,
+        button_count: replyButtons.length,
+        source: slotOffer != null
+          ? "slot_offer"
+          : graphOverride
+            ? "replace"
+            : modelTrailerCount > 0
+              ? "model"
+              : "none",
+      });
     }
 
     const replyMessage =

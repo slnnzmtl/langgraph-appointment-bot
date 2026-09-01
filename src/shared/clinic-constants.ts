@@ -56,6 +56,9 @@ export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
 
+/** STEP INTENT skip shortcut — optional visit note. */
+export const INTENT_SKIP_LABEL = "Продовжити без коментаря";
+
 /**
  * Labels the supervisor must route itself — never sticky-continue into booking.
  * Includes DEFAULT MENU items, main menu, and soft declines after a move/cancel
