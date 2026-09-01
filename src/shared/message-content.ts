@@ -58,7 +58,7 @@ export const extractNonTextContentParts = (
   });
 };
 
-const MAX_REPLY_BUTTONS = 4;
+const MAX_REPLY_BUTTONS = 6;
 
 /** Trailer from the first `<reply_buttons>` to EOF (model may emit one or several blocks). */
 const REPLY_BUTTONS_TRAILER = /(?:\r?\n)*<reply_buttons\b[\s\S]*$/i;

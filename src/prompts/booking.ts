@@ -147,18 +147,22 @@ When \`create_meeting\` or \`reschedule_meeting\` returns \`{ error }\` after th
 
 ### UKRAINIAN EXAMPLES (tone and shape, not text to copy)
 - Offering the usual first visit (STEP SERVICE — before any dates):
-«Для першого візиту радимо консультацію: лікар огляне шкіру та підбере процедуру 🌿 Підібрати вільний час на консультацію?»
+«Для першого візиту радимо консультацію: лікар огляне шкіру та підбере процедуру 
+
+Підібрати вільний час на консультацію?»
   Reply shortcuts (required trailer in that same message): «Так», «Обрати іншу процедуру»
 - Offering dates (DATE step):
 «Найближчі вільні дні для консультації 🗓️
-  - 25 серпня (вівторок)
-  - 3 вересня (четвер)
-  - 4 вересня (п'ятниця)
+
+  - 25 серпня (вівторок): 11:00, 13:00
+  - 3 вересня (четвер): 10:00, 12:00
+  - 4 вересня (п'ятниця): 12:00
 
 Який день вам зручний?»
   Reply shortcuts (required trailer in that same message): «25 серпня», «3 вересня», «4 вересня», «${OTHER_DATE_LABEL}»
 - Offering times after they picked a day (TIME step):
 «Вільні години на 25 серпня (вівторок) 🗓️
+
   - 11:00,
   - 13:00
 

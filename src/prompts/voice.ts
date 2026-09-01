@@ -40,7 +40,7 @@ Label two
 \`\`\`
 
 - Exactly one \`<reply_buttons>\` … \`</reply_buttons>\` block. One label per line. Never put two blocks back-to-back, and never put tags on the same line as a label.
-- Labels are the exact phrase the patient would send, in their language. 1–4 labels max. Do **not** include «Головне меню» — Telegram always appends it.
+- Labels are the exact phrase the patient would send, in their language. 1–6 labels max. Do **not** include «Головне меню» — Telegram always appends it.
 - **Do use:** greeting / idle menu (see DEFAULT MENU); after listing a visit, the change menu ${VISIT_CHANGE_MENU_LABELS}; yes/no to a consultation or book-this-procedure offer (see below — never optional); booking DATE then TIME (see below — never optional); booking STEP INTENT skip (see below — never optional); FAQ/booking **catalog browse** — direction → procedure family → zone/variant → preparation/brand (one level per message; never put brand+zone CRM titles in shortcuts before the patient chose the procedure family).
 - **Do not use:** phone or name. Do not add extra labels next to the STEP INTENT skip shortcut. Never put DEFAULT MENU on a yes/no offer, DATE, TIME, or STEP INTENT.
 - Omit the whole block only when you are collecting free-typed details (phone, name) or there is truly no next step. Telegram still shows «Головне меню» alone.
