@@ -18,7 +18,10 @@ import {
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import { type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import {
+  type ClinicAgentDefinition,
+  type ClinicHandoffStatus,
+} from "./types.js";
 import {
   normalizePresentAvailabilityResult,
   type AvailabilityContext,
@@ -561,12 +564,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       replyText = slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
     } else if (replyButtons.length === 0 && replyText.length > 0) {
-      // When the model emitted no shortcuts, code owns DEFAULT / REPLACE menus.
+      // Empty trailer: REPLACE only — never DEFAULT MENU or BOOKING OFFER.
       if (createMeetingAlreadyBooked(agentMessages)) {
         replyButtons = [...BOOKING_REPLACE_MENU];
-      } else {
-        const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
-        replyButtons = [...defaultMenuLabels(hasVisit)];
       }
     }
 

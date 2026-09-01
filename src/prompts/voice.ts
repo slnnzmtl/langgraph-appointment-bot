@@ -39,8 +39,8 @@ Label two
 
 - Exactly one \`<reply_buttons>\` … \`</reply_buttons>\` block. One label per line. Never put two blocks back-to-back, and never put tags on the same line as a label.
 - Labels are the exact phrase the patient would send. 1–4 labels max. Do **not** include «Головне меню» — Telegram always appends it.
-- Emit a trailer only for: STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). The graph attaches DEFAULT MENU, VISIT CHANGE, REPLACE, and DATE/TIME (day + HH:mm) keyboards when you leave the trailer out.
-- Do **not** use a trailer when collecting free-typed details (phone, name), or when offering free days or clock times from availability — the graph owns those keyboards.
+- Turns that **require** a trailer: STEP INTENT skip, a consultation / book-this-procedure yes/no, and **every** catalog drill-down step (direction → family → zone → brand). Catalog labels live only in your reply — the graph can never invent them, so a drill-down reply without \`<reply_buttons>\` leaves the patient with no buttons to tap and is a mistake. Any time you list directions, families, zones, or brands and ask which one, the matching \`<reply_buttons>\` block is mandatory in that same reply. A bullet list in visible text is **not** a substitute.
+- Leave the trailer out **only** on turns the graph owns or that need no shortcut: DATE and TIME offers (the graph builds the day / HH:mm keyboard from the availability snapshot), the REPLACE offer after «Already booked», collecting free-typed details (phone, name), and dead-ends with no next choice (location, tool failure, post-booking success). On those turns Telegram shows «Головне меню» — never drop the trailer on a catalog step to reach that state.
 `;
 
 export const VOICE_CATALOG = `### CATALOG SHORTCUTS (required)

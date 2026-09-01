@@ -1136,7 +1136,7 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
+  it("strips an empty reply_buttons trailer and leaves Main Menu only for booking", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1153,7 +1153,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(stored.content)).toBe("Could you please provide your phone number?");
     expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
-    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
   it("attaches REPLACE when create_meeting returned Already booked and no trailer", () => {
@@ -1332,21 +1332,47 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(["14:00", OTHER_DATE_LABEL]);
   });
 
-  it("keeps DEFAULT MENU when availability snapshot is empty and there is no trailer", () => {
+  it("leaves Main Menu only when last human is Послуги or Записатись and there is no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+
+    for (const humanText of ["Послуги", "Записатись"]) {
+      const update = finalize(
+        clinicState({
+          stepCount: 1,
+          agentMessages: [
+            new HumanMessage(humanText),
+            new AIMessage(
+              humanText === "Послуги"
+                ? "Записати вас на консультацію?"
+                : "Підібрати вільний час на консультацію?",
+            ),
+          ],
+        }),
+      );
+
+      expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    }
+  });
+
+  it("leaves Main Menu only for catalog drill-down without a trailer", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
         stepCount: 1,
-        availabilityContext: { days: [], stepMinutes: 60 },
+        bookingContext: {
+          meetings: [{ id: "m-1", visitLabel: "Консультація - завтра о 10:00" }],
+        },
         agentMessages: [
-          new HumanMessage("Записатись"),
-          new AIMessage("Could you please provide your phone number?"),
+          new HumanMessage("Обрати іншу процедуру"),
+          new AIMessage(
+            "Ось основні напрями послуг нашої клініки 🌿\n• Консультації та діагностика\n• Ін'єкційні процедури\n• Дерматологічні послуги та догляд\n\nЯкий саме напрямок вас цікавить?",
+          ),
         ],
       }),
     );
 
-    expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
-    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+    expect(update.lastHandoff?.replyText).toContain("Який саме напрямок");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 });
 
