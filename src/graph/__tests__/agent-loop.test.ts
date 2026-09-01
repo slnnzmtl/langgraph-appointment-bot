@@ -5,8 +5,10 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../agent-loop.js";
+import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, formatAvailabilityDateOffer, formatAvailabilityTimeOffer, matchAvailabilityDay, meetingMutationClearsAvailability, resolveAvailabilityOffer } from "../agent-loop.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
+import { OTHER_DATE_LABEL } from "../../shared/clinic-constants.js";
+import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   formatAvailabilityContext,
   formatBookingMeetingsContext,
@@ -1379,5 +1381,210 @@ describe("createAgentFinalizeNode", () => {
       yieldToSupervisor: true,
       replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
+  });
+
+  const moveSnapshot: AvailabilityContext = {
+    days: [
+      {
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "2026-09-10T1400",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T15:00:00",
+          },
+        ],
+      },
+      {
+        date: "2026-09-11",
+        dayLabel: "11 вересня (п'ятниця)",
+        slots: [
+          {
+            id: "2026-09-11T1200",
+            label: "12:00",
+            dateStart: "2026-09-11T12:00:00",
+            dateEnd: "2026-09-11T13:00:00",
+          },
+        ],
+      },
+      {
+        date: "2026-09-12",
+        dayLabel: "12 вересня (субота)",
+        slots: [
+          {
+            id: "2026-09-12T1100",
+            label: "11:00",
+            dateStart: "2026-09-12T11:00:00",
+            dateEnd: "2026-09-12T12:00:00",
+          },
+        ],
+      },
+    ],
+    stepMinutes: 60,
+    excludeMeetingIds: ["6a95fe6e5b90474bc"],
+  };
+
+  it("replaces invented 09:00–18:00 with DATE offer (hours in text, date keyboard)", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        availabilityContext: moveSnapshot,
+        agentMessages: [
+          new HumanMessage("Перенести"),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "present_availability_slots", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              date: "2026-09-10",
+              slots: moveSnapshot.days[0]!.slots,
+              days: moveSnapshot.days,
+              stepMinutes: 60,
+              searchedDays: 12,
+              excludeMeetingIds: moveSnapshot.excludeMeetingIds,
+            }),
+            tool_call_id: "1",
+            name: "present_availability_slots",
+          }),
+          new AIMessage(
+            "Вільні години на 10 вересня (четвер) 🗓️\n\n  - 09:00\n  - 10:00\n  - 11:00\n  - 12:00\n  - 13:00\n  - 14:00\n  - 15:00\n  - 16:00\n  - 17:00\n  - 18:00\n\nЯкий час вам зручний?",
+          ),
+        ],
+      }),
+    );
+
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text).toContain("10 вересня (четвер): 14:00");
+    expect(text).toContain("11 вересня (п'ятниця): 12:00");
+    expect(text).toContain("12 вересня (субота): 11:00");
+    expect(text).not.toContain("18:00");
+    expect(text).not.toContain("09:00");
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "10 вересня",
+      "11 вересня",
+      "12 вересня",
+      OTHER_DATE_LABEL,
+    ]);
+    expect(String(update.messages?.[0]?.content)).toBe(text);
+  });
+
+  it("on day pick without a new tool call, rewrites to TIME from availabilityContext", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        availabilityContext: moveSnapshot,
+        agentMessages: [
+          new HumanMessage("10 вересня"),
+          new AIMessage(
+            "Вільні години на 10 вересня (четвер) 🗓️\n\n  - 09:00\n  - 10:00\n  - 18:00\n\nЯкий час вам зручний?",
+          ),
+        ],
+      }),
+    );
+
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text).toContain("Вільні години на 10 вересня (четвер)");
+    expect(text).toContain("14:00");
+    expect(text).not.toContain("18:00");
+    expect(text).not.toContain("09:00");
+    expect(update.lastHandoff?.replyButtons).toEqual(["14:00", OTHER_DATE_LABEL]);
+  });
+
+  it("keeps DEFAULT MENU when availability snapshot is empty and there is no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        availabilityContext: { days: [], stepMinutes: 60 },
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new AIMessage("Could you please provide your phone number?"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
+    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+  });
+});
+
+describe("availability offer helpers", () => {
+  const days: AvailabilityContext["days"] = [
+    {
+      date: "2026-09-10",
+      dayLabel: "10 вересня (четвер)",
+      slots: [
+        {
+          id: "a",
+          label: "14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T15:00:00",
+        },
+        {
+          id: "b",
+          label: "15:00",
+          dateStart: "2026-09-10T15:00:00",
+          dateEnd: "2026-09-10T16:00:00",
+        },
+      ],
+    },
+    {
+      date: "2026-09-11",
+      dayLabel: "11 вересня (п'ятниця)",
+      slots: [
+        {
+          id: "c",
+          label: "12:00",
+          dateStart: "2026-09-11T12:00:00",
+          dateEnd: "2026-09-11T13:00:00",
+        },
+      ],
+    },
+  ];
+
+  it("formatAvailabilityDateOffer lists hours and keeps date-only shortcuts", () => {
+    const offer = formatAvailabilityDateOffer(days);
+    expect(offer.replyText).toContain("10 вересня (четвер): 14:00, 15:00");
+    expect(offer.replyText).toContain("11 вересня (п'ятниця): 12:00");
+    expect(offer.replyButtons).toEqual(["10 вересня", "11 вересня", OTHER_DATE_LABEL]);
+  });
+
+  it("formatAvailabilityTimeOffer lists all times and caps shortcuts at 3", () => {
+    const offer = formatAvailabilityTimeOffer(days[0]!);
+    expect(offer.replyText).toContain("14:00");
+    expect(offer.replyText).toContain("15:00");
+    expect(offer.replyButtons).toEqual(["14:00", "15:00", OTHER_DATE_LABEL]);
+  });
+
+  it("matchAvailabilityDay accepts short keyboard labels", () => {
+    expect(matchAvailabilityDay("10 вересня", days)?.date).toBe("2026-09-10");
+    expect(matchAvailabilityDay(OTHER_DATE_LABEL, days)).toBeNull();
+    expect(matchAvailabilityDay("14:00", days)).toBeNull();
+  });
+
+  it("resolveAvailabilityOffer prefers tool-turn DATE over checkpoint day pick", () => {
+    const offer = resolveAvailabilityOffer(
+      [
+        new HumanMessage("10 вересня"),
+        new AIMessage({
+          content: "",
+          tool_calls: [{ id: "1", name: "present_availability_slots", args: {} }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ days, stepMinutes: 60 }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+        new AIMessage("invented"),
+      ],
+      { days, stepMinutes: 60 },
+    );
+    expect(offer?.replyText).toContain("Найближчі вільні дні");
+    expect(offer?.replyButtons?.[0]).toBe("10 вересня");
   });
 });

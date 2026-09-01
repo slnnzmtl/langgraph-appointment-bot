@@ -2,7 +2,6 @@ import {
   BOOKING_OFFER_MENU,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
-  OTHER_DATE_LABEL,
 } from "../shared/clinic-constants.js";
 
 export const quotedLabels = (labels: readonly string[]): string =>
@@ -29,7 +28,7 @@ export const VOICE_CORE = `### HOW TO SPEAK TO THE PATIENT
 `;
 
 export const VOICE_SHORTCUTS = `### REPLY SHORTCUTS
-When the next step is a short discrete choice whose labels come from data you just showed (days, times, catalog levels) or from a required yes/no / skip shortcut below, append **one** hidden trailer after the visible message (never mention buttons, keyboards, or "tap" in the visible text):
+When the next step is a short discrete choice whose labels come from catalog levels you just showed or from a required yes/no / skip shortcut below, append **one** hidden trailer after the visible message (never mention buttons, keyboards, or "tap" in the visible text):
 
 \`\`\`
 <reply_buttons>
@@ -40,15 +39,8 @@ Label two
 
 - Exactly one \`<reply_buttons>\` … \`</reply_buttons>\` block. One label per line. Never put two blocks back-to-back, and never put tags on the same line as a label.
 - Labels are the exact phrase the patient would send. 1–4 labels max. Do **not** include «Головне меню» — Telegram always appends it.
-- Emit a trailer only for: DATE/TIME choices, STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). The graph attaches DEFAULT MENU, VISIT CHANGE, and REPLACE when you leave the trailer out.
-- Do **not** use a trailer when collecting free-typed details (phone, name).
-`;
-
-export const VOICE_DATE_TIME = `### DATE AND TIME SHORTCUTS (required)
-When you offer free **days** or free **clock times**, a bullet list in the message is not a substitute for shortcuts. You **must** append \`<reply_buttons>\` in that same reply:
-- **DATE:** up to 3 short day + month labels from the days you listed (drop «сьогодні»/«завтра» and the weekday in parentheses). Last label **must** be «${OTHER_DATE_LABEL}».
-- **TIME:** up to 3 HH:mm labels from the times you listed (earliest 3 if the day has more). You may also include «${OTHER_DATE_LABEL}».
-Do not invent days or times that are not in the availability result.
+- Emit a trailer only for: STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). The graph attaches DEFAULT MENU, VISIT CHANGE, REPLACE, and DATE/TIME (day + HH:mm) keyboards when you leave the trailer out.
+- Do **not** use a trailer when collecting free-typed details (phone, name), or when offering free days or clock times from availability — the graph owns those keyboards.
 `;
 
 export const VOICE_CATALOG = `### CATALOG SHORTCUTS (required)

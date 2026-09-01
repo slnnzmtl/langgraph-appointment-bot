@@ -1,5 +1,6 @@
 import {
   AIMessage,
+  HumanMessage,
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
@@ -22,12 +23,14 @@ import {
   normalizePresentAvailabilityResult,
   type AvailabilityContext,
 } from "../tools/availability-tools.js";
+import { shortDayMonthLabel } from "../tools/availability-slots.js";
 import {
   normalizeListServicesResult,
   type ServicesContext,
 } from "../tools/service-tools.js";
 import {
   BOOKING_REPLACE_MENU,
+  OTHER_DATE_LABEL,
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
 } from "../shared/clinic-constants.js";
@@ -160,6 +163,125 @@ export const captureServicesFromMessages = (
   messages: BaseMessage[],
 ): ServicesContext | null | undefined =>
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
+
+/** DATE offer from a multi-day availability snapshot (code-owned when the model invents hours). */
+export const formatAvailabilityDateOffer = (
+  days: AvailabilityContext["days"],
+): { replyText: string; replyButtons: string[] } => {
+  const open = days.filter((day) => day.slots.length > 0).slice(0, 3);
+  const bullets = open
+    .map((day) => {
+      const dayPart = day.dayLabel ?? day.date;
+      const hours = day.slots.map((slot) => slot.label).join(", ");
+      return `  - ${dayPart}: ${hours}`;
+    })
+    .join("\n");
+  return {
+    replyText: `Найближчі вільні дні 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`,
+    replyButtons: [
+      ...open.map((day) => shortDayMonthLabel(day.dayLabel ?? day.date)),
+      OTHER_DATE_LABEL,
+    ],
+  };
+};
+
+/** TIME offer from a single-day availability snapshot. */
+export const formatAvailabilityTimeOffer = (
+  day: AvailabilityContext["days"][number],
+): { replyText: string; replyButtons: string[] } => {
+  const dayLabel = day.dayLabel ?? day.date;
+  const labels = day.slots.map((slot) => slot.label);
+  const bullets = labels.map((label) => `  - ${label}`).join("\n");
+  return {
+    replyText: `Вільні години на ${dayLabel} 🗓️\n\n${bullets}\n\nЯкий час вам зручний?`,
+    replyButtons: [...labels.slice(0, 3), OTHER_DATE_LABEL],
+  };
+};
+
+const lastHumanText = (messages: BaseMessage[]): string => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message instanceof HumanMessage) {
+      return extractMessageTextContent(message.content).trim();
+    }
+  }
+  return "";
+};
+
+/** Match a patient day pick to a snapshot day (keyboard short label, dayLabel, or YYYY-MM-DD). */
+export const matchAvailabilityDay = (
+  humanText: string,
+  days: AvailabilityContext["days"],
+): AvailabilityContext["days"][number] | null => {
+  const trimmed = humanText.trim();
+  if (!trimmed || trimmed === OTHER_DATE_LABEL) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase();
+  for (const day of days) {
+    if (day.slots.length === 0) {
+      continue;
+    }
+    const dayLabel = day.dayLabel ?? day.date;
+    const short = shortDayMonthLabel(dayLabel);
+    if (
+      trimmed === day.date
+      || trimmed === dayLabel
+      || trimmed === short
+      || normalized === dayLabel.toLowerCase()
+      || normalized === short.toLowerCase()
+    ) {
+      return day;
+    }
+  }
+  return null;
+};
+
+/**
+ * When present_availability_slots ran this turn, replace invented DATE/TIME copy with the
+ * snapshot. Multi-day → DATE; one day → TIME. Returns null when this turn is not a slot offer.
+ */
+export const availabilityOfferFromToolTurn = (
+  messages: BaseMessage[],
+): { replyText: string; replyButtons: string[] } | null => {
+  if (!toolRanThisTurn(messages, "present_availability_slots")) {
+    return null;
+  }
+  const captured = captureAvailabilityFromMessages(messages);
+  if (!captured) {
+    return null;
+  }
+  const open = captured.days.filter((day) => day.slots.length > 0);
+  if (open.length === 0) {
+    return null;
+  }
+  if (open.length === 1) {
+    return formatAvailabilityTimeOffer(open[0]!);
+  }
+  return formatAvailabilityDateOffer(open);
+};
+
+/**
+ * Code-owned DATE/TIME for booking finalize: prefer this-turn tool snapshot; else TIME when
+ * the latest human message picks a day already in checkpointed availabilityContext.
+ */
+export const resolveAvailabilityOffer = (
+  messages: BaseMessage[],
+  availabilityContext: AvailabilityContext | null | undefined,
+): { replyText: string; replyButtons: string[] } | null => {
+  const fromTool = availabilityOfferFromToolTurn(messages);
+  if (fromTool) {
+    return fromTool;
+  }
+  if (!availabilityContext || availabilityContext.days.length === 0) {
+    return null;
+  }
+  const day = matchAvailabilityDay(lastHumanText(messages), availabilityContext.days);
+  if (!day) {
+    return null;
+  }
+  return formatAvailabilityTimeOffer(day);
+};
 
 export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
@@ -431,15 +553,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
     const { text, buttons, yieldToSupervisor } = extractReplyButtons(rawText);
-    const replyMessage =
-      text !== rawText || buttons.length > 0 || yieldToSupervisor
-        ? new AIMessage({
-            content: text,
-            additional_kwargs: tagged.additional_kwargs,
-            response_metadata: tagged.response_metadata,
-          })
-        : tagged;
-    const replyText = extractMessageTextContent(replyMessage.content).trim();
+    let replyText = text.trim();
+    let replyButtons = buttons;
+    let yieldFlag = yieldToSupervisor;
 
     // Model failure: deliver via handoff only — do not persist into conversation history.
     if (status === "error" && isModelFailureMessage(tagged)) {
@@ -456,9 +572,17 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       };
     }
 
-    let replyButtons = buttons;
-    // When the model emitted no shortcuts, code owns DEFAULT / REPLACE for booking.
-    if (replyButtons.length === 0 && replyText.length > 0) {
+    // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
+    const slotOffer =
+      agent.id === BOOKING_AGENT_ID
+        ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
+        : null;
+    if (slotOffer) {
+      replyText = slotOffer.replyText;
+      replyButtons = slotOffer.replyButtons;
+      yieldFlag = false;
+    } else if (replyButtons.length === 0 && replyText.length > 0) {
+      // When the model emitted no shortcuts, code owns DEFAULT / REPLACE for booking.
       if (agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages)) {
         replyButtons = [...BOOKING_REPLACE_MENU];
       } else if (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID) {
@@ -467,13 +591,25 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       }
     }
 
+    const replyMessage =
+      replyText !== extractMessageTextContent(tagged.content).trim()
+        || buttons.length > 0
+        || yieldToSupervisor
+        || slotOffer != null
+        ? new AIMessage({
+            content: replyText,
+            additional_kwargs: tagged.additional_kwargs,
+            response_metadata: tagged.response_metadata,
+          })
+        : tagged;
+
     const lastHandoff = {
       agentId: agent.id,
       agentName: agent.name,
       status,
       ...(replyText.length > 0 ? { replyText } : {}),
       ...(replyButtons.length > 0 ? { replyButtons } : {}),
-      ...(yieldToSupervisor ? { yieldToSupervisor: true } : {}),
+      ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
 
     if (status === "empty") {
