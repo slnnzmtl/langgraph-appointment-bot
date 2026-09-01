@@ -1,6 +1,54 @@
 import { describe, expect, it } from "vitest";
 
-import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
+import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, catalogChoiceButtonsFromText, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
+
+describe("catalogChoiceButtonsFromText", () => {
+  it("recovers procedure family labels from a catalog-choice reply", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "У напрямку дерматологічних послуг є:\n• видалення новоутворень\n• пілінги\n• мезотерапія\n\nЯка саме процедура вас цікавить?",
+      ),
+    ).toEqual(["видалення новоутворень", "пілінги", "мезотерапія"]);
+  });
+
+  it("recovers direction labels without description suffixes", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "Ось основні напрями:\n• Консультації та діагностика — …\n• Ін'єкційні процедури — …\n\nЯкий саме напрямок вас цікавить?",
+      ),
+    ).toEqual(["Консультації та діагностика", "Ін'єкційні процедури"]);
+  });
+
+  it("recovers zone and brand labels", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "Для ботулінотерапії є варіанти:\n• 1 зона\n• 2 зони\n\nЯкий варіант вам підходить?",
+      ),
+    ).toEqual(["1 зона", "2 зони"]);
+    expect(
+      catalogChoiceButtonsFromText(
+        "Оберіть препарат:\n• Disport\n• Nabota\n• Botox\n\nЯкий препарат вас цікавить?",
+      ),
+    ).toEqual(["Disport", "Nabota", "Botox"]);
+  });
+
+  it("does not recover bullets from a consultation yes/no offer", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "У нашій клініці доступні такі напрями\n\n• Консультації та діагностика — …\n• Ін'єкційні процедури — …\n\nЗаписати вас на консультацію?",
+      ),
+    ).toEqual([]);
+  });
+
+  it("does not recover bullets from hours or location replies", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "Пн–Пт: 9:00–18:00\n• понеділок\n• вівторок\n\nКоли вам зручно прийти?",
+      ),
+    ).toEqual([]);
+    expect(catalogChoiceButtonsFromText("Адреса: вул. Миколаївська 33.")).toEqual([]);
+  });
+});
 
 describe("extractReplyButtons yield trailer", () => {
   it("strips yield tag and sets yieldToSupervisor", () => {

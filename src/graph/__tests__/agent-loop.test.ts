@@ -1423,7 +1423,7 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("strips a yield-only trailer and attaches DEFAULT MENU for faq", () => {
+  it("strips a yield-only trailer and omits DEFAULT MENU for faq", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -1435,6 +1435,7 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        bookingContext: listedMeetings,
         agentMessages: [new AIMessage("Done.\n<yield_to_supervisor/>")],
       }),
     );
@@ -1447,8 +1448,128 @@ describe("createAgentFinalizeNode", () => {
       status: "ok",
       replyText: "Done.",
       yieldToSupervisor: true,
-      replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("recovers catalog buttons when faq lists procedures without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage(
+            "В ін'єкційних процедурах є, наприклад:\n• збільшення губ\n• ботулінотерапія\n\nЯка процедура вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Яка процедура вас цікавить?");
+    expect(update.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
+  });
+
+  it("recovers dermatology family buttons on a second catalog browse", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage(
+            "У напрямку дерматологічних послуг та догляду є, наприклад:\n• видалення новоутворень\n• пілінги\n• мезотерапія\n\nЯка саме процедура вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "видалення новоутворень",
+      "пілінги",
+      "мезотерапія",
+    ]);
+  });
+
+  it("does not recover direction bullets from a consultation offer without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "У нашій клініці доступні такі напрями\n\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЗаписати вас на консультацію?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("keeps explicit faq trailers authoritative over bullet parsing", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Який напрямок?\n\n• ignored one\n• ignored two\n\n<reply_buttons>\nКонсультації\nІн'єкційні процедури\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Консультації", "Ін'єкційні процедури"]);
+  });
+
+  it("does not attach buttons for faq location-only replies", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(`Ми знаходимося за адресою вул. Миколаївська 33.`),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
   const moveSnapshot: AvailabilityContext = {

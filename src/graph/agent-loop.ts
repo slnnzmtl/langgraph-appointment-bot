@@ -36,6 +36,7 @@ import {
 } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import {
+  catalogChoiceButtonsFromText,
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
@@ -565,7 +566,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           agentName: agent.name,
           status: "error",
           replyText: PATIENT_FALLBACK_MESSAGE,
-          replyButtons: [...defaultMenuLabels(hasVisit)],
+          ...(agent.id === BOOKING_AGENT_ID
+            ? { replyButtons: [...defaultMenuLabels(hasVisit)] }
+            : {}),
         },
       };
     }
@@ -580,12 +583,17 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       replyButtons = slotOffer.replyButtons;
       yieldFlag = false;
     } else if (replyButtons.length === 0 && replyText.length > 0) {
-      // When the model emitted no shortcuts, code owns DEFAULT / REPLACE for booking.
-      if (agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages)) {
-        replyButtons = [...BOOKING_REPLACE_MENU];
-      } else if (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID) {
-        const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
-        replyButtons = [...defaultMenuLabels(hasVisit)];
+      if (agent.id === BOOKING_AGENT_ID) {
+        // Booking: no shortcuts → REPLACE or DEFAULT MENU.
+        if (createMeetingAlreadyBooked(agentMessages)) {
+          replyButtons = [...BOOKING_REPLACE_MENU];
+        } else {
+          const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+          replyButtons = [...defaultMenuLabels(hasVisit)];
+        }
+      } else if (agent.id === FAQ_AGENT_ID) {
+        // FAQ catalog drill-down: recover visible bullet labels when trailer is missing.
+        replyButtons = catalogChoiceButtonsFromText(replyText);
       }
     }
 

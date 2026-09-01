@@ -38,13 +38,13 @@ Label two
 \`\`\`
 
 - Exactly one \`<reply_buttons>\` … \`</reply_buttons>\` block. One label per line. Never put two blocks back-to-back, and never put tags on the same line as a label.
-- Labels are the exact phrase the patient would send. 1–4 labels max. Do **not** include «Головне меню» — Telegram always appends it.
-- Emit a trailer only for: STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). The graph attaches DEFAULT MENU, VISIT CHANGE, REPLACE, and DATE/TIME (day + HH:mm) keyboards when you leave the trailer out.
+- Labels are the exact phrase the patient would send. 1–6 labels max. Do **not** include «Головне меню» — Telegram always appends it.
+- Emit a trailer only for: STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). Booking/supervisor attach DEFAULT MENU, VISIT CHANGE, REPLACE, and DATE/TIME when you leave the trailer out. FAQ with no trailer: Telegram shows only «Головне меню».
 - Do **not** use a trailer when collecting free-typed details (phone, name), or when offering free days or clock times from availability — the graph owns those keyboards.
 `;
 
 export const VOICE_CATALOG = `### CATALOG SHORTCUTS (required)
-When you list **directions**, **procedure families**, **zones/variants**, or **preparations/brands** and ask which one, a bullet list in the visible text is not a substitute. You **must** append \`<reply_buttons>\` in that same reply with those short labels (up to 4; if more, list all in text and put the first 3 in the trailer). Never put brand+zone CRM titles in shortcuts before the patient chose the procedure family. Do **not** add \`<yield_to_supervisor/>\` on catalog drill-down — only on consultation / book-this-procedure yes/no offers.
+When you list **directions**, **procedure families**, **zones/variants**, or **preparations/brands** and ask which one, a bullet list in the visible text is not a substitute. You **must** append \`<reply_buttons>\` in that same reply with those short labels (up to 6; if more, list all in text and put the first 3 in the trailer). Never put brand+zone CRM titles in shortcuts before the patient chose the procedure family. Do **not** add \`<yield_to_supervisor/>\` on catalog drill-down — only on consultation / book-this-procedure yes/no offers.
 `;
 
 export const VOICE_YES_NO = `### CONSULTATION / YES-NO OFFER (required)
