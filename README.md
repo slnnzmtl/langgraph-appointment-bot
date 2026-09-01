@@ -96,7 +96,7 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 
 ## Booking tools
 
-Default visit is **Консультація** unless the patient is sure about a named procedure (or FAQ already chose one). Catalog browse is FAQ; booking may `list_services` once to match a typed CRM name.
+Default visit is **Консультація** unless the patient is sure about a named procedure (or FAQ already chose one). Catalog browse is FAQ; booking reuses checkpointed `<list_services>` until availability is loaded, then omits the catalog from prompts.
 
 - `present_availability_slots` — free/busy from `search_meetings` and `CReservedTime`; optional `excludeMeetingIds` when rescheduling (current start is not listed)
 - `create_meeting` — HITL Yes/No, then MCP `create_meeting`

@@ -68,7 +68,7 @@ Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<
 
 ### Booking (read/write, `maxSteps` 10)
 
-One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. Booking may `list_services` once to match a typed CRM procedure name; it does not drill the catalog.
+One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. Booking reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK).
 
 | Tool | Role |
 | --- | --- |
