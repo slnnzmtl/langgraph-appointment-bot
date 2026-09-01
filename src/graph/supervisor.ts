@@ -42,7 +42,6 @@ import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
-  FAQ_AGENT_ID,
   FINISH_ROUTE,
   type AgentPrefetchResult,
   type ClinicAgentDefinition,
@@ -103,17 +102,13 @@ const lastHumanLineFromMessages = (messages: BaseMessage[]): string => {
 
 /**
  * Skip the supervisor LLM when the patient taps a shortcut the specialist just
- * offered. Supervisor-owned labels, free text, and yielded handoffs still go
- * through the LLM.
+ * offered. Supervisor-owned labels and free text still go through the LLM.
  */
 export const shouldContinueInSpecialist = (
   state: ClinicState,
   agentId: string,
 ): boolean => {
   if (state.lastHandoff?.agentId !== agentId || state.lastHandoff.status !== "ok") {
-    return false;
-  }
-  if (state.lastHandoff.yieldToSupervisor) {
     return false;
   }
 
@@ -134,12 +129,6 @@ export const shouldContinueInSpecialist = (
   return labels.includes(humanText);
 };
 
-export const shouldContinueInBooking = (state: ClinicState): boolean =>
-  shouldContinueInSpecialist(state, BOOKING_AGENT_ID);
-
-export const shouldContinueInFaq = (state: ClinicState): boolean =>
-  shouldContinueInSpecialist(state, FAQ_AGENT_ID);
-
 /** True when the latest human line is Перенести / Скасувати / cancel-and-rebook (or EN). */
 export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
   VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages));
@@ -147,15 +136,14 @@ export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
 /** Agent id to sticky-continue into, or null when the supervisor LLM must run. */
 export const stickyContinueAgentId = (
   state: ClinicState,
-): typeof FAQ_AGENT_ID | typeof BOOKING_AGENT_ID | null => {
+): typeof BOOKING_AGENT_ID | null => {
   // Belt-and-suspenders: Перенести / Скасувати / cancel-and-rebook still route to
   // booking when lastHandoff is missing (FINISH or replace menus store those buttons).
   if (isVisitChangeRouteLabel(state)) {
     return BOOKING_AGENT_ID;
   }
-  const agentId = state.lastHandoff?.agentId;
-  if (agentId === FAQ_AGENT_ID || agentId === BOOKING_AGENT_ID) {
-    return shouldContinueInSpecialist(state, agentId) ? agentId : null;
+  if (state.lastHandoff?.agentId === BOOKING_AGENT_ID) {
+    return shouldContinueInSpecialist(state, BOOKING_AGENT_ID) ? BOOKING_AGENT_ID : null;
   }
   return null;
 };

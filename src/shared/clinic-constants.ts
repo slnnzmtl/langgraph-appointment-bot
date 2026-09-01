@@ -34,7 +34,7 @@ export const defaultMenuLabels = (hasVisit: boolean): readonly string[] =>
 /** XML tag names for dynamic LLM context blocks (formatters + tool reuse hints). */
 export const CONTEXT_TAGS = {
   contact: "contact_info",
-  /** One tag; projections differ per agent (flag / visitLabels / full meetings). */
+  /** One tag; projections differ (supervisor visitLabels vs booking full meetings). */
   meetings: "list_planned_meetings",
   availability: "availability",
   services: "list_services",
@@ -58,8 +58,8 @@ export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as cons
 
 /**
  * Labels the supervisor must route itself — never sticky-continue into booking.
- * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,
- * and soft declines after a move/cancel or replace offer.
+ * Includes DEFAULT MENU items, main menu, and soft declines after a move/cancel
+ * or replace offer. Catalog browse («Обрати іншу процедуру») stays in booking.
  */
 export const SUPERVISOR_OWNED_REPLY_LABELS = new Set<string>([
   MAIN_MENU_LABEL,
@@ -69,8 +69,6 @@ export const SUPERVISOR_OWNED_REPLY_LABELS = new Set<string>([
   "Services",
   "Address",
   "My visit",
-  "Обрати іншу процедуру",
-  "Choose another procedure",
   VISIT_CHANGE_MENU[2],
   VISIT_CHANGE_MENU_EN[2],
 ]);

@@ -1,6 +1,6 @@
 # Clinic Appointment Bot
 
-Telegram AI for a cosmetic clinic. Patients chat in private Telegram; the bot answers clinic FAQ and books / moves / cancels visits in EspoCRM via MCP (Gemini supervisor + FAQ / booking specialists, telegraf long polling, HITL ✅/❌). Ukrainian-first; replies in the patient’s language.
+Telegram AI for a cosmetic clinic. Patients chat in private Telegram; the bot answers clinic FAQ and books / moves / cancels visits in EspoCRM via MCP (Gemini supervisor + booking specialist, telegraf long polling, HITL ✅/❌). Ukrainian-first; replies in the patient’s language.
 
 Product topology, routing, and change map: [AGENT.md](AGENT.md).
 
@@ -71,7 +71,7 @@ pnpm depcruise  # dependency rules (cycles, orphans, missing deps)
 pnpm depcruise:graph  # write dependency-graph.mmd (Mermaid)
 pnpm depcruise:graph:svg  # write dependency-graph.svg (needs Graphviz `dot`)
 pnpm smoke   # bootstrap + live MCP HTTP (`ESPOCRM_MCP_URL`)
-pnpm smoke -- --invoke    # FAQ routing via Gemini
+pnpm smoke -- --invoke    # clinic hours via Gemini (supervisor → booking)
 pnpm smoke -- --identity  # known vs unknown telegram_id booking smoke
 pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is set
 ```
@@ -79,9 +79,9 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 ## Layout
 
 - `AGENT.md` — product map (agents, routing, write/HITL invariants, where to edit)
-- `src/graph/` — LangGraph (supervisor + faq/booking loops, sticky routing, prefetch)
+- `src/graph/` — LangGraph (supervisor + booking loop, sticky routing, prefetch)
 - `src/composition/` — runtime wiring, MCP adapters, agent defs (`maxSteps`)
-- `src/prompts/` — supervisor / FAQ / booking plus shared `VOICE_*` sections in `voice.ts`
+- `src/prompts/` — supervisor / booking plus shared `VOICE_*` sections in `voice.ts`
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
 - `src/adapter/` — telegraf (`telegram-bot.ts`), keyboards (`telegram-ui.ts`), `/start` welcome, reminder webhook
 - `src/shared/` — clinic constants (address, consultation id, menu labels), helpers
@@ -90,13 +90,13 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 
 ## FAQ / services
 
-- Catalog (`list_services`): grouped summary; **no prices** in the tool payload or reply. Closes with a consultation offer («Так» / «Обрати іншу процедуру»). «Обрати іншу процедуру» drills the catalog one level per message (FAQ), then offers to book that procedure.
+- Catalog (`list_services`): grouped summary; **no prices** in the tool payload or reply. Closes with a consultation offer («Так» / «Обрати іншу процедуру»). «Обрати іншу процедуру» drills the catalog one level per message, then offers to book that procedure.
 - Pricing: `get_service` for the matched service only; quote only what the user asked for.
-- USD → UAH: when CRM `priceCurrency` is USD, `get_service` fetches `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) and attaches `priceUah`; FAQ quotes it only if the user asks in UAH (FX failure → native USD, no invented rates).
+- USD → UAH: when CRM `priceCurrency` is USD, `get_service` fetches `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) and attaches `priceUah`; booking quotes it only if the user asks in UAH (FX failure → native USD, no invented rates).
 
 ## Booking tools
 
-Default visit is **Консультація** unless the patient is sure about a named procedure (or FAQ already chose one). Catalog browse is FAQ; booking reuses checkpointed `<list_services>` until availability is loaded, then omits the catalog from prompts.
+Default visit is **Консультація** unless the patient is sure about a named procedure (or already chose one via catalog). Booking reuses checkpointed `<list_services>` until availability is loaded, then omits the catalog from prompts.
 
 - `present_availability_slots` — free/busy from `search_meetings` and `CReservedTime`; optional `excludeMeetingIds` when rescheduling (current start is not listed)
 - `create_meeting` — HITL Yes/No, then MCP `create_meeting`
@@ -116,9 +116,9 @@ Default visit is **Консультація** unless the patient is sure about a
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
 - At most one Planned meeting per patient: `create_meeting` is blocked until the existing visit is cancelled; then the new slot can be booked. Do not offer reschedule during that conflict — reschedule is only after «Мій запис»
 - Supervisor prefetches contact + planned meetings into checkpointed state; booking prepare reuses that snapshot until a successful CRM write dirties it or the snapshot is older than ~5 minutes.
-- Sticky routing: tapping a shortcut the specialist just offered continues in that agent (skips the supervisor LLM). FAQ book-handoff offers include a hidden `<yield_to_supervisor/>` so «Так» is re-routed to booking. «Перенести» / «Скасувати» go to booking even after a FINISH visit list or an Already-booked replace offer
+- Sticky routing: tapping a shortcut the specialist just offered continues in booking (skips the supervisor LLM). Catalog and consultation offers stay in booking. «Перенести» / «Скасувати» go to booking even after a FINISH visit list or an Already-booked replace offer
 - `present_availability_slots` uses `search_meetings` and `CReservedTime` free/busy; booking finalize attaches DATE then TIME reply keyboards from the tool snapshot (`dayLabel` / slot labels precomputed in TS). The user may still type a slot. `whenLabel` / `visitLabel` for planned meetings are also precomputed so the model quotes them instead of formatting dates itself
-- When the next step is a short choice, the agent may append a hidden `<reply_buttons>` trailer; the adapter strips it and shows a one-time Telegram **reply keyboard**. Tapping a label sends that text as a normal message. Every keyboard ends with **«Головне меню»** (adapter-appended, including HITL and turns with no other shortcuts). Supervisor **FINISH** must emit that trailer itself: DEFAULT MENU, or VISIT CHANGE («Перенести», «Скасувати», «Ні, дякую») after an explicit visit inquiry — the server does not fill these. `/start` and reminders still use `buildDefaultMenuKeyboard`. When `create_meeting` returns `Already booked`, the booking agent must emit REPLACE («Скасувати», «Ні, дякую») in `<reply_buttons>` — never «Перенести». Consultation and book-this-procedure yes/no offers must use «Так» / «Обрати іншу процедуру» in `<reply_buttons>` (FAQ adds `<yield_to_supervisor/>` on «Так»). DATE/TIME shortcuts (dates plus «Інша дата», then HH:mm) come from the graph snapshot, not a model trailer. «Головне меню» routes to a short idle reply with DEFAULT MENU; during HITL it declines the write. English aliases (Book / Services / Address / …) are recognized for routing.
+- When the next step is a short choice, the agent may append a hidden `<reply_buttons>` trailer; the adapter strips it and shows a one-time Telegram **reply keyboard**. Tapping a label sends that text as a normal message. Every keyboard ends with **«Головне меню»** (adapter-appended, including HITL and turns with no other shortcuts). Supervisor **FINISH** attaches DEFAULT MENU or VISIT CHANGE («Перенести», «Скасувати», «Ні, дякую») after an explicit visit inquiry — the model does not emit that trailer. `/start` and reminders still use `buildDefaultMenuKeyboard`. When `create_meeting` returns `Already booked`, booking finalize attaches REPLACE («Скасувати», «Ні, дякую») — never «Перенести». Consultation and book-this-procedure yes/no offers must use «Так» / «Обрати іншу процедуру» in `<reply_buttons>`. DATE/TIME shortcuts (dates plus «Інша дата», then HH:mm) come from the graph snapshot, not a model trailer. «Головне меню» routes to a short idle reply with DEFAULT MENU; during HITL it declines the write. English aliases (Book / Services / Address / …) are recognized for routing.
 - Book/move success includes clinic address + Maps; cancel does not.
 - Internal failures (routing, model call, step limit) reply with `PATIENT_FALLBACK_MESSAGE`; the raw error goes to the log only
 - HITL confirm: meeting writes pause on a one-time **reply keyboard** with ✅ / ❌ (~15 min pending; replaces any prior date/time shortcuts). The agent must call the write tool on the same turn as a clear book/cancel/move intent — never a prior chat «підтвердити?». Tapping ✅ / ❌ resumes with `Command({ confirmed })`. Other text while the card is pending goes into the interrupt as `userReply`; the tool returns `awaitingConfirmation` (nothing written). If the user affirmed, the model re-calls the same tool with `confirmationGiven: true`. The server honors that flag only when a HITL card was already shown on this thread for the same write arguments. Chat text never implicitly cancels.
@@ -130,7 +130,7 @@ Default visit is **Консультація** unless the patient is sure about a
 2. Known Telegram user: booking skips phone/name after `cTelegram` lookup (details only after a slot if CRM fields are missing)
 3. Incomplete CRM contact (missing firstName/lastName/phone): collect them at book time, then `update_contact` before confirm
 4. Unknown user: asks phone/name after a slot, create/link writes `cTelegram`
-5. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`. «Послуги» → consultation offer; «Обрати іншу процедуру» drills one catalog level per message
+5. Info: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`. «Послуги» → consultation offer; «Обрати іншу процедуру» drills one catalog level per message
 6. «Записатись» offers consultation («Так» / «Обрати іншу процедуру») before dates
 7. Pick a date shortcut, then a time shortcut (or type a slot time from the agent's text list)
 8. Tap ✅ to book; ❌ cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned visit is refused until the first is cancelled (REPLACE shortcuts: cancel then book the new slot — never reschedule in that conflict). Success message includes address + Maps

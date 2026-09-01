@@ -42,7 +42,6 @@ describe("extractReplyButtons", () => {
     );
     expect(result.text).toBe("Підібрати вільний час на консультацію?");
     expect(result.buttons).toEqual(["Так", "Обрати іншу процедуру"]);
-    expect(result.yieldToSupervisor).toBe(false);
   });
 
   it("caps at four labels and ignores empty lines", () => {
@@ -54,16 +53,14 @@ describe("extractReplyButtons", () => {
   });
 
   it("returns no buttons when the block is missing or empty", () => {
-    expect(extractReplyButtons("Just text")).toEqual({ text: "Just text", buttons: [], yieldToSupervisor: false });
+    expect(extractReplyButtons("Just text")).toEqual({ text: "Just text", buttons: [] });
     expect(extractReplyButtons("Ask?\n<reply_buttons>\n\n</reply_buttons>")).toEqual({
       text: "Ask?",
       buttons: [],
-      yieldToSupervisor: false,
     });
     expect(extractReplyButtons("Ask?\n<reply_buttons>broken")).toEqual({
       text: "Ask?",
       buttons: ["broken"],
-      yieldToSupervisor: false,
     });
   });
 

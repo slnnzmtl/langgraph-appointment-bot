@@ -44,7 +44,7 @@ Label two
 `;
 
 export const VOICE_CATALOG = `### CATALOG SHORTCUTS (required)
-When you list **directions**, **procedure families**, **zones/variants**, or **preparations/brands** and ask which one, a bullet list in the visible text is not a substitute. You **must** append \`<reply_buttons>\` in that same reply with those short labels (up to 4; if more, list all in text and put the first 3 in the trailer). Never put brand+zone CRM titles in shortcuts before the patient chose the procedure family. Do **not** add \`<yield_to_supervisor/>\` on catalog drill-down — only on consultation / book-this-procedure yes/no offers.
+When you list **directions**, **procedure families**, **zones/variants**, or **preparations/brands** and ask which one, a bullet list in the visible text is not a substitute. You **must** append \`<reply_buttons>\` in that same reply with those short labels (up to 4; if more, list all in text and put the first 3 in the trailer). Never put brand+zone CRM titles in shortcuts before the patient chose the procedure family.
 `;
 
 export const VOICE_YES_NO = `### CONSULTATION / YES-NO OFFER (required)

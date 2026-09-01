@@ -4,10 +4,9 @@ import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 
 export const FINISH_ROUTE = "FINISH" as const;
-export const FAQ_AGENT_ID = "faq" as const;
 export const BOOKING_AGENT_ID = "booking" as const;
 
-export type ClinicAgentId = typeof FAQ_AGENT_ID | typeof BOOKING_AGENT_ID;
+export type ClinicAgentId = typeof BOOKING_AGENT_ID;
 export type ClinicRouteId = ClinicAgentId | typeof FINISH_ROUTE;
 
 export type ClinicAgentDefinition = {
@@ -28,8 +27,6 @@ export type ClinicHandoff = {
   replyText?: string;
   /** Labels from the last agent reply trailer (stripped from checkpointed text). */
   replyButtons?: string[];
-  /** When true, the next patient message must go through the supervisor. */
-  yieldToSupervisor?: boolean;
 };
 
 /** Contact + upcoming meetings loaded at supervisor entry (TTL / dirty-gated). */

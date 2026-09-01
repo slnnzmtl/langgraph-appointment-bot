@@ -10,13 +10,6 @@ import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 
 const agents: ClinicAgentDefinition[] = [
   {
-    id: "faq",
-    name: "FAQ",
-    description: "FAQ",
-    systemPrompt: "faq",
-    maxSteps: 4,
-  },
-  {
     id: "booking",
     name: "Booking",
     description: "Booking",
@@ -26,11 +19,11 @@ const agents: ClinicAgentDefinition[] = [
 ];
 
 describe("clinic routing schema", () => {
-  it("accepts faq, booking, and FINISH", () => {
+  it("accepts booking and FINISH", () => {
     const schema = buildClinicRoutingSchema(agents);
     expect(schema.parse({ next: "FINISH", reply: "Hello" }).next).toBe("FINISH");
-    expect(schema.parse({ next: "faq" }).next).toBe("faq");
     expect(schema.parse({ next: "booking" }).next).toBe("booking");
+    expect(() => schema.parse({ next: "faq" })).toThrow();
   });
 
   it("accepts optional FINISH menu", () => {
@@ -58,8 +51,8 @@ describe("agent loop routing", () => {
         }),
       ],
     };
-    expect(routeAfterAgentLlm(state as never, 4, "faq__tools", "faq__finalize")).toBe(
-      "faq__tools",
+    expect(routeAfterAgentLlm(state as never, 4, "booking__tools", "booking__finalize")).toBe(
+      "booking__tools",
     );
   });
 
@@ -68,8 +61,8 @@ describe("agent loop routing", () => {
       stepCount: 4,
       agentMessages: [new AIMessage("done")],
     };
-    expect(routeAfterAgentLlm(state as never, 4, "faq__tools", "faq__finalize")).toBe(
-      "faq__finalize",
+    expect(routeAfterAgentLlm(state as never, 4, "booking__tools", "booking__finalize")).toBe(
+      "booking__finalize",
     );
   });
 
@@ -84,6 +77,8 @@ describe("agent loop routing", () => {
         new ToolMessage({ content: "{}", tool_call_id: "1" }),
       ],
     };
-    expect(routeAfterAgentTools(state as never, "faq__llm", "faq__tools")).toBe("faq__llm");
+    expect(routeAfterAgentTools(state as never, "booking__llm", "booking__tools")).toBe(
+      "booking__llm",
+    );
   });
 });

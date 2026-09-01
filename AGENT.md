@@ -9,11 +9,11 @@ This file is the map for changing the product. Patient-facing copy lives in prom
 ```
 Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HTTP
                                          │
-                         ┌───────────────┼───────────────┐
-                         ▼               ▼               ▼
-                    Supervisor      FAQ agent      Booking agent
-                    (route /         (read)         (read + write
-                     FINISH)                         + HITL)
+                         ┌───────────────┴───────────────┐
+                         ▼                               ▼
+                    Supervisor                      Booking agent
+                    (route / FINISH /               (read + write
+                     greeter)                        + HITL + FAQ)
 ```
 
 - **Interface:** private chats only; exclusive per-`thread_id` invoke queue; 20 messages/user/minute; optional `POST /webhooks/tomorrow-reminder`.
@@ -26,53 +26,41 @@ Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HT
 | Change | Edit |
 | --- | --- |
 | Greeting, routing ladder, FINISH menus | `src/prompts/supervisor.ts` |
-| Catalog / prices / location / yield tag | `src/prompts/faq.ts` |
-| Booking ladder, HITL wording, slot UX | `src/prompts/booking.ts` |
-| Shared patient voice sections + `<reply_buttons>` rules | `src/prompts/voice.ts` (composed per agent into the Gemini cache) |
+| Catalog / prices / location / booking ladder / HITL / slot UX | `src/prompts/booking.ts` |
+| Shared patient voice sections + `<reply_buttons>` rules | `src/prompts/voice.ts` (composed into the Gemini cache) |
 | Sticky continue, FINISH button attach, prefetch | `src/graph/` (`supervisor.ts`, `agent-loop.ts`, `state.ts`) |
 | CRM tools, HITL pause, free/busy, E.164 | `src/tools/` |
 | Keyboards, `/start`, voice, rate limit, reminder | `src/adapter/` |
 | Address, consultation id, menu label lists | `src/shared/clinic-constants.ts` |
 | Wiring / agent defs (`maxSteps`) | `src/composition/` |
 
-Do not add a third specialist, a second booking path, or a parallel keyboard format. One graph, one HITL confirm map, one reply-keyboard trailer.
+Do not add a second specialist, a second booking path, or a parallel keyboard format. One graph, one HITL confirm map, one reply-keyboard trailer.
 
 ## Agents
 
 ### Supervisor (router + greeter)
 
-Only agent that greets. Each turn: `faq` / `booking` (empty `reply`; specialist sees full history) or `FINISH` (answer itself). No CRM tools.
+Only agent that greets. Each turn: `booking` (empty `reply`; specialist sees full history) or `FINISH` (answer itself). No CRM tools. Kept as a toolless front-end so greetings, «Мій запис», and small talk never bind the 12 tool schemas.
 
 - Prefetches contact + planned meetings into checkpointed state.
 - On FINISH, the model sets `menu` (`default` or `visit_change`) and writes patient text only — **no** `<reply_buttons>` trailer. The graph attaches DEFAULT MENU or VISIT CHANGE from `menu` + `bookingContext`. The adapter still appends «Головне меню». `/start` and reminders use `buildDefaultMenuKeyboard`.
 - `/start` stores `WELCOME_HISTORY_MARKER` in history, not the full welcome text (`src/adapter/welcome-message.ts`). Later hellos stay short.
-- Key labels: «Записатись» → booking; «Послуги» / «Обрати іншу процедуру» / «Адреса» → faq; «Мій запис» → FINISH (list visits, `menu=visit_change`); «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting.
+- Key labels: «Записатись» / «Послуги» / «Обрати іншу процедуру» / «Адреса» → booking; «Мій запис» → FINISH (list visits, `menu=visit_change`); «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting.
 
 ### Sticky routing
 
-After an FAQ/booking handoff, tapping a shortcut the specialist just offered continues in that agent (skips the supervisor LLM). Supervisor-owned labels and free text still go through the LLM.
+After a booking handoff, tapping a shortcut the specialist just offered continues in booking (skips the supervisor LLM). Supervisor-owned labels and free text still go through the LLM.
 
-- FAQ book-handoff offers («Так» after consultation / book-this-procedure) append `<yield_to_supervisor/>` so the tap is re-routed to booking.
-- Catalog drill-down taps stay in FAQ (no yield tag).
+- Catalog drill-down and consultation / book-this-procedure offers («Так» / «Обрати іншу процедуру») sticky-continue in booking.
 - «Перенести» / «Скасувати» sticky-route to booking even after a FINISH visit list or an Already-booked replace offer.
 
-### FAQ (read-only, `maxSteps` 4)
+### Booking (read/write + FAQ, `maxSteps` 10)
 
-Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<list_services>` when present.
-
-- Catalog: grouped summary, **no prices**; close with consultation offer («Так» / «Обрати іншу процедуру») + yield.
-- After «Обрати іншу процедуру»: one catalog level per message (direction → family → zone → brand → book-this-procedure + yield).
-- Prices: `get_service` for the matched service only; USD→UAH only via tool FX (`priceUah`), never invented.
-- Address only when asked (`CLINIC_ADDRESS` + Maps constants).
-- Skin concerns → offer consultation unless they already chose another procedure.
-
-### Booking (read/write, `maxSteps` 10)
-
-One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. Booking reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK).
+Answers clinic info and books visits. One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Information turns (hours, catalog, prices, location, help choosing) answer that topic and stop. Reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK). Always receives full contact + meetings context.
 
 | Tool | Role |
 | --- | --- |
-| `list_services`, `get_service`, `get_working_time` | Same reads as FAQ |
+| `list_services`, `get_service`, `get_working_time` | Catalog, prices, open-days |
 | `present_availability_slots` | Free/busy (`search_meetings` + `CReservedTime`); date then time shortcuts; reuse `<availability>` when valid |
 | `find_contact_by_phone`, `create_contact`, `link_telegram_to_contact`, `update_contact` | Patient identity |
 | `list_planned_meetings` | Upcoming Planned visits |
@@ -80,10 +68,12 @@ One ladder step per message: **service → time → details → optional intent 
 
 Rules:
 
-- Default service is **Консультація** (`CONSULTATION_SERVICE_ID`) unless the patient is sure about a named procedure (or FAQ already chose one).
+- Catalog: grouped summary, **no prices**; close with consultation offer («Так» / «Обрати іншу процедуру»). After «Обрати іншу процедуру»: one catalog level per message (direction → family → zone → brand → book-this-procedure).
+- Prices: `get_service` for the matched service only; USD→UAH only via tool FX (`priceUah`), never invented.
+- Address only when asked or on successful book/move (`CLINIC_ADDRESS` + Maps constants). Never in `confirmMessage` or on cancel.
+- Default service is **Консультація** (`CONSULTATION_SERVICE_ID`) unless the patient is sure about a named procedure (or already chose one via catalog).
 - At most **one Planned meeting**. Only Planned / Held / Confirmed block free/busy. A second booking is refused until the existing visit is **cancelled** (then the new slot can be booked). Reschedule is only offered when the patient explicitly asks about their visit («Мій запис»), not during a new-booking conflict.
 - Collect phone/name only after a slot is chosen; incomplete contacts get `update_contact` before confirm. Phones must be E.164.
-- Book/move success includes address + Maps; cancel does not. Never put address in `confirmMessage`.
 - Slots are Europe/Kyiv. Quote TS `dayLabel` / `whenLabel` / `visitLabel`; never invent dates.
 
 ## Writes, HITL, reminder
@@ -104,8 +94,13 @@ Hidden `<reply_buttons>` trailers become one-time Telegram reply keyboards. Adap
 - **VISIT CHANGE** (code-owned): «Перенести», «Скасувати», «Ні, дякую» — supervisor `menu=visit_change` after listing visits for «Мій запис» / a visit inquiry (falls back to DEFAULT when the list is empty).
 - **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` and the model emitted no trailer (never «Перенести» here). After «Скасувати», cancel then book the new slot.
 - **DATE / TIME** (code-owned): short day labels + «Інша дата», then HH:mm — booking finalize from `present_availability_slots` / `availabilityContext` (model must not invent hours or emit a DATE/TIME trailer).
-- **BOOKING OFFER** (model trailer): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no (FAQ adds `<yield_to_supervisor/>`).
-- Mid-flow (model trailer): FAQ catalog levels; booking STEP INTENT skip («Продовжити без коментаря»).
+- **BOOKING OFFER** (model trailer): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no.
+- Mid-flow (model trailer): catalog levels; STEP INTENT skip («Продовжити без коментаря»).
+
+## Later work (do not build here)
+
+- Dual greeting: `/start` template in `welcome-message.ts` vs supervisor GREETING prompt.
+- After one specialist, DEFAULT MENU labels («Записатись» / «Послуги» / «Адреса») still punch out to the supervisor LLM via `SUPERVISOR_OWNED_REPLY_LABELS` — a code table could skip that hop.
 
 ## Code map
 

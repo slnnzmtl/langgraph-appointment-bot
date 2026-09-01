@@ -6,6 +6,5 @@ export {
 export type { ClinicAgentDefinition, ILLMConnector } from "./types.js";
 export {
   BOOKING_AGENT_ID,
-  FAQ_AGENT_ID,
   FINISH_ROUTE,
 } from "./types.js";

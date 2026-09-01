@@ -13,7 +13,6 @@ import {
   formatAvailabilityContext,
   formatBookingMeetingsContext,
   formatContactContext,
-  formatPlannedVisitsFlag,
   formatServicesContext,
   formatSupervisorVisitLabels,
 } from "../context-blocks.js";
@@ -143,20 +142,6 @@ describe("formatBookingMeetingsContext", () => {
   });
 });
 
-describe("formatPlannedVisitsFlag", () => {
-  it("emits visits has/none under the meetings tag", () => {
-    expect(formatPlannedVisitsFlag(null)).toBe(
-      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
-    );
-    expect(formatPlannedVisitsFlag({ meetings: [], dateFrom: "2026-08-11" })).toBe(
-      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
-    );
-    expect(formatPlannedVisitsFlag(listedMeetings)).toBe(
-      '<list_planned_meetings>\n{"visits":"has"}\n</list_planned_meetings>',
-    );
-  });
-});
-
 describe("formatSupervisorVisitLabels", () => {
   it("emits visitLabels only", () => {
     vi.useFakeTimers();
@@ -235,19 +220,6 @@ describe("createAgentPrepareNode", () => {
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Book tomorrow")],
-        servicesContext: {
-          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
-        },
-      }),
-    );
-    expect(update.servicesContext).toBeUndefined();
-  });
-
-  it("does not clear servicesContext when preparing FAQ", async () => {
-    const prepare = createAgentPrepareNode("faq");
-    const update = await prepare(
-      clinicState({
-        messages: [new HumanMessage("Послуги")],
         servicesContext: {
           list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
         },
@@ -536,39 +508,6 @@ describe("services context helpers", () => {
 });
 
 describe("createAgentToolsNode services capture", () => {
-  it("captures servicesContext from list_services on FAQ", async () => {
-    const listTool = tool(
-      async () =>
-        JSON.stringify({
-          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
-          total: 1,
-        }),
-      {
-        name: "list_services",
-        description: "List services",
-        schema: z.object({}),
-      },
-    );
-
-    const toolsNode = createAgentToolsNode([listTool], "faq");
-    const update = await toolsNode(
-      clinicState({
-        agentMessages: [
-          new AIMessage({
-            content: "",
-            tool_calls: [{ id: "1", name: "list_services", args: {}, type: "tool_call" }],
-          }),
-        ],
-      }),
-      { configurable: {} },
-    );
-
-    expect(update.servicesContext).toEqual({
-      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
-      total: 1,
-    });
-  });
-
   it("captures servicesContext from list_services on booking", async () => {
     const listTool = tool(
       async () =>
@@ -609,7 +548,7 @@ describe("createAgentToolsNode services capture", () => {
       schema: z.object({ firstName: z.string().optional() }),
     });
 
-    const toolsNode = createAgentToolsNode([updateTool], "faq");
+    const toolsNode = createAgentToolsNode([updateTool], "booking");
     const update = await toolsNode(
       clinicState({
         agentMessages: [
@@ -638,12 +577,12 @@ describe("createAgentLlmNode context cache", () => {
     schema: z.object({}),
   });
 
-  const faqAgent: ClinicAgentDefinition = {
-    id: "faq",
-    name: "FAQ",
-    description: "FAQ",
-    systemPrompt: "STATIC FAQ PROMPT",
-    maxSteps: 4,
+  const bookingAgent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Booking",
+    systemPrompt: "STATIC BOOKING PROMPT",
+    maxSteps: 10,
   };
 
   const invoke = vi.fn();
@@ -677,7 +616,7 @@ describe("createAgentLlmNode context cache", () => {
     };
 
     const node = createAgentLlmNode({
-      agent: faqAgent,
+      agent: bookingAgent,
       model,
       tools: [sampleTool],
       formatSystemMetadata: () => "DYNAMIC METADATA",
@@ -691,7 +630,7 @@ describe("createAgentLlmNode context cache", () => {
     const update = await node(
       clinicState({
         agentMessages: [new HumanMessage("hours?")],
-        next: "faq",
+        next: "booking",
       }),
     );
 
@@ -699,14 +638,14 @@ describe("createAgentLlmNode context cache", () => {
     expect(manager.getOrCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         modelName: "gemini-2.5-flash",
-        staticSystemInstruction: "STATIC FAQ PROMPT",
+        staticSystemInstruction: "STATIC BOOKING PROMPT",
         tools: [sampleTool],
-        displayName: "clinic-faq",
+        displayName: "clinic-booking",
       }),
     );
     const messages = invoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(SystemMessage);
-    expect((messages[0] as SystemMessage).content).toContain("STATIC FAQ PROMPT");
+    expect((messages[0] as SystemMessage).content).toContain("STATIC BOOKING PROMPT");
     expect((messages[0] as SystemMessage).content).toContain("DYNAMIC METADATA");
     const agentMessages = update.agentMessages as AIMessage[];
     expect(agentMessages[0]).toBeInstanceOf(AIMessage);
@@ -723,7 +662,7 @@ describe("createAgentLlmNode context cache", () => {
     };
 
     const node = createAgentLlmNode({
-      agent: faqAgent,
+      agent: bookingAgent,
       model,
       tools: [sampleTool],
       formatSystemMetadata: () => "DYNAMIC KYIV",
@@ -737,7 +676,7 @@ describe("createAgentLlmNode context cache", () => {
     await node(
       clinicState({
         agentMessages: [new HumanMessage("hours?")],
-        next: "faq",
+        next: "booking",
       }),
     );
 
@@ -745,19 +684,17 @@ describe("createAgentLlmNode context cache", () => {
     expect(bindTools).toHaveBeenCalledTimes(1);
     const messages = cachedInvoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(HumanMessage);
-    expect((messages[0] as HumanMessage).content).toBe(
-      'DYNAMIC KYIV\n\n<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
-    );
+    expect((messages[0] as HumanMessage).content).toBe("DYNAMIC KYIV");
     expect(messages.some((m) => m instanceof SystemMessage)).toBe(false);
     expect(manager.getOrCreate).toHaveBeenCalledWith(
       expect.objectContaining({
-        displayName: "clinic-faq",
+        displayName: "clinic-booking",
         tools: [sampleTool],
       }),
     );
   });
 
-  it("appends contact and listed meetings to booking dynamic context only", async () => {
+  it("appends contact and listed meetings to booking dynamic context", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -766,26 +703,7 @@ describe("createAgentLlmNode context cache", () => {
       invalidate: vi.fn(),
     };
 
-    const bookingAgent: ClinicAgentDefinition = {
-      id: "booking",
-      name: "Booking",
-      description: "Booking",
-      systemPrompt: "STATIC BOOKING",
-      maxSteps: 10,
-    };
-
-    const faqNode = createAgentLlmNode({
-      agent: faqAgent,
-      model,
-      tools: [sampleTool],
-      formatSystemMetadata: () => "DYNAMIC KYIV",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-2.5-flash",
-      },
-    });
-    const bookingNode = createAgentLlmNode({
+    const node = createAgentLlmNode({
       agent: bookingAgent,
       model,
       tools: [sampleTool],
@@ -797,15 +715,7 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    await faqNode(
-      clinicState({
-        agentMessages: [new HumanMessage("hours?")],
-        bookingContext: listedMeetings,
-        contactContext: listedContact,
-        next: "faq",
-      }),
-    );
-    await bookingNode(
+    await node(
       clinicState({
         agentMessages: [new HumanMessage("скасуй")],
         bookingContext: listedMeetings,
@@ -818,15 +728,7 @@ describe("createAgentLlmNode context cache", () => {
       }),
     );
 
-    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
-    expect(faqDynamic.content).toContain("DYNAMIC KYIV");
-    expect(String(faqDynamic.content)).toContain(formatPlannedVisitsFlag(listedMeetings));
-    expect(String(faqDynamic.content)).not.toContain("<contact_info>");
-    expect(String(faqDynamic.content)).not.toContain('"visitLabel"');
-    expect(String(faqDynamic.content)).not.toContain('"meetings"');
-    expect(String(faqDynamic.content)).not.toContain("<availability>");
-    expect(String(faqDynamic.content)).not.toContain("<list_services>");
+    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatBookingMeetingsContext(listedMeetings));
@@ -835,7 +737,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(bookingDynamic.content)).not.toContain('"visits"');
   });
 
-  it("appends list_services to FAQ and booking when catalog is set and availability is empty", async () => {
+  it("appends list_services to booking when catalog is set and availability is empty", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -844,30 +746,11 @@ describe("createAgentLlmNode context cache", () => {
       invalidate: vi.fn(),
     };
 
-    const bookingAgent: ClinicAgentDefinition = {
-      id: "booking",
-      name: "Booking",
-      description: "Booking",
-      systemPrompt: "STATIC BOOKING",
-      maxSteps: 10,
-    };
-
     const sampleServices = {
       list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
       total: 1,
     };
 
-    const faqNode = createAgentLlmNode({
-      agent: faqAgent,
-      model,
-      tools: [sampleTool],
-      formatSystemMetadata: () => "DYNAMIC KYIV",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-2.5-flash",
-      },
-    });
     const bookingNode = createAgentLlmNode({
       agent: bookingAgent,
       model,
@@ -880,13 +763,6 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    await faqNode(
-      clinicState({
-        agentMessages: [new HumanMessage("Послуги")],
-        servicesContext: sampleServices,
-        next: "faq",
-      }),
-    );
     await bookingNode(
       clinicState({
         agentMessages: [new HumanMessage("Записатись")],
@@ -895,10 +771,7 @@ describe("createAgentLlmNode context cache", () => {
       }),
     );
 
-    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
-    expect(String(faqDynamic.content)).toContain("<list_services>");
-    expect(String(faqDynamic.content)).toContain("svc-1");
+    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
     expect(String(bookingDynamic.content)).toContain("<list_services>");
     expect(String(bookingDynamic.content)).toContain("svc-1");
   });
@@ -954,48 +827,6 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });
 
-  it("still appends list_services to FAQ when availabilityContext is set", async () => {
-    const manager = {
-      getOrCreate: vi.fn(async () => ({
-        cacheName: "caches/abc",
-        model: "models/gemini-2.5-flash",
-      })),
-      invalidate: vi.fn(),
-    };
-
-    const sampleServices = {
-      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
-      total: 1,
-    };
-
-    const faqNode = createAgentLlmNode({
-      agent: faqAgent,
-      model,
-      tools: [sampleTool],
-      formatSystemMetadata: () => "DYNAMIC KYIV",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-2.5-flash",
-      },
-    });
-
-    await faqNode(
-      clinicState({
-        agentMessages: [new HumanMessage("Послуги")],
-        servicesContext: sampleServices,
-        availabilityContext: {
-          days: [{ date: "2026-09-04", slots: [] }],
-          stepMinutes: 30,
-        },
-        next: "faq",
-      }),
-    );
-
-    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    expect(String(faqDynamic.content)).toContain("<list_services>");
-  });
-
   it("omits list_services block when list_services already ran this turn", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
@@ -1005,8 +836,8 @@ describe("createAgentLlmNode context cache", () => {
       invalidate: vi.fn(),
     };
 
-    const faqNode = createAgentLlmNode({
-      agent: faqAgent,
+    const bookingNode = createAgentLlmNode({
+      agent: bookingAgent,
       model,
       tools: [sampleTool],
       formatSystemMetadata: () => "DYNAMIC KYIV",
@@ -1017,7 +848,7 @@ describe("createAgentLlmNode context cache", () => {
       },
     });
 
-    await faqNode(
+    await bookingNode(
       clinicState({
         agentMessages: [
           new HumanMessage("Послуги"),
@@ -1031,12 +862,12 @@ describe("createAgentLlmNode context cache", () => {
         servicesContext: {
           list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
         },
-        next: "faq",
+        next: "booking",
       }),
     );
 
-    const faqDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    expect(String(faqDynamic.content)).not.toContain("<list_services>");
+    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });
 
   it("keeps availability block when a different tool ran this turn", async () => {
@@ -1167,7 +998,7 @@ describe("createAgentLlmNode context cache", () => {
       .mockResolvedValueOnce(new AIMessage("recovered"));
 
     const node = createAgentLlmNode({
-      agent: faqAgent,
+      agent: bookingAgent,
       model,
       tools: [sampleTool],
       formatSystemMetadata: () => "DYN",
@@ -1181,7 +1012,7 @@ describe("createAgentLlmNode context cache", () => {
     const update = await node(
       clinicState({
         agentMessages: [new HumanMessage("hours?")],
-        next: "faq",
+        next: "booking",
       }),
     );
 
@@ -1206,7 +1037,7 @@ describe("createAgentLlmNode context cache", () => {
     invoke.mockResolvedValueOnce(new AIMessage("uncached after miss"));
 
     const node = createAgentLlmNode({
-      agent: faqAgent,
+      agent: bookingAgent,
       model,
       tools: [sampleTool],
       formatSystemMetadata: () => "DYN",
@@ -1220,7 +1051,7 @@ describe("createAgentLlmNode context cache", () => {
     const update = await node(
       clinicState({
         agentMessages: [new HumanMessage("hours?")],
-        next: "faq",
+        next: "booking",
       }),
     );
 
@@ -1229,7 +1060,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(createCachedGeminiModel).toHaveBeenCalledTimes(1);
     const messages = invoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(SystemMessage);
-    expect((messages[0] as SystemMessage).content).toContain("STATIC FAQ PROMPT");
+    expect((messages[0] as SystemMessage).content).toContain("STATIC BOOKING PROMPT");
     expect((messages[0] as SystemMessage).content).toContain("DYN");
     expect((update.agentMessages as AIMessage[])[0].content).toBe("uncached after miss");
   });
@@ -1304,7 +1135,6 @@ describe("createAgentFinalizeNode", () => {
       replyText: "Підібрати вільний час на консультацію?",
       replyButtons: ["Так", "Обрати іншу процедуру"],
     });
-    expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
   it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
@@ -1387,66 +1217,6 @@ describe("createAgentFinalizeNode", () => {
       agentId: "booking",
       status: "error",
       replyText: PATIENT_FALLBACK_MESSAGE,
-      replyButtons: ["Записатись", "Послуги", "Адреса"],
-    });
-  });
-
-  it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
-    const faqAgent: ClinicAgentDefinition = {
-      id: "faq",
-      name: "FAQ",
-      description: "Answers FAQ",
-      systemPrompt: "faq",
-      maxSteps: 4,
-    };
-    const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
-      clinicState({
-        stepCount: 1,
-        agentMessages: [
-          new AIMessage(
-            "Записати вас на консультацію?\n<yield_to_supervisor/>\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
-          ),
-        ],
-      }),
-    );
-
-    const stored = update.messages?.[0] as AIMessage;
-    expect(String(stored.content)).toBe("Записати вас на консультацію?");
-    expect(String(stored.content)).not.toContain("yield_to_supervisor");
-    expect(update.lastHandoff).toMatchObject({
-      agentId: "faq",
-      status: "ok",
-      replyText: "Записати вас на консультацію?",
-      replyButtons: ["Так", "Обрати іншу процедуру"],
-      yieldToSupervisor: true,
-    });
-  });
-
-  it("strips a yield-only trailer and attaches DEFAULT MENU for faq", () => {
-    const faqAgent: ClinicAgentDefinition = {
-      id: "faq",
-      name: "FAQ",
-      description: "Answers FAQ",
-      systemPrompt: "faq",
-      maxSteps: 4,
-    };
-    const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
-      clinicState({
-        stepCount: 1,
-        agentMessages: [new AIMessage("Done.\n<yield_to_supervisor/>")],
-      }),
-    );
-
-    const stored = update.messages?.[0] as AIMessage;
-    expect(String(stored.content)).toBe("Done.");
-    expect(String(stored.content)).not.toContain("yield_to_supervisor");
-    expect(update.lastHandoff).toMatchObject({
-      agentId: "faq",
-      status: "ok",
-      replyText: "Done.",
-      yieldToSupervisor: true,
       replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
   });

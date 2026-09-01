@@ -18,7 +18,7 @@ import {
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import { type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
 import {
   normalizePresentAvailabilityResult,
   type AvailabilityContext,
@@ -44,7 +44,6 @@ import {
   formatAvailabilityContext,
   formatBookingMeetingsContext,
   formatContactContext,
-  formatPlannedVisitsFlag,
   formatServicesContext,
 } from "./context-blocks.js";
 import {
@@ -413,24 +412,18 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const staticPrompt = agent.systemPrompt.trim();
     const dynamicParts = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
-      agent.id === BOOKING_AGENT_ID ? formatContactContext(state.contactContext) : "",
-      agent.id === BOOKING_AGENT_ID
-        ? formatBookingMeetingsContext(state.bookingContext)
-        : formatPlannedVisitsFlag(state.bookingContext),
+      formatContactContext(state.contactContext),
+      formatBookingMeetingsContext(state.bookingContext),
     ];
     // Skip when the tool already ran this turn — its ToolMessage is in agentMessages.
-    if (
-      agent.id === BOOKING_AGENT_ID
-      && !toolRanThisTurn(state.agentMessages, "present_availability_slots")
-    ) {
+    if (!toolRanThisTurn(state.agentMessages, "present_availability_slots")) {
       dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
     }
     const bookingHasAvailabilityDays =
       (state.availabilityContext?.days.length ?? 0) > 0;
     if (
-      (agent.id === FAQ_AGENT_ID || agent.id === BOOKING_AGENT_ID)
-      && !toolRanThisTurn(state.agentMessages, "list_services")
-      && !(agent.id === BOOKING_AGENT_ID && bookingHasAvailabilityDays)
+      !toolRanThisTurn(state.agentMessages, "list_services")
+      && !bookingHasAvailabilityDays
     ) {
       dynamicParts.push(formatServicesContext(state.servicesContext));
     }
@@ -550,10 +543,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
-    const { text, buttons, yieldToSupervisor } = extractReplyButtons(rawText);
+    const { text, buttons } = extractReplyButtons(rawText);
     let replyText = text.trim();
     let replyButtons = buttons;
-    let yieldFlag = yieldToSupervisor;
 
     // Model failure: deliver via handoff only — do not persist into conversation history.
     if (status === "error" && isModelFailureMessage(tagged)) {
@@ -571,19 +563,15 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     }
 
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
-    const slotOffer =
-      agent.id === BOOKING_AGENT_ID
-        ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
-        : null;
+    const slotOffer = resolveAvailabilityOffer(agentMessages, state.availabilityContext);
     if (slotOffer) {
       replyText = slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
-      yieldFlag = false;
     } else if (replyButtons.length === 0 && replyText.length > 0) {
-      // When the model emitted no shortcuts, code owns DEFAULT / REPLACE for booking.
-      if (agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages)) {
+      // When the model emitted no shortcuts, code owns DEFAULT / REPLACE menus.
+      if (createMeetingAlreadyBooked(agentMessages)) {
         replyButtons = [...BOOKING_REPLACE_MENU];
-      } else if (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID) {
+      } else {
         const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
         replyButtons = [...defaultMenuLabels(hasVisit)];
       }
@@ -592,7 +580,6 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const replyMessage =
       replyText !== extractMessageTextContent(tagged.content).trim()
         || buttons.length > 0
-        || yieldToSupervisor
         || slotOffer != null
         ? new AIMessage({
             content: replyText,
@@ -607,7 +594,6 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       status,
       ...(replyText.length > 0 ? { replyText } : {}),
       ...(replyButtons.length > 0 ? { replyButtons } : {}),
-      ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
 
     if (status === "empty") {

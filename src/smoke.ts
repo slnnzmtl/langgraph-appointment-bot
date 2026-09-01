@@ -7,14 +7,16 @@ import { applyTracingPrivacyDefaults } from "./analytics/track.js";
 import { loadConfig } from "./config.js";
 import type { ClinicAdapters } from "./composition/clinic-adapters.js";
 import { createClinicRuntime, type ClinicRuntime } from "./composition/clinic-runtime.js";
-import { bookingAgent, faqAgent } from "./composition/agents.js";
+import { bookingAgent } from "./composition/agents.js";
 import type { McpCallTool } from "./shared/mcp.js";
 import { runWithTelegramUserId } from "./tools/telegram-user-context.js";
 
-const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;
+const EXPECTED_AGENT_IDS = ["booking"] as const;
 
-const FAQ_TOOL_NAMES = ["list_services", "get_service", "get_working_time"] as const;
-const BOOKING_EXTRA_TOOL_NAMES = [
+const BOOKING_TOOL_NAMES = [
+  "list_services",
+  "get_service",
+  "get_working_time",
   "find_contact_by_phone",
   "create_contact",
   "link_telegram_to_contact",
@@ -77,29 +79,19 @@ const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
     bootstrap.agents.map((agent) => agent.id).join(", "),
   );
 
-  const faqRuntime = bootstrap.agents.find((agent) => agent.id === "faq");
   const bookingRuntime = bootstrap.agents.find((agent) => agent.id === "booking");
-  if (faqRuntime?.systemPrompt !== faqAgent.systemPrompt) {
-    throw new Error("faq systemPrompt in runtime does not match src/composition/agents.ts");
-  }
   if (bookingRuntime?.systemPrompt !== bookingAgent.systemPrompt) {
     throw new Error("booking systemPrompt in runtime does not match src/composition/agents.ts");
   }
   console.log("✓ Agent prompts loaded from build-time agents.ts");
 
-  const faqTools = (bootstrap.agentTools.faq ?? []).map((tool) => tool.name).sort();
   const bookingTools = (bootstrap.agentTools.booking ?? []).map((tool) => tool.name).sort();
-  const expectedFaq = [...FAQ_TOOL_NAMES].sort();
-  const expectedBooking = [...FAQ_TOOL_NAMES, ...BOOKING_EXTRA_TOOL_NAMES].sort();
+  const expectedBooking = [...BOOKING_TOOL_NAMES].sort();
 
-  if (faqTools.join(",") !== expectedFaq.join(",")) {
-    throw new Error(`FAQ tools mismatch: got [${faqTools.join(", ")}]`);
-  }
   if (bookingTools.join(",") !== expectedBooking.join(",")) {
     throw new Error(`Booking tools mismatch: got [${bookingTools.join(", ")}]`);
   }
   console.log("✓ Agent tool wiring:", {
-    faq: faqTools.join("|"),
     booking: bookingTools.join("|"),
   });
 

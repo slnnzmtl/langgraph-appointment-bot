@@ -7,17 +7,16 @@
 * Validation: `Zod` (for strict tool and state schemas)
 * Model: Fast, strict-tool-calling models (e.g., `GPT-5.6 Luna` or `Gemini 3.5 Flash-Lite` for the Root Router; `GPT-5.6 Terra` or `Claude 5 Sonnet` for the Booking Graph)
 
-**2. Topology (Supervisor-Lite Pattern):**
+**2. Topology (Supervisor + one specialist):**
 * **Telegram Adapter:** Parses incoming messages, renders UI (reply keyboards from `<reply_buttons>` trailers), manages `thread_id` checkpointers for LangGraph.
-* **Root Supervisor (Semantic Router):** A cheap, fast evaluation node. Uses Zod structured output to classify user intent into exactly two paths: `faq_node` or `booking_node`.
-* **FAQ Sub-Graph (Read-Only):** Answers clinic info, working hours, and service pricing based on a static system prompt or a simple retriever.
-* **Booking Sub-Graph (Read/Write):** Binds to EspoCRM MCP tools to find/create contacts and schedule/cancel appointments.
+* **Root Supervisor (Semantic Router + greeter):** A toolless node. Uses Zod structured output to classify into `booking` or `FINISH` (greet / list visits / small talk).
+* **Booking Agent (Read/Write + FAQ):** Binds all EspoCRM MCP tools — catalog/prices/hours plus contact and meeting writes with HITL.
 
 **3. State Management (AgentState):**
 ```typescript
 interface AgentState {
   messages: BaseMessage[];
-  current_intent: "booking" | "faq" | "canceling" | null;
+  current_intent: "booking" | "canceling" | null;
   draft_booking: {
      service_id?: string;
      date?: string; // YYYY-MM-DD
@@ -59,10 +58,9 @@ Execute the development in the following atomic phases. **Ask for my approval be
 3. Create the `ToolNode` that will be executed by the Booking Sub-Graph.
 
 ### Phase 3: Nodes & Edges (The Core Graph)
-1. **Supervisor Node:** Implement a `.withStructuredOutput()` call that forces the LLM to output `{"next_node": "booking_node" | "faq_node"}`.
-2. **FAQ Node:** Implement a simple prompt chain injected with clinic hours and generic service data.
-3. **Booking Node:** Implement a ReAct or native tool-calling loop that evaluates `AgentState.draft_booking`. If data is missing (like phone number), it asks the user. If data is complete, it triggers the MCP tools.
-4. Compile the graph with appropriate conditional edges routing back to the user or to the tools.
+1. **Supervisor Node:** Implement a `.withStructuredOutput()` call that forces the LLM to output `{"next_node": "booking" | "FINISH"}`.
+2. **Booking Node:** Implement a ReAct or native tool-calling loop that answers clinic FAQ and evaluates booking state. If data is missing (like phone number), it asks the user. If data is complete, it triggers the MCP tools.
+3. Compile the graph with appropriate conditional edges routing back to the user or to the tools.
 
 ### Phase 4: Telegram UI Adapter & Human-in-the-Loop
 1. Wrap the compiled graph in a Telegram Bot webhook/polling loop.

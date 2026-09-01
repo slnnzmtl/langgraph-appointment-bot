@@ -2,25 +2,19 @@ import { describe, expect, it } from "vitest";
 
 import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
 
-describe("extractReplyButtons yield trailer", () => {
-  it("strips yield tag and sets yieldToSupervisor", () => {
+describe("extractReplyButtons", () => {
+  it("strips a reply_buttons trailer and returns text plus labels", () => {
     const result = extractReplyButtons(
-      "Записати вас на консультацію?\n<yield_to_supervisor/>\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
+      "Записати вас на консультацію?\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
     );
-    expect(result.text).toBe("Записати вас на консультацію?");
-    expect(result.buttons).toEqual(["Так", "Обрати іншу процедуру"]);
-    expect(result.yieldToSupervisor).toBe(true);
-    expect(result.text).not.toContain("yield_to_supervisor");
+    expect(result).toEqual({
+      text: "Записати вас на консультацію?",
+      buttons: ["Так", "Обрати іншу процедуру"],
+    });
   });
 
-  it("handles yield-only trailer", () => {
-    const result = extractReplyButtons("Done.\n<yield_to_supervisor/>");
-    expect(result).toEqual({ text: "Done.", buttons: [], yieldToSupervisor: true });
-  });
-
-  it("defaults yieldToSupervisor to false when tag is absent", () => {
-    const result = extractReplyButtons("Just text");
-    expect(result.yieldToSupervisor).toBe(false);
+  it("returns empty buttons when there is no trailer", () => {
+    expect(extractReplyButtons("Just text")).toEqual({ text: "Just text", buttons: [] });
   });
 });
 

@@ -9,8 +9,8 @@ import {
 
 describe("sub-agent-messages", () => {
   it("tagRuntimeAgentMessage stamps agent id", () => {
-    const tagged = tagRuntimeAgentMessage(new AIMessage("done"), "faq");
-    expect(getRuntimeAgentIdFromMessage(tagged)).toBe("faq");
-    expect(tagged.additional_kwargs?.[RUNTIME_AGENT_CONTEXT_KEY]).toBe("faq");
+    const tagged = tagRuntimeAgentMessage(new AIMessage("done"), "booking");
+    expect(getRuntimeAgentIdFromMessage(tagged)).toBe("booking");
+    expect(tagged.additional_kwargs?.[RUNTIME_AGENT_CONTEXT_KEY]).toBe("booking");
   });
 });

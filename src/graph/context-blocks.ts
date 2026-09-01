@@ -31,14 +31,6 @@ const visitLabelForMeeting = (
 const block = (tag: string, payload: unknown, trailer = ""): string =>
   `<${tag}>\n${JSON.stringify(payload)}${trailer}\n</${tag}>`;
 
-/** FAQ-only flag for whether visits exist (same tag as full meetings; projection differs). */
-export const formatPlannedVisitsFlag = (
-  ctx: BookingContext | null | undefined,
-): string => {
-  const has = (ctx?.meetings.length ?? 0) > 0;
-  return block(CONTEXT_TAGS.meetings, { visits: has ? "has" : "none" });
-};
-
 /** Supervisor: visitLabels only (no meeting ids). */
 export const formatSupervisorVisitLabels = (
   ctx: BookingContext | null | undefined,
