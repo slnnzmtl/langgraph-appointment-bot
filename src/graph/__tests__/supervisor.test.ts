@@ -1119,6 +1119,19 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
   });
 
+  it("attaches DEFAULT has-visits after «Головне меню» even when menu=visit_change", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: "Привіт! У вас є запланований візит. Чим можу допомогти?",
+      menu: "visit_change",
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Головне меню")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
   it("falls back to DEFAULT no-visits when menu=visit_change but list is empty", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",

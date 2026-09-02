@@ -71,6 +71,8 @@ const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
 
 const isMyVisitLine = (line: string): boolean => /^(мій запис|my visit)$/i.test(line.trim());
 
+const isMainMenuLine = (line: string): boolean => /^(головне меню|main menu)$/i.test(line.trim());
+
 /** Patient asks what is booked — not greetings/thanks that never mention visits. */
 const humanAsksAboutVisits = (line: string): boolean =>
   /(?:мій запис|my visit|які?\s+(?:в\s+мене\s+)?візит|мо[їи]\s+візит|запланован\w*\s+візит|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)/i
@@ -205,14 +207,17 @@ const resolveRoutingDecision = (
     const { text } = extractReplyButtons(reply);
     const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
-    // Exact «Мій запис» must get VISIT CHANGE when visits exist — do not depend on menu.
-    // When menu is omitted, also fall back on free-text visit asks. Explicit menu otherwise wins.
+    // Exact «Мій запис» → VISIT CHANGE when visits exist. «Головне меню» → DEFAULT always
+    // (model may list visits in GREETING and wrongly set menu=visit_change). Else honor
+    // explicit menu; when omitted, also fall back on free-text visit asks.
     let replyButtons: string[];
     if (hasVisit && isMyVisitLine(lastHumanLine)) {
       replyButtons = [...VISIT_CHANGE_MENU];
       if (decision.menu == null) {
         trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
       }
+    } else if (isMainMenuLine(lastHumanLine)) {
+      replyButtons = [...defaultMenuLabels(hasVisit)];
     } else if (decision.menu === "visit_change" && hasVisit) {
       replyButtons = [...VISIT_CHANGE_MENU];
     } else if (decision.menu == null && hasVisit && humanAsksAboutVisits(lastHumanLine)) {

@@ -1395,6 +1395,36 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
+  it("leaves only adapter Main menu after a committed cancel_meeting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "cancel_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              success: true,
+              id: "m-1",
+            }),
+            tool_call_id: "1",
+            name: "cancel_meeting",
+          }),
+          new AIMessage(
+            "Візит успішно скасовано. Чи бажаєте підібрати новий час для запису?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("скасовано");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
   it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {
     const finalize = createAgentFinalizeNode(agent);
     const days = [

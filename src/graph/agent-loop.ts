@@ -323,11 +323,14 @@ export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => 
   return false;
 };
 
-/** True when the latest create_meeting tool result this turn is a committed write. */
-export const createMeetingCommitted = (messages: BaseMessage[]): boolean => {
+/** True when the latest create_meeting or cancel_meeting this turn is a committed write. */
+export const createOrCancelMeetingCommitted = (messages: BaseMessage[]): boolean => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
+    if (
+      !(message instanceof ToolMessage)
+      || (message.name !== "create_meeting" && message.name !== "cancel_meeting")
+    ) {
       continue;
     }
     return classifyMeetingMutationToolMessage(message) === "committed";
@@ -599,10 +602,10 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       yieldFlag = false;
     } else if (replyButtons.length === 0 && replyText.length > 0) {
       if (agent.id === BOOKING_AGENT_ID) {
-        // Booking: no shortcuts → REPLACE, or DEFAULT MENU (skip after a committed create).
+        // Booking: no shortcuts → REPLACE, or DEFAULT MENU (skip after committed create/cancel).
         if (alreadyBooked) {
           replyButtons = [...BOOKING_REPLACE_MENU];
-        } else if (!createMeetingCommitted(agentMessages)) {
+        } else if (!createOrCancelMeetingCommitted(agentMessages)) {
           const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
           replyButtons = [...defaultMenuLabels(hasVisit)];
         }
