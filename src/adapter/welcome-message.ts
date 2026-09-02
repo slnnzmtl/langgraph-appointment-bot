@@ -113,7 +113,7 @@ export const loadWelcomeMessage = async (
   return buildWelcomeMessage(raw);
 };
 
-/** True when this Telegram user has at least one upcoming Planned meeting. */
+/** True when this Telegram user has at least one upcoming Planned or Confirmed meeting. */
 export const hasUpcomingVisit = async (callTool: McpCallTool): Promise<boolean> => {
   try {
     const contactJson = await lookupContactByTelegram(callTool);

@@ -457,7 +457,7 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 
-  it("rejects create_meeting when the contact already has a Planned visit", async () => {
+  it("rejects create_meeting when the contact already has a Planned or Confirmed visit", async () => {
     await withTg(async () => {
       const bookedCallTool = async (name: string, args: Record<string, unknown>) => {
         calls.push({ name, args });
@@ -512,7 +512,7 @@ describe("create_meeting HITL interrupt", () => {
       expect(JSON.parse(first.result)).toMatchObject({
         error: "Already booked",
         meetings: [{ id: "mtg-existing" }],
-        hint: "This patient already has a Planned visit. Cancel it, then book the new one — do not offer to reschedule.",
+        hint: "This patient already has a Planned or Confirmed visit. Cancel it, then book the new one — do not offer to reschedule.",
       });
     });
   });

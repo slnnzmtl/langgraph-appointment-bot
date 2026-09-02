@@ -9,6 +9,12 @@ const DAY_SCHEMA = z
   .regex(/^\d{4}-\d{2}-\d{2}$/)
   .describe("Calendar day YYYY-MM-DD");
 
+/** Upcoming visits the bot lists and treats as blocking a second booking. */
+const LISTABLE_MEETING_STATUSES = ["Planned", "Confirmed"] as const;
+
+const isListableMeetingStatus = (status: unknown): boolean =>
+  typeof status !== "string" || (LISTABLE_MEETING_STATUSES as readonly string[]).includes(status);
+
 export type ListedMeeting = {
   id: string;
   name: string;
@@ -21,7 +27,7 @@ export type BookingContext = {
   dateFrom: string;
 };
 
-/** Compact planned meetings from search_entity Meeting list payloads. */
+/** Compact planned/confirmed meetings from search_entity Meeting list payloads. */
 const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] => {
   let value: unknown = raw;
   if (typeof value === "string") {
@@ -51,6 +57,7 @@ const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] =
       || typeof m.name !== "string"
       || typeof m.dateStart !== "string"
       || typeof m.dateEnd !== "string"
+      || !isListableMeetingStatus(m.status)
     ) {
       continue;
     }
@@ -91,7 +98,7 @@ export const lookupPlannedMeetings = async (
       filters: {
         parentId: contactId,
         parentType: "Contact",
-        status: "Planned",
+        status: { $in: [...LISTABLE_MEETING_STATUSES] },
         dateStart: { $gte: `${from}T00:00:00` },
       },
       select: ["id", "name", "dateStart", "dateEnd", "status"],
@@ -124,7 +131,7 @@ export const createListPlannedMeetingsTool = (
     {
       name: "list_planned_meetings",
       description:
-        "List upcoming Planned meetings for a Contact (parentId). Use before cancel or reschedule, or when the user asks what is booked. Pass contactId from <contact_info> / create_contact / link_telegram_to_contact. Optional dateFrom defaults to Kyiv today. Returns { meetings: [{ id, name, dateStart, dateEnd }] }.",
+        "List upcoming Planned or Confirmed meetings for a Contact (parentId), including times a doctor set outside clinic hours. Use before cancel or reschedule, or when the user asks what is booked. Pass contactId from <contact_info> / create_contact / link_telegram_to_contact. Optional dateFrom defaults to Kyiv today. Returns { meetings: [{ id, name, dateStart, dateEnd }] }.",
       schema: z.object({
         contactId: z.string().min(1).describe("Patient Contact id"),
         dateFrom: DAY_SCHEMA.optional().describe(

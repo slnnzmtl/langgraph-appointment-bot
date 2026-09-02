@@ -256,7 +256,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         return JSON.stringify({
           error: "Already booked",
           meetings: planned.meetings,
-          hint: "This patient already has a Planned visit. Cancel it, then book the new one — do not offer to reschedule.",
+          hint: "This patient already has a Planned or Confirmed visit. Cancel it, then book the new one — do not offer to reschedule.",
         });
       }
 
@@ -317,7 +317,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned visit. Call immediately on clear book intent — never ask Yes/No in chat first. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL ✅/❌ reply keyboard (contact must belong to this Telegram user). After explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned or Confirmed visit. Call immediately on clear book intent — never ask Yes/No in chat first. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL ✅/❌ reply keyboard (contact must belong to this Telegram user). After explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()
@@ -391,7 +391,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "cancel_meeting",
       description:
-        "Soft-cancel an existing Planned meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Pass name and dateStart/dateEnd from list_planned_meetings when known (HITL caption); CRM fills gaps. Call immediately on clear cancel intent (e.g. «Скасувати візит») — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
+        "Soft-cancel an existing Planned or Confirmed meeting (status Not Held). Resolve meetingId via list_planned_meetings first. Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Pass name and dateStart/dateEnd from list_planned_meetings when known (HITL caption); CRM fills gaps. Call immediately on clear cancel intent (e.g. «Скасувати візит») — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,

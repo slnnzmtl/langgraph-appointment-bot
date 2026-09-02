@@ -94,7 +94,7 @@ Default visit is **Консультація** unless the patient is sure about a
 
 - `present_availability_slots` — free/busy from `search_meetings` and `CReservedTime`; optional `excludeMeetingIds` when rescheduling (current start is not listed)
 - `create_meeting` — HITL Yes/No, then MCP `create_meeting`
-- `list_planned_meetings` — upcoming Planned meetings for a Contact (`search_entity`)
+- `list_planned_meetings` — upcoming Planned or Confirmed meetings for a Contact (`search_entity`)
 - `cancel_meeting` — HITL Yes/No, then soft cancel (`update_meeting` status `Not Held`)
 - `reschedule_meeting` — HITL Yes/No, then in-place `dateStart`/`dateEnd` update
 - Contact tools (`find_contact_by_phone`, `create_contact`, `link_telegram_to_contact`, `update_contact`) — identity; phone/name only after a slot is chosen
@@ -108,7 +108,7 @@ Default visit is **Консультація** unless the patient is sure about a
 - SIGINT/SIGTERM stop Telegram polling, wait for in-flight handler work, then abort in-flight EspoCRM MCP HTTP calls (`shutdownAdapters`). MCP `/health` is checked at process start; later MCP outages fail the tool call (30s timeout).
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user
-- At most one Planned meeting per patient: `create_meeting` is blocked until the existing visit is cancelled; then the new slot can be booked. Do not offer reschedule during that conflict — reschedule is only after «Мій запис»
+- At most one Planned or Confirmed meeting per patient: `create_meeting` is blocked until the existing visit is cancelled; then the new slot can be booked. Do not offer reschedule during that conflict — reschedule is only after «Мій запис»
 - Supervisor prefetches contact + planned meetings into checkpointed state; booking prepare reuses that snapshot until a successful CRM write dirties it or the snapshot is older than ~5 minutes.
 - Sticky routing: tapping a shortcut the specialist just offered continues in that agent (skips the supervisor LLM). FAQ book-handoff offers include a hidden `<yield_to_supervisor/>` so «Так» is re-routed to booking. «Перенести» / «Скасувати» go to booking even after a FINISH visit list or an Already-booked replace offer
 - `present_availability_slots` uses `search_meetings` and `CReservedTime` free/busy; booking finalize attaches DATE then TIME reply keyboards from the tool snapshot (`dayLabel` / slot labels precomputed in TS). The user may still type a slot. `whenLabel` / `visitLabel` for planned meetings are also precomputed so the model quotes them instead of formatting dates itself
@@ -127,7 +127,7 @@ Default visit is **Консультація** unless the patient is sure about a
 5. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`. «Послуги» → consultation offer; «Обрати іншу процедуру» drills one catalog level per message
 6. «Записатись» offers consultation («Так» / «Обрати іншу процедуру») before dates
 7. Pick a date shortcut, then a time shortcut (or type a slot time from the agent's text list)
-8. Tap ✅ to book; ❌ cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned visit is refused until the first is cancelled (REPLACE shortcuts: cancel then book the new slot — never reschedule in that conflict). Success message includes address + Maps
+8. Tap ✅ to book; ❌ cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned or Confirmed visit is refused until the first is cancelled (REPLACE shortcuts: cancel then book the new slot — never reschedule in that conflict). Success message includes address + Maps
 9. After ✅/❌, agent continues; the next outbound reply replaces the reply keyboard
 10. «Мій запис» lists visits with VISIT CHANGE; «Перенести» / «Скасувати» go to booking
 11. Cancel: list upcoming visits → ✅ soft-cancels (`Not Held`)

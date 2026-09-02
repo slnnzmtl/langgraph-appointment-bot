@@ -43,7 +43,7 @@ Do not add a third specialist, a second booking path, or a parallel keyboard for
 
 Only agent that greets. Each turn: `faq` / `booking` (empty `reply`; specialist sees full history) or `FINISH` (answer itself). No CRM tools.
 
-- Prefetches contact + planned meetings into checkpointed state.
+- Prefetches contact + planned/confirmed meetings into checkpointed state.
 - On FINISH, the model sets `menu` (`default` or `visit_change`) and writes patient text only — **no** `<reply_buttons>` trailer. The graph attaches DEFAULT MENU or VISIT CHANGE from `menu` + `bookingContext`. The adapter still appends «Головне меню». `/start` and reminders use `buildDefaultMenuKeyboard`.
 - `/start` stores `WELCOME_HISTORY_MARKER` in history, not the full welcome text (`src/adapter/welcome-message.ts`). Later hellos stay short.
 - Key labels: «Записатись» → booking; «Послуги» / «Обрати іншу процедуру» / «Адреса» → faq; «Мій запис» → FINISH (list visits, `menu=visit_change`); «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting.
@@ -75,13 +75,13 @@ One ladder step per message: **service → time → details → optional intent 
 | `list_services`, `get_service`, `get_working_time` | Same reads as FAQ |
 | `present_availability_slots` | Free/busy (`search_meetings` + `CReservedTime`); date then time shortcuts; reuse `<availability>` when valid |
 | `find_contact_by_phone`, `create_contact`, `link_telegram_to_contact`, `update_contact` | Patient identity |
-| `list_planned_meetings` | Upcoming Planned visits |
+| `list_planned_meetings` | Upcoming Planned or Confirmed visits (including off-hours doctor moves) |
 | `create_meeting` / `cancel_meeting` / `reschedule_meeting` | Writes (HITL). Cancel → status `Not Held`. Reschedule uses `excludeMeetingIds` |
 
 Rules:
 
 - Default service is **Консультація** (`CONSULTATION_SERVICE_ID`) unless the patient is sure about a named procedure (or FAQ already chose one).
-- At most **one Planned meeting**. Only Planned / Held / Confirmed block free/busy. A second booking is refused until the existing visit is **cancelled** (then the new slot can be booked). Reschedule is only offered when the patient explicitly asks about their visit («Мій запис»), not during a new-booking conflict.
+- At most **one Planned or Confirmed meeting**. Only Planned / Held / Confirmed block free/busy. A second booking is refused until the existing visit is **cancelled** (then the new slot can be booked). Reschedule is only offered when the patient explicitly asks about their visit («Мій запис»), not during a new-booking conflict. The bot cannot offer slots outside clinic hours, but it must still list a visit a doctor moved off-hours.
 - Collect phone/name only after a slot is chosen; incomplete contacts get `update_contact` before confirm. Phones must be E.164.
 - Book/move success includes address + Maps; cancel does not. Never put address in `confirmMessage`.
 - Slots are Europe/Kyiv. Quote TS `dayLabel` / `whenLabel` / `visitLabel`; never invent dates.

@@ -20,7 +20,11 @@ describe("prefetchBookingContext", () => {
         expect(name).toBe("search_entity");
         expect(args).toMatchObject({
           entityType: "Meeting",
-          filters: { parentId: "c-1", parentType: "Contact", status: "Planned" },
+          filters: {
+            parentId: "c-1",
+            parentType: "Contact",
+            status: { $in: ["Planned", "Confirmed"] },
+          },
         });
         return {
           list: [

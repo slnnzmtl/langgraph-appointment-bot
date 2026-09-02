@@ -45,7 +45,7 @@ export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "�
 export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;
 
 /**
- * When a new booking is blocked by an existing Planned visit — cancel then book
+ * When a new booking is blocked by an existing Planned or Confirmed visit — cancel then book
  * the new slot. Never includes «Перенести» (reschedule is only after «Мій запис»).
  * Cancel label matches VISIT_CHANGE «Скасувати»; context (conflict copy) distinguishes intent.
  */

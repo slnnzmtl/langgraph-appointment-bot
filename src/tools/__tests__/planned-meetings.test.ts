@@ -20,7 +20,7 @@ describe("list_planned_meetings", () => {
     vi.useRealTimers();
   });
 
-  it("calls search_entity with Contact parent and Planned filters", async () => {
+  it("calls search_entity with Contact parent and Planned/Confirmed $in", async () => {
     await withTg(async () => {
       const calls: CallRecord[] = [];
       const callTool = async (name: string, args: Record<string, unknown>) => {
@@ -64,14 +64,14 @@ describe("list_planned_meetings", () => {
         dateFrom: string;
       };
 
-      expect(calls.some((c) => c.name === "search_entity")).toBe(true);
+      expect(calls.filter((c) => c.name === "search_entity")).toHaveLength(1);
       const search = calls.find((c) => c.name === "search_entity");
       expect(search?.args).toMatchObject({
         entityType: "Meeting",
         filters: {
           parentId: "contact-9",
           parentType: "Contact",
-          status: "Planned",
+          status: { $in: ["Planned", "Confirmed"] },
           dateStart: { $gte: "2026-08-10T00:00:00" },
         },
         orderBy: "dateStart",
@@ -87,6 +87,46 @@ describe("list_planned_meetings", () => {
         },
       ]);
     });
+  });
+
+  it("keeps Confirmed visits and drops Held / Not Held", async () => {
+    const listed = await lookupPlannedMeetings(
+      async () => ({
+        list: [
+          {
+            id: "plan",
+            name: "Later",
+            dateStart: "2026-08-23T16:00:00",
+            dateEnd: "2026-08-23T16:30:00",
+            status: "Planned",
+          },
+          {
+            id: "conf",
+            name: "Consult: Ada",
+            dateStart: "2026-08-23T18:05:00",
+            dateEnd: "2026-08-23T18:35:00",
+            status: "Confirmed",
+          },
+          {
+            id: "held",
+            name: "Done",
+            dateStart: "2026-08-23T19:00:00",
+            dateEnd: "2026-08-23T19:30:00",
+            status: "Held",
+          },
+          {
+            id: "cancelled",
+            name: "Gone",
+            dateStart: "2026-08-23T20:00:00",
+            dateEnd: "2026-08-23T20:30:00",
+            status: "Not Held",
+          },
+        ],
+      }),
+      "contact-9",
+      "2026-08-23",
+    );
+    expect(listed?.meetings.map((m) => m.id)).toEqual(["plan", "conf"]);
   });
 
   it("lookupPlannedMeetings returns meetings payload and null on throw", async () => {
