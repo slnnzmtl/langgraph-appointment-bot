@@ -14,7 +14,7 @@ cp .env.example .env
 # set GOOGLE_API_KEY, ESPOCRM_API_KEY, ESPOCRM_ASSIGNED_USER_ID
 # set ESPOCRM_MCP_URL=http://127.0.0.1:3000 for local MCP
 # set TELEGRAM_BOT_TOKEN to launch the bot
-# optional: WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder (compose: 127.0.0.1:8080)
+# optional: WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder (Docker-internal :8080)
 # optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
 # optional LangSmith: LANGSMITH_TRACING=true LANGSMITH_API_KEY= LANGSMITH_PROJECT=clinic-appointment-bot
 ```
@@ -35,23 +35,17 @@ Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still 
 
 ### Tomorrow-reminder webhook
 
-When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also listens for `POST /webhooks/tomorrow-reminder` (default port `8080`, override with `WEBHOOK_PORT`). Compose maps **`127.0.0.1:8080:8080`** so the port is not reachable from the public internet. Use a long random `WEBHOOK_SECRET` (header `X-Webhook-Secret`).
+When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also listens for `POST /webhooks/tomorrow-reminder` (default port `8080`, override with `WEBHOOK_PORT`). Compose does **not** publish `8080` to the host — only containers on `espocrm-mcp_default` can reach it. Use a long random `WEBHOOK_SECRET` (header `X-Webhook-Secret`).
 
-**Public HTTPS (Caddy on this host):** EspoCRM should call:
+**EspoCRM (same host):** set `meetingTomorrowWebhookUrl` to:
 
-`https://<public-host>/webhooks/tomorrow-reminder`
+`http://appointment-bot:8080/webhooks/tomorrow-reminder`
 
-Host Caddy ([`deploy/Caddyfile`](deploy/Caddyfile) → `/etc/caddy/Caddyfile`) terminates TLS, allowlists EspoCRM egress **IPv4**, and reverse-proxies the same path to `http://127.0.0.1:8080`. Other client IPs and paths get `403`. Bind Caddy to the public IPv4 only so it does not clash with Tailscale on `:443`. After editing the repo file, copy it to `/etc/caddy/Caddyfile` (do not symlink under `/root` — the `caddy` user cannot read it) and `systemctl restart caddy`.
+(`espocrm` / `espocrm-daemon` already share `espocrm-mcp_default` with `appointment-bot`.) There is no public HTTPS path for this webhook.
 
 ```sh
-# Loopback (on the bot host) — HITL needs id (+ status Planned)
-curl -sS -X POST http://127.0.0.1:8080/webhooks/tomorrow-reminder \
-  -H "Content-Type: application/json" \
-  -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
-  -d '{"telegramId":"123456789","meetings":[{"id":"meetIdHere","name":"Консультація","dateStart":"2026-08-22T10:00:00","status":"Planned"}]}'
-
-# From EspoCRM (allowlisted egress IP)
-curl -sS -X POST https://<public-host>/webhooks/tomorrow-reminder \
+# From the EspoCRM container (HITL needs id + status Planned)
+docker exec espocrm curl -sS -X POST http://appointment-bot:8080/webhooks/tomorrow-reminder \
   -H "Content-Type: application/json" \
   -H "X-Webhook-Secret: $WEBHOOK_SECRET" \
   -d '{"telegramId":"123456789","meetings":[{"id":"meetIdHere","name":"Консультація","dateStart":"2026-08-22T10:00:00","status":"Planned"}]}'

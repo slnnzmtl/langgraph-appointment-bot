@@ -92,7 +92,7 @@ Create / cancel / reschedule pause on ✅/❌ (~15 min pending). Other text whil
 
 Voice notes ≤ 60s → Gemini transcription → same text graph. Longer / empty / failed → short Ukrainian fallback, no graph invoke.
 
-Reminder webhook: requires `WEBHOOK_SECRET` (`X-Webhook-Secret`, timing-safe); Zod + body-size checks. EspoCRM POSTs `telegramId` + meetings. Time-aware Ukrainian copy from `dateStart` vs Kyiv now. HITL (Confirmed / Not Held) only for Planned + meeting `id`; pending lasts until visit start. Already-Confirmed or missing `id` → notify-only. Compose binds loopback; see README for Caddy.
+Reminder webhook: requires `WEBHOOK_SECRET` (`X-Webhook-Secret`, timing-safe); Zod + body-size checks. EspoCRM POSTs `telegramId` + meetings to `http://appointment-bot:8080/webhooks/tomorrow-reminder` on the shared Docker network (port not published). Time-aware Ukrainian copy from `dateStart` vs Kyiv now. HITL (Confirmed / Not Held) only for Planned + meeting `id`; pending lasts until visit start. Already-Confirmed or missing `id` → notify-only.
 
 Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph recursion limit 40. MCP HTTP ~30s; SIGINT/SIGTERM stops polling and aborts in-flight MCP. LangSmith chat I/O redacted by default; Tier 1 analytics in `src/analytics/` (`ANALYTICS_DISABLED=1` skips those events only).
 
