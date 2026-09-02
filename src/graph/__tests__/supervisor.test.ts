@@ -1101,11 +1101,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     });
 
-  it("attaches VISIT_CHANGE from menu=visit_change when visits exist", async () => {
+  it("attaches VISIT_CHANGE after «Мій запис» when visits exist (ignores wrong menu=default)", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
       reply: visitAsk,
-      menu: "visit_change",
+      menu: "default",
     });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
@@ -1119,7 +1119,20 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
   });
 
-  it("falls back to DEFAULT no-visits when menu=visit_change but list is empty", async () => {
+  it("attaches DEFAULT has-visits after «Головне меню» even when menu=visit_change", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: "Привіт! У вас є запланований візит. Чим можу допомогти?",
+      menu: "visit_change",
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Головне меню")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("falls back to DEFAULT no-visits when «Мій запис» but list is empty", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
       reply: "Зараз не бачу запланованих візитів. Можу допомогти записатися?",
@@ -1152,6 +1165,24 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+  });
+
+  it("attaches VISIT_CHANGE when menu is omitted after «Мій запис» and visits exist", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: visitAsk });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
+  });
+
+  it("attaches DEFAULT has-visits when menu is omitted on a greeting and visits exist", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: "Привіт! Чим можу допомогти?" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("привіт")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
   it("strips a stray model trailer and still uses code-owned menu labels", async () => {

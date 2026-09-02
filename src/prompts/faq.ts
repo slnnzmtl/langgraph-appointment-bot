@@ -101,13 +101,22 @@ ${BOOKING_OFFER_MENU_LINES}
 контурна пластика
 </reply_buttons>
 - Family chosen, zones left:
-«Для ботулінотерапії є варіанти за зонами. Який варіант вам підходить?»
+«Для ботулінотерапії є варіанти за зонами:
+• 1 зона
+• 2 зони
+
+Який варіант вам підходить?»
 <reply_buttons>
 1 зона
 2 зони
 </reply_buttons>
 - Zone chosen, preparations left:
-«Який препарат для ботулінотерапії (1 зона) вас цікавить?»
+«Для ботулінотерапії (1 зона) є препарати:
+• Disport
+• Nabota
+• Botox
+
+Який препарат вас цікавить?»
 <reply_buttons>
 Disport
 Nabota

@@ -13,3 +13,4 @@ high-level-dependency-graph.dot
 dependency-violation-report.html
 .pnpm-store/
 .cursor/plans
+.cursor/mcp.json

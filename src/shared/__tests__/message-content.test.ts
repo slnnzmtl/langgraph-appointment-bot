@@ -32,6 +32,22 @@ describe("catalogChoiceButtonsFromText", () => {
     ).toEqual(["Disport", "Nabota", "Botox"]);
   });
 
+  it("recovers when the question uses послуга", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "Ось доступні послуги:\n• Консультація дерматолога\n• Консультація косметолога\n\nЯка саме послуга вас цікавить?",
+      ),
+    ).toEqual(["Консультація дерматолога", "Консультація косметолога"]);
+  });
+
+  it("recovers numbered CRM-style list items", () => {
+    expect(
+      catalogChoiceButtonsFromText(
+        "В ін'єкційних процедурах є:\n1. збільшення губ\n2. ботулінотерапія\n3) біоревіталізація\n\nЯка процедура вас цікавить?",
+      ),
+    ).toEqual(["збільшення губ", "ботулінотерапія", "біоревіталізація"]);
+  });
+
   it("does not recover bullets from a consultation yes/no offer", () => {
     expect(
       catalogChoiceButtonsFromText(

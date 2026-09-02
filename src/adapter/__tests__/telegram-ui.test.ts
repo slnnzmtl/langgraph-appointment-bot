@@ -45,12 +45,12 @@ describe("extractReplyButtons", () => {
     expect(result.yieldToSupervisor).toBe(false);
   });
 
-  it("caps at four labels and ignores empty lines", () => {
+  it("caps at six labels and ignores empty lines", () => {
     const result = extractReplyButtons(
-      "Чим можу допомогти?\n<reply_buttons>\n\nA\nB\nC\nD\nE\n\n</reply_buttons>\n",
+      "Чим можу допомогти?\n<reply_buttons>\n\nA\nB\nC\nD\nE\nF\nG\n\n</reply_buttons>\n",
     );
     expect(result.text).toBe("Чим можу допомогти?");
-    expect(result.buttons).toEqual(["A", "B", "C", "D"]);
+    expect(result.buttons).toEqual(["A", "B", "C", "D", "E", "F"]);
   });
 
   it("returns no buttons when the block is missing or empty", () => {

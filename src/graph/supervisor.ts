@@ -11,6 +11,7 @@ import {
   type ContextCacheManager,
 } from "@personal-assistant/llm-gemini";
 
+import { trackEvent } from "../analytics/track.js";
 import {
   PATIENT_FALLBACK_MESSAGE,
   SUPERVISOR_OWNED_REPLY_LABELS,
@@ -67,6 +68,13 @@ const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
   BOOKING_REPLACE_MENU[0],
   BOOKING_REPLACE_MENU_EN[0],
 ]);
+
+const isMyVisitLine = (line: string): boolean => /^(мій запис|my visit)$/i.test(line.trim());
+
+/** Patient asks what is booked — not greetings/thanks that never mention visits. */
+const humanAsksAboutVisits = (line: string): boolean =>
+  /(?:мій запис|my visit|які?\s+(?:в\s+мене\s+)?візит|мо[їи]\s+візит|запланован\w*\s+візит|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)/i
+    .test(line.trim());
 
 export type CreateClinicSupervisorNodeOptions = {
   agents: ClinicAgentDefinition[];
@@ -193,13 +201,23 @@ const resolveRoutingDecision = (
       return routingFailureUpdate("FINISH without reply");
     }
 
-    // Strip any stray model trailer; code owns FINISH keyboards from menu + bookingContext.
+    // Strip any stray model trailer; code owns FINISH keyboards from human intent + bookingContext.
+    // VISIT CHANGE only when the patient asked about their visit(s) — ignore model menu=
+    // visit_change on greetings / «Головне меню» (GREETING lists visits but stays DEFAULT).
     const { text } = extractReplyButtons(reply);
     const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
-    const replyButtons =
-      decision.menu === "visit_change" && hasVisit
-        ? [...VISIT_CHANGE_MENU]
-        : [...defaultMenuLabels(hasVisit)];
+    const lastHumanLine = lastHumanLineFromMessages(state.messages);
+    const wantsVisitChange =
+      hasVisit && (isMyVisitLine(lastHumanLine) || humanAsksAboutVisits(lastHumanLine));
+    let replyButtons: string[];
+    if (wantsVisitChange) {
+      replyButtons = [...VISIT_CHANGE_MENU];
+      if (decision.menu == null) {
+        trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
+      }
+    } else {
+      replyButtons = [...defaultMenuLabels(hasVisit)];
+    }
 
     return {
       next: FINISH_ROUTE,

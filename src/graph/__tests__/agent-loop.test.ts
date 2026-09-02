@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, formatAvailabilityDateOffer, formatAvailabilityTimeOffer, matchAvailabilityDay, meetingMutationClearsAvailability, resolveAvailabilityOffer } from "../agent-loop.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
-import { OTHER_DATE_LABEL } from "../../shared/clinic-constants.js";
+import { OTHER_DATE_LABEL, DEFAULT_MENU_HAS_VISITS, DEFAULT_MENU_NO_VISITS } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   formatAvailabilityContext,
@@ -1365,6 +1365,158 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.status).toBe("ok");
   });
 
+  it("attaches DEFAULT has-visits after a committed create_meeting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "create_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              id: "m-new",
+              name: "Консультація - Ada",
+              dateStart: "2026-09-10 14:00:00",
+            }),
+            tool_call_id: "1",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            "Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\nвул. Миколаївська 33",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Готово!");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("attaches DEFAULT no-visits after cancelling the only planned meeting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "cancel_meeting", args: { meetingId: "m-1" } }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              success: true,
+              id: "m-1",
+            }),
+            tool_call_id: "1",
+            name: "cancel_meeting",
+          }),
+          new AIMessage(
+            "Візит успішно скасовано. Чи бажаєте підібрати новий час для запису?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("скасовано");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+  });
+
+  it("keeps DEFAULT has-visits after cancelling one of several meetings", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const twoMeetings: BookingContext = {
+      meetings: [
+        ...listedMeetings.meetings,
+        {
+          id: "m-2",
+          name: "Консультація - Ada",
+          dateStart: "2026-08-20 10:00:00",
+          dateEnd: "2026-08-20 10:30:00",
+        },
+      ],
+      dateFrom: listedMeetings.dateFrom,
+    };
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        bookingContext: twoMeetings,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "cancel_meeting", args: { meetingId: "m-1" } }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              success: true,
+              id: "m-1",
+            }),
+            tool_call_id: "1",
+            name: "cancel_meeting",
+          }),
+          new AIMessage("Візит успішно скасовано."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const days = [
+      {
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "a",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T15:00:00",
+          },
+        ],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 3,
+        availabilityContext: { days, stepMinutes: 60 },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "slots", name: "present_availability_slots", args: {} },
+              { id: "create", name: "create_meeting", args: {} },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({ days, stepMinutes: 60 }),
+            tool_call_id: "slots",
+            name: "present_availability_slots",
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "Already booked",
+              meetings: [{ id: "m-1", name: "Консультація - Ada", dateStart: "2026-09-04 11:00:00" }],
+            }),
+            tool_call_id: "create",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            "У вас вже є запланований візит. Бажаєте скасувати поточний і записати нову?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Скасувати", "Ні, дякую"]);
+    expect(update.lastHandoff?.replyText).toContain("запланований візит");
+    expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
+  });
+
   it("delivers model-failure fallback via handoff only (no history, no sticky ok)", async () => {
     const { createAgentLlmNode } = await import("../agent-loop.js");
     const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
@@ -1511,6 +1663,79 @@ describe("createAgentFinalizeNode", () => {
       "видалення новоутворень",
       "пілінги",
       "мезотерапія",
+    ]);
+  });
+
+  it("recovers numbered injection families and zone bullets without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+
+    const families = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "В ін'єкційних процедурах є:\n1. збільшення губ\n2. ботулінотерапія\n\nЯка процедура вас цікавить?",
+          ),
+        ],
+      }),
+    );
+    expect(families.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
+
+    const zones = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Для ботулінотерапії є варіанти за зонами:\n• 1 зона\n• 2 зони\n\nЯкий варіант вам підходить?",
+          ),
+        ],
+      }),
+    );
+    expect(zones.lastHandoff?.replyButtons).toEqual(["1 зона", "2 зони"]);
+
+    const brands = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Для ботулінотерапії (1 зона) є препарати:\n• Disport\n• Nabota\n• Botox\n\nЯкий препарат вас цікавить?",
+          ),
+        ],
+      }),
+    );
+    expect(brands.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota", "Botox"]);
+  });
+
+  it("recovers послуга catalog choice without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Ось послуги напрямку:\n• Консультація дерматолога\n• Консультація косметолога\n\nЯка саме послуга вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "Консультація дерматолога",
+      "Консультація косметолога",
     ]);
   });
 

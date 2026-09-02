@@ -28,6 +28,7 @@ import {
   normalizeListServicesResult,
   type ServicesContext,
 } from "../tools/service-tools.js";
+import type { BookingContext } from "../tools/planned-meetings.js";
 import {
   BOOKING_REPLACE_MENU,
   OTHER_DATE_LABEL,
@@ -323,6 +324,69 @@ export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => 
   return false;
 };
 
+/** Meeting id from a committed cancel_meeting result or its tool_call args. */
+const cancelledMeetingIdFromTurn = (
+  messages: BaseMessage[],
+  cancelResult: ToolMessage,
+): string | undefined => {
+  const record = asJsonRecord(extractMessageTextContent(cancelResult.content).trim());
+  if (typeof record?.id === "string" && record.id.length > 0) {
+    return record.id;
+  }
+  if (typeof record?.meetingId === "string" && record.meetingId.length > 0) {
+    return record.meetingId;
+  }
+  const callId = cancelResult.tool_call_id;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof AIMessage)) {
+      continue;
+    }
+    for (const call of message.tool_calls ?? []) {
+      if (call.name !== "cancel_meeting") {
+        continue;
+      }
+      if (callId && call.id != null && call.id !== callId) {
+        continue;
+      }
+      const meetingId = (call.args as { meetingId?: unknown } | undefined)?.meetingId;
+      if (typeof meetingId === "string" && meetingId.length > 0) {
+        return meetingId;
+      }
+    }
+  }
+  return undefined;
+};
+
+/**
+ * DEFAULT MENU hasVisit for booking finalize: committed create → true; committed cancel →
+ * remaining meetings after dropping that id; else checkpointed bookingContext.
+ */
+export const defaultMenuHasVisit = (
+  messages: BaseMessage[],
+  bookingContext: BookingContext | null | undefined,
+): boolean => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      !(message instanceof ToolMessage)
+      || (message.name !== "create_meeting" && message.name !== "cancel_meeting")
+    ) {
+      continue;
+    }
+    if (classifyMeetingMutationToolMessage(message) !== "committed") {
+      return (bookingContext?.meetings.length ?? 0) > 0;
+    }
+    if (message.name === "create_meeting") {
+      return true;
+    }
+    const cancelledId = cancelledMeetingIdFromTurn(messages, message);
+    const remaining = (bookingContext?.meetings ?? []).filter((m) => m.id !== cancelledId);
+    return remaining.length > 0;
+  }
+  return (bookingContext?.meetings.length ?? 0) > 0;
+};
+
 const resolveHandoffStatus = (
   message: AIMessage,
   stepCount: number,
@@ -573,9 +637,12 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       };
     }
 
+    // Already booked wins over DATE/TIME rewrite when both fire in the same turn.
+    const alreadyBooked =
+      agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages);
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
     const slotOffer =
-      agent.id === BOOKING_AGENT_ID
+      agent.id === BOOKING_AGENT_ID && !alreadyBooked
         ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
         : null;
     if (slotOffer) {
@@ -584,11 +651,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       yieldFlag = false;
     } else if (replyButtons.length === 0 && replyText.length > 0) {
       if (agent.id === BOOKING_AGENT_ID) {
-        // Booking: no shortcuts → REPLACE or DEFAULT MENU.
-        if (createMeetingAlreadyBooked(agentMessages)) {
+        // Booking: no shortcuts → REPLACE, or DEFAULT MENU (hasVisit from mutation when stale).
+        if (alreadyBooked) {
           replyButtons = [...BOOKING_REPLACE_MENU];
         } else {
-          const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+          const hasVisit = defaultMenuHasVisit(agentMessages, state.bookingContext);
           replyButtons = [...defaultMenuLabels(hasVisit)];
         }
       } else if (agent.id === FAQ_AGENT_ID) {
