@@ -66,7 +66,7 @@ Execute the development in the following atomic phases. **Ask for my approval be
 
 ### Phase 4: Telegram UI Adapter & Human-in-the-Loop
 1. Wrap the compiled graph in a Telegram Bot webhook/polling loop.
-2. **CRITICAL UI RULE:** When offering availability, use a two-step date-then-time flow. The agent appends a hidden `<reply_buttons>` trailer; the adapter strips it and shows a one-time Telegram **reply keyboard**. Tapping a label sends that text as a normal message (the user may still type a slot).
+2. **CRITICAL UI RULE:** When offering availability, use a two-step date-then-time flow. Booking finalize attaches the DATE then TIME **reply keyboards** from the `present_availability_slots` snapshot (the model must not invent hours or emit a DATE/TIME `<reply_buttons>` trailer). Tapping a label sends that text as a normal message (the user may still type a slot).
 3. **CRITICAL SAFETY RULE (HITL):** Before writing a meeting (create / soft-cancel / reschedule), the graph must pause. The bot sends a confirmation caption with a ✅/❌ **reply keyboard**. Only proceed when the user taps ✅ (or affirms in chat and the model re-calls with `confirmationGiven: true`).
 
 ---

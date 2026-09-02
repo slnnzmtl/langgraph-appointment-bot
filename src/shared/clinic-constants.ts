@@ -27,11 +27,15 @@ export const OTHER_DATE_LABEL_EN = "Another date";
 export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
 export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;
 
+/** Ukrainian DEFAULT MENU labels from whether the patient has upcoming visits. */
+export const defaultMenuLabels = (hasVisit: boolean): readonly string[] =>
+  hasVisit ? DEFAULT_MENU_HAS_VISITS : DEFAULT_MENU_NO_VISITS;
+
 /** XML tag names for dynamic LLM context blocks (formatters + tool reuse hints). */
 export const CONTEXT_TAGS = {
   contact: "contact_info",
+  /** One tag; projections differ per agent (flag / visitLabels / full meetings). */
   meetings: "list_planned_meetings",
-  plannedVisits: "planned_visits",
   availability: "availability",
   services: "list_services",
 } as const;
@@ -41,9 +45,21 @@ export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "�
 export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;
 
 /**
+ * When a new booking is blocked by an existing Planned visit — cancel then book
+ * the new slot. Never includes «Перенести» (reschedule is only after «Мій запис»).
+ * Cancel label matches VISIT_CHANGE «Скасувати»; context (conflict copy) distinguishes intent.
+ */
+export const BOOKING_REPLACE_MENU = ["Скасувати", "Ні, дякую"] as const;
+export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
+
+/** Yes/no shortcuts for consultation or book-this-procedure offers (FAQ + booking STEP SERVICE). */
+export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
+export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
+
+/**
  * Labels the supervisor must route itself — never sticky-continue into booking.
  * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,
- * and soft declines after a move/cancel offer.
+ * and soft declines after a move/cancel or replace offer.
  */
 export const SUPERVISOR_OWNED_REPLY_LABELS = new Set<string>([
   MAIN_MENU_LABEL,

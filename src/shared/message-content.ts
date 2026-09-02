@@ -84,7 +84,63 @@ const stripYieldToSupervisorTags = (raw: string): { cleaned: string; yieldToSupe
   return { cleaned, yieldToSupervisor };
 };
 
-/** Strip trailing yield / `<reply_buttons>` trailers and return up to 4 unique labels. */
+/** Yes/no booking offers — never recover catalog bullets from these replies. */
+const BOOKING_OFFER_QUESTION =
+  /(?:записати\s+вас\s+на\s+консультацію|бажаєте\s+записатися|підібрати\s+вільний\s+час|book(?:\s+a|\s+you\s+for)?\s+consultation)/i;
+
+/** Catalog drill-down closing questions (direction / family / zone / brand). */
+const CATALOG_CHOICE_QUESTION =
+  /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?процедура|який\s+варіант|який\s+препарат|which\s+(?:direction|procedure|variant|preparation))/i;
+
+const BULLET_PREFIX = /^[\s•\u2022\-\*]+\s*(.+)$/;
+
+const labelBeforeDescription = (raw: string): string => {
+  const trimmed = raw.trim();
+  const dash = trimmed.search(/\s+[—–]\s+/);
+  return (dash >= 0 ? trimmed.slice(0, dash) : trimmed).trim();
+};
+
+/**
+ * Recover reply shortcuts from visible catalog bullet lists when the model omitted
+ * `<reply_buttons>`. Returns [] unless the reply ends with a catalog-choice question.
+ */
+export const catalogChoiceButtonsFromText = (text: string): string[] => {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+  const lastLine = lines.at(-1) ?? "";
+  if (!lastLine.includes("?") || BOOKING_OFFER_QUESTION.test(lastLine) || !CATALOG_CHOICE_QUESTION.test(lastLine)) {
+    return [];
+  }
+
+  const seen = new Set<string>();
+  const buttons: string[] = [];
+  for (const line of lines) {
+    if (line === lastLine) {
+      continue;
+    }
+    const match = line.match(BULLET_PREFIX);
+    if (!match) {
+      continue;
+    }
+    const label = labelBeforeDescription(match[1]!);
+    if (!label || seen.has(label)) {
+      continue;
+    }
+    seen.add(label);
+    buttons.push(label);
+    if (buttons.length >= MAX_REPLY_BUTTONS) {
+      break;
+    }
+  }
+
+  return buttons;
+};
+
+/** Strip trailing yield / `<reply_buttons>` trailers and return up to 6 unique labels. */
 export const extractReplyButtons = (raw: string): ExtractedReplyButtons => {
   const { cleaned, yieldToSupervisor } = stripYieldToSupervisorTags(raw);
   const match = cleaned.match(REPLY_BUTTONS_TRAILER);

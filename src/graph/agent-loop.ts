@@ -1,5 +1,6 @@
 import {
   AIMessage,
+  HumanMessage,
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
@@ -14,9 +15,28 @@ import {
   type ContextCacheHandle,
 } from "@personal-assistant/llm-gemini";
 
-import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
+import { stripToolNoiseFromMessages } from "./supervisor-history.js";
+import type { SupervisorContextCacheOptions } from "./supervisor.js";
+import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import {
+  normalizePresentAvailabilityResult,
+  type AvailabilityContext,
+} from "../tools/availability-tools.js";
+import { shortDayMonthLabel } from "../tools/availability-slots.js";
+import {
+  normalizeListServicesResult,
+  type ServicesContext,
+} from "../tools/service-tools.js";
+import {
+  BOOKING_REPLACE_MENU,
+  OTHER_DATE_LABEL,
+  PATIENT_FALLBACK_MESSAGE,
+  defaultMenuLabels,
+} from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import {
+  catalogChoiceButtonsFromText,
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
@@ -33,19 +53,11 @@ import {
   buildUncachedMessages,
 } from "./gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { tagRuntimeAgentMessage } from "./sub-agent-messages.js";
-import { stripToolNoiseFromMessages } from "./supervisor-history.js";
-import type { SupervisorContextCacheOptions } from "./supervisor.js";
-import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
 import {
-  normalizePresentAvailabilityResult,
-  type AvailabilityContext,
-} from "../tools/availability-tools.js";
-import {
-  normalizeListServicesResult,
-  type ServicesContext,
-} from "../tools/service-tools.js";
+  isModelFailureMessage,
+  tagModelFailureMessage,
+  tagRuntimeAgentMessage,
+} from "./sub-agent-messages.js";
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
@@ -153,6 +165,125 @@ export const captureServicesFromMessages = (
 ): ServicesContext | null | undefined =>
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
+/** DATE offer from a multi-day availability snapshot (code-owned when the model invents hours). */
+export const formatAvailabilityDateOffer = (
+  days: AvailabilityContext["days"],
+): { replyText: string; replyButtons: string[] } => {
+  const open = days.filter((day) => day.slots.length > 0).slice(0, 3);
+  const bullets = open
+    .map((day) => {
+      const dayPart = day.dayLabel ?? day.date;
+      const hours = day.slots.map((slot) => slot.label).join(", ");
+      return `  - ${dayPart}: ${hours}`;
+    })
+    .join("\n");
+  return {
+    replyText: `Найближчі вільні дні 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`,
+    replyButtons: [
+      ...open.map((day) => shortDayMonthLabel(day.dayLabel ?? day.date)),
+      OTHER_DATE_LABEL,
+    ],
+  };
+};
+
+/** TIME offer from a single-day availability snapshot. */
+export const formatAvailabilityTimeOffer = (
+  day: AvailabilityContext["days"][number],
+): { replyText: string; replyButtons: string[] } => {
+  const dayLabel = day.dayLabel ?? day.date;
+  const labels = day.slots.map((slot) => slot.label);
+  const bullets = labels.map((label) => `  - ${label}`).join("\n");
+  return {
+    replyText: `Вільні години на ${dayLabel} 🗓️\n\n${bullets}\n\nЯкий час вам зручний?`,
+    replyButtons: [...labels.slice(0, 3), OTHER_DATE_LABEL],
+  };
+};
+
+const lastHumanText = (messages: BaseMessage[]): string => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message instanceof HumanMessage) {
+      return extractMessageTextContent(message.content).trim();
+    }
+  }
+  return "";
+};
+
+/** Match a patient day pick to a snapshot day (keyboard short label, dayLabel, or YYYY-MM-DD). */
+export const matchAvailabilityDay = (
+  humanText: string,
+  days: AvailabilityContext["days"],
+): AvailabilityContext["days"][number] | null => {
+  const trimmed = humanText.trim();
+  if (!trimmed || trimmed === OTHER_DATE_LABEL) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase();
+  for (const day of days) {
+    if (day.slots.length === 0) {
+      continue;
+    }
+    const dayLabel = day.dayLabel ?? day.date;
+    const short = shortDayMonthLabel(dayLabel);
+    if (
+      trimmed === day.date
+      || trimmed === dayLabel
+      || trimmed === short
+      || normalized === dayLabel.toLowerCase()
+      || normalized === short.toLowerCase()
+    ) {
+      return day;
+    }
+  }
+  return null;
+};
+
+/**
+ * When present_availability_slots ran this turn, replace invented DATE/TIME copy with the
+ * snapshot. Multi-day → DATE; one day → TIME. Returns null when this turn is not a slot offer.
+ */
+export const availabilityOfferFromToolTurn = (
+  messages: BaseMessage[],
+): { replyText: string; replyButtons: string[] } | null => {
+  if (!toolRanThisTurn(messages, "present_availability_slots")) {
+    return null;
+  }
+  const captured = captureAvailabilityFromMessages(messages);
+  if (!captured) {
+    return null;
+  }
+  const open = captured.days.filter((day) => day.slots.length > 0);
+  if (open.length === 0) {
+    return null;
+  }
+  if (open.length === 1) {
+    return formatAvailabilityTimeOffer(open[0]!);
+  }
+  return formatAvailabilityDateOffer(open);
+};
+
+/**
+ * Code-owned DATE/TIME for booking finalize: prefer this-turn tool snapshot; else TIME when
+ * the latest human message picks a day already in checkpointed availabilityContext.
+ */
+export const resolveAvailabilityOffer = (
+  messages: BaseMessage[],
+  availabilityContext: AvailabilityContext | null | undefined,
+): { replyText: string; replyButtons: string[] } | null => {
+  const fromTool = availabilityOfferFromToolTurn(messages);
+  if (fromTool) {
+    return fromTool;
+  }
+  if (!availabilityContext || availabilityContext.days.length === 0) {
+    return null;
+  }
+  const day = matchAvailabilityDay(lastHumanText(messages), availabilityContext.days);
+  if (!day) {
+    return null;
+  }
+  return formatAvailabilityTimeOffer(day);
+};
+
 export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
     if (!(message instanceof ToolMessage)) {
@@ -171,10 +302,26 @@ export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
       return true;
     }
     if (typeof record.error === "string") {
-      return false;
+      return name === "cancel_meeting";
     }
     return record.cancelled !== true && record.awaitingConfirmation !== true;
   });
+
+export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
+      continue;
+    }
+    const body = extractMessageTextContent(message.content).trim();
+    if (body.startsWith("Error:")) {
+      return false;
+    }
+    const record = asJsonRecord(body);
+    return record?.error === "Already booked";
+  }
+  return false;
+};
 
 const resolveHandoffStatus = (
   message: AIMessage,
@@ -182,6 +329,10 @@ const resolveHandoffStatus = (
   maxSteps: number,
   agentMessages: BaseMessage[],
 ): ClinicHandoffStatus => {
+  if (isModelFailureMessage(message)) {
+    return "error";
+  }
+
   if (stepCount >= maxSteps) {
     return "max_steps";
   }
@@ -208,12 +359,10 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (agentId: string) =>
+export const createAgentPrepareNode = (_agentId: string) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => ({
     agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
     stepCount: 0,
-    // Drop leftover FAQ catalog so booking/cancel turns do not bill or show it.
-    ...(agentId === BOOKING_AGENT_ID ? { servicesContext: null } : {}),
   });
 
 export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
@@ -277,9 +426,12 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     ) {
       dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
     }
+    const bookingHasAvailabilityDays =
+      (state.availabilityContext?.days.length ?? 0) > 0;
     if (
-      agent.id === FAQ_AGENT_ID
+      (agent.id === FAQ_AGENT_ID || agent.id === BOOKING_AGENT_ID)
       && !toolRanThisTurn(state.agentMessages, "list_services")
+      && !(agent.id === BOOKING_AGENT_ID && bookingHasAvailabilityDays)
     ) {
       dynamicParts.push(formatServicesContext(state.servicesContext));
     }
@@ -327,7 +479,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[clinic-${agent.id}] model call failed:`, message);
       return {
-        agentMessages: [new AIMessage(PATIENT_FALLBACK_MESSAGE)],
+        agentMessages: [tagModelFailureMessage(new AIMessage(PATIENT_FALLBACK_MESSAGE))],
         stepCount,
       };
     }
@@ -336,7 +488,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
 
 export const createAgentToolsNode = (
   tools: StructuredToolInterface[],
-  agentId?: string,
+  _agentId?: string,
 ) => {
   const toolNode = new ToolNode(tools);
 
@@ -361,12 +513,9 @@ export const createAgentToolsNode = (
       }
     }
 
-    // Catalog checkpoint is FAQ-only («Обрати іншу процедуру» browse).
-    if (agentId === FAQ_AGENT_ID) {
-      const capturedServices = captureServicesFromMessages(result.messages);
-      if (capturedServices !== undefined) {
-        update.servicesContext = capturedServices;
-      }
+    const capturedServices = captureServicesFromMessages(result.messages);
+    if (capturedServices !== undefined) {
+      update.servicesContext = capturedServices;
     }
 
     if (crmWriteDirtiesPrefetch(result.messages)) {
@@ -403,22 +552,73 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
     const { text, buttons, yieldToSupervisor } = extractReplyButtons(rawText);
+    let replyText = text.trim();
+    let replyButtons = buttons;
+    let yieldFlag = yieldToSupervisor;
+
+    // Model failure: deliver via handoff only — do not persist into conversation history.
+    if (status === "error" && isModelFailureMessage(tagged)) {
+      const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+      return {
+        ...cleared,
+        lastHandoff: {
+          agentId: agent.id,
+          agentName: agent.name,
+          status: "error",
+          replyText: PATIENT_FALLBACK_MESSAGE,
+          ...(agent.id === BOOKING_AGENT_ID
+            ? { replyButtons: [...defaultMenuLabels(hasVisit)] }
+            : {}),
+        },
+      };
+    }
+
+    // Already booked wins over DATE/TIME rewrite when both fire in the same turn.
+    const alreadyBooked =
+      agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages);
+    // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
+    const slotOffer =
+      agent.id === BOOKING_AGENT_ID && !alreadyBooked
+        ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
+        : null;
+    if (slotOffer) {
+      replyText = slotOffer.replyText;
+      replyButtons = slotOffer.replyButtons;
+      yieldFlag = false;
+    } else if (replyButtons.length === 0 && replyText.length > 0) {
+      if (agent.id === BOOKING_AGENT_ID) {
+        // Booking: no shortcuts → REPLACE or DEFAULT MENU.
+        if (alreadyBooked) {
+          replyButtons = [...BOOKING_REPLACE_MENU];
+        } else {
+          const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+          replyButtons = [...defaultMenuLabels(hasVisit)];
+        }
+      } else if (agent.id === FAQ_AGENT_ID) {
+        // FAQ catalog drill-down: recover visible bullet labels when trailer is missing.
+        replyButtons = catalogChoiceButtonsFromText(replyText);
+      }
+    }
+
     const replyMessage =
-      text !== rawText || buttons.length > 0 || yieldToSupervisor
+      replyText !== extractMessageTextContent(tagged.content).trim()
+        || buttons.length > 0
+        || yieldToSupervisor
+        || slotOffer != null
         ? new AIMessage({
-            content: text,
+            content: replyText,
             additional_kwargs: tagged.additional_kwargs,
             response_metadata: tagged.response_metadata,
           })
         : tagged;
-    const replyText = extractMessageTextContent(replyMessage.content).trim();
+
     const lastHandoff = {
       agentId: agent.id,
       agentName: agent.name,
       status,
       ...(replyText.length > 0 ? { replyText } : {}),
-      ...(buttons.length > 0 ? { replyButtons: buttons } : {}),
-      ...(yieldToSupervisor ? { yieldToSupervisor: true } : {}),
+      ...(replyButtons.length > 0 ? { replyButtons } : {}),
+      ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
 
     if (status === "empty") {

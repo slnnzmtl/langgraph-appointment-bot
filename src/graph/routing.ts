@@ -21,9 +21,14 @@ export const normalizeSupervisorReply = (reply: string | undefined): string | un
   return trimmed;
 };
 
+export const SUPERVISOR_MENU_VALUES = ["default", "visit_change"] as const;
+export type SupervisorMenu = (typeof SUPERVISOR_MENU_VALUES)[number];
+
 export type ClinicRoutingDecision = {
   next: ClinicRouteId;
   reply?: string;
+  /** FINISH only: which keyboard the graph attaches (model does not emit trailers). */
+  menu?: SupervisorMenu;
 };
 
 export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
@@ -43,5 +48,11 @@ export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
       .string()
       .optional()
       .describe("Patient-facing text. Required iff next=FINISH. Omit when delegating."),
+    menu: z
+      .enum(SUPERVISOR_MENU_VALUES)
+      .optional()
+      .describe(
+        "FINISH only. visit_change when listing upcoming visits and asking to move/cancel; otherwise default. Omit when next is not FINISH.",
+      ),
   });
 };

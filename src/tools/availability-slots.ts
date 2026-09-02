@@ -360,6 +360,16 @@ export const formatKyivDayLabel = (day: string, today: string): string => {
 };
 
 /**
+ * Reply-keyboard day label from a full `dayLabel`: drop «сьогодні»/«завтра» and
+ * the weekday in parentheses (e.g. `сьогодні, 20 серпня (четвер)` → `20 серпня`).
+ */
+export const shortDayMonthLabel = (dayLabel: string): string =>
+  dayLabel
+    .replace(/^(сьогодні|завтра),\s*/i, "")
+    .replace(/\s*\([^)]*\)\s*$/, "")
+    .trim();
+
+/**
  * Patient-facing Ukrainian label for a `YYYY-MM-DDTHH:mm:ss` start, e.g.
  * `завтра, 21 серпня (п'ятниця) о 10:00`.
  */

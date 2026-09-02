@@ -1,7 +1,6 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setTrackEventForTests, type Tier1EventName } from "../../analytics/track.js";
 import {
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
@@ -223,11 +222,12 @@ describe("createClinicSupervisorNode context cache", () => {
     expect((update.messages?.[0] as AIMessage).content).toBe("Uncached reply");
   });
 
-  it("strips reply_buttons from FINISH history and keeps labels on lastHandoff", async () => {
+  it("strips reply_buttons from FINISH history and attaches code-owned DEFAULT MENU", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
       reply:
         "Привіт, Тест!\n\n<reply_buttons>\nЗаписатись\nПослуги\nАдреса\n</reply_buttons>",
+      menu: "default",
     });
     const node = createClinicSupervisorNode({
       agents,
@@ -469,6 +469,64 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     );
 
     expect(prefetch).toHaveBeenCalledOnce();
+  });
+
+  it("refetches on Головне меню even when prefetch is fresh", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Головне меню")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.bookingContext?.meetings).toEqual([]);
+  });
+
+  it("refetches on Скасувати even when prefetch is fresh", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Скасувати")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+        lastHandoff: {
+          agentId: "supervisor",
+          agentName: "supervisor",
+          status: "ok",
+          replyText: "visit list",
+          replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
+        },
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.bookingContext?.meetings).toEqual([]);
+    expect(update.next).toBe("booking");
   });
 
   it("refetches when prefetchFetchedAt is missing", async () => {
@@ -1007,11 +1065,10 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
   });
 });
 
-describe("createClinicSupervisorNode static reply buttons", () => {
+describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   const invoke = vi.fn();
   const bindRoutingTools = vi.fn(() => ({ invoke }));
   const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
-  const tracked: { name: Tier1EventName; props: Record<string, unknown> }[] = [];
 
   const meetings = {
     meetings: [
@@ -1031,14 +1088,6 @@ describe("createClinicSupervisorNode static reply buttons", () => {
   beforeEach(() => {
     invoke.mockReset();
     bindRoutingTools.mockClear();
-    tracked.length = 0;
-    setTrackEventForTests((name, props) => {
-      tracked.push({ name, props });
-    });
-  });
-
-  afterEach(() => {
-    setTrackEventForTests(null);
   });
 
   const nodeWithPrefetch = (bookingContext: typeof meetings | null) =>
@@ -1052,8 +1101,12 @@ describe("createClinicSupervisorNode static reply buttons", () => {
       }),
     });
 
-  it("fills VISIT_CHANGE_MENU after Мій запис with visits when the model omits the trailer", async () => {
-    invoke.mockResolvedValue({ next: "FINISH", reply: visitAsk });
+  it("attaches VISIT_CHANGE from menu=visit_change when visits exist", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: visitAsk,
+      menu: "visit_change",
+    });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
     );
@@ -1064,87 +1117,54 @@ describe("createClinicSupervisorNode static reply buttons", () => {
       replyText: visitAsk,
       replyButtons: [...VISIT_CHANGE_MENU],
     });
-    expect(tracked).toContainEqual({
-      name: "reply_menu_filled",
-      props: { menu: "visit_change", reason: "omitted" },
-    });
   });
 
-  it("overrides DEFAULT MENU with VISIT_CHANGE_MENU after Мій запис with visits", async () => {
+  it("falls back to DEFAULT no-visits when menu=visit_change but list is empty", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
-      reply: `${visitAsk}\n\n<reply_buttons>\nМій запис\nПослуги\nАдреса\n</reply_buttons>`,
+      reply: "Зараз не бачу запланованих візитів. Можу допомогти записатися?",
+      menu: "visit_change",
     });
-    const update = await nodeWithPrefetch(meetings)(
+    const update = await nodeWithPrefetch(null)(
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
-    expect(update.lastHandoff?.replyText).toBe(visitAsk);
-    expect(tracked).toContainEqual({
-      name: "reply_menu_filled",
-      props: { menu: "visit_change", reason: "overridden" },
-    });
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
-  it("keeps partial model move/cancel labels on a visit-change ask", async () => {
+  it("attaches DEFAULT has-visits for menu=default when visits exist", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
-      reply: `${visitAsk}\n\n<reply_buttons>\nСкасувати\nНі, дякую\n</reply_buttons>`,
+      reply: "Будь ласка! Чим ще можу допомогти?",
+      menu: "default",
     });
-    const update = await nodeWithPrefetch(meetings)(
-      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
-    );
-
-    expect(update.lastHandoff?.replyButtons).toEqual(["Скасувати", "Ні, дякую"]);
-    expect(tracked.filter((e) => e.name === "reply_menu_filled")).toEqual([]);
-  });
-
-  it("fills VISIT_CHANGE_MENU on free-text visit inquiry from the human line", async () => {
-    invoke.mockResolvedValue({ next: "FINISH", reply: visitAsk });
-    const update = await nodeWithPrefetch(meetings)(
-      supervisorState({ messages: [new HumanMessage("які в мене візити?")] }),
-    );
-
-    expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
-  });
-
-  it("fills DEFAULT_MENU_HAS_VISITS on thanks with visits and no trailer", async () => {
-    invoke.mockResolvedValue({ next: "FINISH", reply: "Будь ласка! Чим ще можу допомогти?" });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("дякую")] }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(tracked).toContainEqual({
-      name: "reply_menu_filled",
-      props: { menu: "default_has_visits", reason: "omitted" },
-    });
   });
 
-  it("fills DEFAULT_MENU_NO_VISITS on greeting with no visits and no trailer", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply:
-        "Привіт! Я ШІ-асистент клініки. Можу записати, перенести чи скасувати візит.\n\nЧим можу допомогти?",
-    });
+  it("attaches DEFAULT no-visits when menu is omitted on FINISH", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: "Привіт! Чим можу допомогти?" });
     const update = await nodeWithPrefetch(null)(
       supervisorState({ messages: [new HumanMessage("привіт")] }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
-    expect(tracked).toContainEqual({
-      name: "reply_menu_filled",
-      props: { menu: "default_no_visits", reason: "omitted" },
-    });
   });
 
-  it("does not treat greeting capability copy as visit-change when visits exist", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply:
-        "Привіт! Я ШІ-асистент клініки. Можу записати, перенести чи скасувати візит.\n\nЧим можу допомогти?",
-    });
+  it("attaches VISIT_CHANGE when menu is omitted after «Мій запис» and visits exist", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: visitAsk });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
+  });
+
+  it("attaches DEFAULT has-visits when menu is omitted on a greeting and visits exist", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", reply: "Привіт! Чим можу допомогти?" });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("привіт")] }),
     );
@@ -1152,18 +1172,35 @@ describe("createClinicSupervisorNode static reply buttons", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("keeps non-visit-change model trailers on FINISH without telemetry", async () => {
+  it("strips a stray model trailer and still uses code-owned menu labels", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
       reply:
-        "Привіт, Тест!\n\n<reply_buttons>\nЗаписатись\nПослуги\nАдреса\n</reply_buttons>",
+        "Привіт, Тест!\n\n<reply_buttons>\nWrong\nLabels\n</reply_buttons>",
+      menu: "default",
     });
     const update = await nodeWithPrefetch(null)(
       supervisorState({ messages: [new HumanMessage("Головне меню")] }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
     expect(update.lastHandoff?.replyText).toBe("Привіт, Тест!");
-    expect(tracked.filter((e) => e.name === "reply_menu_filled")).toEqual([]);
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
+  });
+
+  it("delivers routing failure via handoff only", async () => {
+    const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
+    invoke.mockResolvedValue({ next: "FINISH" });
+    const update = await nodeWithPrefetch(null)(
+      supervisorState({ messages: [new HumanMessage("???")] }),
+    );
+
+    expect(update.messages).toBeUndefined();
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "FINISH",
+      status: "error",
+      replyText: PATIENT_FALLBACK_MESSAGE,
+      replyButtons: [...DEFAULT_MENU_NO_VISITS],
+    });
   });
 });

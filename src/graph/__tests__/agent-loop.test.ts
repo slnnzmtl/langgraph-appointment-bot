@@ -5,8 +5,10 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../agent-loop.js";
+import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, formatAvailabilityDateOffer, formatAvailabilityTimeOffer, matchAvailabilityDay, meetingMutationClearsAvailability, resolveAvailabilityOffer } from "../agent-loop.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
+import { OTHER_DATE_LABEL } from "../../shared/clinic-constants.js";
+import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   formatAvailabilityContext,
   formatBookingMeetingsContext,
@@ -142,15 +144,15 @@ describe("formatBookingMeetingsContext", () => {
 });
 
 describe("formatPlannedVisitsFlag", () => {
-  it("emits only has/none", () => {
+  it("emits visits has/none under the meetings tag", () => {
     expect(formatPlannedVisitsFlag(null)).toBe(
-      "<planned_visits>none</planned_visits>",
+      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
     expect(formatPlannedVisitsFlag({ meetings: [], dateFrom: "2026-08-11" })).toBe(
-      "<planned_visits>none</planned_visits>",
+      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
     expect(formatPlannedVisitsFlag(listedMeetings)).toBe(
-      "<planned_visits>has</planned_visits>",
+      '<list_planned_meetings>\n{"visits":"has"}\n</list_planned_meetings>',
     );
   });
 });
@@ -225,7 +227,20 @@ describe("createAgentPrepareNode", () => {
     expect(agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
     expect(update.contactContext).toBeUndefined();
     expect(update.bookingContext).toBeUndefined();
-    expect(update.servicesContext).toBeNull();
+    expect(update.servicesContext).toBeUndefined();
+  });
+
+  it("does not clear servicesContext when preparing booking", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Book tomorrow")],
+        servicesContext: {
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+        },
+      }),
+    );
+    expect(update.servicesContext).toBeUndefined();
   });
 
   it("does not clear servicesContext when preparing FAQ", async () => {
@@ -319,6 +334,15 @@ describe("crmWriteDirtiesPrefetch", () => {
         }),
       ]),
     ).toBe(false);
+    expect(
+      crmWriteDirtiesPrefetch([
+        new ToolMessage({
+          content: JSON.stringify({ error: "Not authorized" }),
+          tool_call_id: "1",
+          name: "cancel_meeting",
+        }),
+      ]),
+    ).toBe(true);
     expect(
       crmWriteDirtiesPrefetch([
         new ToolMessage({
@@ -554,7 +578,7 @@ describe("createAgentToolsNode services capture", () => {
     });
   });
 
-  it("does not capture servicesContext from list_services on booking", async () => {
+  it("captures servicesContext from list_services on booking", async () => {
     const listTool = tool(
       async () =>
         JSON.stringify({
@@ -581,7 +605,10 @@ describe("createAgentToolsNode services capture", () => {
       { configurable: {} },
     );
 
-    expect(update.servicesContext).toBeUndefined();
+    expect(update.servicesContext).toEqual({
+      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+      total: 1,
+    });
   });
 
   it("does not clear servicesContext on update_contact", async () => {
@@ -728,7 +755,7 @@ describe("createAgentLlmNode context cache", () => {
     const messages = cachedInvoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(HumanMessage);
     expect((messages[0] as HumanMessage).content).toBe(
-      "DYNAMIC KYIV\n\n<planned_visits>none</planned_visits>",
+      'DYNAMIC KYIV\n\n<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
     expect(messages.some((m) => m instanceof SystemMessage)).toBe(false);
     expect(manager.getOrCreate).toHaveBeenCalledWith(
@@ -805,7 +832,8 @@ describe("createAgentLlmNode context cache", () => {
     expect(faqDynamic.content).toContain("DYNAMIC KYIV");
     expect(String(faqDynamic.content)).toContain(formatPlannedVisitsFlag(listedMeetings));
     expect(String(faqDynamic.content)).not.toContain("<contact_info>");
-    expect(String(faqDynamic.content)).not.toContain("<list_planned_meetings>");
+    expect(String(faqDynamic.content)).not.toContain('"visitLabel"');
+    expect(String(faqDynamic.content)).not.toContain('"meetings"');
     expect(String(faqDynamic.content)).not.toContain("<availability>");
     expect(String(faqDynamic.content)).not.toContain("<list_services>");
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
@@ -813,9 +841,10 @@ describe("createAgentLlmNode context cache", () => {
     expect(bookingDynamic.content).toContain(formatBookingMeetingsContext(listedMeetings));
     expect(String(bookingDynamic.content)).toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+    expect(String(bookingDynamic.content)).not.toContain('"visits"');
   });
 
-  it("appends list_services to FAQ only, never to booking", async () => {
+  it("appends list_services to FAQ and booking when catalog is set and availability is empty", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -879,6 +908,58 @@ describe("createAgentLlmNode context cache", () => {
     const bookingDynamic = (cachedInvoke.mock.calls[1]?.[0] as unknown[])[0] as HumanMessage;
     expect(String(faqDynamic.content)).toContain("<list_services>");
     expect(String(faqDynamic.content)).toContain("svc-1");
+    expect(String(bookingDynamic.content)).toContain("<list_services>");
+    expect(String(bookingDynamic.content)).toContain("svc-1");
+  });
+
+  it("omits list_services from booking when availabilityContext has days", async () => {
+    const manager = {
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-2.5-flash",
+      })),
+      invalidate: vi.fn(),
+    };
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "STATIC BOOKING",
+      maxSteps: 10,
+    };
+
+    const sampleServices = {
+      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+      total: 1,
+    };
+
+    const bookingNode = createAgentLlmNode({
+      agent: bookingAgent,
+      model,
+      tools: [sampleTool],
+      formatSystemMetadata: () => "DYNAMIC KYIV",
+      contextCache: {
+        manager,
+        apiKey: "key",
+        modelName: "gemini-2.5-flash",
+      },
+    });
+
+    await bookingNode(
+      clinicState({
+        agentMessages: [new HumanMessage("4 вересня")],
+        servicesContext: sampleServices,
+        availabilityContext: {
+          days: [{ date: "2026-09-04", slots: [{ label: "11:00", dateStart: "2026-09-04T11:00:00", dateEnd: "2026-09-04T11:30:00" }] }],
+          stepMinutes: 30,
+        },
+        next: "booking",
+      }),
+    );
+
+    const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
+    expect(String(bookingDynamic.content)).toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });
 
@@ -1235,7 +1316,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
-  it("strips an empty reply_buttons trailer from checkpointed history", () => {
+  it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1252,7 +1333,124 @@ describe("createAgentFinalizeNode", () => {
     expect(String(stored.content)).toBe("Could you please provide your phone number?");
     expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+  });
+
+  it("attaches REPLACE when create_meeting returned Already booked and no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "create_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "Already booked",
+              meetings: [{ id: "m-1", name: "Консультація - Ada", dateStart: "2026-09-04 11:00:00" }],
+            }),
+            tool_call_id: "1",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            "У вас вже є запланований візит. Бажаєте скасувати поточний і записати нову?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Скасувати", "Ні, дякую"]);
+    expect(update.lastHandoff?.status).toBe("ok");
+  });
+
+  it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const days = [
+      {
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "a",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T15:00:00",
+          },
+        ],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 3,
+        availabilityContext: { days, stepMinutes: 60 },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "slots", name: "present_availability_slots", args: {} },
+              { id: "create", name: "create_meeting", args: {} },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({ days, stepMinutes: 60 }),
+            tool_call_id: "slots",
+            name: "present_availability_slots",
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "Already booked",
+              meetings: [{ id: "m-1", name: "Консультація - Ada", dateStart: "2026-09-04 11:00:00" }],
+            }),
+            tool_call_id: "create",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            "У вас вже є запланований візит. Бажаєте скасувати поточний і записати нову?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Скасувати", "Ні, дякую"]);
+    expect(update.lastHandoff?.replyText).toContain("запланований візит");
+    expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
+  });
+
+  it("delivers model-failure fallback via handoff only (no history, no sticky ok)", async () => {
+    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
+    const bindTools = vi.fn(() => ({
+      invoke: vi.fn(async () => {
+        throw new Error("model down");
+      }),
+    }));
+    const model = { bindTools } as unknown as BaseChatModel;
+    const llm = createAgentLlmNode({
+      agent,
+      model,
+      tools: [],
+      formatSystemMetadata: () => "DYN",
+    });
+    const llmUpdate = await llm(
+      clinicState({ agentMessages: [new HumanMessage("hi")], next: "booking" }),
+    );
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: llmUpdate.stepCount ?? 1,
+        agentMessages: llmUpdate.agentMessages as never,
+      }),
+    );
+
+    expect(update.messages).toBeUndefined();
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "booking",
+      status: "error",
+      replyText: PATIENT_FALLBACK_MESSAGE,
+      replyButtons: ["Записатись", "Послуги", "Адреса"],
+    });
   });
 
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
@@ -1287,7 +1485,7 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("strips a yield-only trailer with no reply_buttons", () => {
+  it("strips a yield-only trailer and omits DEFAULT MENU for faq", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -1299,6 +1497,7 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        bookingContext: listedMeetings,
         agentMessages: [new AIMessage("Done.\n<yield_to_supervisor/>")],
       }),
     );
@@ -1313,5 +1512,330 @@ describe("createAgentFinalizeNode", () => {
       yieldToSupervisor: true,
     });
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("recovers catalog buttons when faq lists procedures without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage(
+            "В ін'єкційних процедурах є, наприклад:\n• збільшення губ\n• ботулінотерапія\n\nЯка процедура вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Яка процедура вас цікавить?");
+    expect(update.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
+  });
+
+  it("recovers dermatology family buttons on a second catalog browse", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage(
+            "У напрямку дерматологічних послуг та догляду є, наприклад:\n• видалення новоутворень\n• пілінги\n• мезотерапія\n\nЯка саме процедура вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "видалення новоутворень",
+      "пілінги",
+      "мезотерапія",
+    ]);
+  });
+
+  it("does not recover direction bullets from a consultation offer without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "У нашій клініці доступні такі напрями\n\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЗаписати вас на консультацію?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("keeps explicit faq trailers authoritative over bullet parsing", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Який напрямок?\n\n• ignored one\n• ignored two\n\n<reply_buttons>\nКонсультації\nІн'єкційні процедури\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["Консультації", "Ін'єкційні процедури"]);
+  });
+
+  it("does not attach buttons for faq location-only replies", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(`Ми знаходимося за адресою вул. Миколаївська 33.`),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  const moveSnapshot: AvailabilityContext = {
+    days: [
+      {
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "2026-09-10T1400",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T15:00:00",
+          },
+        ],
+      },
+      {
+        date: "2026-09-11",
+        dayLabel: "11 вересня (п'ятниця)",
+        slots: [
+          {
+            id: "2026-09-11T1200",
+            label: "12:00",
+            dateStart: "2026-09-11T12:00:00",
+            dateEnd: "2026-09-11T13:00:00",
+          },
+        ],
+      },
+      {
+        date: "2026-09-12",
+        dayLabel: "12 вересня (субота)",
+        slots: [
+          {
+            id: "2026-09-12T1100",
+            label: "11:00",
+            dateStart: "2026-09-12T11:00:00",
+            dateEnd: "2026-09-12T12:00:00",
+          },
+        ],
+      },
+    ],
+    stepMinutes: 60,
+    excludeMeetingIds: ["6a95fe6e5b90474bc"],
+  };
+
+  it("replaces invented 09:00–18:00 with DATE offer (hours in text, date keyboard)", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        availabilityContext: moveSnapshot,
+        agentMessages: [
+          new HumanMessage("Перенести"),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "present_availability_slots", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              date: "2026-09-10",
+              slots: moveSnapshot.days[0]!.slots,
+              days: moveSnapshot.days,
+              stepMinutes: 60,
+              searchedDays: 12,
+              excludeMeetingIds: moveSnapshot.excludeMeetingIds,
+            }),
+            tool_call_id: "1",
+            name: "present_availability_slots",
+          }),
+          new AIMessage(
+            "Вільні години на 10 вересня (четвер) 🗓️\n\n  - 09:00\n  - 10:00\n  - 11:00\n  - 12:00\n  - 13:00\n  - 14:00\n  - 15:00\n  - 16:00\n  - 17:00\n  - 18:00\n\nЯкий час вам зручний?",
+          ),
+        ],
+      }),
+    );
+
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text).toContain("10 вересня (четвер): 14:00");
+    expect(text).toContain("11 вересня (п'ятниця): 12:00");
+    expect(text).toContain("12 вересня (субота): 11:00");
+    expect(text).not.toContain("18:00");
+    expect(text).not.toContain("09:00");
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "10 вересня",
+      "11 вересня",
+      "12 вересня",
+      OTHER_DATE_LABEL,
+    ]);
+    expect(String(update.messages?.[0]?.content)).toBe(text);
+  });
+
+  it("on day pick without a new tool call, rewrites to TIME from availabilityContext", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        availabilityContext: moveSnapshot,
+        agentMessages: [
+          new HumanMessage("10 вересня"),
+          new AIMessage(
+            "Вільні години на 10 вересня (четвер) 🗓️\n\n  - 09:00\n  - 10:00\n  - 18:00\n\nЯкий час вам зручний?",
+          ),
+        ],
+      }),
+    );
+
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text).toContain("Вільні години на 10 вересня (четвер)");
+    expect(text).toContain("14:00");
+    expect(text).not.toContain("18:00");
+    expect(text).not.toContain("09:00");
+    expect(update.lastHandoff?.replyButtons).toEqual(["14:00", OTHER_DATE_LABEL]);
+  });
+
+  it("keeps DEFAULT MENU when availability snapshot is empty and there is no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        availabilityContext: { days: [], stepMinutes: 60 },
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new AIMessage("Could you please provide your phone number?"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
+    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+  });
+});
+
+describe("availability offer helpers", () => {
+  const days: AvailabilityContext["days"] = [
+    {
+      date: "2026-09-10",
+      dayLabel: "10 вересня (четвер)",
+      slots: [
+        {
+          id: "a",
+          label: "14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T15:00:00",
+        },
+        {
+          id: "b",
+          label: "15:00",
+          dateStart: "2026-09-10T15:00:00",
+          dateEnd: "2026-09-10T16:00:00",
+        },
+      ],
+    },
+    {
+      date: "2026-09-11",
+      dayLabel: "11 вересня (п'ятниця)",
+      slots: [
+        {
+          id: "c",
+          label: "12:00",
+          dateStart: "2026-09-11T12:00:00",
+          dateEnd: "2026-09-11T13:00:00",
+        },
+      ],
+    },
+  ];
+
+  it("formatAvailabilityDateOffer lists hours and keeps date-only shortcuts", () => {
+    const offer = formatAvailabilityDateOffer(days);
+    expect(offer.replyText).toContain("10 вересня (четвер): 14:00, 15:00");
+    expect(offer.replyText).toContain("11 вересня (п'ятниця): 12:00");
+    expect(offer.replyButtons).toEqual(["10 вересня", "11 вересня", OTHER_DATE_LABEL]);
+  });
+
+  it("formatAvailabilityTimeOffer lists all times and caps shortcuts at 3", () => {
+    const offer = formatAvailabilityTimeOffer(days[0]!);
+    expect(offer.replyText).toContain("14:00");
+    expect(offer.replyText).toContain("15:00");
+    expect(offer.replyButtons).toEqual(["14:00", "15:00", OTHER_DATE_LABEL]);
+  });
+
+  it("matchAvailabilityDay accepts short keyboard labels", () => {
+    expect(matchAvailabilityDay("10 вересня", days)?.date).toBe("2026-09-10");
+    expect(matchAvailabilityDay(OTHER_DATE_LABEL, days)).toBeNull();
+    expect(matchAvailabilityDay("14:00", days)).toBeNull();
+  });
+
+  it("resolveAvailabilityOffer prefers tool-turn DATE over checkpoint day pick", () => {
+    const offer = resolveAvailabilityOffer(
+      [
+        new HumanMessage("10 вересня"),
+        new AIMessage({
+          content: "",
+          tool_calls: [{ id: "1", name: "present_availability_slots", args: {} }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ days, stepMinutes: 60 }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+        new AIMessage("invented"),
+      ],
+      { days, stepMinutes: 60 },
+    );
+    expect(offer?.replyText).toContain("Найближчі вільні дні");
+    expect(offer?.replyButtons?.[0]).toBe("10 вересня");
   });
 });

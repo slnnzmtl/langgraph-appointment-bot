@@ -256,7 +256,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         return JSON.stringify({
           error: "Already booked",
           meetings: planned.meetings,
-          hint: "This patient already has a Planned visit. Cancel or reschedule it before booking another.",
+          hint: "This patient already has a Planned visit. Cancel it, then book the new one — do not offer to reschedule.",
         });
       }
 
@@ -329,7 +329,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
         contactId: z.string().min(1).describe("Patient Contact id"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
-        serviceId: z.string().min(1).describe("Required cService entity id (resolve via list_services)"),
+        serviceId: z.string().min(1).describe("Required cService entity id — from <list_services> when present, else the consultation id in the booking prompt, else resolve via list_services once"),
         description: z
           .string()
           .optional()

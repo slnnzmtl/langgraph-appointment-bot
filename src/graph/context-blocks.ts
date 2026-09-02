@@ -31,12 +31,12 @@ const visitLabelForMeeting = (
 const block = (tag: string, payload: unknown, trailer = ""): string =>
   `<${tag}>\n${JSON.stringify(payload)}${trailer}\n</${tag}>`;
 
-/** FAQ-only flag for DEFAULT MENU («Записатись» vs «Мій запис»). Emits even when ctx is null. */
+/** FAQ-only flag for whether visits exist (same tag as full meetings; projection differs). */
 export const formatPlannedVisitsFlag = (
   ctx: BookingContext | null | undefined,
 ): string => {
   const has = (ctx?.meetings.length ?? 0) > 0;
-  return `<${CONTEXT_TAGS.plannedVisits}>${has ? "has" : "none"}</${CONTEXT_TAGS.plannedVisits}>`;
+  return block(CONTEXT_TAGS.meetings, { visits: has ? "has" : "none" });
 };
 
 /** Supervisor: visitLabels only (no meeting ids). */
