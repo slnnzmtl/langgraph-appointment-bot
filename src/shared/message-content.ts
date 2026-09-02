@@ -90,9 +90,10 @@ const BOOKING_OFFER_QUESTION =
 
 /** Catalog drill-down closing questions (direction / family / zone / brand). */
 const CATALOG_CHOICE_QUESTION =
-  /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?процедура|який\s+варіант|який\s+препарат|which\s+(?:direction|procedure|variant|preparation))/i;
+  /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?(?:процедура|послуга)|який\s+варіант|який\s+препарат|which\s+(?:direction|procedure|service|variant|preparation))/i;
 
-const BULLET_PREFIX = /^[\s•\u2022\-\*]+\s*(.+)$/;
+/** Bullet or numbered CRM-style list item (`• label`, `1. label`, `1) label`). */
+const LIST_ITEM_PREFIX = /^(?:[\s•\u2022\-\*]+\s*|\d+[\.\)]\s+)(.+)$/;
 
 const labelBeforeDescription = (raw: string): string => {
   const trimmed = raw.trim();
@@ -122,7 +123,7 @@ export const catalogChoiceButtonsFromText = (text: string): string[] => {
     if (line === lastLine) {
       continue;
     }
-    const match = line.match(BULLET_PREFIX);
+    const match = line.match(LIST_ITEM_PREFIX);
     if (!match) {
       continue;
     }

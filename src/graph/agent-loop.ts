@@ -323,6 +323,18 @@ export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => 
   return false;
 };
 
+/** True when the latest create_meeting tool result this turn is a committed write. */
+export const createMeetingCommitted = (messages: BaseMessage[]): boolean => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
+      continue;
+    }
+    return classifyMeetingMutationToolMessage(message) === "committed";
+  }
+  return false;
+};
+
 const resolveHandoffStatus = (
   message: AIMessage,
   stepCount: number,
@@ -587,10 +599,10 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       yieldFlag = false;
     } else if (replyButtons.length === 0 && replyText.length > 0) {
       if (agent.id === BOOKING_AGENT_ID) {
-        // Booking: no shortcuts → REPLACE or DEFAULT MENU.
+        // Booking: no shortcuts → REPLACE, or DEFAULT MENU (skip after a committed create).
         if (alreadyBooked) {
           replyButtons = [...BOOKING_REPLACE_MENU];
-        } else {
+        } else if (!createMeetingCommitted(agentMessages)) {
           const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
           replyButtons = [...defaultMenuLabels(hasVisit)];
         }

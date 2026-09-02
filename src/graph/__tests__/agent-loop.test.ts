@@ -1365,6 +1365,36 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.status).toBe("ok");
   });
 
+  it("leaves only adapter Main menu after a committed create_meeting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "create_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              id: "m-new",
+              name: "Консультація - Ada",
+              dateStart: "2026-09-10 14:00:00",
+            }),
+            tool_call_id: "1",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            "Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\nвул. Миколаївська 33",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Готово!");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
   it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {
     const finalize = createAgentFinalizeNode(agent);
     const days = [
@@ -1564,6 +1594,79 @@ describe("createAgentFinalizeNode", () => {
       "видалення новоутворень",
       "пілінги",
       "мезотерапія",
+    ]);
+  });
+
+  it("recovers numbered injection families and zone bullets without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+
+    const families = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "В ін'єкційних процедурах є:\n1. збільшення губ\n2. ботулінотерапія\n\nЯка процедура вас цікавить?",
+          ),
+        ],
+      }),
+    );
+    expect(families.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
+
+    const zones = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Для ботулінотерапії є варіанти за зонами:\n• 1 зона\n• 2 зони\n\nЯкий варіант вам підходить?",
+          ),
+        ],
+      }),
+    );
+    expect(zones.lastHandoff?.replyButtons).toEqual(["1 зона", "2 зони"]);
+
+    const brands = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Для ботулінотерапії (1 зона) є препарати:\n• Disport\n• Nabota\n• Botox\n\nЯкий препарат вас цікавить?",
+          ),
+        ],
+      }),
+    );
+    expect(brands.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota", "Botox"]);
+  });
+
+  it("recovers послуга catalog choice without a trailer", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Ось послуги напрямку:\n• Консультація дерматолога\n• Консультація косметолога\n\nЯка саме послуга вас цікавить?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "Консультація дерматолога",
+      "Консультація косметолога",
     ]);
   });
 
