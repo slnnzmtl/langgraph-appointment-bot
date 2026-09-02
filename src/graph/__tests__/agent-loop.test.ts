@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, formatAvailabilityDateOffer, formatAvailabilityTimeOffer, matchAvailabilityDay, meetingMutationClearsAvailability, resolveAvailabilityOffer } from "../agent-loop.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
-import { OTHER_DATE_LABEL } from "../../shared/clinic-constants.js";
+import { OTHER_DATE_LABEL, DEFAULT_MENU_HAS_VISITS, DEFAULT_MENU_NO_VISITS } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   formatAvailabilityContext,
@@ -1365,7 +1365,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.status).toBe("ok");
   });
 
-  it("leaves only adapter Main menu after a committed create_meeting", () => {
+  it("attaches DEFAULT has-visits after a committed create_meeting", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1392,10 +1392,10 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.lastHandoff?.replyText).toContain("Готово!");
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("leaves only adapter Main menu after a committed cancel_meeting", () => {
+  it("attaches DEFAULT no-visits after cancelling the only planned meeting", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1404,7 +1404,7 @@ describe("createAgentFinalizeNode", () => {
         agentMessages: [
           new AIMessage({
             content: "",
-            tool_calls: [{ id: "1", name: "cancel_meeting", args: {} }],
+            tool_calls: [{ id: "1", name: "cancel_meeting", args: { meetingId: "m-1" } }],
           }),
           new ToolMessage({
             content: JSON.stringify({
@@ -1422,7 +1422,46 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.lastHandoff?.replyText).toContain("скасовано");
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+  });
+
+  it("keeps DEFAULT has-visits after cancelling one of several meetings", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const twoMeetings: BookingContext = {
+      meetings: [
+        ...listedMeetings.meetings,
+        {
+          id: "m-2",
+          name: "Консультація - Ada",
+          dateStart: "2026-08-20 10:00:00",
+          dateEnd: "2026-08-20 10:30:00",
+        },
+      ],
+      dateFrom: listedMeetings.dateFrom,
+    };
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        bookingContext: twoMeetings,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "cancel_meeting", args: { meetingId: "m-1" } }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              success: true,
+              id: "m-1",
+            }),
+            tool_call_id: "1",
+            name: "cancel_meeting",
+          }),
+          new AIMessage("Візит успішно скасовано."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
   it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {

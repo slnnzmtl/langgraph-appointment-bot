@@ -71,8 +71,6 @@ const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
 
 const isMyVisitLine = (line: string): boolean => /^(мій запис|my visit)$/i.test(line.trim());
 
-const isMainMenuLine = (line: string): boolean => /^(головне меню|main menu)$/i.test(line.trim());
-
 /** Patient asks what is booked — not greetings/thanks that never mention visits. */
 const humanAsksAboutVisits = (line: string): boolean =>
   /(?:мій запис|my visit|які?\s+(?:в\s+мене\s+)?візит|мо[їи]\s+візит|запланован\w*\s+візит|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)/i
@@ -203,26 +201,20 @@ const resolveRoutingDecision = (
       return routingFailureUpdate("FINISH without reply");
     }
 
-    // Strip any stray model trailer; code owns FINISH keyboards from menu + bookingContext.
+    // Strip any stray model trailer; code owns FINISH keyboards from human intent + bookingContext.
+    // VISIT CHANGE only when the patient asked about their visit(s) — ignore model menu=
+    // visit_change on greetings / «Головне меню» (GREETING lists visits but stays DEFAULT).
     const { text } = extractReplyButtons(reply);
     const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
-    // Exact «Мій запис» → VISIT CHANGE when visits exist. «Головне меню» → DEFAULT always
-    // (model may list visits in GREETING and wrongly set menu=visit_change). Else honor
-    // explicit menu; when omitted, also fall back on free-text visit asks.
+    const wantsVisitChange =
+      hasVisit && (isMyVisitLine(lastHumanLine) || humanAsksAboutVisits(lastHumanLine));
     let replyButtons: string[];
-    if (hasVisit && isMyVisitLine(lastHumanLine)) {
+    if (wantsVisitChange) {
       replyButtons = [...VISIT_CHANGE_MENU];
       if (decision.menu == null) {
         trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
       }
-    } else if (isMainMenuLine(lastHumanLine)) {
-      replyButtons = [...defaultMenuLabels(hasVisit)];
-    } else if (decision.menu === "visit_change" && hasVisit) {
-      replyButtons = [...VISIT_CHANGE_MENU];
-    } else if (decision.menu == null && hasVisit && humanAsksAboutVisits(lastHumanLine)) {
-      replyButtons = [...VISIT_CHANGE_MENU];
-      trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
     } else {
       replyButtons = [...defaultMenuLabels(hasVisit)];
     }

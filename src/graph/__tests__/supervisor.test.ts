@@ -1101,11 +1101,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     });
 
-  it("attaches VISIT_CHANGE from menu=visit_change when visits exist", async () => {
+  it("attaches VISIT_CHANGE after «Мій запис» when visits exist (ignores wrong menu=default)", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
       reply: visitAsk,
-      menu: "visit_change",
+      menu: "default",
     });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
@@ -1132,7 +1132,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("falls back to DEFAULT no-visits when menu=visit_change but list is empty", async () => {
+  it("falls back to DEFAULT no-visits when «Мій запис» but list is empty", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
       reply: "Зараз не бачу запланованих візитів. Можу допомогти записатися?",

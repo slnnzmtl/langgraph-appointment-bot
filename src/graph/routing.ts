@@ -52,7 +52,7 @@ export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
       .enum(SUPERVISOR_MENU_VALUES)
       .optional()
       .describe(
-        "FINISH only. visit_change when listing upcoming visits and asking to move/cancel; otherwise default. Omit when next is not FINISH.",
+        "FINISH only. visit_change when asking to move/cancel a listed visit; otherwise default (including greetings that merely list visits). Omit when next is not FINISH.",
       ),
   });
 };
