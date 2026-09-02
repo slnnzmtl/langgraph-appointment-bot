@@ -27,8 +27,10 @@ import {
   replyButtonLabels,
 } from "../shared/message-content.js";
 import {
+  attachPrefetchVisits,
   formatGreetingContact,
-  formatSupervisorVisitLabels,
+  formatPlannedVisitsFlag,
+  type FinishVisitIntent,
 } from "./context-blocks.js";
 import {
   buildCachedMessages,
@@ -70,6 +72,14 @@ const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
 ]);
 
 const isMyVisitLine = (line: string): boolean => /^(мій запис|my visit)$/i.test(line.trim());
+
+const isGreetingOrMainMenuLine = (line: string): boolean => {
+  const trimmed = line.trim();
+  return (
+    /^(головне меню|main menu)$/i.test(trimmed) ||
+    /^(привіт|вітаю|hi|hello)(?:[\s,!.?…:]|$)/iu.test(trimmed)
+  );
+};
 
 /** Patient asks what is booked — not greetings/thanks that never mention visits. */
 const humanAsksAboutVisits = (line: string): boolean =>
@@ -201,14 +211,20 @@ const resolveRoutingDecision = (
       return routingFailureUpdate("FINISH without reply");
     }
 
-    // Strip any stray model trailer; code owns FINISH keyboards from human intent + bookingContext.
-    // VISIT CHANGE only when the patient asked about their visit(s) — ignore model menu=
-    // visit_change on greetings / «Головне меню» (GREETING lists visits but stays DEFAULT).
+    // Strip any stray model trailer; code owns FINISH keyboards and visit lines from
+    // human intent + bookingContext. VISIT CHANGE only when they asked about visits —
+    // ignore model menu=visit_change on greetings / «Головне меню».
     const { text } = extractReplyButtons(reply);
     const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
     const wantsVisitChange =
       hasVisit && (isMyVisitLine(lastHumanLine) || humanAsksAboutVisits(lastHumanLine));
+    const visitIntent: FinishVisitIntent = wantsVisitChange
+      ? "visit_ask"
+      : isGreetingOrMainMenuLine(lastHumanLine)
+        ? "greeting"
+        : "other";
+    const replyText = attachPrefetchVisits(text, bookingContext, visitIntent);
     let replyButtons: string[];
     if (wantsVisitChange) {
       replyButtons = [...VISIT_CHANGE_MENU];
@@ -225,10 +241,10 @@ const resolveRoutingDecision = (
         agentId: FINISH_ROUTE,
         agentName: "supervisor",
         status: "ok",
-        replyText: text,
+        replyText,
         replyButtons,
       },
-      messages: [new AIMessage(text)],
+      messages: [new AIMessage(replyText)],
     };
   }
 
@@ -318,7 +334,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     const dynamic = [
       options.buildSupervisorDynamicContext?.().trim() ?? "",
       formatGreetingContact(contactContext),
-      formatSupervisorVisitLabels(bookingContext),
+      formatPlannedVisitsFlag(bookingContext),
     ]
       .filter((part) => part.length > 0)
       .join("\n\n");

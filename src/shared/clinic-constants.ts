@@ -34,7 +34,7 @@ export const defaultMenuLabels = (hasVisit: boolean): readonly string[] =>
 /** XML tag names for dynamic LLM context blocks (formatters + tool reuse hints). */
 export const CONTEXT_TAGS = {
   contact: "contact_info",
-  /** One tag; projections differ per agent (flag / visitLabels / full meetings). */
+  /** One tag; projections differ per agent (flag vs full meetings). */
   meetings: "list_planned_meetings",
   availability: "availability",
   services: "list_services",

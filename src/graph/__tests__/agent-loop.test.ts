@@ -15,7 +15,8 @@ import {
   formatContactContext,
   formatPlannedVisitsFlag,
   formatServicesContext,
-  formatSupervisorVisitLabels,
+  formatMyVisitReply,
+  attachPrefetchVisits,
 } from "../context-blocks.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
@@ -157,23 +158,58 @@ describe("formatPlannedVisitsFlag", () => {
   });
 });
 
-describe("formatSupervisorVisitLabels", () => {
-  it("emits visitLabels only", () => {
+describe("attachPrefetchVisits", () => {
+  it("replaces visit-ask with formatMyVisitReply", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      const block = formatSupervisorVisitLabels(listedMeetings);
-      expect(block).toContain('"visitLabels"');
-      expect(block).toContain("Консультація - 17 серпня (понеділок) о 11:00");
-      expect(block).not.toContain('"id"');
-      expect(block).not.toContain('"dateStart"');
+      expect(
+        attachPrefetchVisits("stale 15:05 from chat", listedMeetings, "visit_ask"),
+      ).toBe(formatMyVisitReply(listedMeetings));
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("returns an empty string when context is missing", () => {
-    expect(formatSupervisorVisitLabels(null)).toBe("");
+  it("injects prefetch lines on greeting even without a visit heading", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
+      const out = attachPrefetchVisits(
+        "Привіт, Ada! Я ШІ-асистент.\n\nЧим можу допомогти?",
+        listedMeetings,
+        "greeting",
+      );
+      expect(out).toContain("🗓️ Консультація - 17 серпня (понеділок) о 11:00");
+      expect(out).toContain("Чим можу допомогти?");
+      expect(out.indexOf("Заплановані візити:")).toBeLessThan(out.indexOf("Чим можу допомогти?"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not inject a list on other FINISH (thanks)", () => {
+    const out = attachPrefetchVisits(
+      "Будь ласка! Чим ще можу допомогти?",
+      listedMeetings,
+      "other",
+    );
+    expect(out).toBe("Будь ласка! Чим ще можу допомогти?");
+    expect(out).not.toContain("Заплановані візити:");
+  });
+});
+
+describe("formatMyVisitReply", () => {
+  it("lists prefetch labels and asks to move or cancel", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
+      expect(formatMyVisitReply(listedMeetings)).toBe(
+        "Заплановані візити:\n🗓️ Консультація - 17 серпня (понеділок) о 11:00\n\nБажаєте перенести або скасувати цей візит?",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

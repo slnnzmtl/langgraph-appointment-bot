@@ -26,29 +26,71 @@ const visitLabelForMeeting = (
   return `${serviceLabel} - ${whenLabel}`;
 };
 
+const listedVisitLines = (ctx: BookingContext, today = kyivToday()): string[] =>
+  ctx.meetings.map((meeting) => `🗓️ ${visitLabelForMeeting(meeting, today)}`);
+
+const visitListBlock = (ctx: BookingContext): string =>
+  `Заплановані візити:\n${listedVisitLines(ctx).join("\n")}`;
+
+/** Patient-facing «Мій запис» body from prefetch (not the supervisor LLM). */
+export const formatMyVisitReply = (ctx: BookingContext): string => {
+  const question =
+    ctx.meetings.length > 1
+      ? "Бажаєте перенести або скасувати якийсь із цих візитів?"
+      : "Бажаєте перенести або скасувати цей візит?";
+  return `${visitListBlock(ctx)}\n\n${question}`;
+};
+
+const VISIT_LIST_BLOCK =
+  /(?:Заплановані візити|Planned visits):\s*\n(?:[ \t]*🗓️[^\n]*\n?)*/u;
+
+const HELP_TAIL = /\n*(?:Чим можу допомогти\??|How can I help\??)\s*$/i;
+
+const stripVisitList = (text: string): string =>
+  text.replace(VISIT_LIST_BLOCK, "").replace(/\n{3,}/g, "\n\n").trim();
+
+const injectVisitList = (text: string, ctx: BookingContext): string => {
+  const cleaned = stripVisitList(text);
+  const block = visitListBlock(ctx);
+  const help = HELP_TAIL.exec(cleaned);
+  if (help && help.index != null) {
+    const head = cleaned.slice(0, help.index).trimEnd();
+    return `${head}\n\n${block}\n\n${help[0].trim()}`;
+  }
+  return `${cleaned}\n\n${block}`;
+};
+
+export type FinishVisitIntent = "visit_ask" | "greeting" | "other";
+
+/** Code-owned visit list on FINISH: visit-ask replaces the body; greeting injects prefetch lines; other only strips a model list. */
+export const attachPrefetchVisits = (
+  text: string,
+  ctx: BookingContext | null | undefined,
+  intent: FinishVisitIntent,
+): string => {
+  if (intent === "visit_ask") {
+    if (!ctx || ctx.meetings.length === 0) {
+      return text;
+    }
+    return formatMyVisitReply(ctx);
+  }
+  if (intent === "greeting" && ctx && ctx.meetings.length > 0) {
+    return injectVisitList(text, ctx);
+  }
+  return stripVisitList(text);
+};
+
 // Uncached dynamic LLM blocks (Gemini 3 drops synthetic functionCall parts without thoughtSignature).
 
 const block = (tag: string, payload: unknown, trailer = ""): string =>
   `<${tag}>\n${JSON.stringify(payload)}${trailer}\n</${tag}>`;
 
-/** FAQ-only flag for whether visits exist (same tag as full meetings; projection differs). */
+/** FAQ and supervisor: whether visits exist (same tag as booking meetings; projection differs). */
 export const formatPlannedVisitsFlag = (
   ctx: BookingContext | null | undefined,
 ): string => {
   const has = (ctx?.meetings.length ?? 0) > 0;
   return block(CONTEXT_TAGS.meetings, { visits: has ? "has" : "none" });
-};
-
-/** Supervisor: visitLabels only (no meeting ids). */
-export const formatSupervisorVisitLabels = (
-  ctx: BookingContext | null | undefined,
-): string => {
-  if (!ctx) {
-    return "";
-  }
-  const today = kyivToday();
-  const visitLabels = ctx.meetings.map((meeting) => visitLabelForMeeting(meeting, today));
-  return block(CONTEXT_TAGS.meetings, { visitLabels });
 };
 
 /** Booking: full meetings with precomputed visitLabel. */

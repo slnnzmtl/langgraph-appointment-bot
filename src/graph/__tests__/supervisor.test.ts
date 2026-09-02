@@ -134,7 +134,8 @@ describe("createClinicSupervisorNode context cache", () => {
     });
     const messages = invoke.mock.calls[0]?.[0] as unknown[];
     expect(messages[0]).toBeInstanceOf(HumanMessage);
-    expect((messages[0] as HumanMessage).content).toBe("DYNAMIC KYIV");
+    expect((messages[0] as HumanMessage).content).toContain("DYNAMIC KYIV");
+    expect((messages[0] as HumanMessage).content).toContain('"visits":"none"');
     expect(messages.some((m) => m instanceof SystemMessage)).toBe(false);
   });
 
@@ -318,8 +319,8 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(system).toContain("<contact_info>");
     expect(system).toContain("Марія");
     expect(system).toContain("<list_planned_meetings>");
-    expect(system).toContain("visitLabels");
-    expect(system).toContain("Консультація");
+    expect(system).toContain('"visits":"has"');
+    expect(system).not.toContain("visitLabels");
     expect(system).not.toContain('"id":"m-1"');
     expect(update.contactContext).toEqual(listedContact);
     expect(update.bookingContext).toEqual(listedMeetings);
@@ -630,7 +631,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     const system = String((messages[0] as SystemMessage).content);
     expect(system).toContain("DYNAMIC");
     expect(system).not.toContain("<contact_info>");
-    expect(system).not.toContain("<list_planned_meetings>");
+    expect(system).toContain('"visits":"none"');
     expect(update.next).toBe("FINISH");
     expect(update.contactContext).toBeUndefined();
   });
@@ -1119,6 +1120,36 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
   });
 
+  it("replaces a stale «Мій запис» list with prefetch labels", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply:
+        "Заплановані візити:\n🗓️ Консультація — завтра, 3 вересня (четвер) о 15:05\n\nБажаєте перенести або скасувати цей візит?",
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(visitAsk);
+    expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
+  });
+
+  it("injects prefetch visits on «Головне меню» even when the model omitted the heading", async () => {
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: "Привіт, Ada! Я ШІ-асистент.\n\nЧим можу допомогти?",
+      menu: "default",
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Головне меню")] }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
+    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+
   it("attaches DEFAULT has-visits after «Головне меню» even when menu=visit_change", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
@@ -1130,6 +1161,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
   });
 
   it("falls back to DEFAULT no-visits when «Мій запис» but list is empty", async () => {
@@ -1156,6 +1188,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(update.lastHandoff?.replyText).toBe("Будь ласка! Чим ще можу допомогти?");
+    expect(update.lastHandoff?.replyText).not.toContain("Заплановані візити:");
   });
 
   it("attaches DEFAULT no-visits when menu is omitted on FINISH", async () => {
@@ -1183,6 +1217,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
+    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
   });
 
   it("strips a stray model trailer and still uses code-owned menu labels", async () => {
