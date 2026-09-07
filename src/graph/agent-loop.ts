@@ -308,7 +308,8 @@ export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
     return record.cancelled !== true && record.awaitingConfirmation !== true;
   });
 
-export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => {
+/** Latest this-turn create_meeting JSON `error`, or undefined. */
+const latestCreateMeetingError = (messages: BaseMessage[]): string | undefined => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
@@ -316,13 +317,18 @@ export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean => 
     }
     const body = extractMessageTextContent(message.content).trim();
     if (body.startsWith("Error:")) {
-      return false;
+      return undefined;
     }
     const record = asJsonRecord(body);
-    return record?.error === "Already booked";
+    return typeof record?.error === "string" ? record.error : undefined;
   }
-  return false;
+  return undefined;
 };
+
+export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean =>
+  latestCreateMeetingError(messages) === "Already booked";
+
+const SLOT_JUST_TAKEN_PREFIX = "На жаль, обраний час щойно зайняли.\n\n";
 
 /** Meeting id from a committed cancel_meeting result or its tool_call args. */
 const cancelledMeetingIdFromTurn = (
@@ -646,7 +652,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
         : null;
     if (slotOffer) {
-      replyText = slotOffer.replyText;
+      const createError = latestCreateMeetingError(agentMessages);
+      replyText =
+        createError != null
+          ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
+          : slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
       yieldFlag = false;
     } else if (replyButtons.length === 0 && replyText.length > 0) {

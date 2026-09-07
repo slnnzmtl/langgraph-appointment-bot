@@ -1553,6 +1553,147 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
   });
 
+  it("prefixes DATE offer when create_meeting overlaps and slots ran same turn", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const days = [
+      {
+        date: "2026-09-15",
+        dayLabel: "15 вересня (вівторок)",
+        slots: [
+          {
+            id: "a",
+            label: "11:00",
+            dateStart: "2026-09-15T11:00:00",
+            dateEnd: "2026-09-15T11:30:00",
+          },
+          {
+            id: "b",
+            label: "14:30",
+            dateStart: "2026-09-15T14:30:00",
+            dateEnd: "2026-09-15T15:00:00",
+          },
+        ],
+      },
+      {
+        date: "2026-09-28",
+        dayLabel: "28 вересня (понеділок)",
+        slots: [
+          {
+            id: "c",
+            label: "11:00",
+            dateStart: "2026-09-28T11:00:00",
+            dateEnd: "2026-09-28T11:30:00",
+          },
+        ],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 3,
+        availabilityContext: { days, stepMinutes: 30 },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "create", name: "create_meeting", args: {} },
+              { id: "slots", name: "present_availability_slots", args: {} },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "This meeting overlaps an existing meeting for the assigned user.",
+            }),
+            tool_call_id: "create",
+            name: "create_meeting",
+          }),
+          new ToolMessage({
+            content: JSON.stringify({ days, stepMinutes: 30 }),
+            tool_call_id: "slots",
+            name: "present_availability_slots",
+          }),
+          new AIMessage(
+            "На жаль, обраний час щойно зайняли.\n\nОсь інші дні з вигаданими годинами 09:00–18:00.",
+          ),
+        ],
+      }),
+    );
+
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text.startsWith("На жаль, обраний час щойно зайняли.")).toBe(true);
+    expect(text).toContain("Найближчі вільні дні");
+    expect(text).toContain("15 вересня (вівторок): 11:00, 14:30");
+    expect(text).toContain("28 вересня (понеділок): 11:00");
+    expect(text).not.toContain("09:00");
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "15 вересня",
+      "28 вересня",
+      OTHER_DATE_LABEL,
+    ]);
+  });
+
+  it("prefixes TIME offer when create_meeting overlaps and same-day slots ran this turn", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const day = {
+      date: "2026-09-15",
+      dayLabel: "15 вересня (вівторок)",
+      slots: [
+        {
+          id: "2026-09-15T1430",
+          label: "14:30",
+          dateStart: "2026-09-15T14:30:00",
+          dateEnd: "2026-09-15T15:00:00",
+        },
+      ],
+    };
+    const update = finalize(
+      clinicState({
+        stepCount: 3,
+        availabilityContext: { days: [day], stepMinutes: 30 },
+        agentMessages: [
+          new HumanMessage("11:00"),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "create", name: "create_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "This meeting overlaps an existing meeting for the assigned user.",
+              hint: "That time may already be booked.",
+            }),
+            tool_call_id: "create",
+            name: "create_meeting",
+          }),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "slots", name: "present_availability_slots", args: { date: "2026-09-15" } },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              slots: day.slots,
+              date: day.date,
+              dayLabel: day.dayLabel,
+              stepMinutes: 30,
+            }),
+            tool_call_id: "slots",
+            name: "present_availability_slots",
+          }),
+          new AIMessage(
+            "На жаль, 15 вересня о 11:00 вже зайнято. Залишився вільний час на цей день:\n\n  - 14:30\n\nБажаєте обрати цей час?",
+          ),
+        ],
+      }),
+    );
+
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text.startsWith("На жаль, обраний час щойно зайняли.")).toBe(true);
+    expect(text).toContain("Вільні години на 15 вересня (вівторок)");
+    expect(text).toContain("14:30");
+    expect(text).not.toContain("11:00 вже зайнято");
+    expect(update.lastHandoff?.replyButtons).toEqual(["14:30", OTHER_DATE_LABEL]);
+  });
+
   it("delivers model-failure fallback via handoff only (no history, no sticky ok)", async () => {
     const { createAgentLlmNode } = await import("../agent-loop.js");
     const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
