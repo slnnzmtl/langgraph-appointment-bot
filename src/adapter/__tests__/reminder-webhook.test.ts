@@ -1,6 +1,10 @@
 import { createServer, type AddressInfo } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import {
+  setTrackEventForTests,
+  type Tier1EventName,
+} from "../../analytics/track.js";
 import { kyivCalendarDate } from "../../composition/clinic-datetime.js";
 import {
   clearReminderConfirmsForTests,
@@ -23,6 +27,8 @@ import {
   DEFAULT_MENU_HAS_VISITS,
   MAIN_MENU_LABEL,
 } from "../telegram-ui.js";
+
+type Captured = { name: Tier1EventName; props: Record<string, unknown> };
 
 const SECRET = "test-webhook-secret";
 
@@ -256,6 +262,7 @@ describe("createReminderWebhookHandler", () => {
   let close: (() => Promise<void>) | undefined;
 
   afterEach(async () => {
+    setTrackEventForTests(null);
     clearReminderConfirmsForTests();
     if (close) {
       await close();
@@ -340,6 +347,10 @@ describe("createReminderWebhookHandler", () => {
   });
 
   it("returns 502 when Telegram send fails", async () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
     const sendMessage = vi.fn<ReminderSendMessage>().mockRejectedValue(new Error("tg down"));
     const server = await listen(sendMessage);
     close = server.close;
@@ -357,9 +368,14 @@ describe("createReminderWebhookHandler", () => {
     });
     expect(response.status).toBe(502);
     expect(await response.json()).toEqual({ ok: false, error: "telegram_send_failed" });
+    expect(seen).toEqual([]);
   });
 
   it("returns 200 and sends HTML reminder with has-visit menu", async () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
     const sendMessage = vi.fn<ReminderSendMessage>().mockResolvedValue({});
     const server = await listen(sendMessage);
     close = server.close;
@@ -390,9 +406,25 @@ describe("createReminderWebhookHandler", () => {
       [{ text: DEFAULT_MENU_HAS_VISITS[0] }, { text: DEFAULT_MENU_HAS_VISITS[1] }],
       [{ text: DEFAULT_MENU_HAS_VISITS[2] }, { text: MAIN_MENU_LABEL }],
     ]);
+    expect(seen).toEqual([
+      {
+        name: "reminder_sent",
+        props: {
+          outcome: "success",
+          telegram_user_id: "42",
+          meeting_count: 1,
+          hitl: false,
+          meeting_ids: [],
+        },
+      },
+    ]);
   });
 
   it("returns 200 with confirm keyboard for Planned meetings with id", async () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
     const sendMessage = vi.fn<ReminderSendMessage>().mockResolvedValue({});
     const server = await listen(sendMessage);
     close = server.close;
@@ -436,6 +468,18 @@ describe("createReminderWebhookHandler", () => {
       ],
       status: "Confirmed",
     });
+    expect(seen).toEqual([
+      {
+        name: "reminder_sent",
+        props: {
+          outcome: "success",
+          telegram_user_id: "42",
+          meeting_count: 1,
+          hitl: true,
+          meeting_ids: ["meet-1"],
+        },
+      },
+    ]);
   });
 
   it("does not HITL when status is already Confirmed", async () => {

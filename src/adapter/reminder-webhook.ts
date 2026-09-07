@@ -3,6 +3,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { Telegraf } from "telegraf";
 import { z } from "zod";
 
+import { trackEvent } from "../analytics/track.js";
 import { CLINIC_SLOT_TZ } from "../shared/clinic-constants.js";
 import {
   addCalendarDays,
@@ -462,6 +463,16 @@ export const createReminderWebhookHandler = (
       writeJson(res, 502, { ok: false, error: "telegram_send_failed" });
       return;
     }
+
+    trackEvent("reminder_sent", {
+      outcome: "success",
+      telegram_user_id: parsed.data.telegramId,
+      meeting_count: parsed.data.meetings.length,
+      hitl: hitlPending.length > 0,
+      meeting_ids: parsed.data.meetings
+        .map((meeting) => meeting.id)
+        .filter((id): id is string => Boolean(id)),
+    });
 
     if (hitlPending.length > 0) {
       setReminderConfirmPending(parsed.data.telegramId, hitlPending);
