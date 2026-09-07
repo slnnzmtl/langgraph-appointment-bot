@@ -20,6 +20,7 @@ export const TIER1_EVENTS = [
   "contact_incomplete_blocked",
   "tool_error",
   "reply_menu_filled",
+  "reminder_sent",
 ] as const;
 
 export type Tier1EventName = (typeof TIER1_EVENTS)[number];

@@ -44,6 +44,32 @@ describe("trackEvent", () => {
     ]);
   });
 
+  it("accepts reminder_sent as a Tier1 event", () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
+    trackEvent("reminder_sent", {
+      outcome: "success",
+      telegram_user_id: "42",
+      meeting_count: 1,
+      hitl: false,
+      meeting_ids: [],
+    });
+    expect(seen).toEqual([
+      {
+        name: "reminder_sent",
+        props: {
+          outcome: "success",
+          telegram_user_id: "42",
+          meeting_count: 1,
+          hitl: false,
+          meeting_ids: [],
+        },
+      },
+    ]);
+  });
+
   it("no-ops when ANALYTICS_DISABLED=1", () => {
     process.env.ANALYTICS_DISABLED = "1";
     const seen: Captured[] = [];
