@@ -7,7 +7,6 @@ import {
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
-import { trackEvent } from "../analytics/track.js";
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
@@ -354,12 +353,6 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
         return;
       }
       const confirmed = reminderDecision.status === "Confirmed";
-      trackEvent(confirmed ? "reminder_approved" : "reminder_declined", {
-        outcome: "success",
-        telegram_user_id: telegramUserId,
-        meeting_count: reminderDecision.meetingIds.length,
-        meeting_ids: reminderDecision.meetingIds,
-      });
       await ctx.reply(
         formatForTelegram(confirmed ? REMINDER_CONFIRMED_ACK : REMINDER_DECLINED_ACK),
         {

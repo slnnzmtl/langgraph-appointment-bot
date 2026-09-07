@@ -21,7 +21,7 @@ cp .env.example .env
 
 ## LangSmith
 
-Set `LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` to send LangGraph traces to LangSmith (`LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` aliases also work). Optional `LANGSMITH_PROJECT` (example: `clinic-appointment-bot`) and `LANGSMITH_ENDPOINT` (EU / self-hosted). When tracing is on, LLM and tool **inputs/outputs are redacted** (empty payloads) so patient chat does not leave the process. Set `LANGSMITH_TRACE_CONTENT=true` only for a trusted, EU, or self-hosted project if you need the raw spans. Run metadata still includes `telegram_user_id` and `chat_id`. Telegram and smoke invokes tag each turn as `clinic-turn`. Tier 1 booking events (`meeting_created`, `contact_created`, `reminder_sent`, `reminder_approved`, `reminder_declined`, …) are posted as named runs with PII-safe props (ids, counts, dates, field names) and are not redacted. `ANALYTICS_DISABLED=1` skips those events only; LLM tracing still runs.
+Set `LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` to send LangGraph traces to LangSmith (`LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` aliases also work). Optional `LANGSMITH_PROJECT` (example: `clinic-appointment-bot`) and `LANGSMITH_ENDPOINT` (EU / self-hosted). When tracing is on, LLM and tool **inputs/outputs are redacted** (empty payloads) so patient chat does not leave the process. Set `LANGSMITH_TRACE_CONTENT=true` only for a trusted, EU, or self-hosted project if you need the raw spans. Run metadata still includes `telegram_user_id` and `chat_id`. Telegram and smoke invokes tag each turn as `clinic-turn`. Tier 1 booking events (`meeting_created`, `contact_created`, `reminder_sent`, …) are posted as named runs with PII-safe props (ids, counts, dates, field names) and are not redacted. `ANALYTICS_DISABLED=1` skips those events only; LLM tracing still runs.
 
 ## Docker
 
@@ -79,7 +79,7 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
 - `src/adapter/` — telegraf (`telegram-bot.ts`), keyboards (`telegram-ui.ts`), `/start` welcome, reminder webhook
 - `src/shared/` — clinic constants (address, consultation id, menu labels), helpers
-- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs; `reminder_sent` is a root run from the tomorrow-reminder webhook; `reminder_approved` / `reminder_declined` fire after HITL CRM update)
+- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs; `reminder_sent` is a root run from the tomorrow-reminder webhook)
 - `packages/llm-gemini` — Gemini connector + explicit context cache (`GEMINI_CONTEXT_CACHE`, default on)
 
 ## FAQ / services

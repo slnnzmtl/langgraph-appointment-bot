@@ -24,8 +24,6 @@ export const TIER1_EVENTS = [
   "tool_error",
   "reply_menu_filled",
   "reminder_sent",
-  "reminder_approved",
-  "reminder_declined",
 ] as const;
 
 export type Tier1EventName = (typeof TIER1_EVENTS)[number];
