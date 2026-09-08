@@ -24,6 +24,7 @@ import {
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU,
   INTENT_SKIP_LABEL,
   OTHER_DATE_LABEL,
   DEFAULT_MENU_HAS_VISITS,
@@ -1987,7 +1988,45 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
+  });
+
+  it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingNoteStatus: "unasked",
+        availabilityContext: null,
+        selectedSlot: null,
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new AIMessage(
+            "Для першого візиту радимо консультацію: лікар огляне шкіру та підбере процедуру.\n\nПідібрати вільний час на консультацію?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+  });
+
+  it("DDD-79: booking still attaches DEFAULT MENU for non-offer replies without a trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new AIMessage("Could you please provide your phone number?"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
   it("keeps explicit faq trailers authoritative over bullet parsing", () => {

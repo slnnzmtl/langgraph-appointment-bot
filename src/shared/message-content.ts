@@ -88,6 +88,20 @@ const stripYieldToSupervisorTags = (raw: string): { cleaned: string; yieldToSupe
 const BOOKING_OFFER_QUESTION =
   /(?:записати\s+вас\s+на\s+консультацію|бажаєте\s+записатися|підібрати\s+вільний\s+час|book(?:\s+a|\s+you\s+for)?\s+consultation)/i;
 
+const lastNonEmptyLine = (text: string): string =>
+  text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .at(-1) ?? "";
+
+/** True when the reply ends with a consultation / book-this-procedure yes/no question. */
+export const isBookingOfferQuestion = (text: string): boolean => {
+  const lastLine = lastNonEmptyLine(text);
+  return lastLine.includes("?") && BOOKING_OFFER_QUESTION.test(lastLine);
+};
+
 /** Catalog drill-down closing questions (direction / family / zone / brand). */
 const CATALOG_CHOICE_QUESTION =
   /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?(?:процедура|послуга)|який\s+варіант|який\s+препарат|which\s+(?:direction|procedure|service|variant|preparation))/i;
@@ -113,7 +127,7 @@ export const catalogChoiceButtonsFromText = (text: string): string[] => {
 
   const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
   const lastLine = lines.at(-1) ?? "";
-  if (!lastLine.includes("?") || BOOKING_OFFER_QUESTION.test(lastLine) || !CATALOG_CHOICE_QUESTION.test(lastLine)) {
+  if (!lastLine.includes("?") || isBookingOfferQuestion(trimmed) || !CATALOG_CHOICE_QUESTION.test(lastLine)) {
     return [];
   }
 

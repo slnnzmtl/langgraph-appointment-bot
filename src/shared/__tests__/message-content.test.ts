@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, catalogChoiceButtonsFromText, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
+import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, catalogChoiceButtonsFromText, isBookingOfferQuestion, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
 
 describe("catalogChoiceButtonsFromText", () => {
   it("recovers procedure family labels from a catalog-choice reply", () => {
@@ -63,6 +63,27 @@ describe("catalogChoiceButtonsFromText", () => {
       ),
     ).toEqual([]);
     expect(catalogChoiceButtonsFromText("Адреса: вул. Миколаївська 33.")).toEqual([]);
+  });
+});
+
+describe("isBookingOfferQuestion", () => {
+  it("detects consultation and book-this-procedure yes/no closers", () => {
+    expect(isBookingOfferQuestion("Підібрати вільний час на консультацію?")).toBe(true);
+    expect(
+      isBookingOfferQuestion(
+        "Для першого візиту радимо консультацію.\n\nПідібрати вільний час на консультацію?",
+      ),
+    ).toBe(true);
+    expect(isBookingOfferQuestion("Записати вас на консультацію?")).toBe(true);
+    expect(isBookingOfferQuestion("Бажаєте записатися на цю процедуру?")).toBe(true);
+    expect(isBookingOfferQuestion("Shall I book a consultation?")).toBe(true);
+  });
+
+  it("rejects phone, catalog, and cancel-rebook questions", () => {
+    expect(isBookingOfferQuestion("Could you please provide your phone number?")).toBe(false);
+    expect(isBookingOfferQuestion("Яка саме процедура вас цікавить?")).toBe(false);
+    expect(isBookingOfferQuestion("Чи бажаєте підібрати новий час для запису?")).toBe(false);
+    expect(isBookingOfferQuestion("Готово! Чекаємо вас на консультацію.")).toBe(false);
   });
 });
 

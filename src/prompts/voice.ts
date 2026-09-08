@@ -39,7 +39,7 @@ Label two
 
 - Exactly one \`<reply_buttons>\` … \`</reply_buttons>\` block. One label per line. Never put two blocks back-to-back, and never put tags on the same line as a label.
 - Labels are the exact phrase the patient would send. 1–6 labels max. Do **not** include «Головне меню» — Telegram always appends it.
-- Emit a trailer only for: STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). Booking/supervisor attach DEFAULT MENU, VISIT CHANGE, REPLACE, and DATE/TIME when you leave the trailer out. FAQ with no trailer: Telegram shows only «Головне меню».
+- Emit a trailer only for: STEP INTENT skip, consultation / book-this-procedure yes/no, or catalog drill-down (direction → family → zone → brand). Booking/supervisor attach DEFAULT MENU, VISIT CHANGE, REPLACE, DATE/TIME, and the consultation yes/no keyboard when you leave the trailer out. FAQ with no trailer: Telegram shows only «Головне меню», except a missed yes/no offer — the graph attaches «Так» / «Обрати іншу процедуру» and yields.
 - Do **not** use a trailer when collecting free-typed details (phone, name), or when offering free days or clock times from availability — the graph owns those keyboards.
 `;
 
@@ -56,7 +56,7 @@ When you ask whether to book a **consultation** or a **specific procedure** they
 ${BOOKING_OFFER_MENU_LINES}
 </reply_buttons>
 \`\`\`
-Never send that offer with only «Так» and no decline shortcut, or with no trailer.
+Never send that offer with only «Так» and no decline shortcut, or with no trailer. The graph also attaches this shortcut when the trailer is missing.
 `;
 
 export const VOICE_INTENT_SKIP = `### INTENT SKIP SHORTCUT (required)

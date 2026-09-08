@@ -41,6 +41,7 @@ import type { BookingContext } from "../tools/planned-meetings.js";
 import { trackEvent } from "../analytics/track.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU,
   BOOKING_REPLACE_MENU,
   INTENT_SKIP_LABEL,
   INTENT_SKIP_LABEL_EN,
@@ -55,6 +56,7 @@ import {
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
+  isBookingOfferQuestion,
 } from "../shared/message-content.js";
 import {
   formatBookingMeetingsContext,
@@ -901,14 +903,19 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       yieldFlag = false;
       trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
     } else if (replyButtons.length === 0 && replyText.length > 0) {
-      if (agent.id === BOOKING_AGENT_ID) {
-        // Booking: no shortcuts → REPLACE, or DEFAULT MENU (hasVisit from mutation when stale).
-        if (alreadyBooked) {
-          replyButtons = [...BOOKING_REPLACE_MENU];
-        } else {
-          const hasVisit = defaultMenuHasVisit(agentMessages, state.bookingContext);
-          replyButtons = [...defaultMenuLabels(hasVisit)];
+      if (agent.id === BOOKING_AGENT_ID && alreadyBooked) {
+        // Booking: no shortcuts → REPLACE when create_meeting said already booked.
+        replyButtons = [...BOOKING_REPLACE_MENU];
+      } else if (isBookingOfferQuestion(replyText)) {
+        // DDD-79: consultation / book-this-procedure yes/no — do not fall back to DEFAULT MENU.
+        replyButtons = [...BOOKING_OFFER_MENU];
+        if (agent.id === FAQ_AGENT_ID) {
+          yieldFlag = true;
         }
+        trackEvent("reply_menu_filled", { menu: "booking_offer", reason: "omitted" });
+      } else if (agent.id === BOOKING_AGENT_ID) {
+        const hasVisit = defaultMenuHasVisit(agentMessages, state.bookingContext);
+        replyButtons = [...defaultMenuLabels(hasVisit)];
       } else if (agent.id === FAQ_AGENT_ID) {
         // FAQ catalog drill-down: recover visible bullet labels when trailer is missing.
         replyButtons = catalogChoiceButtonsFromText(replyText);
