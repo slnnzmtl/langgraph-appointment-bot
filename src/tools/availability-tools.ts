@@ -127,6 +127,81 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
   return null;
 };
 
+const sameExcludeIds = (
+  left: string[] | undefined,
+  right: string[] | undefined,
+): boolean => {
+  const a = [...(left ?? [])].sort();
+  const b = [...(right ?? [])].sort();
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every((id, index) => id === b[index]);
+};
+
+export type AvailabilitySlotsToolArgs = {
+  date?: string;
+  startDate?: string;
+  afterDate?: string;
+  durationMinutes?: number;
+  excludeMeetingIds?: string[];
+};
+
+/**
+ * When the request matches the checkpointed snapshot, return the same JSON shape as a
+ * CRM present_availability_slots success (no search_meetings). Null = cache miss.
+ */
+export const tryAvailabilityCacheHit = (
+  ctx: AvailabilityContext | null | undefined,
+  input: AvailabilitySlotsToolArgs,
+): { json: string; kind: "date_list" | "day_slots" } | null => {
+  if (!ctx || ctx.days.length === 0) {
+    return null;
+  }
+  // Paging forward or shifting the search window always hits CRM.
+  if (input.afterDate || input.startDate) {
+    return null;
+  }
+  const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
+  if (stepMinutes !== ctx.stepMinutes) {
+    return null;
+  }
+  if (!sameExcludeIds(input.excludeMeetingIds, ctx.excludeMeetingIds)) {
+    return null;
+  }
+
+  const shared = {
+    stepMinutes: ctx.stepMinutes,
+    ...(ctx.excludeMeetingIds?.length ? { excludeMeetingIds: ctx.excludeMeetingIds } : {}),
+    cacheHit: true as const,
+  };
+
+  if (input.date) {
+    const day = ctx.days.find((entry) => entry.date === input.date);
+    if (!day) {
+      return null;
+    }
+    return {
+      kind: "day_slots",
+      json: JSON.stringify({
+        slots: day.slots,
+        date: day.date,
+        ...(day.dayLabel ? { dayLabel: day.dayLabel } : {}),
+        ...shared,
+      }),
+    };
+  }
+
+  return {
+    kind: "date_list",
+    json: JSON.stringify({
+      days: ctx.days,
+      ...shared,
+      ...(ctx.truncated ? { truncated: true } : {}),
+    }),
+  };
+};
+
 const DAY_SCHEMA = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -350,7 +425,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Reuse <${CONTEXT_TAGS.availability}> in context when days[] already covers the patient's choice — call only when the block is missing, the day is not listed, they want other dates (afterDate / «${OTHER_DATE_LABEL}» / "${OTHER_DATE_LABEL_EN}" — always a new search, afterDate = last day in days[]), stepMinutes differs, excludeMeetingIds differs (MOVE), truncated and they want more, or create_meeting/reschedule_meeting failed because the slot was taken. Returns JSON { days: [{ date, dayLabel, slots }], stepMinutes, excludeMeetingIds?, truncated? }. Do not invent days or HH:mm — the graph attaches DATE/TIME text and reply keyboards from this result.`,
+        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Always call this tool to show DATE (and to re-show a day already in the last snapshot) — the graph may return the checkpointed snapshot without a CRM search when the request matches. Call with afterDate when they want other dates («${OTHER_DATE_LABEL}» / "${OTHER_DATE_LABEL_EN}"). Do not invent days or HH:mm and do not quote a free/busy list from memory — the graph attaches DATE/TIME text and reply keyboards from this tool result.`,
       schema: z.object({
         date: DAY_SCHEMA.optional().describe(
           "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",

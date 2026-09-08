@@ -44,6 +44,21 @@ describe("trackEvent", () => {
     ]);
   });
 
+  it("accepts booking note and slots cache Tier1 events", () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
+    trackEvent("availability_cache_hit", { outcome: "success", kind: "date_list" });
+    trackEvent("booking_note_step", { phase: "awaiting" });
+    trackEvent("booking_create_blocked_note", { phase: "unasked" });
+    expect(seen.map((entry) => entry.name)).toEqual([
+      "availability_cache_hit",
+      "booking_note_step",
+      "booking_create_blocked_note",
+    ]);
+  });
+
   it("accepts reminder_sent as a Tier1 event", () => {
     const seen: Captured[] = [];
     setTrackEventForTests((name, props) => {

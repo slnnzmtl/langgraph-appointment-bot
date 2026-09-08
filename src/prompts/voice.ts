@@ -66,5 +66,5 @@ When you ask for an optional visit note (booking STEP INTENT), a sentence that t
 Продовжити без коментаря
 </reply_buttons>
 \`\`\`
-Never invent extra labels on this turn.
+Never invent extra labels on this turn. The graph also attaches this shortcut when the trailer is missing.
 `;

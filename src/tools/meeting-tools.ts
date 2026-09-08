@@ -317,7 +317,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
     {
       name: "create_meeting",
       description:
-        "Book an appointment when contact, service, and start/end are known and the patient has no other Planned or Confirmed visit. Call immediately on clear book intent — never ask Yes/No in chat first. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL ✅/❌ reply keyboard (contact must belong to this Telegram user). After explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
+        "Book an appointment when contact, service, start/end are known, the optional visit-note step is done (skipped or answered — the graph blocks this tool until then), and the patient has no other Planned or Confirmed visit. Call immediately on clear book intent after the note step — never ask Yes/No in chat first. Requires confirmMessage (patient language). Optional description: Ukrainian intent summary for staff. First call pauses for HITL ✅/❌ reply keyboard (contact must belong to this Telegram user). After explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true — confirmationGiven is ignored unless that card was shown for these arguments. Injects assignedUserId and Contact parent fields.",
       schema: z.object({
         name: z
           .string()

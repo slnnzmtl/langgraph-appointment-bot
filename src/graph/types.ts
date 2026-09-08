@@ -32,6 +32,19 @@ export type ClinicHandoff = {
   yieldToSupervisor?: boolean;
 };
 
+/**
+ * Optional visit-note ladder after a start time is chosen.
+ * Always ask once; skip only via shortcut / decline / a real note — then create_meeting may run.
+ */
+export type BookingNoteStatus = "unasked" | "awaiting" | "skipped" | "answered";
+
+/** Matched free slot held while the note step runs (ISO local wall times from availability). */
+export type SelectedBookingSlot = {
+  dateStart: string;
+  dateEnd: string;
+  label: string;
+};
+
 /** Contact + upcoming meetings loaded at supervisor entry (TTL / dirty-gated). */
 export type AgentPrefetchResult = {
   contactContext: ContactLookupContext;

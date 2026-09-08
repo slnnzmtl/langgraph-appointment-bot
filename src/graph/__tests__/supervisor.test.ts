@@ -40,6 +40,8 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
+  bookingNoteStatus: "unasked",
+  selectedSlot: null,
   ...overrides,
 });
 
@@ -393,6 +395,8 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
     expect(update.servicesContext).toBeUndefined();
   });
 
@@ -1208,6 +1212,21 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
+  });
+
+  it("builds visit list when FINISH omits reply on «Мій запис»", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", menu: "visit_change" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "FINISH",
+      status: "ok",
+      replyText: visitAsk,
+      replyButtons: [...VISIT_CHANGE_MENU],
+    });
+    expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
   });
 
   it("attaches DEFAULT has-visits when menu is omitted on a greeting and visits exist", async () => {

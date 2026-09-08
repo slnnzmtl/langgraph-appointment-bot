@@ -37,6 +37,7 @@ export const CONTEXT_TAGS = {
   /** One tag; projections differ per agent (flag vs full meetings). */
   meetings: "list_planned_meetings",
   availability: "availability",
+  selectedSlot: "selected_slot",
   services: "list_services",
 } as const;
 
@@ -55,6 +56,14 @@ export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 /** Yes/no shortcuts for consultation or book-this-procedure offers (FAQ + booking STEP SERVICE). */
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
+
+/** Code-owned INTENT skip while bookingNoteStatus is awaiting (DDD-48). */
+export const INTENT_SKIP_LABEL = "Продовжити без коментаря";
+export const INTENT_SKIP_LABEL_EN = "Continue with no comments";
+
+/** Patient-facing note question when create_meeting is blocked before INTENT (DDD-49/51). */
+export const BOOKING_NOTE_QUESTION_UK =
+  "Чи можете поділитися деталями перед записом — що вас турбує або яку процедуру маєте на увазі? Якщо ні — запишу без коментаря.";
 
 /**
  * Labels the supervisor must route itself — never sticky-continue into booking.

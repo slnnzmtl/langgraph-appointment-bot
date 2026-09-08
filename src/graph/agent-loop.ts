@@ -18,10 +18,19 @@ import {
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import type { SupervisorContextCacheOptions } from "./supervisor.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "./tool-routing.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID, type ClinicAgentDefinition, type ClinicHandoffStatus } from "./types.js";
+import {
+  BOOKING_AGENT_ID,
+  FAQ_AGENT_ID,
+  type BookingNoteStatus,
+  type ClinicAgentDefinition,
+  type ClinicHandoffStatus,
+  type SelectedBookingSlot,
+} from "./types.js";
 import {
   normalizePresentAvailabilityResult,
+  tryAvailabilityCacheHit,
   type AvailabilityContext,
+  type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
 import { shortDayMonthLabel } from "../tools/availability-slots.js";
 import {
@@ -29,8 +38,13 @@ import {
   type ServicesContext,
 } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
+import { trackEvent } from "../analytics/track.js";
 import {
+  BOOKING_NOTE_QUESTION_UK,
   BOOKING_REPLACE_MENU,
+  INTENT_SKIP_LABEL,
+  INTENT_SKIP_LABEL_EN,
+  MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
@@ -43,10 +57,10 @@ import {
   extractReplyButtons,
 } from "../shared/message-content.js";
 import {
-  formatAvailabilityContext,
   formatBookingMeetingsContext,
   formatContactContext,
   formatPlannedVisitsFlag,
+  formatSelectedSlotContext,
   formatServicesContext,
 } from "./context-blocks.js";
 import {
@@ -93,6 +107,7 @@ const BLOCKED_MEETING_ERRORS = new Set([
   "Contact incomplete",
   "Already booked",
   "Not authorized",
+  "Note step required",
 ]);
 
 export type MeetingMutationOutcome = "committed" | "pending" | "blocked" | "failed" | null;
@@ -121,13 +136,18 @@ export const classifyMeetingMutationToolMessage = (
   return "committed";
 };
 
+const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
+  MEETING_MUTATION_TOOLS.has(message.name ?? "")
+  && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
+
+/** Committed, failed, or HITL ❌ — stale free/busy and note step must not survive. */
 export const meetingMutationClearsAvailability = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
     if (!(message instanceof ToolMessage)) {
       return false;
     }
     const outcome = classifyMeetingMutationToolMessage(message);
-    return outcome === "committed" || outcome === "failed";
+    return outcome === "committed" || outcome === "failed" || meetingMutationIsHitlDecline(message);
   });
 
 const toolMessageName = (message: BaseMessage): string | undefined => {
@@ -238,6 +258,114 @@ export const matchAvailabilityDay = (
   }
   return null;
 };
+
+const clockKey = (text: string): string | null => {
+  const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(text);
+  if (!match) {
+    return null;
+  }
+  return `${Number(match[1])}:${match[2] ?? "00"}`;
+};
+
+/** Match a patient clock-time pick to a snapshot slot (label, HH:mm, or bare hour). */
+export const matchAvailabilitySlot = (
+  humanText: string,
+  availabilityContext: AvailabilityContext | null | undefined,
+): SelectedBookingSlot | null => {
+  if (!availabilityContext || availabilityContext.days.length === 0) {
+    return null;
+  }
+  const trimmed = humanText.trim();
+  if (!trimmed || trimmed === OTHER_DATE_LABEL) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase().replace(/\s+/g, "");
+  const wantClock = clockKey(normalized);
+  for (const day of availabilityContext.days) {
+    for (const slot of day.slots) {
+      const labelNorm = slot.label.trim().toLowerCase().replace(/\s+/g, "");
+      if (normalized === labelNorm || (wantClock != null && clockKey(labelNorm) === wantClock)) {
+        return { dateStart: slot.dateStart, dateEnd: slot.dateEnd, label: slot.label };
+      }
+    }
+  }
+  return null;
+};
+
+const NOTE_SKIP_REPLIES = new Set(
+  [
+    INTENT_SKIP_LABEL,
+    INTENT_SKIP_LABEL_EN,
+    "no",
+    "ні",
+    "нет",
+    "без коментаря",
+    "без коментарів",
+    "не треба",
+    "не потрібно",
+    "skip",
+  ].map((label) => label.toLowerCase()),
+);
+
+const isNoteSkipReply = (humanText: string): boolean =>
+  NOTE_SKIP_REPLIES.has(humanText.trim().toLowerCase());
+
+const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boolean =>
+  status !== "skipped" && status !== "answered";
+
+const CREATE_NOTE_REQUIRED_ERROR = "Note step required";
+
+/**
+ * Advance / reset the note ladder from the latest human line before the booking LLM runs.
+ * Always ask once after a time pick — even if they named a procedure earlier.
+ */
+export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate => {
+  const human = lastHumanText(state.messages);
+  if (!human || human === MAIN_MENU_LABEL) {
+    return {};
+  }
+  const status = state.bookingNoteStatus ?? "unasked";
+  const availability = state.availabilityContext;
+  const matchedSlot = matchAvailabilitySlot(human, availability);
+  const matchedDay = matchAvailabilityDay(human, availability?.days ?? []);
+
+  const sameSlot =
+    matchedSlot != null
+    && state.selectedSlot != null
+    && state.selectedSlot.dateStart === matchedSlot.dateStart;
+
+  if (status === "awaiting") {
+    if (isNoteSkipReply(human) || sameSlot) {
+      trackEvent("booking_note_step", { phase: "skipped" });
+      return { bookingNoteStatus: "skipped" };
+    }
+    if (matchedSlot) {
+      trackEvent("booking_note_step", { phase: "awaiting" });
+      return { bookingNoteStatus: "awaiting", selectedSlot: matchedSlot };
+    }
+    if (matchedDay) {
+      return { bookingNoteStatus: "unasked", selectedSlot: null };
+    }
+    trackEvent("booking_note_step", { phase: "answered" });
+    return { bookingNoteStatus: "answered" };
+  }
+
+  if (matchedSlot && (status === "unasked" || !sameSlot)) {
+    trackEvent("booking_note_step", { phase: "awaiting" });
+    return { bookingNoteStatus: "awaiting", selectedSlot: matchedSlot };
+  }
+
+  if (matchedDay && (status === "skipped" || status === "answered")) {
+    return { bookingNoteStatus: "unasked", selectedSlot: null };
+  }
+
+  return {};
+};
+
+const resetBookingNoteState = (): ClinicStateUpdate => ({
+  bookingNoteStatus: "unasked",
+  selectedSlot: null,
+});
 
 /**
  * When present_availability_slots ran this turn, replace invented DATE/TIME copy with the
@@ -429,11 +557,17 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (_agentId: string) =>
-  async (state: ClinicState): Promise<ClinicStateUpdate> => ({
-    agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
-    stepCount: 0,
-  });
+export const createAgentPrepareNode = (agentId: string) =>
+  async (state: ClinicState): Promise<ClinicStateUpdate> => {
+    const update: ClinicStateUpdate = {
+      agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
+      stepCount: 0,
+    };
+    if (agentId === BOOKING_AGENT_ID) {
+      Object.assign(update, advanceBookingNoteStep(state));
+    }
+    return update;
+  };
 
 export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
   const { agent, model, tools, formatSystemMetadata } = options;
@@ -489,12 +623,10 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
         ? formatBookingMeetingsContext(state.bookingContext)
         : formatPlannedVisitsFlag(state.bookingContext),
     ];
-    // Skip when the tool already ran this turn — its ToolMessage is in agentMessages.
-    if (
-      agent.id === BOOKING_AGENT_ID
-      && !toolRanThisTurn(state.agentMessages, "present_availability_slots")
-    ) {
-      dynamicParts.push(formatAvailabilityContext(state.availabilityContext));
+    // Full days[] lives in the slots tool result / checkpoint — do not also bill Gemini for it.
+    // After a time pick, pass only the matched ISO slot for create_meeting.
+    if (agent.id === BOOKING_AGENT_ID) {
+      dynamicParts.push(formatSelectedSlotContext(state.selectedSlot));
     }
     const bookingHasAvailabilityDays =
       (state.availabilityContext?.days.length ?? 0) > 0;
@@ -558,37 +690,133 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
 
 export const createAgentToolsNode = (
   tools: StructuredToolInterface[],
-  _agentId?: string,
+  agentId?: string,
 ) => {
   const toolNode = new ToolNode(tools);
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
-    const result = await (
-      toolNode as unknown as {
-        run(
-          input: { messages: BaseMessage[] },
-          config?: RunnableConfig,
-        ): Promise<{ messages: BaseMessage[] }>;
+    const agentMessages = state.agentMessages ?? [];
+    let lastAiIndex = -1;
+    for (let index = agentMessages.length - 1; index >= 0; index -= 1) {
+      const message = agentMessages[index];
+      if (message instanceof AIMessage && (message.tool_calls?.length ?? 0) > 0) {
+        lastAiIndex = index;
+        break;
       }
-    ).run({ messages: state.agentMessages }, config);
+    }
 
-    const update: ClinicStateUpdate = { agentMessages: result.messages };
+    const synthetic: ToolMessage[] = [];
+    const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
+    let noteStatusUpdate: ClinicStateUpdate = {};
 
-    if (meetingMutationClearsAvailability(result.messages)) {
+    if (lastAiIndex >= 0) {
+      const lastAi = agentMessages[lastAiIndex] as AIMessage;
+      for (const call of lastAi.tool_calls ?? []) {
+        if (
+          agentId === BOOKING_AGENT_ID
+          && call.name === "create_meeting"
+          && noteStepBlocksCreate(state.bookingNoteStatus)
+        ) {
+          noteStatusUpdate = { bookingNoteStatus: "awaiting" };
+          trackEvent("booking_create_blocked_note", {
+            phase: state.bookingNoteStatus ?? "unasked",
+          });
+          synthetic.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                error: CREATE_NOTE_REQUIRED_ERROR,
+                hint:
+                  "Ask the optional visit-note question once (STEP INTENT) with the skip shortcut. Do not call create_meeting until the patient skips, declines, or shares a note.",
+              }),
+              tool_call_id: call.id ?? "",
+              name: "create_meeting",
+            }),
+          );
+          continue;
+        }
+
+        if (call.name === "present_availability_slots") {
+          const args = (call.args ?? {}) as AvailabilitySlotsToolArgs;
+          const hit = tryAvailabilityCacheHit(state.availabilityContext, args);
+          if (hit) {
+            trackEvent("availability_cache_hit", {
+              outcome: "success",
+              kind: hit.kind,
+              ...(typeof args.date === "string" ? { date: args.date } : {}),
+            });
+            synthetic.push(
+              new ToolMessage({
+                content: hit.json,
+                tool_call_id: call.id ?? "",
+                name: "present_availability_slots",
+              }),
+            );
+            continue;
+          }
+        }
+
+        remainingCalls.push(call);
+      }
+    }
+
+    let toolResultMessages: BaseMessage[] = [];
+    if (remainingCalls.length > 0 && lastAiIndex >= 0) {
+      const lastAi = agentMessages[lastAiIndex] as AIMessage;
+      const originalCalls = lastAi.tool_calls ?? [];
+      const messagesForTools =
+        remainingCalls.length === originalCalls.length
+          ? agentMessages
+          : [
+              ...agentMessages.slice(0, lastAiIndex),
+              new AIMessage({
+                content: lastAi.content,
+                tool_calls: remainingCalls,
+                additional_kwargs: lastAi.additional_kwargs,
+                response_metadata: lastAi.response_metadata,
+                id: lastAi.id,
+              } as ConstructorParameters<typeof AIMessage>[0]),
+              ...agentMessages.slice(lastAiIndex + 1),
+            ];
+      const result = await (
+        toolNode as unknown as {
+          run(
+            input: { messages: BaseMessage[] },
+            config?: RunnableConfig,
+          ): Promise<{ messages: BaseMessage[] }>;
+        }
+      ).run({ messages: messagesForTools }, config);
+      toolResultMessages = result.messages;
+    }
+
+    const resultMessages = [...synthetic, ...toolResultMessages];
+    const update: ClinicStateUpdate = {
+      agentMessages: resultMessages,
+      ...noteStatusUpdate,
+    };
+
+    if (meetingMutationClearsAvailability(resultMessages)) {
       update.availabilityContext = null;
+      Object.assign(update, resetBookingNoteState());
+      if (
+        resultMessages.some(
+          (message) => message instanceof ToolMessage && meetingMutationIsHitlDecline(message),
+        )
+      ) {
+        trackEvent("booking_note_step", { phase: "reset", reason: "hitl_declined" });
+      }
     } else {
-      const capturedAvailability = captureAvailabilityFromMessages(result.messages);
+      const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
       if (capturedAvailability !== undefined) {
         update.availabilityContext = capturedAvailability;
       }
     }
 
-    const capturedServices = captureServicesFromMessages(result.messages);
+    const capturedServices = captureServicesFromMessages(resultMessages);
     if (capturedServices !== undefined) {
       update.servicesContext = capturedServices;
     }
 
-    if (crmWriteDirtiesPrefetch(result.messages)) {
+    if (crmWriteDirtiesPrefetch(resultMessages)) {
       update.prefetchDirty = true;
     }
 
@@ -646,19 +874,32 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     // Already booked wins over DATE/TIME rewrite when both fire in the same turn.
     const alreadyBooked =
       agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages);
+    const createError = latestCreateMeetingError(agentMessages);
+    const noteBlockedThisTurn = createError === CREATE_NOTE_REQUIRED_ERROR;
+    const awaitingNote =
+      agent.id === BOOKING_AGENT_ID
+      && (state.bookingNoteStatus === "awaiting" || noteBlockedThisTurn)
+      && !alreadyBooked;
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
     const slotOffer =
       agent.id === BOOKING_AGENT_ID && !alreadyBooked
         ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
         : null;
     if (slotOffer) {
-      const createError = latestCreateMeetingError(agentMessages);
       replyText =
-        createError != null
+        createError != null && !noteBlockedThisTurn
           ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
           : slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
       yieldFlag = false;
+    } else if (awaitingNote) {
+      // Code-own INTENT skip (DDD-48); force the note question when create was blocked (DDD-49/51).
+      if (noteBlockedThisTurn || replyText.length === 0) {
+        replyText = BOOKING_NOTE_QUESTION_UK;
+      }
+      replyButtons = [INTENT_SKIP_LABEL];
+      yieldFlag = false;
+      trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
     } else if (replyButtons.length === 0 && replyText.length > 0) {
       if (agent.id === BOOKING_AGENT_ID) {
         // Booking: no shortcuts → REPLACE, or DEFAULT MENU (hasVisit from mutation when stale).
@@ -673,6 +914,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         replyButtons = catalogChoiceButtonsFromText(replyText);
       }
     }
+
+    const noteStatusForHandoff =
+      awaitingNote && !slotOffer
+        ? ({ bookingNoteStatus: "awaiting" as const } satisfies ClinicStateUpdate)
+        : {};
 
     const replyMessage =
       replyText !== extractMessageTextContent(tagged.content).trim()
@@ -696,7 +942,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     };
 
     if (status === "empty") {
-      return { ...cleared, lastHandoff };
+      return { ...cleared, lastHandoff, ...noteStatusForHandoff };
     }
 
     if (status === "max_steps") {
@@ -708,6 +954,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       return {
         ...cleared,
         lastHandoff,
+        ...noteStatusForHandoff,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -719,6 +966,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     return {
       ...cleared,
       lastHandoff,
+      ...noteStatusForHandoff,
       messages: [replyMessage],
     };
   };
