@@ -24,6 +24,7 @@ import {
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU,
   INTENT_SKIP_LABEL,
   OTHER_DATE_LABEL,
   DEFAULT_MENU_HAS_VISITS,
@@ -1378,7 +1379,7 @@ describe("createAgentFinalizeNode", () => {
     maxSteps: 8,
   };
 
-  it("strips reply_buttons from checkpointed history and stores labels on lastHandoff", () => {
+  it("strips reply_buttons from checkpointed history and code-owns consultation shortcuts", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1398,9 +1399,39 @@ describe("createAgentFinalizeNode", () => {
       agentId: "booking",
       status: "ok",
       replyText: "Підібрати вільний час на консультацію?",
-      replyButtons: ["Так", "Обрати іншу процедуру"],
+      replyButtons: [...BOOKING_OFFER_MENU],
     });
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+  });
+
+  it("DDD-53: attaches BOOKING OFFER when the consultation question has no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+  });
+
+  it("replaces a wrong consultation trailer with BOOKING OFFER", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Записати вас на консультацію?\n<reply_buttons>\nЗаписатись\nПослуги\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(String(update.messages?.[0]?.content)).toBe("Записати вас на консультацію?");
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
   });
 
   it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
@@ -1780,6 +1811,31 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
+  it("code-owns FAQ consultation yield and BOOKING OFFER without tags", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [new AIMessage("Записати вас на консультацію?")],
+      }),
+    );
+
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "faq",
+      status: "ok",
+      replyText: "Записати вас на консультацію?",
+      replyButtons: [...BOOKING_OFFER_MENU],
+      yieldToSupervisor: true,
+    });
+  });
+
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -1967,7 +2023,7 @@ describe("createAgentFinalizeNode", () => {
     ]);
   });
 
-  it("does not recover direction bullets from a consultation offer without a trailer", () => {
+  it("attaches BOOKING OFFER (not catalog bullets) on a consultation offer without a trailer", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -1987,10 +2043,11 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
   });
 
-  it("keeps explicit faq trailers authoritative over bullet parsing", () => {
+  it("prefers catalog bullets over an accidental leftover trailer", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -2004,13 +2061,41 @@ describe("createAgentFinalizeNode", () => {
         stepCount: 1,
         agentMessages: [
           new AIMessage(
-            "Який напрямок?\n\n• ignored one\n• ignored two\n\n<reply_buttons>\nКонсультації\nІн'єкційні процедури\n</reply_buttons>",
+            "Ось основні напрями:\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЯкий напрямок?\n<reply_buttons>\nIgnored\nLabels\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "Консультації та діагностика",
+      "Ін'єкційні процедури",
+    ]);
+    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
+  });
+
+  it("harvests an accidental catalog trailer when bullets are missing", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Який напрямок?\n<reply_buttons>\nКонсультації\nІн'єкційні процедури\n</reply_buttons>",
           ),
         ],
       }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual(["Консультації", "Ін'єкційні процедури"]);
+    expect(String(update.messages?.[0]?.content)).toBe("Який напрямок?");
   });
 
   it("does not attach buttons for faq location-only replies", () => {

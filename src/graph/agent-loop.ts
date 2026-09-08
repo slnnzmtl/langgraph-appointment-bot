@@ -41,6 +41,7 @@ import type { BookingContext } from "../tools/planned-meetings.js";
 import { trackEvent } from "../analytics/track.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU,
   BOOKING_REPLACE_MENU,
   INTENT_SKIP_LABEL,
   INTENT_SKIP_LABEL_EN,
@@ -55,6 +56,7 @@ import {
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
+  isBookingOfferReply,
 } from "../shared/message-content.js";
 import {
   formatBookingMeetingsContext,
@@ -849,10 +851,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
-    const { text, buttons, yieldToSupervisor } = extractReplyButtons(rawText);
+    const { text, buttons: accidentalButtons, yieldToSupervisor: yieldTag } =
+      extractReplyButtons(rawText);
     let replyText = text.trim();
-    let replyButtons = buttons;
-    let yieldFlag = yieldToSupervisor;
+    let replyButtons: string[] = [];
+    let yieldFlag = false;
 
     // Model failure: deliver via handoff only — do not persist into conversation history.
     if (status === "error" && isModelFailureMessage(tagged)) {
@@ -891,28 +894,34 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
           : slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
-      yieldFlag = false;
     } else if (awaitingNote) {
       // Code-own INTENT skip (DDD-48); force the note question when create was blocked (DDD-49/51).
       if (noteBlockedThisTurn || replyText.length === 0) {
         replyText = BOOKING_NOTE_QUESTION_UK;
       }
       replyButtons = [INTENT_SKIP_LABEL];
-      yieldFlag = false;
       trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
-    } else if (replyButtons.length === 0 && replyText.length > 0) {
-      if (agent.id === BOOKING_AGENT_ID) {
-        // Booking: no shortcuts → REPLACE, or DEFAULT MENU (hasVisit from mutation when stale).
-        if (alreadyBooked) {
-          replyButtons = [...BOOKING_REPLACE_MENU];
-        } else {
-          const hasVisit = defaultMenuHasVisit(agentMessages, state.bookingContext);
-          replyButtons = [...defaultMenuLabels(hasVisit)];
-        }
-      } else if (agent.id === FAQ_AGENT_ID) {
-        // FAQ catalog drill-down: recover visible bullet labels when trailer is missing.
-        replyButtons = catalogChoiceButtonsFromText(replyText);
+    } else if (alreadyBooked) {
+      replyButtons = [...BOOKING_REPLACE_MENU];
+    } else if (replyText.length > 0 && isBookingOfferReply(replyText)) {
+      replyButtons = [...BOOKING_OFFER_MENU];
+      if (agent.id === FAQ_AGENT_ID) {
+        yieldFlag = true;
       }
+      trackEvent("reply_menu_filled", { menu: "booking_offer", reason: "code_owned" });
+    } else if (agent.id === FAQ_AGENT_ID && replyText.length > 0) {
+      replyButtons = catalogChoiceButtonsFromText(replyText);
+      if (replyButtons.length === 0) {
+        // Accidental leftover trailer only — never the adapter markup channel.
+        replyButtons = accidentalButtons;
+      }
+    } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
+      const hasVisit = defaultMenuHasVisit(agentMessages, state.bookingContext);
+      replyButtons = [...defaultMenuLabels(hasVisit)];
+    }
+
+    if (yieldTag && agent.id === FAQ_AGENT_ID) {
+      yieldFlag = true;
     }
 
     const noteStatusForHandoff =
@@ -922,8 +931,8 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     const replyMessage =
       replyText !== extractMessageTextContent(tagged.content).trim()
-        || buttons.length > 0
-        || yieldToSupervisor
+        || accidentalButtons.length > 0
+        || yieldTag
         || slotOffer != null
         ? new AIMessage({
             content: replyText,

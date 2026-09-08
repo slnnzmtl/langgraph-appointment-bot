@@ -26,7 +26,7 @@ export type ClinicHandoff = {
   status: ClinicHandoffStatus;
   /** Patient-facing text for this handoff (adapter prefers over scanning history). */
   replyText?: string;
-  /** Labels from the last agent reply trailer (stripped from checkpointed text). */
+  /** Code-owned reply keyboard labels for this handoff (adapter markup channel). */
   replyButtons?: string[];
   /** When true, the next patient message must go through the supervisor. */
   yieldToSupervisor?: boolean;

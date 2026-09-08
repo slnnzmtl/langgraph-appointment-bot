@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, catalogChoiceButtonsFromText, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
+import { extractMessageTextContent, extractRawMessageText, extractReplyButtons, catalogChoiceButtonsFromText, isBookingOfferReply, replyButtonLabels, unescapeModelLineBreaks } from "../message-content.js";
 
 describe("catalogChoiceButtonsFromText", () => {
   it("recovers procedure family labels from a catalog-choice reply", () => {
@@ -66,6 +66,25 @@ describe("catalogChoiceButtonsFromText", () => {
   });
 });
 
+describe("isBookingOfferReply", () => {
+  it("detects consultation and book-this-procedure yes/no questions", () => {
+    expect(isBookingOfferReply("Підібрати вільний час на консультацію?")).toBe(true);
+    expect(isBookingOfferReply("Записати вас на консультацію?")).toBe(true);
+    expect(isBookingOfferReply("Бажаєте записатися на цю процедуру?")).toBe(true);
+    expect(isBookingOfferReply("Для першого візиту радимо консультацію.\n\nПідібрати час?")).toBe(true);
+    expect(isBookingOfferReply("Would you like to book a consultation?")).toBe(true);
+  });
+
+  it("does not treat catalog, date, or replace questions as booking offers", () => {
+    expect(isBookingOfferReply("Який саме напрямок вас цікавить?")).toBe(false);
+    expect(isBookingOfferReply("Який день вам зручний?")).toBe(false);
+    expect(
+      isBookingOfferReply("Бажаєте скасувати поточний візит і записати нову?"),
+    ).toBe(false);
+    expect(isBookingOfferReply("Адреса: вул. Миколаївська 33.")).toBe(false);
+  });
+});
+
 describe("extractReplyButtons yield trailer", () => {
   it("strips yield tag and sets yieldToSupervisor", () => {
     const result = extractReplyButtons(
@@ -89,24 +108,13 @@ describe("extractReplyButtons yield trailer", () => {
 });
 
 describe("replyButtonLabels", () => {
-  it("prefers stored labels over a message trailer", () => {
-    expect(
-      replyButtonLabels(
-        ["Записатись", "Послуги"],
-        "Hi\n<reply_buttons>\nIgnored\n</reply_buttons>",
-      ),
-    ).toEqual(["Записатись", "Послуги"]);
+  it("returns stored lastHandoff labels", () => {
+    expect(replyButtonLabels(["Записатись", "Послуги"])).toEqual(["Записатись", "Послуги"]);
   });
 
-  it("falls back to parsing the trailer when stored labels are missing", () => {
-    expect(
-      replyButtonLabels(undefined, "Pick?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>"),
-    ).toEqual(["25 серпня", "Інша дата"]);
-  });
-
-  it("returns an empty list when neither source has buttons", () => {
-    expect(replyButtonLabels(undefined, "Just text")).toEqual([]);
-    expect(replyButtonLabels([], "Just text")).toEqual([]);
+  it("does not parse a message trailer for markup", () => {
+    expect(replyButtonLabels(undefined)).toEqual([]);
+    expect(replyButtonLabels([])).toEqual([]);
   });
 });
 
