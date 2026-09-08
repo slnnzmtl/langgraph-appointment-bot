@@ -1,10 +1,67 @@
-# Clinic Appointment Bot
+# LangGraph Appointment Bot
 
-Telegram clinic assistant that answers FAQ and books, moves, or cancels visits in EspoCRM with human-in-the-loop confirmation. Patients chat in private Telegram (Gemini supervisor + FAQ / booking specialists, telegraf long polling, HITL ✅/❌). Ukrainian-first; replies in the patient’s language.
+> A guided Telegram booking interface that turns text, voice, and button-led requests into confirmed CRM appointments—without giving a language model authority over identity, availability, or writes.
+
+![Three patient entry points converge into one confirmed CRM appointment.](docs/assets/three-interfaces-one-workflow.png)
+
+## The customer problem
+
+An independent practice already had a CRM, but appointment requests still required manual back-and-forth: interpret a message, check a real slot, identify the patient, get confirmation, and record the visit. That work arrived through several channels and formats, including free-form text, voice notes, and guided choices.
+
+The goal was not to replace the CRM. It was to make the same scheduling workflow easier for patients to start and easier for staff to operate.
+
+## The outcome
+
+Patients can start in the way that suits them—by typing, sending a voice note, or using Telegram buttons—and arrive at the same supported workflow:
+
+1. Ask a clinic question or begin a booking.
+2. Choose a service, date, and a slot from current CRM availability.
+3. Review the specific pending operation and explicitly confirm it.
+4. Create, move, or cancel the appointment in the CRM.
+
+The bot is Ukrainian-first and responds in the patient's language. It also supports appointment reminders and a private, patient-facing Telegram experience. This is an early production workflow, not a claim of automation at scale.
+
+## Product walkthrough
+
+These anonymized Telegram screenshots show two supported paths into the same CRM-backed booking flow: a guided date/time selection and a voice-led request. They contain no live patient, account, or operational data.
+
+| Guided selection | Voice-led request |
+| --- | --- |
+| ![Telegram presents live dates and time buttons after a patient chooses a day.](docs/assets/telegram-guided-booking.png) | ![A Telegram voice message continues through date and time selection.](docs/assets/telegram-voice-booking.png) |
+
+## Visual architecture
+
+The diagram below shows how Telegram, the AI receptionist, controlled CRM operations, and EspoCRM fit together.
+
+![Patient request flows from Telegram through the AI receptionist and controlled MCP operations to EspoCRM.](docs/assets/telegram-crm-architecture.png)
+
+## How the workflow stays safe
+
+The language model interprets natural language and helps route a conversation. The application owns the guarantees that must be deterministic:
+
+- **CRM and Telegram integration:** Telegram is the patient interface; an MCP-backed EspoCRM capability layer supplies services, availability, contacts, and appointment operations.
+- **Authorization and identity:** the application carries the Telegram sender identity through the workflow. CRM operations verify that contacts and appointments belong to that identity; the model does not select a customer record or grant itself access.
+- **Fresh availability:** the application looks up live availability and renders known date/time choices. It does not rely on the model to invent valid slots.
+- **Explicit approval:** appointment writes pause on a short-lived, operation-specific confirmation. A confirmation applies to the pending action, not to a generic “yes.”
+- **Interface guarantees:** dates, times, default menus, and confirmation controls are application-generated when the valid choices are known. The model can guide the conversation without being the sole source of UI state.
+- **Abuse controls:** the bot accepts private chats only and rate-limits each user to 20 messages per minute.
+
+## Engineering evidence
+
+The implementation evolved from one model with all CRM tools into a supervisor routing to focused FAQ and booking specialists. Known booking continuations can bypass the supervisor, and useful CRM context is kept in graph state to avoid repeated lookups.
+
+The repository has automated type checking and unit coverage for identity, approval/HITL behavior, slot availability, Telegram UI, and graph routing. Run the checks locally with:
+
+```sh
+pnpm check
+pnpm test
+```
 
 Product topology, routing, and change map: [AGENT.md](AGENT.md).
 
-## Setup
+---
+
+## Engineering setup and reference
 
 EspoCRM MCP must already be running (HTTP). This bot sends `ESPOCRM_API_KEY` as the `espocrm_api_key` header.
 
@@ -22,7 +79,7 @@ cp .env.example .env
 
 ## LangSmith
 
-Set `LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` to send LangGraph traces to LangSmith (`LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` aliases also work). Optional `LANGSMITH_PROJECT` (example: `clinic-appointment-bot`) and `LANGSMITH_ENDPOINT` (EU / self-hosted). When tracing is on, LLM and tool **inputs/outputs are redacted** (empty payloads) so patient chat does not leave the process. Set `LANGSMITH_TRACE_CONTENT=true` only for a trusted, EU, or self-hosted project if you need the raw spans. Run metadata still includes `telegram_user_id` and `chat_id`. Telegram and smoke invokes tag each turn as `clinic-turn`. Tier 1 booking events (`meeting_created`, `contact_created`, `reminder_sent`, …) are posted as named runs with PII-safe props (ids, counts, dates, field names) and are not redacted. `ANALYTICS_DISABLED=1` skips those events only; LLM tracing still runs.
+Set `LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` to send LangGraph traces to LangSmith (`LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` aliases also work). Optional `LANGSMITH_PROJECT` (example: `clinic-appointment-bot`) and `LANGSMITH_ENDPOINT` (EU / self-hosted). When tracing is on, LLM and tool **inputs/outputs are redacted** (empty payloads) so patient chat does not leave the process. Set `LANGSMITH_TRACE_CONTENT=true` only for a trusted, EU, or self-hosted project if you need the raw spans. Run metadata still includes `telegram_user_id` and `chat_id`. Telegram and smoke invokes tag each turn as `clinic-turn`. Tier 1 booking events (`meeting_created`, `contact_created`, `reminder_sent`, `reminder_approved`, `reminder_declined`, …) are posted as named runs with PII-safe props (ids, counts, dates, field names) and are not redacted. `ANALYTICS_DISABLED=1` skips those events only; LLM tracing still runs.
 
 ## Docker
 
@@ -82,7 +139,7 @@ pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is s
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
 - `src/adapter/` — telegraf (`telegram-bot.ts`), keyboards (`telegram-ui.ts`), `/start` welcome, reminder webhook
 - `src/shared/` — clinic constants (address, consultation id, menu labels), helpers
-- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs; `reminder_sent` is a root run from the tomorrow-reminder webhook)
+- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs; `reminder_sent` is a root run from the tomorrow-reminder webhook; `reminder_approved` / `reminder_declined` fire after HITL CRM update)
 - `packages/llm-gemini` — Gemini connector + explicit context cache (`GEMINI_CONTEXT_CACHE`, default on)
 
 ## FAQ / services

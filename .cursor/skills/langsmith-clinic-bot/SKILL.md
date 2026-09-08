@@ -122,6 +122,7 @@ Use these `name` values (not guessed synonyms):
 | `tool_error` | Tool failure (`tool`, truncated `error_message`) |
 | `reply_menu_filled` | Graph filled a missing visit-change, intent-skip, or booking-offer reply keyboard |
 | `reminder_sent` | Tomorrow-reminder Telegram send succeeded (`hitl`, `meeting_count`, `meeting_ids`; root run, not under `clinic-turn`) |
+| `reminder_approved` / `reminder_declined` | Reminder HITL ✅ / ❌ after CRM `update_meeting` succeeded (`meeting_count`, `meeting_ids`; from `telegram-bot`, often under `clinic-turn` ALS) |
 
 Outcomes: `success` \| `error` \| `not_found` \| `declined` \| `awaiting`.
 
