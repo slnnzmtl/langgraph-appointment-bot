@@ -144,11 +144,7 @@ export const shouldContinueInSpecialist = (
     return false;
   }
 
-  const lastAi = [...state.messages].reverse().find((m) => m instanceof AIMessage);
-  const labels = replyButtonLabels(
-    state.lastHandoff.replyButtons,
-    lastAi ? extractMessageTextContent(lastAi.content) : undefined,
-  );
+  const labels = replyButtonLabels(state.lastHandoff.replyButtons);
   return labels.includes(humanText);
 };
 

@@ -89,7 +89,7 @@ export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as co
 export const BOOKING_REPLACE_MENU = ["Скасувати", "Ні, дякую"] as const;
 export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 
-/** Yes/no shortcuts for consultation or book-this-procedure offers (FAQ + booking STEP SERVICE). */
+/** Code-owned yes/no shortcuts for consultation or book-this-procedure offers. */
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
 

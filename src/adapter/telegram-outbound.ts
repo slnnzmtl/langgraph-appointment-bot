@@ -231,7 +231,7 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
   const visible = handoffText || lastVisibleAiText(record.messages) || "…";
   const stripped = extractReplyButtons(visible);
-  const buttons = replyButtonLabels(handoff?.replyButtons, visible);
+  const buttons = replyButtonLabels(handoff?.replyButtons);
   return {
     text: stripped.text || "…",
     reply_markup: buildReplyKeyboard(withMainMenu(buttons)),

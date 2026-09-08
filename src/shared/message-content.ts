@@ -86,7 +86,7 @@ const stripYieldToSupervisorTags = (raw: string): { cleaned: string; yieldToSupe
 
 /** Yes/no booking offers — never recover catalog bullets from these replies. */
 const BOOKING_OFFER_QUESTION =
-  /(?:записати\s+вас\s+на\s+консультацію|бажаєте\s+записатися|підібрати\s+вільний\s+час|book(?:\s+a|\s+you\s+for)?\s+consultation)/i;
+  /(?:записати\s+вас\s+на\s+консультацію|бажаєте\s+записатися|підібрати\s+(?:вільний\s+)?час|записатися\s+на\s+цю\s+процедуру|book(?:\s+a|\s+you\s+for)?\s+(?:a\s+)?consultation|would\s+you\s+like\s+to\s+book|book\s+this\s+(?:procedure|service))/i;
 
 const lastNonEmptyLine = (text: string): string =>
   text
@@ -116,8 +116,8 @@ const labelBeforeDescription = (raw: string): string => {
 };
 
 /**
- * Recover reply shortcuts from visible catalog bullet lists when the model omitted
- * `<reply_buttons>`. Returns [] unless the reply ends with a catalog-choice question.
+ * Recover catalog drill-down shortcuts from visible bullet lists.
+ * Returns [] unless the reply ends with a catalog-choice question (not a booking offer).
  */
 export const catalogChoiceButtonsFromText = (text: string): string[] => {
   const trimmed = text.trim();
@@ -155,7 +155,10 @@ export const catalogChoiceButtonsFromText = (text: string): string[] => {
   return buttons;
 };
 
-/** Strip trailing yield / `<reply_buttons>` trailers and return up to 6 unique labels. */
+/**
+ * Defensive strip of accidental yield / `<reply_buttons>` tags so they never reach Telegram.
+ * Labels are not the markup channel — the graph writes `lastHandoff.replyButtons`.
+ */
 export const extractReplyButtons = (raw: string): ExtractedReplyButtons => {
   const { cleaned, yieldToSupervisor } = stripYieldToSupervisorTags(raw);
   const match = cleaned.match(REPLY_BUTTONS_TRAILER);
@@ -200,17 +203,14 @@ export const extractReplyButtons = (raw: string): ExtractedReplyButtons => {
   return { text, buttons, yieldToSupervisor };
 };
 
-/** Prefer checkpointed `lastHandoff.replyButtons`; fall back to a message trailer. */
-export const replyButtonLabels = (stored: unknown, rawText?: string): string[] => {
+/** Checkpointed `lastHandoff.replyButtons` only — message trailers are never markup. */
+export const replyButtonLabels = (stored: unknown): string[] => {
   if (
     Array.isArray(stored)
     && stored.length > 0
     && stored.every((label) => typeof label === "string")
   ) {
     return stored;
-  }
-  if (rawText !== undefined) {
-    return extractReplyButtons(rawText).buttons;
   }
   return [];
 };
