@@ -1,11 +1,11 @@
 /** Clinic slot step and fallback open hours when CRM working time is unavailable. */
 export const CLINIC_SLOT_TZ = "Europe/Kyiv";
-export const CLINIC_ADDRESS = "вул. Миколаївська 33, м. Білгород-Дністровський";
-export const CLINIC_MAPS_URL =
-  "https://www.google.com/maps/place/Mukolayivska+St,+33,+Bilhorod-Dnistrovs'kyi,+Odes'ka+oblast,+Ukraine,+67701";
+/** Demo placeholders — replace with the clinic’s public address for a real deployment. */
+export const CLINIC_ADDRESS = "вул. Прикладна 1, м. Київ";
+export const CLINIC_MAPS_URL = "https://www.google.com/maps?q=Kyiv,+Ukraine";
 export const CLINIC_MAPS_MARKDOWN = `[Google maps](${CLINIC_MAPS_URL})`;
-/** CRM `cService` id of «Консультація» — the default first visit offered when no service is named. */
-export const CONSULTATION_SERVICE_ID = "683773dc9f1110052";
+/** CRM `cService` id of «Консультація» — set to your EspoCRM service id in a real deployment. */
+export const CONSULTATION_SERVICE_ID = "demo-consultation-service-id";
 /** Patient-facing copy for internal failures (routing, model, or step-limit errors). */
 export const PATIENT_FALLBACK_MESSAGE =
   "Вибачте, зараз не вдалося обробити запит 🙏 Спробуйте, будь ласка, ще раз за хвилинку.";

@@ -1473,7 +1473,7 @@ describe("createAgentFinalizeNode", () => {
             name: "create_meeting",
           }),
           new AIMessage(
-            "Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\nвул. Миколаївська 33",
+            "Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\nвул. Прикладна 1",
           ),
         ],
       }),
@@ -2065,7 +2065,7 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         agentMessages: [
-          new AIMessage(`Ми знаходимося за адресою вул. Миколаївська 33.`),
+          new AIMessage(`Ми знаходимося за адресою вул. Прикладна 1.`),
         ],
       }),
     );

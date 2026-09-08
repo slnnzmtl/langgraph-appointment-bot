@@ -62,7 +62,7 @@ describe("catalogChoiceButtonsFromText", () => {
         "Пн–Пт: 9:00–18:00\n• понеділок\n• вівторок\n\nКоли вам зручно прийти?",
       ),
     ).toEqual([]);
-    expect(catalogChoiceButtonsFromText("Адреса: вул. Миколаївська 33.")).toEqual([]);
+    expect(catalogChoiceButtonsFromText("Адреса: вул. Прикладна 1.")).toEqual([]);
   });
 });
 
