@@ -154,6 +154,20 @@ export const formatAvailabilityContext = (
   return block(CONTEXT_TAGS.availability, ctx);
 };
 
+/** Compact matched slot for BOOK after the note step — not the full days[] snapshot. */
+export const formatSelectedSlotContext = (
+  slot: { dateStart: string; dateEnd: string; label: string } | null | undefined,
+): string => {
+  if (!slot) {
+    return "";
+  }
+  return block(CONTEXT_TAGS.selectedSlot, {
+    dateStart: slot.dateStart,
+    dateEnd: slot.dateEnd,
+    label: slot.label,
+  });
+};
+
 export const formatServicesContext = (
   ctx: ServicesContext | null | undefined,
 ): string => {

@@ -6,7 +6,7 @@ import type { AvailabilityContext } from "../tools/availability-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
-import type { ClinicHandoff } from "./types.js";
+import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 
 export type ClinicStateAnnotationOptions = {
   messageHistoryMaxTokens: number;
@@ -66,6 +66,16 @@ export const createClinicStateAnnotation = ({
     }),
     prefetchFetchedAt: Annotation<number | null>({
       reducer: (_left, right) => right ?? null,
+      default: () => null,
+    }),
+    /** Optional note after a time pick: unasked → awaiting → skipped|answered before create_meeting. */
+    bookingNoteStatus: Annotation<BookingNoteStatus>({
+      reducer: (_left, right) => right,
+      default: () => "unasked",
+    }),
+    /** Slot matched from availability while the note step is in progress. */
+    selectedSlot: Annotation<SelectedBookingSlot | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
   });

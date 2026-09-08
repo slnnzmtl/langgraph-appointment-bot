@@ -40,6 +40,8 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
+  bookingNoteStatus: "unasked",
+  selectedSlot: null,
   ...overrides,
 });
 
@@ -393,6 +395,8 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
     expect(update.servicesContext).toBeUndefined();
   });
 
@@ -651,17 +655,20 @@ describe("isPrefetchExpired", () => {
 });
 
 describe("shouldContinueInBooking", () => {
-  const bookingOffer = (labels: string[]) =>
-    new AIMessage(
-      `Який день?\n<reply_buttons>\n${labels.join("\n")}\n</reply_buttons>`,
-    );
-
   it("is true when last handoff is booking/ok and the human taps an offered label", () => {
     expect(
       shouldContinueInBooking(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
-          messages: [bookingOffer(["25 серпня", "3 вересня", "Інша дата"]), new HumanMessage("25 серпня")],
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["25 серпня", "3 вересня", "Інша дата"],
+          },
+          messages: [
+            new AIMessage("Який день вам зручний?"),
+            new HumanMessage("25 серпня"),
+          ],
         }),
       ),
     ).toBe(true);
@@ -686,13 +693,18 @@ describe("shouldContinueInBooking", () => {
     ).toBe(true);
   });
 
-  it("is false for supervisor-owned labels even when they appear in the trailer", () => {
+  it("is false for supervisor-owned labels even when they appear on lastHandoff", () => {
     expect(
       shouldContinueInBooking(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
           messages: [
-            bookingOffer(["Так", "Обрати іншу процедуру"]),
+            new AIMessage("Підібрати вільний час на консультацію?"),
             new HumanMessage("Обрати іншу процедуру"),
           ],
         }),
@@ -701,9 +713,14 @@ describe("shouldContinueInBooking", () => {
     expect(
       shouldContinueInBooking(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["Мій запис", "Послуги", "Адреса"],
+          },
           messages: [
-            bookingOffer(["Мій запис", "Послуги", "Адреса"]),
+            new AIMessage("Чим можу допомогти?"),
             new HumanMessage("Послуги"),
           ],
         }),
@@ -715,16 +732,32 @@ describe("shouldContinueInBooking", () => {
     expect(
       shouldContinueInBooking(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
-          messages: [bookingOffer(["25 серпня"]), new HumanMessage("а скільки коштує?")],
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["25 серпня"],
+          },
+          messages: [
+            new AIMessage("Який день вам зручний?"),
+            new HumanMessage("а скільки коштує?"),
+          ],
         }),
       ),
     ).toBe(false);
     expect(
       shouldContinueInBooking(
         supervisorState({
-          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
-          messages: [bookingOffer(["25 серпня"]), new HumanMessage("25 серпня")],
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            replyButtons: ["25 серпня"],
+          },
+          messages: [
+            new AIMessage("Який день вам зручний?"),
+            new HumanMessage("25 серпня"),
+          ],
         }),
       ),
     ).toBe(false);
@@ -732,18 +765,18 @@ describe("shouldContinueInBooking", () => {
 });
 
 describe("shouldContinueInFaq", () => {
-  const faqOffer = (labels: string[]) =>
-    new AIMessage(
-      `Який напрямок?\n<reply_buttons>\n${labels.join("\n")}\n</reply_buttons>`,
-    );
-
   it("is true when last handoff is faq/ok and the human taps an offered catalog label", () => {
     expect(
       shouldContinueInFaq(
         supervisorState({
-          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            replyButtons: ["Ін'єкційні процедури", "Консультації та діагностика"],
+          },
           messages: [
-            faqOffer(["Ін'єкційні процедури", "Консультації та діагностика"]),
+            new AIMessage("Який напрямок вас цікавить?"),
             new HumanMessage("Ін'єкційні процедури"),
           ],
         }),
@@ -794,9 +827,14 @@ describe("shouldContinueInFaq", () => {
     expect(
       shouldContinueInFaq(
         supervisorState({
-          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            replyButtons: ["Записатись", "Послуги", "Адреса"],
+          },
           messages: [
-            faqOffer(["Записатись", "Послуги", "Адреса"]),
+            new AIMessage("Чим можу допомогти?"),
             new HumanMessage("Послуги"),
           ],
         }),
@@ -805,16 +843,32 @@ describe("shouldContinueInFaq", () => {
     expect(
       shouldContinueInFaq(
         supervisorState({
-          lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
-          messages: [faqOffer(["ботулінотерапія"]), new HumanMessage("а скільки коштує?")],
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            replyButtons: ["ботулінотерапія"],
+          },
+          messages: [
+            new AIMessage("Яка процедура вас цікавить?"),
+            new HumanMessage("а скільки коштує?"),
+          ],
         }),
       ),
     ).toBe(false);
     expect(
       shouldContinueInFaq(
         supervisorState({
-          lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
-          messages: [faqOffer(["ботулінотерапія"]), new HumanMessage("ботулінотерапія")],
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["ботулінотерапія"],
+          },
+          messages: [
+            new AIMessage("Яка процедура вас цікавить?"),
+            new HumanMessage("ботулінотерапія"),
+          ],
         }),
       ),
     ).toBe(false);
@@ -841,11 +895,14 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 
     const update = await node(
       supervisorState({
-        lastHandoff: { agentId: "faq", agentName: "FAQ", status: "ok" },
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          replyButtons: ["Ін'єкційні процедури"],
+        },
         messages: [
-          new AIMessage(
-            "Який напрямок?\n<reply_buttons>\nІн'єкційні процедури\n</reply_buttons>",
-          ),
+          new AIMessage("Який напрямок вас цікавить?"),
           new HumanMessage("Ін'єкційні процедури"),
         ],
       }),
@@ -908,11 +965,14 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     const update = await node(
       supervisorState({
-        lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["25 серпня", "Інша дата"],
+        },
         messages: [
-          new AIMessage(
-            "Який день?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>",
-          ),
+          new AIMessage("Який день вам зручний?"),
           new HumanMessage("25 серпня"),
         ],
       }),
@@ -938,11 +998,14 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     const update = await node(
       supervisorState({
-        lastHandoff: { agentId: "booking", agentName: "Booking", status: "ok" },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["25 серпня", "Інша дата"],
+        },
         messages: [
-          new AIMessage(
-            "Який день?\n<reply_buttons>\n25 серпня\nІнша дата\n</reply_buttons>",
-          ),
+          new AIMessage("Який день вам зручний?"),
           new HumanMessage("а скільки коштує консультація?"),
         ],
       }),
@@ -1208,6 +1271,21 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
+  });
+
+  it("builds visit list when FINISH omits reply on «Мій запис»", async () => {
+    invoke.mockResolvedValue({ next: "FINISH", menu: "visit_change" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "FINISH",
+      status: "ok",
+      replyText: visitAsk,
+      replyButtons: [...VISIT_CHANGE_MENU],
+    });
+    expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
   });
 
   it("attaches DEFAULT has-visits when menu is omitted on a greeting and visits exist", async () => {

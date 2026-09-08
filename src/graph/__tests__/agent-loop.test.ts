@@ -5,9 +5,32 @@ import { Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { createAgentFinalizeNode, createAgentPrepareNode, captureAvailabilityFromMessages, captureServicesFromMessages, classifyMeetingMutationToolMessage, createAgentToolsNode, crmWriteDirtiesPrefetch, formatAvailabilityDateOffer, formatAvailabilityTimeOffer, matchAvailabilityDay, meetingMutationClearsAvailability, resolveAvailabilityOffer } from "../agent-loop.js";
+import {
+  advanceBookingNoteStep,
+  createAgentFinalizeNode,
+  createAgentPrepareNode,
+  captureAvailabilityFromMessages,
+  captureServicesFromMessages,
+  classifyMeetingMutationToolMessage,
+  createAgentToolsNode,
+  crmWriteDirtiesPrefetch,
+  formatAvailabilityDateOffer,
+  formatAvailabilityTimeOffer,
+  matchAvailabilityDay,
+  matchAvailabilitySlot,
+  meetingMutationClearsAvailability,
+  resolveAvailabilityOffer,
+} from "../agent-loop.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
-import { OTHER_DATE_LABEL, DEFAULT_MENU_HAS_VISITS, DEFAULT_MENU_NO_VISITS } from "../../shared/clinic-constants.js";
+import {
+  BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU,
+  CLINIC_ADDRESS,
+  INTENT_SKIP_LABEL,
+  OTHER_DATE_LABEL,
+  DEFAULT_MENU_HAS_VISITS,
+  DEFAULT_MENU_NO_VISITS,
+} from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   formatAvailabilityContext,
@@ -51,6 +74,8 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
+  bookingNoteStatus: "unasked",
+  selectedSlot: null,
   ...overrides,
 });
 
@@ -441,6 +466,15 @@ describe("availability context helpers", () => {
     expect(
       classifyMeetingMutationToolMessage(
         new ToolMessage({
+          content: JSON.stringify({ error: "Note step required" }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ),
+    ).toBe("blocked");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
           content: JSON.stringify({ awaitingConfirmation: true }),
           tool_call_id: "1",
           name: "create_meeting",
@@ -449,7 +483,7 @@ describe("availability context helpers", () => {
     ).toBe("pending");
   });
 
-  it("clears availability on committed or failed meeting mutations only", () => {
+  it("clears availability on committed, failed, or HITL decline", () => {
     expect(
       meetingMutationClearsAvailability([
         new ToolMessage({
@@ -468,6 +502,24 @@ describe("availability context helpers", () => {
         }),
       ]),
     ).toBe(true);
+    expect(
+      meetingMutationClearsAvailability([
+        new ToolMessage({
+          content: JSON.stringify({ cancelled: true }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ]),
+    ).toBe(true);
+    expect(
+      meetingMutationClearsAvailability([
+        new ToolMessage({
+          content: JSON.stringify({ awaitingConfirmation: true }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ]),
+    ).toBe(false);
     expect(
       meetingMutationClearsAvailability([
         new ToolMessage({
@@ -875,7 +927,8 @@ describe("createAgentLlmNode context cache", () => {
     expect(bookingDynamic.content).toContain("DYNAMIC KYIV");
     expect(bookingDynamic.content).toContain(formatContactContext(listedContact));
     expect(bookingDynamic.content).toContain(formatBookingMeetingsContext(listedMeetings));
-    expect(String(bookingDynamic.content)).toContain("<availability>");
+    // Full days[] is not injected into the LLM prompt (served via slots tool / cache).
+    expect(String(bookingDynamic.content)).not.toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
     expect(String(bookingDynamic.content)).not.toContain('"visits"');
   });
@@ -995,7 +1048,7 @@ describe("createAgentLlmNode context cache", () => {
     );
 
     const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    expect(String(bookingDynamic.content)).toContain("<availability>");
+    expect(String(bookingDynamic.content)).not.toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });
 
@@ -1084,7 +1137,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(faqDynamic.content)).not.toContain("<list_services>");
   });
 
-  it("keeps availability block when a different tool ran this turn", async () => {
+  it("omits full availability from booking LLM even when a different tool ran this turn", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -1136,7 +1189,7 @@ describe("createAgentLlmNode context cache", () => {
     );
 
     const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
-    expect(String(bookingDynamic.content)).toContain("<availability>");
+    expect(String(bookingDynamic.content)).not.toContain("<availability>");
     expect(String(bookingDynamic.content)).not.toContain("<list_services>");
   });
 
@@ -1327,7 +1380,7 @@ describe("createAgentFinalizeNode", () => {
     maxSteps: 8,
   };
 
-  it("strips reply_buttons from checkpointed history and stores labels on lastHandoff", () => {
+  it("strips reply_buttons from checkpointed history and code-owns consultation shortcuts", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1347,9 +1400,39 @@ describe("createAgentFinalizeNode", () => {
       agentId: "booking",
       status: "ok",
       replyText: "Підібрати вільний час на консультацію?",
-      replyButtons: ["Так", "Обрати іншу процедуру"],
+      replyButtons: [...BOOKING_OFFER_MENU],
     });
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+  });
+
+  it("DDD-53: attaches BOOKING OFFER when the consultation question has no trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+  });
+
+  it("replaces a wrong consultation trailer with BOOKING OFFER", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Записати вас на консультацію?\n<reply_buttons>\nЗаписатись\nПослуги\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(String(update.messages?.[0]?.content)).toBe("Записати вас на консультацію?");
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
   });
 
   it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
@@ -1421,7 +1504,7 @@ describe("createAgentFinalizeNode", () => {
             name: "create_meeting",
           }),
           new AIMessage(
-            "Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\nвул. Миколаївська 33",
+            `Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\n${CLINIC_ADDRESS}`,
           ),
         ],
       }),
@@ -1729,6 +1812,31 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
+  it("code-owns FAQ consultation yield and BOOKING OFFER without tags", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [new AIMessage("Записати вас на консультацію?")],
+      }),
+    );
+
+    expect(update.lastHandoff).toMatchObject({
+      agentId: "faq",
+      status: "ok",
+      replyText: "Записати вас на консультацію?",
+      replyButtons: [...BOOKING_OFFER_MENU],
+      yieldToSupervisor: true,
+    });
+  });
+
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -1916,7 +2024,7 @@ describe("createAgentFinalizeNode", () => {
     ]);
   });
 
-  it("does not recover direction bullets from a consultation offer without a trailer", () => {
+  it("attaches BOOKING OFFER (not catalog bullets) on a consultation offer without a trailer", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -1936,10 +2044,48 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
   });
 
-  it("keeps explicit faq trailers authoritative over bullet parsing", () => {
+  it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingNoteStatus: "unasked",
+        availabilityContext: null,
+        selectedSlot: null,
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new AIMessage(
+            "Для першого візиту радимо консультацію: лікар огляне шкіру та підбере процедуру.\n\nПідібрати вільний час на консультацію?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+  });
+
+  it("DDD-79: booking still attaches DEFAULT MENU for non-offer replies without a trailer", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new HumanMessage("Записатись"),
+          new AIMessage("Could you please provide your phone number?"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+  });
+
+  it("prefers catalog bullets over an accidental leftover trailer", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -1953,13 +2099,41 @@ describe("createAgentFinalizeNode", () => {
         stepCount: 1,
         agentMessages: [
           new AIMessage(
-            "Який напрямок?\n\n• ignored one\n• ignored two\n\n<reply_buttons>\nКонсультації\nІн'єкційні процедури\n</reply_buttons>",
+            "Ось основні напрями:\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЯкий напрямок?\n<reply_buttons>\nIgnored\nLabels\n</reply_buttons>",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "Консультації та діагностика",
+      "Ін'єкційні процедури",
+    ]);
+    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
+  });
+
+  it("harvests an accidental catalog trailer when bullets are missing", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "Який напрямок?\n<reply_buttons>\nКонсультації\nІн'єкційні процедури\n</reply_buttons>",
           ),
         ],
       }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual(["Консультації", "Ін'єкційні процедури"]);
+    expect(String(update.messages?.[0]?.content)).toBe("Який напрямок?");
   });
 
   it("does not attach buttons for faq location-only replies", () => {
@@ -1975,7 +2149,7 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         agentMessages: [
-          new AIMessage(`Ми знаходимося за адресою вул. Миколаївська 33.`),
+          new AIMessage(`Ми знаходимося за адресою ${CLINIC_ADDRESS}.`),
         ],
       }),
     );
@@ -2186,5 +2360,391 @@ describe("availability offer helpers", () => {
     );
     expect(offer?.replyText).toContain("Найближчі вільні дні");
     expect(offer?.replyButtons?.[0]).toBe("10 вересня");
+  });
+});
+
+describe("stabilize booking flow (DDD-48/49/50/51)", () => {
+  const agent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Books appointments",
+    systemPrompt: "book",
+    maxSteps: 8,
+  };
+
+  const snapshot: AvailabilityContext = {
+    days: [
+      {
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "a",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+          {
+            id: "b",
+            label: "15:00",
+            dateStart: "2026-09-10T15:00:00",
+            dateEnd: "2026-09-10T15:30:00",
+          },
+        ],
+      },
+    ],
+    stepMinutes: 30,
+  };
+
+  it("matches clock-time picks from the availability snapshot", () => {
+    expect(matchAvailabilitySlot("14:00", snapshot)?.dateStart).toBe("2026-09-10T14:00:00");
+    expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
+    expect(matchAvailabilitySlot(OTHER_DATE_LABEL, snapshot)).toBeNull();
+  });
+
+  it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", () => {
+    const update = advanceBookingNoteStep(
+      clinicState({
+        messages: [new HumanMessage("губи"), new HumanMessage("14:00")],
+        availabilityContext: snapshot,
+        bookingNoteStatus: "unasked",
+      }),
+    );
+    expect(update.bookingNoteStatus).toBe("awaiting");
+    expect(update.selectedSlot?.label).toBe("14:00");
+  });
+
+  it("advanceBookingNoteStep skips on INTENT shortcut and answers on free text", () => {
+    expect(
+      advanceBookingNoteStep(
+        clinicState({
+          messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+          bookingNoteStatus: "awaiting",
+          selectedSlot: {
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+            label: "14:00",
+          },
+          availabilityContext: snapshot,
+        }),
+      ).bookingNoteStatus,
+    ).toBe("skipped");
+    expect(
+      advanceBookingNoteStep(
+        clinicState({
+          messages: [new HumanMessage("хочу ботокс губ")],
+          bookingNoteStatus: "awaiting",
+          availabilityContext: snapshot,
+        }),
+      ).bookingNoteStatus,
+    ).toBe("answered");
+  });
+
+  it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingNoteStatus: "awaiting",
+        selectedSlot: {
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+          label: "14:00",
+        },
+        agentMessages: [
+          new AIMessage("Чи можете поділитися деталями перед записом?"),
+        ],
+      }),
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
+    expect(update.bookingNoteStatus).toBe("awaiting");
+  });
+
+  it("DDD-49/51: blocks create_meeting before HITL and forces note ask + skip keyboard", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ id: "should-not-run" }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const toolsUpdate = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "awaiting",
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content)).error).toBe("Note step required");
+    expect(toolsUpdate.bookingNoteStatus).toBe("awaiting");
+
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        bookingNoteStatus: "awaiting",
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+          toolMsg,
+          new AIMessage(""),
+        ],
+      }),
+    );
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_NOTE_QUESTION_UK);
+    expect(update.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
+  });
+
+  it("allows create_meeting after note step is skipped", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ awaitingConfirmation: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const toolsUpdate = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content)).awaitingConfirmation).toBe(true);
+  });
+
+  it("DDD-50: HITL decline clears availability so next slots call is CRM", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ cancelled: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const declineUpdate = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        availabilityContext: snapshot,
+        selectedSlot: {
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+          label: "14:00",
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(JSON.parse(String((declineUpdate.agentMessages as ToolMessage[])[0]!.content))).toEqual({
+      cancelled: true,
+    });
+    expect(declineUpdate.availabilityContext).toBeNull();
+    expect(declineUpdate.bookingNoteStatus).toBe("unasked");
+    expect(declineUpdate.selectedSlot).toBeNull();
+  });
+
+  it("serves checkpointed slots on cache hit without invoking CRM tool", async () => {
+    let crmCalls = 0;
+    const slotsTool = tool(
+      async () => {
+        crmCalls += 1;
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          date: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        availabilityContext: snapshot,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { durationMinutes: 30 },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(crmCalls).toBe(0);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    const body = JSON.parse(String(toolMsg.content)) as {
+      days: unknown[];
+      cacheHit: boolean;
+    };
+    expect(body.cacheHit).toBe(true);
+    expect(body.days).toHaveLength(1);
+    expect(update.availabilityContext?.days).toHaveLength(1);
+  });
+
+  it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const withTool = finalize(
+      clinicState({
+        stepCount: 2,
+        availabilityContext: {
+          days: [
+            snapshot.days[0]!,
+            {
+              date: "2026-09-11",
+              dayLabel: "11 вересня (п'ятниця)",
+              slots: [
+                {
+                  id: "c",
+                  label: "12:00",
+                  dateStart: "2026-09-11T12:00:00",
+                  dateEnd: "2026-09-11T12:30:00",
+                },
+              ],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "s1", name: "present_availability_slots", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              days: [
+                snapshot.days[0],
+                {
+                  date: "2026-09-11",
+                  dayLabel: "11 вересня (п'ятниця)",
+                  slots: [
+                    {
+                      label: "12:00",
+                      dateStart: "2026-09-11T12:00:00",
+                      dateEnd: "2026-09-11T12:30:00",
+                    },
+                  ],
+                },
+              ],
+              stepMinutes: 30,
+              cacheHit: true,
+            }),
+            tool_call_id: "s1",
+            name: "present_availability_slots",
+          }),
+          new AIMessage("invented hours 09:00"),
+        ],
+      }),
+    );
+    expect(withTool.lastHandoff?.replyButtons).toEqual([
+      "10 вересня",
+      "11 вересня",
+      OTHER_DATE_LABEL,
+    ]);
+
+    const proseOnly = finalize(
+      clinicState({
+        stepCount: 1,
+        availabilityContext: {
+          days: [
+            snapshot.days[0]!,
+            {
+              date: "2026-09-11",
+              dayLabel: "11 вересня (п'ятниця)",
+              slots: [
+                {
+                  id: "c",
+                  label: "12:00",
+                  dateStart: "2026-09-11T12:00:00",
+                  dateEnd: "2026-09-11T12:30:00",
+                },
+              ],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        agentMessages: [
+          new HumanMessage("коли зручно?"),
+          new AIMessage("Є вільні дні 10 і 11 вересня."),
+        ],
+      }),
+    );
+    expect(proseOnly.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+  });
+
+  it("injects selected_slot not full availability into booking LLM dynamic context", async () => {
+    const bindTools = vi.fn(() => ({
+      invoke: vi.fn(async (messages: unknown[]) => {
+        const dynamic = messages[0] as HumanMessage;
+        expect(String(dynamic.content)).not.toContain("<availability>");
+        expect(String(dynamic.content)).toContain("<selected_slot>");
+        expect(String(dynamic.content)).toContain("2026-09-10T14:00:00");
+        return new AIMessage("ok");
+      }),
+    }));
+    const model = { bindTools } as unknown as BaseChatModel;
+    const llm = createAgentLlmNode({
+      agent,
+      model,
+      tools: [],
+      formatSystemMetadata: () => "DYN",
+    });
+    await llm(
+      clinicState({
+        agentMessages: [new HumanMessage("14:00")],
+        availabilityContext: snapshot,
+        selectedSlot: {
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+          label: "14:00",
+        },
+        bookingNoteStatus: "awaiting",
+      }),
+    );
+  });
+
+  it("prepare advances note step from the latest human clock pick", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("14:00")],
+        availabilityContext: snapshot,
+        bookingNoteStatus: "unasked",
+      }),
+    );
+    expect(update.bookingNoteStatus).toBe("awaiting");
+    expect(update.selectedSlot?.label).toBe("14:00");
   });
 });

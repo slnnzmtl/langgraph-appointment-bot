@@ -8,7 +8,7 @@
 * Model: Fast, strict-tool-calling models (e.g., `GPT-5.6 Luna` or `Gemini 3.5 Flash-Lite` for the Root Router; `GPT-5.6 Terra` or `Claude 5 Sonnet` for the Booking Graph)
 
 **2. Topology (Supervisor-Lite Pattern):**
-* **Telegram Adapter:** Parses incoming messages, renders UI (reply keyboards from `<reply_buttons>` trailers), manages `thread_id` checkpointers for LangGraph.
+* **Telegram Adapter:** Parses incoming messages, renders UI (reply keyboards from `lastHandoff.replyButtons`), manages `thread_id` checkpointers for LangGraph.
 * **Root Supervisor (Semantic Router):** A cheap, fast evaluation node. Uses Zod structured output to classify user intent into exactly two paths: `faq_node` or `booking_node`.
 * **FAQ Sub-Graph (Read-Only):** Answers clinic info, working hours, and service pricing based on a static system prompt or a simple retriever.
 * **Booking Sub-Graph (Read/Write):** Binds to EspoCRM MCP tools to find/create contacts and schedule/cancel appointments.
@@ -66,7 +66,7 @@ Execute the development in the following atomic phases. **Ask for my approval be
 
 ### Phase 4: Telegram UI Adapter & Human-in-the-Loop
 1. Wrap the compiled graph in a Telegram Bot webhook/polling loop.
-2. **CRITICAL UI RULE:** When offering availability, use a two-step date-then-time flow. Booking finalize attaches the DATE then TIME **reply keyboards** from the `present_availability_slots` snapshot (the model must not invent hours or emit a DATE/TIME `<reply_buttons>` trailer). Tapping a label sends that text as a normal message (the user may still type a slot).
+2. **CRITICAL UI RULE:** When offering availability, use a two-step date-then-time flow. Booking finalize attaches the DATE then TIME **reply keyboards** from the `present_availability_slots` snapshot (the model must not invent hours). Tapping a label sends that text as a normal message (the user may still type a slot).
 3. **CRITICAL SAFETY RULE (HITL):** Before writing a meeting (create / soft-cancel / reschedule), the graph must pause. The bot sends a confirmation caption with a ✅/❌ **reply keyboard**. Only proceed when the user taps ✅ (or affirms in chat and the model re-calls with `confirmationGiven: true`).
 
 ---

@@ -144,11 +144,7 @@ export const shouldContinueInSpecialist = (
     return false;
   }
 
-  const lastAi = [...state.messages].reverse().find((m) => m instanceof AIMessage);
-  const labels = replyButtonLabels(
-    state.lastHandoff.replyButtons,
-    lastAi ? extractMessageTextContent(lastAi.content) : undefined,
-  );
+  const labels = replyButtonLabels(state.lastHandoff.replyButtons);
   return labels.includes(humanText);
 };
 
@@ -199,8 +195,13 @@ const resolveRoutingDecision = (
   bookingContext: ClinicState["bookingContext"],
 ): ClinicStateUpdate => {
   if (decision.next === FINISH_ROUTE) {
-    const reply = normalizeSupervisorReply(decision.reply);
-    if (!reply) {
+    const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+    const lastHumanLine = lastHumanLineFromMessages(state.messages);
+    const wantsVisitChange =
+      hasVisit && (isMyVisitLine(lastHumanLine) || humanAsksAboutVisits(lastHumanLine));
+
+    const normalizedReply = normalizeSupervisorReply(decision.reply);
+    if (!normalizedReply) {
       const last = state.messages[state.messages.length - 1];
       if (last instanceof AIMessage && state.lastHandoff) {
         return {
@@ -208,17 +209,16 @@ const resolveRoutingDecision = (
           lastHandoff: null,
         };
       }
-      return routingFailureUpdate("FINISH without reply");
+      // «Мій запис» body is code-owned — empty model reply is OK when prefetch has visits.
+      if (!wantsVisitChange) {
+        return routingFailureUpdate("FINISH without reply");
+      }
     }
 
     // Strip any stray model trailer; code owns FINISH keyboards and visit lines from
     // human intent + bookingContext. VISIT CHANGE only when they asked about visits —
     // ignore model menu=visit_change on greetings / «Головне меню».
-    const { text } = extractReplyButtons(reply);
-    const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
-    const lastHumanLine = lastHumanLineFromMessages(state.messages);
-    const wantsVisitChange =
-      hasVisit && (isMyVisitLine(lastHumanLine) || humanAsksAboutVisits(lastHumanLine));
+    const text = normalizedReply ? extractReplyButtons(normalizedReply).text : "";
     const visitIntent: FinishVisitIntent = wantsVisitChange
       ? "visit_ask"
       : isGreetingOrMainMenuLine(lastHumanLine)
@@ -315,6 +315,8 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           prefetchDirty: false,
           prefetchFetchedAt: Date.now(),
           availabilityContext: null,
+          bookingNoteStatus: "unasked",
+          selectedSlot: null,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

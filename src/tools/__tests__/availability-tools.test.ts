@@ -4,6 +4,8 @@ import {
   createPresentAvailabilitySlotsTool,
   normalizePresentAvailabilityResult,
   resolveNextAvailableStart,
+  tryAvailabilityCacheHit,
+  type AvailabilityContext,
 } from "../availability-tools.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -620,6 +622,65 @@ describe("normalizePresentAvailabilityResult", () => {
 
   it("returns null for error payloads", () => {
     expect(normalizePresentAvailabilityResult(JSON.stringify({ error: "fail", slots: [] }))).toBeNull();
+  });
+});
+
+describe("tryAvailabilityCacheHit", () => {
+  const snapshot: AvailabilityContext = {
+    days: [
+      {
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "a",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+        ],
+      },
+      {
+        date: "2026-09-11",
+        dayLabel: "11 вересня (п'ятниця)",
+        slots: [
+          {
+            id: "b",
+            label: "12:00",
+            dateStart: "2026-09-11T12:00:00",
+            dateEnd: "2026-09-11T12:30:00",
+          },
+        ],
+      },
+    ],
+    stepMinutes: 30,
+  };
+
+  it("hits for undated DATE list when duration matches", () => {
+    const hit = tryAvailabilityCacheHit(snapshot, { durationMinutes: 30 });
+    expect(hit?.kind).toBe("date_list");
+    const parsed = JSON.parse(hit!.json) as { days: unknown[]; cacheHit: boolean };
+    expect(parsed.days).toHaveLength(2);
+    expect(parsed.cacheHit).toBe(true);
+  });
+
+  it("hits for a dated day already in the snapshot", () => {
+    const hit = tryAvailabilityCacheHit(snapshot, {
+      date: "2026-09-10",
+      durationMinutes: 30,
+    });
+    expect(hit?.kind).toBe("day_slots");
+    const parsed = JSON.parse(hit!.json) as { date: string; slots: unknown[]; cacheHit: boolean };
+    expect(parsed.date).toBe("2026-09-10");
+    expect(parsed.slots).toHaveLength(1);
+    expect(parsed.cacheHit).toBe(true);
+  });
+
+  it("misses on afterDate, duration mismatch, or unknown date", () => {
+    expect(tryAvailabilityCacheHit(snapshot, { afterDate: "2026-09-10", durationMinutes: 30 })).toBeNull();
+    expect(tryAvailabilityCacheHit(snapshot, { durationMinutes: 45 })).toBeNull();
+    expect(tryAvailabilityCacheHit(snapshot, { date: "2026-09-99", durationMinutes: 30 })).toBeNull();
+    expect(tryAvailabilityCacheHit(null, { durationMinutes: 30 })).toBeNull();
   });
 });
 

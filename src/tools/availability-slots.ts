@@ -86,21 +86,60 @@ export const normalizeLocalIsoDatetime = (value: string): string => {
   return `${match[1]}T${match[2]}:${seconds}`;
 };
 
-/** Normalize EspoCRM wall times (`YYYY-MM-DD HH:mm:ss`, ISO, or date-only) for Date.parse. */
-const toMillis = (iso: string): number => {
+/** UTC offset of `timeZone` at `instantMs` (ms to add to UTC to get wall clock as UTC components). */
+const timeZoneOffsetMs = (instantMs: number, timeZone: string): number => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(instantMs));
+  const byType = Object.fromEntries(
+    parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
+  );
+  const hour = Number(byType.hour) % 24;
+  const wallAsUtc = Date.UTC(
+    Number(byType.year),
+    Number(byType.month) - 1,
+    Number(byType.day),
+    hour,
+    Number(byType.minute),
+    Number(byType.second),
+  );
+  return wallAsUtc - instantMs;
+};
+
+/**
+ * EspoCRM wall times (`YYYY-MM-DD HH:mm:ss`, ISO, date-only, or `24:00:00`) as UTC epoch ms.
+ * Digits are Europe/Kyiv wall clock (host `TZ` does not affect the result).
+ */
+export const kyivLocalIsoToUtcMs = (iso: string): number => {
   const trimmed = iso.trim();
   // EspoCRM all-day uses 24:00:00 on the calendar date (not ISO next-midnight).
   const allDay = trimmed.match(/^(\d{4}-\d{2}-\d{2})[ T]24:00(?::00)?$/);
-  const withT = allDay
+  const normalized = allDay
     ? `${allDay[1]}T00:00:00`
     : /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
       ? `${trimmed}T00:00:00`
       : normalizeLocalIsoDatetime(trimmed);
-  const ms = Date.parse(withT);
-  if (Number.isNaN(ms)) {
-    throw new Error(`Invalid datetime: ${iso}`);
-  }
-  return ms;
+  const [year, month, day] = normalized.slice(0, 10).split("-").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const [hour, minute, second] = normalized.slice(11).split(":").map(Number) as [
+    number,
+    number,
+    number,
+  ];
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  let instant = asUtc - timeZoneOffsetMs(asUtc, CLINIC_SLOT_TZ);
+  instant = asUtc - timeZoneOffsetMs(instant, CLINIC_SLOT_TZ);
+  return instant;
 };
 
 const overlaps = (
@@ -247,8 +286,8 @@ export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot
   const busy = meetings
     .filter((m) => !m.status || BUSY_STATUSES.has(m.status))
     .map((m) => ({
-      start: toMillis(m.dateStart),
-      end: toMillis(m.dateEnd),
+      start: kyivLocalIsoToUtcMs(m.dateStart),
+      end: kyivLocalIsoToUtcMs(m.dateEnd),
     }));
 
   const slots: AvailabilitySlot[] = [];
@@ -270,8 +309,8 @@ export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot
 
       const dateStart = localIso(day, hour, minute);
       const dateEnd = localIso(day, endHour, endMinute);
-      const startMs = toMillis(dateStart);
-      const endMs = toMillis(dateEnd);
+      const startMs = kyivLocalIsoToUtcMs(dateStart);
+      const endMs = kyivLocalIsoToUtcMs(dateEnd);
 
       const blocked = busy.some((b) => overlaps(startMs, endMs, b.start, b.end));
       if (!blocked) {

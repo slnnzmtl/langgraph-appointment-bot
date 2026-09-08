@@ -51,13 +51,14 @@ describe("interpretInvokeResult reply selection", () => {
     expect(result.text).not.toBe("I have provided the list above.");
   });
 
-  it("uses lastHandoff.replyButtons when history no longer has a trailer", () => {
+  it("uses lastHandoff.replyButtons and ignores a leftover trailer in visible text", () => {
     const result = interpretInvokeResult({
       lastHandoff: {
         agentId: "FINISH",
         agentName: "supervisor",
         status: "ok",
-        replyText: "Привіт, Тест! Я ШІ-асистент клініки.",
+        replyText:
+          "Привіт, Тест! Я ШІ-асистент клініки.\n<reply_buttons>\nIgnored\n</reply_buttons>",
         replyButtons: ["Записатись", "Послуги", "Адреса"],
       },
       messages: [
@@ -194,14 +195,14 @@ describe("interpretInvokeResult reply selection", () => {
     expect(asReply(result.reply_markup).one_time_keyboard).toBe(true);
   });
 
-  it("strips an empty reply_buttons trailer from visible text", () => {
+  it("strips an accidental reply_buttons trailer from visible text without using it as markup", () => {
     const result = interpretInvokeResult({
       lastHandoff: {
         agentId: "booking",
         agentName: "Booking",
         status: "ok",
         replyText:
-          "To proceed with the booking, I need your contact details. Could you please provide your phone number?\n<reply_buttons>\n</reply_buttons>",
+          "To proceed with the booking, I need your contact details. Could you please provide your phone number?\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
       },
       messages: [],
     });

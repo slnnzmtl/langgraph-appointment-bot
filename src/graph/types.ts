@@ -26,10 +26,23 @@ export type ClinicHandoff = {
   status: ClinicHandoffStatus;
   /** Patient-facing text for this handoff (adapter prefers over scanning history). */
   replyText?: string;
-  /** Labels from the last agent reply trailer (stripped from checkpointed text). */
+  /** Code-owned reply keyboard labels for this handoff (adapter markup channel). */
   replyButtons?: string[];
   /** When true, the next patient message must go through the supervisor. */
   yieldToSupervisor?: boolean;
+};
+
+/**
+ * Optional visit-note ladder after a start time is chosen.
+ * Always ask once; skip only via shortcut / decline / a real note — then create_meeting may run.
+ */
+export type BookingNoteStatus = "unasked" | "awaiting" | "skipped" | "answered";
+
+/** Matched free slot held while the note step runs (ISO local wall times from availability). */
+export type SelectedBookingSlot = {
+  dateStart: string;
+  dateEnd: string;
+  label: string;
 };
 
 /** Contact + upcoming meetings loaded at supervisor entry (TTL / dirty-gated). */

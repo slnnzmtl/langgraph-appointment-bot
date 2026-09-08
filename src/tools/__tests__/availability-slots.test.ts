@@ -8,6 +8,7 @@ import {
   filterSlotsAfterNow,
   findNextAvailableSlots,
   formatKyivLocalIso,
+  kyivLocalIsoToUtcMs,
   localIso,
   normalizeLocalIsoDatetime,
   omitSlotsAtStarts,
@@ -31,6 +32,29 @@ describe("normalizeLocalIsoDatetime", () => {
   it("strips trailing offset or Z", () => {
     expect(normalizeLocalIsoDatetime("2026-08-07T09:00:00Z")).toBe("2026-08-07T09:00:00");
     expect(normalizeLocalIsoDatetime("2026-08-07T09:00:00+03:00")).toBe("2026-08-07T09:00:00");
+  });
+});
+
+describe("kyivLocalIsoToUtcMs", () => {
+  it("maps Kyiv wall clock to UTC (DST summer and winter)", () => {
+    expect(kyivLocalIsoToUtcMs("2026-08-10T12:00:00")).toBe(
+      Date.parse("2026-08-10T12:00:00+03:00"),
+    );
+    expect(kyivLocalIsoToUtcMs("2026-01-10T12:00:00")).toBe(
+      Date.parse("2026-01-10T12:00:00+02:00"),
+    );
+  });
+
+  it("accepts EspoCRM space-separated datetimes", () => {
+    expect(kyivLocalIsoToUtcMs("2026-08-07 11:30:00")).toBe(
+      kyivLocalIsoToUtcMs("2026-08-07T11:30:00"),
+    );
+  });
+
+  it("treats EspoCRM 24:00:00 as that calendar date, not next midnight", () => {
+    expect(kyivLocalIsoToUtcMs("2026-08-27 24:00:00")).toBe(
+      kyivLocalIsoToUtcMs("2026-08-27T00:00:00"),
+    );
   });
 });
 
@@ -234,6 +258,23 @@ describe("computeFreeSlots", () => {
     });
 
     expect(slots.map((s) => s.label)).toEqual(["11:00", "12:00", "12:30"]);
+  });
+
+  it("blocks a meeting that spans noon Kyiv as Europe/Kyiv wall time", () => {
+    const slots = computeFreeSlots({
+      day: "2026-08-10",
+      meetings: [
+        {
+          status: "Planned",
+          dateStart: "2026-08-10 11:30:00",
+          dateEnd: "2026-08-10 12:30:00",
+        },
+      ],
+      timeRanges: [["11:00", "13:00"]],
+      stepMinutes: 30,
+    });
+
+    expect(slots.map((s) => s.label)).toEqual(["11:00", "12:30"]);
   });
 
   it("ignores Not Held meetings", () => {

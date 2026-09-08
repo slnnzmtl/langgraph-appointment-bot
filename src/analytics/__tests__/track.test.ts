@@ -39,8 +39,25 @@ describe("trackEvent", () => {
       seen.push({ name, props });
     });
     trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
+    trackEvent("reply_menu_filled", { menu: "booking_offer", reason: "omitted" });
     expect(seen).toEqual([
       { name: "reply_menu_filled", props: { menu: "visit_change", reason: "omitted" } },
+      { name: "reply_menu_filled", props: { menu: "booking_offer", reason: "omitted" } },
+    ]);
+  });
+
+  it("accepts booking note and slots cache Tier1 events", () => {
+    const seen: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
+    trackEvent("availability_cache_hit", { outcome: "success", kind: "date_list" });
+    trackEvent("booking_note_step", { phase: "awaiting" });
+    trackEvent("booking_create_blocked_note", { phase: "unasked" });
+    expect(seen.map((entry) => entry.name)).toEqual([
+      "availability_cache_hit",
+      "booking_note_step",
+      "booking_create_blocked_note",
     ]);
   });
 
