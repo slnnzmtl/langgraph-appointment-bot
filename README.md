@@ -7,8 +7,7 @@ Product topology, routing, and change map: [AGENT.md](AGENT.md).
 ### Related repositories
 
 - **This repo** — applied clinic product (FAQ + booking + CRM writes)
-- [LangGraph Personal Assistant](https://github.com/slnnzmtl/langgraph-personal-assistant) — applied personal automation system
-- [LangGraph Supervisor Expert Bootstrap](https://github.com/slnnzmtl/langgraph-supervisor-expert-bootstrap) — reusable supervisor–expert runtime (not used by this bot; sibling stack: LangGraph + Telegram + Gemini + MCP)
+- [LangGraph Personal Assistant](https://github.com/slnnzmtl/langgraph-personal-assistant) — applied personal automation system on the same LangGraph + Telegram + Gemini + MCP stack
 
 ## Setup
 
