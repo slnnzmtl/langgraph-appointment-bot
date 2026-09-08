@@ -4,11 +4,6 @@ Telegram clinic assistant that answers FAQ and books, moves, or cancels visits i
 
 Product topology, routing, and change map: [AGENT.md](AGENT.md).
 
-### Related repositories
-
-- **This repo** — applied clinic product (FAQ + booking + CRM writes)
-- [LangGraph Personal Assistant](https://github.com/slnnzmtl/langgraph-personal-assistant) — applied personal automation system on the same LangGraph + Telegram + Gemini + MCP stack
-
 ## Setup
 
 EspoCRM MCP must already be running (HTTP). This bot sends `ESPOCRM_API_KEY` as the `espocrm_api_key` header.
