@@ -4,11 +4,11 @@ import type { Telegraf } from "telegraf";
 import { z } from "zod";
 
 import { trackEvent } from "../analytics/track.js";
-import { CLINIC_SLOT_TZ } from "../shared/clinic-constants.js";
 import {
   addCalendarDays,
   formatKyivDateTimeLabel,
   formatKyivLocalIso,
+  kyivLocalIsoToUtcMs,
   normalizeLocalIsoDatetime,
 } from "../tools/availability-slots.js";
 import { buildConfirmKeyboard, buildDefaultMenuKeyboard, classifyConfirmReply, formatForTelegram, MAIN_MENU_LABEL } from "./telegram-ui.js";
@@ -103,55 +103,9 @@ export const needsEveningBeforeHitl = (meeting: ReminderMeeting): boolean => {
 export const listEveningBeforeHitlMeetingIds = (meetings: ReminderMeeting[]): string[] =>
   meetings.filter(needsEveningBeforeHitl).map((meeting) => meeting.id!.trim());
 
-/** UTC offset of `timeZone` at `instantMs` (ms to add to UTC to get wall clock as UTC components). */
-const timeZoneOffsetMs = (instantMs: number, timeZone: string): number => {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  }).formatToParts(new Date(instantMs));
-  const byType = Object.fromEntries(
-    parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]),
-  );
-  const hour = Number(byType.hour) % 24;
-  const wallAsUtc = Date.UTC(
-    Number(byType.year),
-    Number(byType.month) - 1,
-    Number(byType.day),
-    hour,
-    Number(byType.minute),
-    Number(byType.second),
-  );
-  return wallAsUtc - instantMs;
-};
-
 /** True when the string includes an explicit ISO-8601 zone (`Z` or ±HH:MM / ±HHMM). */
 export const hasExplicitIsoZone = (value: string): boolean =>
   /(?:Z|[+-]\d{2}(?::?\d{2})?)$/i.test(value.trim());
-
-/** Convert Kyiv wall-clock `YYYY-MM-DDTHH:mm:ss` (no zone) to UTC epoch ms. */
-export const kyivLocalIsoToUtcMs = (dateStart: string): number => {
-  const normalized = normalizeLocalIsoDatetime(dateStart);
-  const [year, month, day] = normalized.slice(0, 10).split("-").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  const [hour, minute, second] = normalized.slice(11).split(":").map(Number) as [
-    number,
-    number,
-    number,
-  ];
-  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second);
-  let instant = asUtc - timeZoneOffsetMs(asUtc, CLINIC_SLOT_TZ);
-  instant = asUtc - timeZoneOffsetMs(instant, CLINIC_SLOT_TZ);
-  return instant;
-};
 
 export type MeetingStartKyiv = {
   /** Kyiv calendar day YYYY-MM-DD */
@@ -188,7 +142,7 @@ export const resolveMeetingStartInKyiv = (dateStart: string): MeetingStartKyiv =
   return {
     day: kyivWallIso.slice(0, 10),
     time: kyivWallIso.slice(11, 16),
-    utcMs: kyivLocalIsoToUtcMs(kyivWallIso),
+    utcMs: kyivLocalIsoToUtcMs(trimmed),
     kyivWallIso,
   };
 };
