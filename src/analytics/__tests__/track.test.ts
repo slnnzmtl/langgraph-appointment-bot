@@ -39,8 +39,10 @@ describe("trackEvent", () => {
       seen.push({ name, props });
     });
     trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
+    trackEvent("reply_menu_filled", { menu: "booking_offer", reason: "omitted" });
     expect(seen).toEqual([
       { name: "reply_menu_filled", props: { menu: "visit_change", reason: "omitted" } },
+      { name: "reply_menu_filled", props: { menu: "booking_offer", reason: "omitted" } },
     ]);
   });
 

@@ -120,7 +120,7 @@ Use these `name` values (not guessed synonyms):
 | `booking_declined` | User tapped No |
 | `meeting_created` / `meeting_cancelled` / `meeting_rescheduled` | CRM visit write committed |
 | `tool_error` | Tool failure (`tool`, truncated `error_message`) |
-| `reply_menu_filled` | Graph filled a missing visit-change reply keyboard |
+| `reply_menu_filled` | Graph filled a missing visit-change, intent-skip, or booking-offer reply keyboard |
 | `reminder_sent` | Tomorrow-reminder Telegram send succeeded (`hitl`, `meeting_count`, `meeting_ids`; root run, not under `clinic-turn`) |
 
 Outcomes: `success` \| `error` \| `not_found` \| `declined` \| `awaiting`.

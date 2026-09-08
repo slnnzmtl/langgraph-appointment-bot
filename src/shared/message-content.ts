@@ -88,13 +88,16 @@ const stripYieldToSupervisorTags = (raw: string): { cleaned: string; yieldToSupe
 const BOOKING_OFFER_QUESTION =
   /(?:записати\s+вас\s+на\s+консультацію|бажаєте\s+записатися|підібрати\s+(?:вільний\s+)?час|записатися\s+на\s+цю\s+процедуру|book(?:\s+a|\s+you\s+for)?\s+(?:a\s+)?consultation|would\s+you\s+like\s+to\s+book|book\s+this\s+(?:procedure|service))/i;
 
-const lastNonEmptyLine = (text: string): string => {
-  const lines = text.trim().split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  return lines.at(-1) ?? "";
-};
+const lastNonEmptyLine = (text: string): string =>
+  text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .at(-1) ?? "";
 
 /** True when the reply ends with a consultation / book-this-procedure yes/no question. */
-export const isBookingOfferReply = (text: string): boolean => {
+export const isBookingOfferQuestion = (text: string): boolean => {
   const lastLine = lastNonEmptyLine(text);
   return lastLine.includes("?") && BOOKING_OFFER_QUESTION.test(lastLine);
 };
@@ -124,7 +127,7 @@ export const catalogChoiceButtonsFromText = (text: string): string[] => {
 
   const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
   const lastLine = lines.at(-1) ?? "";
-  if (!lastLine.includes("?") || isBookingOfferReply(trimmed) || !CATALOG_CHOICE_QUESTION.test(lastLine)) {
+  if (!lastLine.includes("?") || isBookingOfferQuestion(trimmed) || !CATALOG_CHOICE_QUESTION.test(lastLine)) {
     return [];
   }
 

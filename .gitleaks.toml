@@ -1,0 +1,18 @@
+# Title: gitleaks configuration
+# Allow only intentional placeholder examples.
+
+[[allowlists]]
+description = "Dependency lockfiles and vendor trees"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)package-lock\.json$''',
+  '''(^|/)pnpm-lock\.yaml$''',
+  '''(^|/)yarn\.lock$''',
+]
+
+[[allowlists]]
+description = "Documented blank/placeholder env templates"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)\.env\..*\.example$''',
+]

@@ -255,7 +255,7 @@ describe("service-tools", () => {
       createdById: "682dcd0dc0406e042",
       createdByName: "Admin",
       modifiedById: "682dd2ab4e415283d",
-      modifiedByName: "Kate Fedchenko",
+      modifiedByName: "Demo Clinician",
       assignedUserId: null,
       assignedUserName: null,
       teamsIds: [],

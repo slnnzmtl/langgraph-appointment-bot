@@ -56,7 +56,7 @@ import {
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
-  isBookingOfferReply,
+  isBookingOfferQuestion,
 } from "../shared/message-content.js";
 import {
   formatBookingMeetingsContext,
@@ -903,7 +903,8 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
     } else if (alreadyBooked) {
       replyButtons = [...BOOKING_REPLACE_MENU];
-    } else if (replyText.length > 0 && isBookingOfferReply(replyText)) {
+    } else if (replyText.length > 0 && isBookingOfferQuestion(replyText)) {
+      // DDD-79 / DDD-56: consultation / book-this-procedure yes/no from visible text.
       replyButtons = [...BOOKING_OFFER_MENU];
       if (agent.id === FAQ_AGENT_ID) {
         yieldFlag = true;
