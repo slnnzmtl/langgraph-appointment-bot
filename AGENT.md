@@ -100,12 +100,12 @@ Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph re
 
 Hidden `<reply_buttons>` trailers become one-time Telegram reply keyboards. Adapter always appends «Головне меню». English aliases (Book / Services / Address / …) are recognized for inbound routing; keyboards the graph attaches are Ukrainian-only.
 
-- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize when the model omits a trailer. FAQ with no trailer: adapter shows only «Головне меню» (no DEFAULT MENU).
+- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize when the model omits a trailer and the reply is not a consultation yes/no offer. FAQ with no trailer: adapter shows only «Головне меню» (no DEFAULT MENU), except a missed yes/no offer.
 - **VISIT CHANGE** (code-owned): «Перенести», «Скасувати», «Ні, дякую» — supervisor `menu=visit_change` after listing visits for «Мій запис» / a visit inquiry (falls back to DEFAULT when the list is empty).
 - **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` and the model emitted no trailer (never «Перенести» here). After «Скасувати», cancel then book the new slot.
 - **DATE / TIME** (code-owned): short day labels + «Інша дата», then HH:mm — booking finalize from `present_availability_slots` / `availabilityContext` (model must not invent hours or emit a DATE/TIME trailer).
-- **BOOKING OFFER** (model trailer): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no (FAQ adds `<yield_to_supervisor/>`).
-- Mid-flow (model trailer): FAQ catalog levels; booking STEP INTENT skip («Продовжити без коментаря»).
+- **BOOKING OFFER** (code-owned fallback): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no. Model should emit the trailer; booking/FAQ finalize fills it when the question is present and the trailer is omitted (FAQ also yields so «Так» re-routes to booking).
+- Mid-flow (model trailer + code-owned skip): FAQ catalog levels; booking STEP INTENT skip («Продовжити без коментаря»).
 
 ## Code map
 
