@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CLINIC_ADDRESS, CLINIC_MAPS_URL } from "../../shared/clinic-constants.js";
 import {
   buildConfirmKeyboard,
   buildDefaultMenuKeyboard,
@@ -140,18 +141,14 @@ describe("formatForTelegram", () => {
   });
 
   it("converts Markdown links to Telegram HTML anchors", () => {
-    expect(
-      formatForTelegram(
-        "[Google maps](https://www.google.com/maps?q=Kyiv,+Ukraine)",
-      ),
-    ).toBe(
-      '<a href="https://www.google.com/maps?q=Kyiv,+Ukraine">Google maps</a>',
+    expect(formatForTelegram(`[Google maps](${CLINIC_MAPS_URL})`)).toBe(
+      `<a href="${CLINIC_MAPS_URL}">Google maps</a>`,
     );
   });
 
   it("turns Gemini slash-n sequences and br tags into real paragraphs", () => {
-    expect(formatForTelegram("Готово!\\n\\nвул. Прикладна 1")).toBe(
-      "Готово!\n\nвул. Прикладна 1",
+    expect(formatForTelegram(`Готово!\\n\\n${CLINIC_ADDRESS}`)).toBe(
+      `Готово!\n\n${CLINIC_ADDRESS}`,
     );
     expect(formatForTelegram("Рядок 1<br><br>Рядок 2")).toBe("Рядок 1\n\nРядок 2");
   });

@@ -25,6 +25,7 @@ import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
+  CLINIC_ADDRESS,
   INTENT_SKIP_LABEL,
   OTHER_DATE_LABEL,
   DEFAULT_MENU_HAS_VISITS,
@@ -1473,7 +1474,7 @@ describe("createAgentFinalizeNode", () => {
             name: "create_meeting",
           }),
           new AIMessage(
-            "Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\nвул. Прикладна 1",
+            `Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\n${CLINIC_ADDRESS}`,
           ),
         ],
       }),
@@ -2065,7 +2066,7 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         agentMessages: [
-          new AIMessage(`Ми знаходимося за адресою вул. Прикладна 1.`),
+          new AIMessage(`Ми знаходимося за адресою ${CLINIC_ADDRESS}.`),
         ],
       }),
     );
