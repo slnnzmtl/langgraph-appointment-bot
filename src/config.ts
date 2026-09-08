@@ -1,5 +1,6 @@
 import { DEFAULT_GEMINI_MODEL } from "@personal-assistant/llm-gemini";
 
+import { PRODUCTION_CLINIC_ENV_KEYS } from "./shared/clinic-constants.js";
 import { getMessageHistoryMaxTokens } from "./shared/message-budget.js";
 
 export interface AppConfig {
@@ -32,8 +33,20 @@ const getRequiredEnv = (name: string): string => {
 const isGeminiContextCacheEnabled = (raw = process.env.GEMINI_CONTEXT_CACHE): boolean =>
   raw === undefined || (raw !== "0" && raw.toLowerCase() !== "false");
 
+const requireProductionClinicEnv = (): void => {
+  if (process.env.NODE_ENV !== "production") {
+    return;
+  }
+  for (const name of PRODUCTION_CLINIC_ENV_KEYS) {
+    if (!process.env[name]?.trim()) {
+      throw new Error(`Missing required environment variable: ${name}`);
+    }
+  }
+};
+
 export const loadConfig = (): AppConfig => {
   const defaultModel = process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
+  requireProductionClinicEnv();
 
   return {
     googleApiKey: getRequiredEnv("GOOGLE_API_KEY"),

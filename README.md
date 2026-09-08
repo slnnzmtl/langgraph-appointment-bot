@@ -14,6 +14,7 @@ cp .env.example .env
 # set GOOGLE_API_KEY, ESPOCRM_API_KEY, ESPOCRM_ASSIGNED_USER_ID
 # set ESPOCRM_MCP_URL=http://127.0.0.1:3000 for local MCP
 # set TELEGRAM_BOT_TOKEN to launch the bot
+# production Docker also requires CLINIC_* / CONSULTATION_SERVICE_ID (see Docker section)
 # optional: WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder (Docker-internal :8080)
 # optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
 # optional LangSmith: LANGSMITH_TRACING=true LANGSMITH_API_KEY= LANGSMITH_PROJECT=clinic-appointment-bot
@@ -32,6 +33,8 @@ docker compose up -d --build
 ```
 
 Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base.
+
+**Production clinic branding:** public git keeps demo placeholders for address, Maps URL, consultation CRM id, clinic name, and welcome copy. Set `CLINIC_ADDRESS`, `CLINIC_MAPS_URL`, `CONSULTATION_SERVICE_ID`, `CLINIC_NAME_UK`, `CLINIC_NAME_EN`, `CLINIC_WELCOME_VENUE_UK`, and `CLINIC_DOCTOR_REF_UK` in the host `.env` before `docker compose up -d --build`. With `NODE_ENV=production` (Compose default), missing any of these vars makes the process exit on boot instead of greeting as a demo clinic or booking a fake service id.
 
 ### Tomorrow-reminder webhook
 

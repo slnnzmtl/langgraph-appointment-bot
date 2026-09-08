@@ -1,11 +1,47 @@
 /** Clinic slot step and fallback open hours when CRM working time is unavailable. */
 export const CLINIC_SLOT_TZ = "Europe/Kyiv";
-/** Demo placeholders — replace with the clinic’s public address for a real deployment. */
-export const CLINIC_ADDRESS = "вул. Прикладна 1, м. Київ";
-export const CLINIC_MAPS_URL = "https://www.google.com/maps?q=Kyiv,+Ukraine";
+
+const fromEnv = (name: string, fallback: string): string =>
+  process.env[name]?.trim() || fallback;
+
+/** Env keys required when `NODE_ENV=production` (host `.env` overlay; demo defaults stay in git). */
+export const PRODUCTION_CLINIC_ENV_KEYS = [
+  "CLINIC_ADDRESS",
+  "CLINIC_MAPS_URL",
+  "CONSULTATION_SERVICE_ID",
+  "CLINIC_NAME_UK",
+  "CLINIC_NAME_EN",
+  "CLINIC_WELCOME_VENUE_UK",
+  "CLINIC_DOCTOR_REF_UK",
+] as const;
+
+/** Demo placeholders — override via env for a real deployment. */
+export const CLINIC_ADDRESS = fromEnv("CLINIC_ADDRESS", "вул. Прикладна 1, м. Київ");
+export const CLINIC_MAPS_URL = fromEnv(
+  "CLINIC_MAPS_URL",
+  "https://www.google.com/maps?q=Kyiv,+Ukraine",
+);
 export const CLINIC_MAPS_MARKDOWN = `[Google maps](${CLINIC_MAPS_URL})`;
-/** CRM `cService` id of «Консультація» — set to your EspoCRM service id in a real deployment. */
-export const CONSULTATION_SERVICE_ID = "demo-consultation-service-id";
+/** CRM `cService` id of «Консультація» — set via env in a real deployment. */
+export const CONSULTATION_SERVICE_ID = fromEnv(
+  "CONSULTATION_SERVICE_ID",
+  "demo-consultation-service-id",
+);
+/** Supervisor greeting clinic identity (Ukrainian). */
+export const CLINIC_NAME_UK = fromEnv(
+  "CLINIC_NAME_UK",
+  "демонстраційна клініка косметичної медицини",
+);
+/** Supervisor greeting clinic identity (English). */
+export const CLINIC_NAME_EN = fromEnv("CLINIC_NAME_EN", "a demo cosmetic medicine clinic");
+/** Welcome “візит до …” venue phrase (Ukrainian). */
+export const CLINIC_WELCOME_VENUE_UK = fromEnv(
+  "CLINIC_WELCOME_VENUE_UK",
+  "демонстраційного косметологічного кабінету",
+);
+/** Welcome “консультацію до …” doctor reference (Ukrainian). */
+export const CLINIC_DOCTOR_REF_UK = fromEnv("CLINIC_DOCTOR_REF_UK", "лікаря");
+
 /** Patient-facing copy for internal failures (routing, model, or step-limit errors). */
 export const PATIENT_FALLBACK_MESSAGE =
   "Вибачте, зараз не вдалося обробити запит 🙏 Спробуйте, будь ласка, ще раз за хвилинку.";
