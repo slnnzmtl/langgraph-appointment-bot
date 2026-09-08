@@ -4,8 +4,8 @@ export const CLINIC_SLOT_TZ = "Europe/Kyiv";
 export const CLINIC_ADDRESS = "вул. Прикладна 1, м. Київ";
 export const CLINIC_MAPS_URL = "https://www.google.com/maps?q=Kyiv,+Ukraine";
 export const CLINIC_MAPS_MARKDOWN = `[Google maps](${CLINIC_MAPS_URL})`;
-/** CRM `cService` id of «Консультація» — set to your EspoCRM service id in a real deployment. */
-export const CONSULTATION_SERVICE_ID = "demo-consultation-service-id";
+/** CRM `cService` id of «Консультація» — replace with your EspoCRM service id before a real deployment. */
+export const CONSULTATION_SERVICE_ID = "000000000000000000000001";
 /** Patient-facing copy for internal failures (routing, model, or step-limit errors). */
 export const PATIENT_FALLBACK_MESSAGE =
   "Вибачте, зараз не вдалося обробити запит 🙏 Спробуйте, будь ласка, ще раз за хвилинку.";

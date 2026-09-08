@@ -2,6 +2,8 @@
 
 Telegram AI for a cosmetic clinic. Patients chat in private Telegram; the bot answers clinic FAQ and books / moves / cancels visits in EspoCRM via MCP. Ukrainian-first; replies in the patient’s language.
 
+Public defaults in `src/shared/clinic-constants.ts` and greeting copy are **demo placeholders** (generic clinic identity, sample address, sample `CONSULTATION_SERVICE_ID`). Swap them for real clinic/CRM values before production use.
+
 This file is the map for changing the product. Patient-facing copy lives in prompts; setup/ops live in [README.md](README.md). Do not copy either here.
 
 ## Topology

@@ -8,6 +8,8 @@ Product topology, routing, and change map: [AGENT.md](AGENT.md).
 
 EspoCRM MCP must already be running (HTTP). This bot sends `ESPOCRM_API_KEY` as the `espocrm_api_key` header.
 
+Clinic-facing copy in `src/shared/clinic-constants.ts` and the welcome/greeting prompts uses **demo placeholders** (generic clinic name, sample address, sample consultation service id). Replace those with your clinic’s public details and EspoCRM `cService` id before connecting to a real CRM.
+
 ```sh
 pnpm install
 cp .env.example .env
