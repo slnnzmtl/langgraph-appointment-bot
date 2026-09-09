@@ -2,7 +2,7 @@ import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { tool } from "@langchain/core/tools";
 import { Overwrite } from "@langchain/langgraph";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import {
@@ -2967,5 +2967,246 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     expect(update.bookingNoteStatus).toBe("awaiting");
     expect(update.selectedSlot?.label).toBe("14:00");
+  });
+});
+
+describe("DDD-87: phone must appear in patient messages", () => {
+  afterEach(() => {
+    setTrackEventForTests(null);
+  });
+
+  const phoneTools = (onInvoke: (name: string, args: Record<string, unknown>) => void) => [
+    tool(
+      async (args: { phoneNumber: string }) => {
+        onInvoke("find_contact_by_phone", args);
+        return JSON.stringify({ success: true, total: 0, contacts: [] });
+      },
+      {
+        name: "find_contact_by_phone",
+        description: "find",
+        schema: z.object({ phoneNumber: z.string() }),
+      },
+    ),
+    tool(
+      async (args: { firstName: string; phoneNumber?: string }) => {
+        onInvoke("create_contact", args);
+        return JSON.stringify({ success: true, id: "c-1" });
+      },
+      {
+        name: "create_contact",
+        description: "create",
+        schema: z.object({
+          firstName: z.string(),
+          phoneNumber: z.string().optional(),
+        }),
+      },
+    ),
+    tool(
+      async (args: { contactId: string; phoneNumber?: string }) => {
+        onInvoke("update_contact", args);
+        return JSON.stringify({ success: true });
+      },
+      {
+        name: "update_contact",
+        description: "update",
+        schema: z.object({
+          contactId: z.string(),
+          phoneNumber: z.string().optional(),
+        }),
+      },
+    ),
+  ];
+
+  it.each([
+    "find_contact_by_phone",
+    "create_contact",
+    "update_contact",
+  ] as const)("blocks invented phone on %s", async (toolName) => {
+    const seen: { name: string; props: Record<string, unknown> }[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
+    const invoked: string[] = [];
+    const toolsNode = createAgentToolsNode(
+      phoneTools((name) => {
+        invoked.push(name);
+      }),
+      "booking",
+    );
+    const args =
+      toolName === "find_contact_by_phone"
+        ? { phoneNumber: "+380689999999" }
+        : toolName === "create_contact"
+          ? { firstName: "Артем", lastName: "Тест", phoneNumber: "+380689999999" }
+          : { contactId: "c-1", phoneNumber: "+380689999999" };
+    const update = await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("Артем"), new HumanMessage("Тест")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "p1", name: toolName, args, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([]);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content))).toEqual({
+      error: "Phone not provided",
+      hint: "Ask the patient for their clinic phone, then retry with the number they typed.",
+    });
+    expect(seen).toContainEqual(
+      expect.objectContaining({
+        name: "tool_error",
+        props: expect.objectContaining({
+          tool: toolName,
+          error_message: "Phone not provided",
+        }),
+      }),
+    );
+  });
+
+  it("allows create_contact when human typed local UA and tool passes E.164", async () => {
+    const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolsNode = createAgentToolsNode(
+      phoneTools((name, args) => {
+        invoked.push({ name, args });
+      }),
+      "booking",
+    );
+    const update = await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("0501112233")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "p1",
+                name: "create_contact",
+                args: {
+                  firstName: "Ada",
+                  phoneNumber: "+380501112233",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      {
+        name: "create_contact",
+        args: { firstName: "Ada", phoneNumber: "+380501112233" },
+      },
+    ]);
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
+      id: "c-1",
+    });
+  });
+
+  it("allows find when human typed spaced local matching tool E.164", async () => {
+    const invoked: string[] = [];
+    const toolsNode = createAgentToolsNode(
+      phoneTools((name) => {
+        invoked.push(name);
+      }),
+      "booking",
+    );
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("050 111 22 33")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "p1",
+                name: "find_contact_by_phone",
+                args: { phoneNumber: "+380501112233" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual(["find_contact_by_phone"]);
+  });
+
+  it("does not treat AI or tool text as patient-provided phone", async () => {
+    const invoked: string[] = [];
+    const toolsNode = createAgentToolsNode(
+      phoneTools((name) => {
+        invoked.push(name);
+      }),
+      "booking",
+    );
+    const update = await toolsNode(
+      clinicState({
+        messages: [
+          new AIMessage("Ваш номер +380501112233?"),
+          new ToolMessage({
+            content: JSON.stringify({ phoneNumber: "+380501112233" }),
+            tool_call_id: "x",
+            name: "create_contact",
+          }),
+          new HumanMessage("Тест"),
+        ],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "p1",
+                name: "find_contact_by_phone",
+                args: { phoneNumber: "+380501112233" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([]);
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content)).error).toBe(
+      "Phone not provided",
+    );
+  });
+
+  it("create_contact without phoneNumber still runs", async () => {
+    const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolsNode = createAgentToolsNode(
+      phoneTools((name, args) => {
+        invoked.push({ name, args });
+      }),
+      "booking",
+    );
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("Ada")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "p1",
+                name: "create_contact",
+                args: { firstName: "Ada" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([{ name: "create_contact", args: { firstName: "Ada" } }]);
   });
 });

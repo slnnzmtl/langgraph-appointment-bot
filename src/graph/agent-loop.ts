@@ -38,7 +38,7 @@ import {
   type ServicesContext,
 } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
-import { trackEvent } from "../analytics/track.js";
+import { trackEvent, trackToolError } from "../analytics/track.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
@@ -58,6 +58,7 @@ import {
   extractReplyButtons,
   isBookingOfferQuestion,
 } from "../shared/message-content.js";
+import { normalizeClinicPhone } from "../shared/phone.js";
 import {
   formatBookingMeetingsContext,
   formatContactContext,
@@ -316,6 +317,23 @@ const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boo
   status !== "skipped" && status !== "answered";
 
 const CREATE_NOTE_REQUIRED_ERROR = "Note step required";
+
+const PHONE_GROUNDED_TOOLS = new Set([
+  "find_contact_by_phone",
+  "create_contact",
+  "update_contact",
+]);
+
+const PHONE_NOT_PROVIDED_ERROR = "Phone not provided";
+
+/** True when some HumanMessage in `messages` normalizes to the same E.164 as `wanted`. */
+const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boolean =>
+  messages.some((message) => {
+    if (!(message instanceof HumanMessage)) {
+      return false;
+    }
+    return normalizeClinicPhone(extractMessageTextContent(message.content)) === wanted;
+  });
 
 /**
  * Advance / reset the note ladder from the latest human line before the booking LLM runs.
@@ -735,6 +753,31 @@ export const createAgentToolsNode = (
             }),
           );
           continue;
+        }
+
+        if (PHONE_GROUNDED_TOOLS.has(call.name)) {
+          const rawPhone = (call.args ?? {}).phoneNumber;
+          if (typeof rawPhone === "string" && rawPhone.trim() !== "") {
+            const wanted = normalizeClinicPhone(rawPhone);
+            if (
+              wanted != null
+              && !humanProvidedPhone(state.messages ?? [], wanted)
+            ) {
+              trackToolError(call.name, PHONE_NOT_PROVIDED_ERROR);
+              synthetic.push(
+                new ToolMessage({
+                  content: JSON.stringify({
+                    error: PHONE_NOT_PROVIDED_ERROR,
+                    hint:
+                      "Ask the patient for their clinic phone, then retry with the number they typed.",
+                  }),
+                  tool_call_id: call.id ?? "",
+                  name: call.name,
+                }),
+              );
+              continue;
+            }
+          }
         }
 
         if (call.name === "present_availability_slots") {
