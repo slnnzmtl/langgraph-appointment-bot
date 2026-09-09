@@ -310,13 +310,19 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         const prefetched = await options.prefetch();
         contactContext = prefetched.contactContext;
         bookingContext = prefetched.bookingContext;
+        // REPLACE cancel-and-rebook: keep chosen slot + note when «Скасувати» arrives with
+        // selectedSlot already set. Visit-change cancel after «Мій запис» has no slot → wipe.
+        // Always drop availability so DATE/TIME rewrite stays owned by finalize only.
+        const keepBookingProgress =
+          /^(скасувати|cancel)$/i.test(lastHumanLine) && state.selectedSlot != null;
         prefetchUpdate = {
           ...prefetched,
           prefetchDirty: false,
           prefetchFetchedAt: Date.now(),
           availabilityContext: null,
-          bookingNoteStatus: "unasked",
-          selectedSlot: null,
+          ...(keepBookingProgress
+            ? {}
+            : { bookingNoteStatus: "unasked" as const, selectedSlot: null }),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

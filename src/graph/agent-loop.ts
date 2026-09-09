@@ -798,7 +798,18 @@ export const createAgentToolsNode = (
 
     if (meetingMutationClearsAvailability(resultMessages)) {
       update.availabilityContext = null;
-      Object.assign(update, resetBookingNoteState());
+      // REPLACE cancel-and-rebook: keep selectedSlot + note so create_meeting can reuse them.
+      // Only skip reset when cancel_meeting is the sole committed mutation this turn.
+      const committed = resultMessages.filter(
+        (message): message is ToolMessage =>
+          message instanceof ToolMessage
+          && classifyMeetingMutationToolMessage(message) === "committed",
+      );
+      const cancelOnlyCommitted =
+        committed.length > 0 && committed.every((message) => message.name === "cancel_meeting");
+      if (!cancelOnlyCommitted) {
+        Object.assign(update, resetBookingNoteState());
+      }
       if (
         resultMessages.some(
           (message) => message instanceof ToolMessage && meetingMutationIsHitlDecline(message),
@@ -874,9 +885,17 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       };
     }
 
-    // Already booked wins over DATE/TIME rewrite when both fire in the same turn.
+    // Already booked / committed create win over DATE/TIME rewrite when both fire same turn.
     const alreadyBooked =
       agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages);
+    const createCommitted =
+      agent.id === BOOKING_AGENT_ID
+      && agentMessages.some(
+        (message) =>
+          message instanceof ToolMessage
+          && message.name === "create_meeting"
+          && classifyMeetingMutationToolMessage(message) === "committed",
+      );
     const createError = latestCreateMeetingError(agentMessages);
     const noteBlockedThisTurn = createError === CREATE_NOTE_REQUIRED_ERROR;
     const awaitingNote =
@@ -885,7 +904,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       && !alreadyBooked;
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
     const slotOffer =
-      agent.id === BOOKING_AGENT_ID && !alreadyBooked
+      agent.id === BOOKING_AGENT_ID && !alreadyBooked && !createCommitted
         ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
         : null;
     if (slotOffer) {

@@ -1729,6 +1729,61 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
   });
 
+  it("keeps Готово + DEFAULT when committed create and present_availability_slots ran same turn", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const days = [
+      {
+        date: "2026-09-29",
+        dayLabel: "29 вересня (вівторок)",
+        slots: [
+          {
+            id: "a",
+            label: "12:00",
+            dateStart: "2026-09-29T12:00:00",
+            dateEnd: "2026-09-29T13:00:00",
+          },
+        ],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 3,
+        availabilityContext: { days, stepMinutes: 60 },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "slots", name: "present_availability_slots", args: {} },
+              { id: "create", name: "create_meeting", args: {} },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({ days, stepMinutes: 60 }),
+            tool_call_id: "slots",
+            name: "present_availability_slots",
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              success: true,
+              id: "m-new",
+              name: "Збільшення губ Neotiva - Daniel Test",
+              dateStart: "2026-09-29 12:00:00",
+            }),
+            tool_call_id: "create",
+            name: "create_meeting",
+          }),
+          new AIMessage(
+            `Готово! Чекаємо вас на збільшення губ Neotiva 29 вересня (вівторок) о 12:00 ✨\n\n${CLINIC_ADDRESS}`,
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Готово!");
+    expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
   it("prefixes DATE offer when create_meeting overlaps and slots ran same turn", () => {
     const finalize = createAgentFinalizeNode(agent);
     const days = [
@@ -2658,6 +2713,79 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(declineUpdate.availabilityContext).toBeNull();
     expect(declineUpdate.bookingNoteStatus).toBe("unasked");
     expect(declineUpdate.selectedSlot).toBeNull();
+  });
+
+  it("REPLACE cancel commit nulls availability but keeps selectedSlot and note", async () => {
+    const cancelTool = tool(
+      async () => JSON.stringify({ success: true, id: "m-1" }),
+      {
+        name: "cancel_meeting",
+        description: "cancel",
+        schema: z.object({ meetingId: z.string() }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([cancelTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        availabilityContext: snapshot,
+        selectedSlot: {
+          dateStart: "2026-09-29T12:00:00",
+          dateEnd: "2026-09-29T13:00:00",
+          label: "12:00",
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "c1",
+                name: "cancel_meeting",
+                args: { meetingId: "m-1" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(update.availabilityContext).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+  });
+
+  it("committed create_meeting still resets selectedSlot and note", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ success: true, id: "m-new" }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        availabilityContext: snapshot,
+        selectedSlot: {
+          dateStart: "2026-09-29T12:00:00",
+          dateEnd: "2026-09-29T13:00:00",
+          label: "12:00",
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(update.availabilityContext).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
   });
 
   it("serves checkpointed slots on cache hit without invoking CRM tool", async () => {
