@@ -208,6 +208,30 @@ describe("contact-tools", () => {
     ).toEqual([]);
   });
 
+  it("contactMissingFields treats Пацієнт/Patient as missing (DDD-59)", () => {
+    expect(
+      contactMissingFields({
+        firstName: "Пацієнт",
+        lastName: "Пацієнт",
+        phoneNumber: "+380671675272",
+      }),
+    ).toEqual(["firstName", "lastName"]);
+    expect(
+      contactMissingFields({
+        firstName: "Patient",
+        lastName: "Ada",
+        phoneNumber: "+380501112233",
+      }),
+    ).toEqual(["firstName"]);
+    expect(
+      contactMissingFields({
+        firstName: "Ada",
+        lastName: "Smoke",
+        phoneNumber: "+380501112233",
+      }),
+    ).toEqual([]);
+  });
+
   it("annotateContactSearchResult flags lastName null", () => {
     const raw = {
       success: true,
