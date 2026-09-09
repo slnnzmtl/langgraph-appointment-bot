@@ -729,6 +729,102 @@ describe("createAgentToolsNode services capture", () => {
   });
 });
 
+describe("createAgentToolsNode contact capture (DDD-86)", () => {
+  it("sets contactContext from find_contact_by_phone hit", async () => {
+    const findTool = tool(
+      async () =>
+        JSON.stringify({
+          contacts: [
+            {
+              id: "c-phone",
+              firstName: "Ada",
+              lastName: "Lovelace",
+              phoneNumber: "+380682667818",
+              cTelegram: null,
+            },
+          ],
+        }),
+      {
+        name: "find_contact_by_phone",
+        description: "Find by phone",
+        schema: z.object({ phoneNumber: z.string() }),
+      },
+    );
+
+    const toolsNode = createAgentToolsNode([findTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("+380682667818")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "1",
+                name: "find_contact_by_phone",
+                args: { phoneNumber: "+380682667818" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.contactContext).toEqual({
+      contacts: [
+        {
+          id: "c-phone",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380682667818",
+          cTelegram: null,
+          missingFields: [],
+        },
+      ],
+    });
+    expect(update.prefetchDirty).toBeUndefined();
+  });
+
+  it("does not set contactContext on empty or error find", async () => {
+    for (const payload of [
+      { contacts: [] },
+      { error: "CRM down" },
+    ]) {
+      const findTool = tool(async () => JSON.stringify(payload), {
+        name: "find_contact_by_phone",
+        description: "Find by phone",
+        schema: z.object({ phoneNumber: z.string() }),
+      });
+
+      const toolsNode = createAgentToolsNode([findTool], "booking");
+      const update = await toolsNode(
+        clinicState({
+          messages: [new HumanMessage("+380682667818")],
+          contactContext: listedContact,
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [
+                {
+                  id: "1",
+                  name: "find_contact_by_phone",
+                  args: { phoneNumber: "+380682667818" },
+                  type: "tool_call",
+                },
+              ],
+            }),
+          ],
+        }),
+        { configurable: {} },
+      );
+
+      expect(update.contactContext).toBeUndefined();
+    }
+  });
+});
+
 describe("createAgentLlmNode context cache", () => {
   const sampleTool = tool(async () => "ok", {
     name: "list_services",
@@ -2489,10 +2585,31 @@ describe("availability offer helpers", () => {
     expect(matchAvailabilityDay("14:00", days)).toBeNull();
   });
 
-  it("resolveAvailabilityOffer prefers tool-turn DATE over checkpoint day pick", () => {
+  it("resolveAvailabilityOffer prefers day pick TIME over this-turn multi-day DATE", () => {
     const offer = resolveAvailabilityOffer(
       [
         new HumanMessage("10 вересня"),
+        new AIMessage({
+          content: "",
+          tool_calls: [{ id: "1", name: "present_availability_slots", args: {} }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ days, stepMinutes: 60 }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+        new AIMessage("invented"),
+      ],
+      { days, stepMinutes: 60 },
+    );
+    expect(offer?.replyText).toContain("Вільні години на 10 вересня (четвер)");
+    expect(offer?.replyButtons).toEqual(["14:00", "15:00", OTHER_DATE_LABEL]);
+  });
+
+  it("resolveAvailabilityOffer keeps DATE when human is not a day pick", () => {
+    const offer = resolveAvailabilityOffer(
+      [
+        new HumanMessage(OTHER_DATE_LABEL),
         new AIMessage({
           content: "",
           tool_calls: [{ id: "1", name: "present_availability_slots", args: {} }],

@@ -33,6 +33,7 @@ import {
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
 import { shortDayMonthLabel } from "../tools/availability-slots.js";
+import { normalizeContactLookupResult } from "../tools/contact-tools.js";
 import {
   normalizeListServicesResult,
   type ServicesContext,
@@ -412,25 +413,21 @@ export const availabilityOfferFromToolTurn = (
 };
 
 /**
- * Code-owned DATE/TIME for booking finalize: prefer this-turn tool snapshot; else TIME when
- * the latest human message picks a day already in checkpointed availabilityContext.
+ * Code-owned DATE/TIME for booking finalize: TIME when the latest human message picks a
+ * snapshot day (even if this-turn present_availability_slots returned a multi-day DATE);
+ * else DATE/TIME from this-turn tool snapshot.
  */
 export const resolveAvailabilityOffer = (
   messages: BaseMessage[],
   availabilityContext: AvailabilityContext | null | undefined,
 ): { replyText: string; replyButtons: string[] } | null => {
-  const fromTool = availabilityOfferFromToolTurn(messages);
-  if (fromTool) {
-    return fromTool;
+  const days =
+    captureAvailabilityFromMessages(messages)?.days ?? availabilityContext?.days ?? [];
+  const day = matchAvailabilityDay(lastHumanText(messages), days);
+  if (day) {
+    return formatAvailabilityTimeOffer(day);
   }
-  if (!availabilityContext || availabilityContext.days.length === 0) {
-    return null;
-  }
-  const day = matchAvailabilityDay(lastHumanText(messages), availabilityContext.days);
-  if (!day) {
-    return null;
-  }
-  return formatAvailabilityTimeOffer(day);
+  return availabilityOfferFromToolTurn(messages);
 };
 
 export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
@@ -870,6 +867,15 @@ export const createAgentToolsNode = (
     const capturedServices = captureServicesFromMessages(resultMessages);
     if (capturedServices !== undefined) {
       update.servicesContext = capturedServices;
+    }
+
+    const found = captureLatestToolContext(
+      resultMessages,
+      "find_contact_by_phone",
+      normalizeContactLookupResult,
+    );
+    if (found && !found.error && found.contacts.length > 0) {
+      update.contactContext = found;
     }
 
     if (crmWriteDirtiesPrefetch(resultMessages)) {
