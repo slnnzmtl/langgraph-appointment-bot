@@ -917,8 +917,19 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         replyButtons = accidentalButtons;
       }
     } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
-      const hasVisit = defaultMenuHasVisit(agentMessages, state.bookingContext);
-      replyButtons = [...defaultMenuLabels(hasVisit)];
+      // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
+      const idle = agentMessages.some(
+        (message) =>
+          message instanceof ToolMessage
+          && (classifyMeetingMutationToolMessage(message) === "committed"
+            || meetingMutationIsHitlDecline(message)),
+      );
+      if (idle) {
+        replyButtons = [
+          ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+        ];
+        trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+      }
     }
 
     if (yieldTag && agent.id === FAQ_AGENT_ID) {

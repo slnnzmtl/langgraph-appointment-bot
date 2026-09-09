@@ -21,6 +21,7 @@ import {
   meetingMutationClearsAvailability,
   resolveAvailabilityOffer,
 } from "../agent-loop.js";
+import { setTrackEventForTests } from "../../analytics/track.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
@@ -1435,7 +1436,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
   });
 
-  it("strips an empty reply_buttons trailer and attaches DEFAULT MENU for booking", () => {
+  it("strips an empty reply_buttons trailer and omits DEFAULT MENU for mid-flow booking", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -1452,7 +1453,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(stored.content)).toBe("Could you please provide your phone number?");
     expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
-    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
   it("attaches REPLACE when create_meeting returned Already booked and no trailer", () => {
@@ -1581,6 +1582,98 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("DDD-54: attaches DEFAULT MENU after HITL decline on create_meeting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "create_meeting", args: {} }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({ cancelled: true }),
+            tool_call_id: "1",
+            name: "create_meeting",
+          }),
+          new AIMessage("Нічого не записано. Можемо підібрати інший час, коли будете готові."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+  });
+
+  it("DDD-54: attaches DEFAULT has-visits after a committed reschedule_meeting", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 2,
+        bookingContext: listedMeetings,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "1", name: "reschedule_meeting", args: { meetingId: "m-1" } }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              id: "m-1",
+              name: "Консультація - Ada",
+              dateStart: "2026-09-10 14:00:00",
+              dateEnd: "2026-09-10 15:00:00",
+            }),
+            tool_call_id: "1",
+            name: "reschedule_meeting",
+          }),
+          new AIMessage(
+            `Готово! Чекаємо вас на консультацію 10 вересня (четвер) о 14:00 ✨\n\n${CLINIC_ADDRESS}`,
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("DDD-54: emits reply_menu_filled when attaching DEFAULT MENU on idle", () => {
+    const seen: { name: string; props: Record<string, unknown> }[] = [];
+    setTrackEventForTests((name, props) => {
+      seen.push({ name, props });
+    });
+    try {
+      const finalize = createAgentFinalizeNode(agent);
+      finalize(
+        clinicState({
+          stepCount: 2,
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: "1", name: "create_meeting", args: {} }],
+            }),
+            new ToolMessage({
+              content: JSON.stringify({
+                id: "m-new",
+                name: "Консультація - Ada",
+                dateStart: "2026-09-10 14:00:00",
+              }),
+              tool_call_id: "1",
+              name: "create_meeting",
+            }),
+            new AIMessage(`Готово!\n\n${CLINIC_ADDRESS}`),
+          ],
+        }),
+      );
+
+      expect(seen).toContainEqual({
+        name: "reply_menu_filled",
+        props: { menu: "default", reason: "idle" },
+      });
+    } finally {
+      setTrackEventForTests(null);
+    }
   });
 
   it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {
@@ -2070,7 +2163,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
   });
 
-  it("DDD-79: booking still attaches DEFAULT MENU for non-offer replies without a trailer", () => {
+  it("DDD-54: booking omits DEFAULT MENU for non-offer mid-flow replies without a trailer", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -2082,7 +2175,7 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
   it("prefers catalog bullets over an accidental leftover trailer", () => {
@@ -2269,7 +2362,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(["14:00", OTHER_DATE_LABEL]);
   });
 
-  it("keeps DEFAULT MENU when availability snapshot is empty and there is no trailer", () => {
+  it("omits DEFAULT MENU when availability snapshot is empty and there is no trailer", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -2283,7 +2376,7 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.lastHandoff?.replyText).toBe("Could you please provide your phone number?");
-    expect(update.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 });
 
@@ -2701,7 +2794,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         ],
       }),
     );
-    expect(proseOnly.lastHandoff?.replyButtons).toEqual(["Записатись", "Послуги", "Адреса"]);
+    expect(proseOnly.lastHandoff?.replyButtons).toBeUndefined();
   });
 
   it("injects selected_slot not full availability into booking LLM dynamic context", async () => {

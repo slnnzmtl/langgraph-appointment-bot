@@ -100,7 +100,7 @@ Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph re
 
 The graph writes reply keyboards on `lastHandoff.replyButtons`. Models emit patient text only. Accidental `<reply_buttons>` / `<yield_to_supervisor/>` tags are stripped so they never reach Telegram. Adapter always appends «Головне меню». English aliases (Book / Services / Address / …) are recognized for inbound routing; keyboards the graph attaches are Ukrainian-only.
 
-- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize when no other code-owned menu matches. FAQ with no choice question: adapter shows only «Головне меню» (no DEFAULT MENU).
+- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize after a committed create/cancel/reschedule or HITL decline. Mid-flow free-text (phone, name) and FAQ with no choice question: adapter shows only «Головне меню» (no DEFAULT MENU).
 - **VISIT CHANGE** (code-owned): «Перенести», «Скасувати», «Ні, дякую» — supervisor `menu=visit_change` after listing visits for «Мій запис» / a visit inquiry (falls back to DEFAULT when the list is empty).
 - **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` (never «Перенести» here). After «Скасувати», cancel then book the new slot.
 - **DATE / TIME** (code-owned): short day labels + «Інша дата», then HH:mm — booking finalize from `present_availability_slots` / `availabilityContext`.

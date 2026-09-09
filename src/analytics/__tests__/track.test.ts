@@ -40,9 +40,11 @@ describe("trackEvent", () => {
     });
     trackEvent("reply_menu_filled", { menu: "visit_change", reason: "omitted" });
     trackEvent("reply_menu_filled", { menu: "booking_offer", reason: "omitted" });
+    trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
     expect(seen).toEqual([
       { name: "reply_menu_filled", props: { menu: "visit_change", reason: "omitted" } },
       { name: "reply_menu_filled", props: { menu: "booking_offer", reason: "omitted" } },
+      { name: "reply_menu_filled", props: { menu: "default", reason: "idle" } },
     ]);
   });
 
