@@ -305,6 +305,56 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 
+  it("rejects dummy CRM names Пацієнт before HITL (DDD-59)", async () => {
+    await withTg(async () => {
+      const dummyCallTool = async (name: string, args: Record<string, unknown>) => {
+        calls.push({ name, args });
+        if (name === "get_entity") {
+          return {
+            id: "contact-1",
+            firstName: "Пацієнт",
+            lastName: "Пацієнт",
+            phoneNumber: "+380671675272",
+            cTelegram: "tg-42",
+          };
+        }
+        return { success: true, id: "meeting-1" };
+      };
+
+      const [createMeeting] = createMeetingTools({
+        callTool: dummyCallTool,
+        assignedUserId: "assigned-99",
+      }).filter((tool) => tool.name === "create_meeting");
+
+      const graph = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const first = await graph.invoke(
+        { result: "" },
+        { configurable: { thread_id: "hitl-dummy-name" } },
+      );
+      expect(first.__interrupt__).toBeUndefined();
+      expect(calls.map((call) => call.name)).toEqual(["get_entity"]);
+      expect(JSON.parse(first.result)).toMatchObject({
+        error: "Contact incomplete",
+        missingFields: ["firstName", "lastName"],
+      });
+    });
+  });
+
   it("confirmationGiven:true on a first tool call interrupts instead of writing", async () => {
     await withTg(async () => {
       const [createMeeting] = createMeetingTools({
