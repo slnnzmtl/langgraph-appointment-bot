@@ -534,6 +534,91 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.next).toBe("booking");
   });
 
+  it("keeps selectedSlot and note on Скасувати when a slot is already chosen (REPLACE)", async () => {
+    const slot = {
+      dateStart: "2026-09-29T12:00:00",
+      dateEnd: "2026-09-29T13:00:00",
+      label: "12:00",
+    };
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Скасувати")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+        bookingNoteStatus: "skipped",
+        selectedSlot: slot,
+        availabilityContext: {
+          days: [{ date: "2026-09-29", slots: [] }],
+          stepMinutes: 60,
+        },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Already booked",
+          replyButtons: ["Скасувати", "Ні, дякую"],
+        },
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.availabilityContext).toBeNull();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.next).toBe("booking");
+  });
+
+  it("wipes selectedSlot and note on Скасувати when no slot is chosen (visit-change)", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Скасувати")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        prefetchFetchedAt: Date.now(),
+        bookingNoteStatus: "answered",
+        selectedSlot: null,
+        availabilityContext: {
+          days: [{ date: "2026-09-29", slots: [] }],
+          stepMinutes: 60,
+        },
+        lastHandoff: {
+          agentId: "FINISH",
+          agentName: "supervisor",
+          status: "ok",
+          replyButtons: ["Перенести", "Скасувати", "Ні, дякую"],
+        },
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.availabilityContext).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+  });
+
   it("refetches when prefetchFetchedAt is missing", async () => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,
