@@ -20,10 +20,22 @@ export const BOOKING_CONTACT_REQUIRED_FIELDS = [
   "phoneNumber",
 ] as const;
 
+/** CRM placeholders that are not a real patient name (DDD-59). */
+const DUMMY_CONTACT_NAMES = new Set(["пацієнт", "patient"]);
+
 export const contactMissingFields = (contact: Record<string, unknown>): string[] =>
   BOOKING_CONTACT_REQUIRED_FIELDS.filter((field) => {
     const value = contact[field];
-    return typeof value !== "string" || value.trim() === "";
+    if (typeof value !== "string" || value.trim() === "") {
+      return true;
+    }
+    if (
+      (field === "firstName" || field === "lastName")
+      && DUMMY_CONTACT_NAMES.has(value.trim().toLowerCase())
+    ) {
+      return true;
+    }
+    return false;
   });
 
 const contactRowsFromSearch = (record: Record<string, unknown>): unknown[] | undefined => {

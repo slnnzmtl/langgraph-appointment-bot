@@ -326,6 +326,7 @@ const PHONE_GROUNDED_TOOLS = new Set([
 ]);
 
 const PHONE_NOT_PROVIDED_ERROR = "Phone not provided";
+const NAME_NOT_PROVIDED_ERROR = "Name not provided";
 
 /** True when some HumanMessage in `messages` normalizes to the same E.164 as `wanted`. */
 const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boolean =>
@@ -335,6 +336,28 @@ const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boolean =>
     }
     return normalizeClinicPhone(extractMessageTextContent(message.content)) === wanted;
   });
+
+/**
+ * True when some HumanMessage equals `wanted` (trim + casefold), or is two whitespace
+ * tokens and `wanted` equals token 0 or 1 (DDD-59 name grounding).
+ */
+const humanProvidedName = (messages: BaseMessage[], wanted: string): boolean => {
+  const target = wanted.trim().toLowerCase();
+  if (target.length === 0) {
+    return false;
+  }
+  return messages.some((message) => {
+    if (!(message instanceof HumanMessage)) {
+      return false;
+    }
+    const text = extractMessageTextContent(message.content).trim().toLowerCase();
+    if (text === target) {
+      return true;
+    }
+    const parts = text.split(/\s+/).filter((part) => part.length > 0);
+    return parts.length === 2 && (parts[0] === target || parts[1] === target);
+  });
+};
 
 /**
  * Advance / reset the note ladder from the latest human line before the booking LLM runs.
@@ -767,6 +790,34 @@ export const createAgentToolsNode = (
                     error: PHONE_NOT_PROVIDED_ERROR,
                     hint:
                       "Ask the patient for their clinic phone, then retry with the number they typed.",
+                  }),
+                  tool_call_id: call.id ?? "",
+                  name: call.name,
+                }),
+              );
+              continue;
+            }
+          }
+
+          if (call.name === "create_contact" || call.name === "update_contact") {
+            const args = call.args ?? {};
+            const nameFields = ["firstName", "lastName"] as const;
+            const invented = nameFields.find((field) => {
+              const raw = args[field];
+              return (
+                typeof raw === "string"
+                && raw.trim() !== ""
+                && !humanProvidedName(state.messages ?? [], raw)
+              );
+            });
+            if (invented) {
+              trackToolError(call.name, NAME_NOT_PROVIDED_ERROR);
+              synthetic.push(
+                new ToolMessage({
+                  content: JSON.stringify({
+                    error: NAME_NOT_PROVIDED_ERROR,
+                    hint:
+                      "Ask the patient for their name, then retry with the value they typed.",
                   }),
                   tool_call_id: call.id ?? "",
                   name: call.name,

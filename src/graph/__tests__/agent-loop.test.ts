@@ -710,6 +710,7 @@ describe("createAgentToolsNode services capture", () => {
     const toolsNode = createAgentToolsNode([updateTool], "faq");
     const update = await toolsNode(
       clinicState({
+        messages: [new HumanMessage("Ada")],
         agentMessages: [
           new AIMessage({
             content: "",
@@ -3195,7 +3196,7 @@ describe("DDD-87: phone must appear in patient messages", () => {
     );
     const update = await toolsNode(
       clinicState({
-        messages: [new HumanMessage("0501112233")],
+        messages: [new HumanMessage("Ada"), new HumanMessage("0501112233")],
         agentMessages: [
           new AIMessage({
             content: "",
@@ -3325,5 +3326,197 @@ describe("DDD-87: phone must appear in patient messages", () => {
       { configurable: {} },
     );
     expect(invoked).toEqual([{ name: "create_contact", args: { firstName: "Ada" } }]);
+  });
+});
+
+describe("DDD-59: name must appear in patient messages", () => {
+  afterEach(() => {
+    setTrackEventForTests(null);
+  });
+
+  const nameTools = (onInvoke: (name: string, args: Record<string, unknown>) => void) => [
+    tool(
+      async (args: { firstName: string; lastName?: string; phoneNumber?: string }) => {
+        onInvoke("create_contact", args);
+        return JSON.stringify({ success: true, id: "c-1" });
+      },
+      {
+        name: "create_contact",
+        description: "create",
+        schema: z.object({
+          firstName: z.string(),
+          lastName: z.string().optional(),
+          phoneNumber: z.string().optional(),
+        }),
+      },
+    ),
+    tool(
+      async (args: {
+        contactId: string;
+        firstName?: string;
+        lastName?: string;
+        phoneNumber?: string;
+      }) => {
+        onInvoke("update_contact", args);
+        return JSON.stringify({ success: true });
+      },
+      {
+        name: "update_contact",
+        description: "update",
+        schema: z.object({
+          contactId: z.string(),
+          firstName: z.string().optional(),
+          lastName: z.string().optional(),
+          phoneNumber: z.string().optional(),
+        }),
+      },
+    ),
+  ];
+
+  it.each(["create_contact", "update_contact"] as const)(
+    "blocks invented Пацієнт on %s even when phone was typed",
+    async (toolName) => {
+      const seen: { name: string; props: Record<string, unknown> }[] = [];
+      setTrackEventForTests((name, props) => {
+        seen.push({ name, props });
+      });
+      const invoked: string[] = [];
+      const toolsNode = createAgentToolsNode(
+        nameTools((name) => {
+          invoked.push(name);
+        }),
+        "booking",
+      );
+      const args =
+        toolName === "create_contact"
+          ? {
+              firstName: "Пацієнт",
+              lastName: "Пацієнт",
+              phoneNumber: "+380671675272",
+            }
+          : {
+              contactId: "c-1",
+              firstName: "Пацієнт",
+              lastName: "Пацієнт",
+              phoneNumber: "+380671675272",
+            };
+      const update = await toolsNode(
+        clinicState({
+          messages: [new HumanMessage("0671675272")],
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: "n1", name: toolName, args, type: "tool_call" }],
+            }),
+          ],
+        }),
+        { configurable: {} },
+      );
+      expect(invoked).toEqual([]);
+      const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+      expect(JSON.parse(String(toolMsg.content))).toEqual({
+        error: "Name not provided",
+        hint: "Ask the patient for their name, then retry with the value they typed.",
+      });
+      expect(seen).toContainEqual(
+        expect.objectContaining({
+          name: "tool_error",
+          props: expect.objectContaining({
+            tool: toolName,
+            error_message: "Name not provided",
+          }),
+        }),
+      );
+    },
+  );
+
+  it("allows create_contact when human typed first then last name", async () => {
+    const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolsNode = createAgentToolsNode(
+      nameTools((name, args) => {
+        invoked.push({ name, args });
+      }),
+      "booking",
+    );
+    await toolsNode(
+      clinicState({
+        messages: [
+          new HumanMessage("Марія"),
+          new HumanMessage("Коваленко"),
+          new HumanMessage("0501112233"),
+        ],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "n1",
+                name: "create_contact",
+                args: {
+                  firstName: "Марія",
+                  lastName: "Коваленко",
+                  phoneNumber: "+380501112233",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      {
+        name: "create_contact",
+        args: {
+          firstName: "Марія",
+          lastName: "Коваленко",
+          phoneNumber: "+380501112233",
+        },
+      },
+    ]);
+  });
+
+  it("allows update_contact when human typed both names in one line", async () => {
+    const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolsNode = createAgentToolsNode(
+      nameTools((name, args) => {
+        invoked.push({ name, args });
+      }),
+      "booking",
+    );
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("Марія Коваленко")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "n1",
+                name: "update_contact",
+                args: {
+                  contactId: "c-1",
+                  firstName: "Марія",
+                  lastName: "Коваленко",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      {
+        name: "update_contact",
+        args: {
+          contactId: "c-1",
+          firstName: "Марія",
+          lastName: "Коваленко",
+        },
+      },
+    ]);
   });
 });
