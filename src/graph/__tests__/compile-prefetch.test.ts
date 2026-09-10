@@ -1,16 +1,15 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
-import { tool } from "@langchain/core/tools";
 import { describe, expect, it } from "vitest";
-import { z } from "zod";
 
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 
 describe("prefetchBookingContext", () => {
-  it("chains contact lookup then planned meetings", async () => {
+  it("chains contact lookup, planned meetings, then latest Held", async () => {
     const names: string[] = [];
+    const entityFilters: unknown[] = [];
     const result = await runWithTelegramUserId("tg-1", () =>
       prefetchBookingContext(async (name, args) => {
         names.push(name);
@@ -18,6 +17,22 @@ describe("prefetchBookingContext", () => {
           return { success: true, contacts: [{ id: "c-1", firstName: "Ada" }] };
         }
         expect(name).toBe("search_entity");
+        entityFilters.push(args?.filters);
+        const statusIn = (args?.filters as { status?: { $in?: string[] } } | undefined)?.status
+          ?.$in;
+        if (statusIn?.includes("Held")) {
+          return {
+            list: [
+              {
+                id: "h-1",
+                name: "Past Consult",
+                dateStart: "2026-06-01 10:00:00",
+                dateEnd: "2026-06-01 10:30:00",
+                status: "Held",
+              },
+            ],
+          };
+        }
         expect(args).toMatchObject({
           entityType: "Meeting",
           filters: {
@@ -39,7 +54,12 @@ describe("prefetchBookingContext", () => {
       }),
     );
 
-    expect(names).toEqual(["search_contacts", "search_entity"]);
+    expect(names).toEqual(["search_contacts", "search_entity", "search_entity"]);
+    expect(entityFilters[1]).toMatchObject({
+      parentId: "c-1",
+      status: { $in: ["Held"] },
+    });
+    expect(entityFilters[1]).not.toHaveProperty("dateStart");
     expect(result.contactContext.contacts).toEqual([
       { id: "c-1", firstName: "Ada", missingFields: ["lastName", "phoneNumber"] },
     ]);
@@ -51,6 +71,28 @@ describe("prefetchBookingContext", () => {
         dateEnd: "2027-01-15 11:30:00",
       },
     ]);
+    expect(result.bookingContext?.latestHeld).toEqual({
+      id: "h-1",
+      name: "Past Consult",
+      dateStart: "2026-06-01 10:00:00",
+      dateEnd: "2026-06-01 10:30:00",
+    });
+  });
+
+  it("sets latestHeld null when there is no Held history", async () => {
+    const result = await runWithTelegramUserId("tg-1", () =>
+      prefetchBookingContext(async (name) => {
+        if (name === "search_contacts") {
+          return { success: true, contacts: [{ id: "c-1", firstName: "Ada" }] };
+        }
+        return { list: [] };
+      }),
+    );
+    expect(result.bookingContext).toEqual({
+      meetings: [],
+      dateFrom: expect.any(String),
+      latestHeld: null,
+    });
   });
 
   it("sets contactContext when no contact id and skips meetings lookup", async () => {
@@ -66,19 +108,49 @@ describe("prefetchBookingContext", () => {
     expect(result.bookingContext).toBeNull();
   });
 
-  it("keeps contactContext when meetings lookup fails", async () => {
+  it("keeps contactContext when planned meetings lookup fails", async () => {
+    const names: string[] = [];
     const result = await runWithTelegramUserId("tg-1", () =>
       prefetchBookingContext(async (name) => {
+        names.push(name);
         if (name === "search_contacts") {
           return { success: true, contacts: [{ id: "c-1" }] };
         }
         throw new Error("CRM down");
       }),
     );
+    expect(names).toEqual(["search_contacts", "search_entity"]);
     expect(result.contactContext.contacts).toEqual([
       { id: "c-1", missingFields: ["firstName", "lastName", "phoneNumber"] },
     ]);
     expect(result.bookingContext).toBeNull();
+  });
+
+  it("keeps upcoming meetings when Held lookup fails", async () => {
+    let entityCalls = 0;
+    const result = await runWithTelegramUserId("tg-1", () =>
+      prefetchBookingContext(async (name) => {
+        if (name === "search_contacts") {
+          return { success: true, contacts: [{ id: "c-1", firstName: "Ada" }] };
+        }
+        entityCalls += 1;
+        if (entityCalls === 1) {
+          return {
+            list: [
+              {
+                id: "m-1",
+                name: "Consult",
+                dateStart: "2027-01-15 11:00:00",
+                dateEnd: "2027-01-15 11:30:00",
+              },
+            ],
+          };
+        }
+        throw new Error("Held search down");
+      }),
+    );
+    expect(result.bookingContext?.meetings).toHaveLength(1);
+    expect(result.bookingContext?.latestHeld).toBeNull();
   });
 });
 
@@ -133,7 +205,7 @@ describe("compileClinicGraph prefetch once", () => {
     );
 
     expect(names.filter((n) => n === "search_contacts")).toHaveLength(1);
-    expect(names.filter((n) => n === "search_entity")).toHaveLength(1);
+    expect(names.filter((n) => n === "search_entity")).toHaveLength(2);
   });
 
   it("reuses checkpointed prefetch on the next turn within TTL", async () => {
@@ -158,7 +230,7 @@ describe("compileClinicGraph prefetch once", () => {
     });
 
     expect(names.filter((n) => n === "search_contacts")).toHaveLength(1);
-    expect(names.filter((n) => n === "search_entity")).toHaveLength(1);
+    expect(names.filter((n) => n === "search_entity")).toHaveLength(2);
   });
 
   it("refetches on the next turn when TTL is zero", async () => {
@@ -186,6 +258,6 @@ describe("compileClinicGraph prefetch once", () => {
     });
 
     expect(names.filter((n) => n === "search_contacts")).toHaveLength(2);
-    expect(names.filter((n) => n === "search_entity")).toHaveLength(2);
+    expect(names.filter((n) => n === "search_entity")).toHaveLength(4);
   });
 });

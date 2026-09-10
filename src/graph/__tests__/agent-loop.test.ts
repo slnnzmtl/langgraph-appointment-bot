@@ -110,6 +110,7 @@ describe("formatBookingMeetingsContext", () => {
     const block = formatBookingMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain('"meetings":[]');
+    expect(block).toContain('"latestHeld":null');
     expect(block).not.toContain("When moving or cancelling");
   });
 
@@ -120,6 +121,22 @@ describe("formatBookingMeetingsContext", () => {
     expect(block).toContain('"id":"m-1"');
     expect(block).toContain('"dateStart":"2026-08-17 11:00:00"');
     expect(block).toContain('"dateFrom":"2026-08-11"');
+    expect(block).toContain('"latestHeld":null');
+  });
+
+  it("includes latestHeld without visitLabel when prefetch set a past visit", () => {
+    const block = formatBookingMeetingsContext({
+      ...listedMeetings,
+      latestHeld: {
+        id: "h-1",
+        name: "Консультація - Ada Lovelace",
+        dateStart: "2026-06-01 10:00:00",
+        dateEnd: "2026-06-01 10:30:00",
+      },
+    });
+    expect(block).toContain('"latestHeld":{"id":"h-1"');
+    expect(block).toContain('"dateStart":"2026-06-01 10:00:00"');
+    expect(block).not.toMatch(/"latestHeld":\{[^}]*"visitLabel"/);
   });
 
   it("adds a ready-to-quote Ukrainian visitLabel so the model does not format dates", () => {
@@ -181,6 +198,21 @@ describe("formatPlannedVisitsFlag", () => {
     expect(formatPlannedVisitsFlag(listedMeetings)).toBe(
       '<list_planned_meetings>\n{"visits":"has"}\n</list_planned_meetings>',
     );
+  });
+
+  it("ignores latestHeld — visits stays none when only history exists", () => {
+    expect(
+      formatPlannedVisitsFlag({
+        meetings: [],
+        dateFrom: "2026-08-11",
+        latestHeld: {
+          id: "h-1",
+          name: "Past",
+          dateStart: "2026-06-01 10:00:00",
+          dateEnd: "2026-06-01 10:30:00",
+        },
+      }),
+    ).toBe('<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>');
   });
 });
 

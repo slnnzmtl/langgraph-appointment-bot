@@ -15,6 +15,7 @@ import {
   lookupPlannedMeetings,
   normalizeContactLookupResult,
 } from "../tools/index.js";
+import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import {
   createAgentFinalizeNode,
   createAgentLlmNode,
@@ -68,7 +69,11 @@ export const prefetchBookingContext = async (callTool: McpCallTool): Promise<Age
     return { contactContext, bookingContext: null };
   }
   const listed = await lookupPlannedMeetings(callTool, contactId);
-  return { contactContext, bookingContext: listed };
+  if (!listed) {
+    return { contactContext, bookingContext: null };
+  }
+  const latestHeld = await lookupLatestHeldMeeting(callTool, contactId);
+  return { contactContext, bookingContext: { ...listed, latestHeld } };
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
