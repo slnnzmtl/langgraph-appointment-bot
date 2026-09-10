@@ -35,6 +35,11 @@ export const WELCOME_PREFIX = `**Хто я?**
 📍 Підкажу години нашої роботи, як до нас дістатися та контактні дані.
 🔔 Завчасно надішлю сповіщення про ваш запланований прийом, щоб ви нічого не пропустили.
 
+**Як зі мною спілкуватися**:
+✍️ Напишіть у чат своїми словами — я зрозумію вільний текст.
+🎤 Надішліть голосове повідомлення — я розпізнаю його як звичайний запит.
+🔘 Або скористайтеся кнопками під чатом, щоб швидко записатися, дізнатися про послуги чи адресу.
+
 ❗️ **Важливе уточнення**:
 Я створена для вирішення організаційних питань. Я не надаю медичних чи косметологічних консультацій та не підбираю засоби для догляду за шкірою. Для отримання індивідуальних рекомендацій щодо догляду я з радістю запишу вас на особисту консультацію до ${CLINIC_DOCTOR_REF_UK}!
 
@@ -138,7 +143,7 @@ export const START_FOLLOW_UP =
 
 /** Compact marker stored in checkpointed history instead of the full patient-visible welcome. */
 export const WELCOME_HISTORY_MARKER =
-  "[Welcome already sent: who I am, what I can do, address, working hours. Do not greet again.]";
+  "[Welcome already sent: who I am, what I can do, how to interact (text, voice, reply buttons), address, working hours. Do not greet again.]";
 
 /** History text for /start — patient still sees the full welcome via ctx.reply. */
 export const buildStartHistoryText = (_welcome?: string): string =>

@@ -15,4 +15,11 @@ describe("WELCOME_PREFIX", () => {
     expect(WELCOME_PREFIX).toContain(CLINIC_ADDRESS);
     expect(WELCOME_PREFIX).toContain(CLINIC_MAPS_MARKDOWN);
   });
+
+  it("includes interaction guide for text, voice, and reply buttons", () => {
+    expect(WELCOME_PREFIX).toContain("**Як зі мною спілкуватися**:");
+    expect(WELCOME_PREFIX).toContain("Напишіть у чат своїми словами");
+    expect(WELCOME_PREFIX).toContain("Надішліть голосове повідомлення");
+    expect(WELCOME_PREFIX).toContain("кнопками під чатом");
+  });
 });
