@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
+  INTENT_SKIP_LABEL,
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import type { ClinicState } from "../state.js";
@@ -398,6 +399,53 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.servicesContext).toBeUndefined();
+  });
+
+  it("keeps note ladder across TTL when patient taps INTENT skip", async () => {
+    const slot = {
+      dateStart: "2026-09-29T11:00:00",
+      dateEnd: "2026-09-29T11:30:00",
+      label: "11:00",
+    };
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+      prefetchTtlMs: 1_000,
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+        contactContext: { contacts: [{ id: "stale" }] },
+        bookingContext: listedMeetings,
+        availabilityContext: {
+          days: [{ date: "2026-09-29", slots: [] }],
+          stepMinutes: 30,
+        },
+        bookingNoteStatus: "awaiting",
+        selectedSlot: slot,
+        prefetchFetchedAt: Date.now() - 1_000,
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Чи можете поділитися деталями перед записом?",
+          replyButtons: [INTENT_SKIP_LABEL],
+        },
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.availabilityContext).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.next).toBe("booking");
   });
 
   it("refetches on Мій запис even when prefetch is fresh", async () => {
