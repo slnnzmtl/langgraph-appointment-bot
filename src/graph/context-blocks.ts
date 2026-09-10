@@ -93,7 +93,7 @@ export const formatPlannedVisitsFlag = (
   return block(CONTEXT_TAGS.meetings, { visits: has ? "has" : "none" });
 };
 
-/** Booking: full meetings with precomputed visitLabel. */
+/** Booking: full meetings with precomputed visitLabel; latestHeld for first-visit classification. */
 export const formatBookingMeetingsContext = (
   ctx: BookingContext | null | undefined,
 ): string => {
@@ -109,11 +109,24 @@ export const formatBookingMeetingsContext = (
     dateEnd: meeting.dateEnd,
     visitLabel: visitLabelForMeeting(meeting, today),
   }));
+  const latestHeld =
+    ctx.latestHeld != null
+      ? {
+          id: ctx.latestHeld.id,
+          name: ctx.latestHeld.name,
+          dateStart: ctx.latestHeld.dateStart,
+          dateEnd: ctx.latestHeld.dateEnd,
+        }
+      : null;
   const moveHint =
     meetings.length > 0
       ? "\nWhen moving or cancelling, quote visitLabel from this block only — never a procedure from earlier chat."
       : "";
-  return block(CONTEXT_TAGS.meetings, { meetings, dateFrom: ctx.dateFrom }, moveHint);
+  return block(
+    CONTEXT_TAGS.meetings,
+    { meetings, dateFrom: ctx.dateFrom, latestHeld },
+    moveHint,
+  );
 };
 
 /** Booking: full CRM contact record (never leaks internal error strings). */

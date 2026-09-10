@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createMeetingTools } from "../meeting-tools.js";
-import { lookupPlannedMeetings } from "../planned-meetings.js";
+import { lookupLatestHeldMeeting, lookupPlannedMeetings } from "../planned-meetings.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
@@ -235,5 +235,57 @@ describe("list_planned_meetings", () => {
         dateEnd: "2026-08-23T16:30:00",
       },
     ]);
+  });
+});
+
+describe("lookupLatestHeldMeeting", () => {
+  it("calls search_entity for Held desc limit 1 without dateStart $gte", async () => {
+    const calls: CallRecord[] = [];
+    const held = await lookupLatestHeldMeeting(async (name, args) => {
+      calls.push({ name, args });
+      return {
+        list: [
+          {
+            id: "held-1",
+            name: "Консультація - Ada",
+            dateStart: "2026-07-01T11:00:00",
+            dateEnd: "2026-07-01T11:30:00",
+            status: "Held",
+          },
+        ],
+      };
+    }, "contact-9");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toMatchObject({
+      entityType: "Meeting",
+      filters: {
+        parentId: "contact-9",
+        parentType: "Contact",
+        status: { $in: ["Held"] },
+      },
+      orderBy: "dateStart",
+      order: "desc",
+      limit: 1,
+    });
+    expect(calls[0]?.args.filters).not.toHaveProperty("dateStart");
+    expect(held).toEqual({
+      id: "held-1",
+      name: "Консультація - Ada",
+      dateStart: "2026-07-01T11:00:00",
+      dateEnd: "2026-07-01T11:30:00",
+    });
+  });
+
+  it("returns null when the list is empty", async () => {
+    expect(await lookupLatestHeldMeeting(async () => ({ list: [] }), "c-1")).toBeNull();
+  });
+
+  it("returns null when search_entity throws", async () => {
+    expect(
+      await lookupLatestHeldMeeting(async () => {
+        throw new Error("CRM down");
+      }, "c-1"),
+    ).toBeNull();
   });
 });

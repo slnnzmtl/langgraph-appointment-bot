@@ -12,8 +12,13 @@ const DAY_SCHEMA = z
 /** Upcoming visits the bot lists and treats as blocking a second booking. */
 const LISTABLE_MEETING_STATUSES = ["Planned", "Confirmed"] as const;
 
-const isListableMeetingStatus = (status: unknown): boolean =>
-  typeof status !== "string" || (LISTABLE_MEETING_STATUSES as readonly string[]).includes(status);
+const HELD_MEETING_STATUSES = ["Held"] as const;
+
+const isAllowedMeetingStatus = (
+  status: unknown,
+  allowed: readonly string[],
+): boolean =>
+  typeof status !== "string" || allowed.includes(status);
 
 export type ListedMeeting = {
   id: string;
@@ -25,10 +30,15 @@ export type ListedMeeting = {
 export type BookingContext = {
   meetings: ListedMeeting[];
   dateFrom: string;
+  /** Prefetch-only: latest completed visit for first-visit classification. Omitted by list_planned_meetings. */
+  latestHeld?: ListedMeeting | null;
 };
 
-/** Compact planned/confirmed meetings from search_entity Meeting list payloads. */
-const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] => {
+/** Compact meetings from search_entity Meeting list payloads, filtered by status allowlist. */
+const extractPlannedMeetingsFromEntityResult = (
+  raw: unknown,
+  allowedStatuses: readonly string[] = LISTABLE_MEETING_STATUSES,
+): ListedMeeting[] => {
   let value: unknown = raw;
   if (typeof value === "string") {
     try {
@@ -57,7 +67,7 @@ const extractPlannedMeetingsFromEntityResult = (raw: unknown): ListedMeeting[] =
       || typeof m.name !== "string"
       || typeof m.dateStart !== "string"
       || typeof m.dateEnd !== "string"
-      || !isListableMeetingStatus(m.status)
+      || !isAllowedMeetingStatus(m.status, allowedStatuses)
     ) {
       continue;
     }
@@ -110,6 +120,30 @@ export const lookupPlannedMeetings = async (
       meetings: filterUpcomingMeetings(extractPlannedMeetingsFromEntityResult(raw)),
       dateFrom: from,
     };
+  } catch {
+    return null;
+  }
+};
+
+/** Latest Held meeting for first-visit classification (prefetch-only; not a product tool). */
+export const lookupLatestHeldMeeting = async (
+  callTool: McpCallTool,
+  contactId: string,
+): Promise<ListedMeeting | null> => {
+  try {
+    const raw = await callTool("search_entity", {
+      entityType: "Meeting",
+      filters: {
+        parentId: contactId,
+        parentType: "Contact",
+        status: { $in: [...HELD_MEETING_STATUSES] },
+      },
+      select: ["id", "name", "dateStart", "dateEnd", "status"],
+      orderBy: "dateStart",
+      order: "desc",
+      limit: 1,
+    });
+    return extractPlannedMeetingsFromEntityResult(raw, HELD_MEETING_STATUSES)[0] ?? null;
   } catch {
     return null;
   }
