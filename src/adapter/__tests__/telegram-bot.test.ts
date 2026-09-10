@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDetachedWorkRunner,
   handleGraphTextTurn,
+  isCheckpointCorruptionError,
   PRIVATE_CHAT_ONLY,
   rejectNonPrivateTelegramChat,
   takeUserMessageSlot,
@@ -11,6 +12,7 @@ import {
   USER_MESSAGE_RATE_LIMIT,
   MAX_VOICE_DURATION_SECONDS,
   isVoiceDurationAllowed,
+  withCheckpointThreadRetry,
   withTypingIndicator,
   wrapTelegramHandler,
 } from "../telegram-bot.js";
@@ -178,6 +180,55 @@ describe("text while HITL pending", () => {
     await handleGraphTextTurn(menuGraph, menuThread, "tg-1", "Головне меню");
     const menuSnap = await menuGraph.getState({ configurable: { thread_id: menuThread } });
     expect(JSON.parse(String(menuSnap.values.result))).toEqual({ confirmed: false });
+  });
+});
+
+describe("checkpoint corruption retry", () => {
+  it("matches serde/checkpoint errors only", () => {
+    expect(isCheckpointCorruptionError(new Error("Failed to deserialize checkpoint"))).toBe(true);
+    expect(isCheckpointCorruptionError(new Error("invalid checkpoint metadata"))).toBe(true);
+    expect(isCheckpointCorruptionError(new Error("Unexpected token in JSON"))).toBe(true);
+    expect(isCheckpointCorruptionError(new Error("MCP timeout"))).toBe(false);
+    expect(isCheckpointCorruptionError("not-an-error")).toBe(false);
+  });
+
+  it("deleteThread + retries once when invoke throws a serde error", async () => {
+    const deleteThread = vi.fn().mockResolvedValue(undefined);
+    let attempts = 0;
+    const graph = {
+      getState: vi.fn().mockResolvedValue({ tasks: [] }),
+      invoke: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("Failed to deserialize checkpoint row");
+        }
+        return {
+          messages: [{ _getType: () => "ai", content: "fresh start" }],
+        };
+      }),
+    };
+
+    const outbound = await handleGraphTextTurn(
+      graph as never,
+      "corrupt-thread",
+      "tg-1",
+      "Привіт",
+      { deleteThread },
+    );
+
+    expect(deleteThread).toHaveBeenCalledWith("corrupt-thread");
+    expect(attempts).toBe(2);
+    expect(outbound.text).toContain("fresh start");
+  });
+
+  it("does not deleteThread for non-corruption errors", async () => {
+    const deleteThread = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      withCheckpointThreadRetry({ deleteThread }, "t-1", async () => {
+        throw new Error("MCP timeout");
+      }),
+    ).rejects.toThrow("MCP timeout");
+    expect(deleteThread).not.toHaveBeenCalled();
   });
 });
 

@@ -10,6 +10,7 @@ const adapterConfig = {
   assignedUserId: "user-1",
   geminiContextCacheEnabled: false,
   espocrmApiKey: "mcp-key",
+  checkpointDbPath: "data/checkpoints.sqlite",
 } as const;
 
 describe("clinic-adapters", () => {

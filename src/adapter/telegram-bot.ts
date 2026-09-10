@@ -1,5 +1,5 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { Command } from "@langchain/langgraph";
+import { Command, type BaseCheckpointSaver } from "@langchain/langgraph";
 import {
   DEFAULT_AUDIO_MODEL,
   transcribeAudio,
@@ -37,6 +37,8 @@ import {
   recordWelcomeInHistory,
   START_FOLLOW_UP,
 } from "./welcome-message.js";
+
+type ThreadCheckpointer = Pick<BaseCheckpointSaver, "deleteThread">;
 
 const GRAPH_RECURSION_LIMIT = 40;
 /** Telegram typing action lasts ~5s; refresh before it expires. */
@@ -167,6 +169,38 @@ const runExclusiveForThread = <T>(
   return run;
 };
 
+/** Narrow match for unreadable checkpoint rows (not LLM/tool failures). */
+export const isCheckpointCorruptionError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return /checkpoint|serde|deserializ|serializ|msgpack|unexpected token|invalid checkpoint/i.test(
+    message,
+  );
+};
+
+/**
+ * On checkpoint/serde failure for this thread: deleteThread and retry once as a new conversation.
+ * Missing checkpoints are empty defaults and do not throw.
+ */
+export const withCheckpointThreadRetry = async <T>(
+  checkpointer: ThreadCheckpointer | undefined,
+  threadId: string,
+  run: () => Promise<T>,
+): Promise<T> => {
+  try {
+    return await run();
+  } catch (error: unknown) {
+    if (!checkpointer?.deleteThread || !isCheckpointCorruptionError(error)) {
+      throw error;
+    }
+    console.error(`Corrupt checkpoint for thread ${threadId}; resetting:`, error);
+    await checkpointer.deleteThread(threadId);
+    return run();
+  }
+};
+
 type InterruptItem = { value?: unknown };
 
 /** True when the thread is paused on create/cancel/reschedule HITL Yes/No. */
@@ -230,26 +264,29 @@ export const handleGraphTextTurn = async (
   threadId: string,
   telegramUserId: string,
   text: string,
+  checkpointer?: ThreadCheckpointer,
 ): Promise<OutboundReply> =>
-  runGraphExclusive(graph, threadId, telegramUserId, async (config) => {
-    if (await hasPendingConfirmBooking(graph, threadId)) {
-      const decision = classifyConfirmReply(text);
-      if (decision.kind === "confirmed") {
-        return graph.invoke(new Command({ resume: { confirmed: true } }) as never, config);
+  runGraphExclusive(graph, threadId, telegramUserId, async (config) =>
+    withCheckpointThreadRetry(checkpointer, threadId, async () => {
+      if (await hasPendingConfirmBooking(graph, threadId)) {
+        const decision = classifyConfirmReply(text);
+        if (decision.kind === "confirmed") {
+          return graph.invoke(new Command({ resume: { confirmed: true } }) as never, config);
+        }
+        if (decision.kind === "declined") {
+          return graph.invoke(new Command({ resume: { confirmed: false } }) as never, config);
+        }
+        return graph.invoke(
+          new Command({
+            resume: { userReply: text },
+            update: { messages: [new HumanMessage(text)] },
+          }) as never,
+          config,
+        );
       }
-      if (decision.kind === "declined") {
-        return graph.invoke(new Command({ resume: { confirmed: false } }) as never, config);
-      }
-      return graph.invoke(
-        new Command({
-          resume: { userReply: text },
-          update: { messages: [new HumanMessage(text)] },
-        }) as never,
-        config,
-      );
-    }
-    return graph.invoke({ messages: [new HumanMessage(text)] } as never, config);
-  });
+      return graph.invoke({ messages: [new HumanMessage(text)] } as never, config);
+    }),
+  );
 
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {
   await ctx.reply(formatForTelegram(outbound.text), {
@@ -283,6 +320,7 @@ const rejectIfRateLimited = async (
 export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<ClinicBotHandle> => {
   const { token, runtime } = options;
   const graph = runtime.getGraph();
+  const checkpointer = runtime.getCheckpointer();
   const bot = new Telegraf(token);
   const { runDetached, waitInflight } = createDetachedWorkRunner();
   const detach = <C>(handler: (ctx: C) => Promise<void>) =>
@@ -314,7 +352,9 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
 
     const threadId = String(chatId);
     await runExclusiveForThread(threadId, () =>
-      recordWelcomeInHistory(graph, threadId, buildStartHistoryText(welcome)),
+      withCheckpointThreadRetry(checkpointer, threadId, () =>
+        recordWelcomeInHistory(graph, threadId, buildStartHistoryText(welcome)),
+      ),
     );
   }));
 
@@ -375,7 +415,12 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     const isReminderConfirmTap =
       confirmTap.kind === "confirmed" ||
       (confirmTap.kind === "declined" && text.replace(/\uFE0F|\uFE0E/g, "") !== MAIN_MENU_LABEL);
-    if (isReminderConfirmTap && !(await hasPendingConfirmBooking(graph, threadId))) {
+    if (
+      isReminderConfirmTap
+      && !(await withCheckpointThreadRetry(checkpointer, threadId, () =>
+        hasPendingConfirmBooking(graph, threadId),
+      ))
+    ) {
       await ctx.reply(formatForTelegram(REMINDER_STALE_CONFIRM), {
         parse_mode: "HTML",
         reply_markup: buildDefaultMenuKeyboard(true),
@@ -389,6 +434,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
         threadId,
         telegramUserId,
         text,
+        checkpointer,
       ),
     );
     await replyOutbound(ctx, outbound);
@@ -432,7 +478,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       if (!transcript) {
         return { text: VOICE_EMPTY_FALLBACK };
       }
-      return handleGraphTextTurn(graph, threadId, String(fromId), transcript);
+      return handleGraphTextTurn(graph, threadId, String(fromId), transcript, checkpointer);
     });
     await replyOutbound(ctx, outbound);
   }));

@@ -9,6 +9,8 @@ services:
       NODE_ENV: production
       TZ: Europe/Kyiv
       ESPOCRM_MCP_URL: http://espocrm-mcp-server:3000
+    volumes:
+      - ./data:/app/data
     networks:
       - espocrm-mcp_default
 
