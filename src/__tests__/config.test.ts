@@ -31,6 +31,7 @@ const envKeys = [
   "TELEGRAM_BOT_TOKEN",
   "WEBHOOK_SECRET",
   "MESSAGE_HISTORY_MAX_TOKENS",
+  "CHECKPOINT_DB_PATH",
 ] as const;
 
 describe("loadConfig", () => {
@@ -110,5 +111,17 @@ describe("loadConfig", () => {
     applyClinicEnv();
     process.env.NODE_ENV = "production";
     expect(() => loadConfig()).not.toThrow();
+  });
+
+  it("defaults checkpointDbPath to data/checkpoints.sqlite", () => {
+    applyRequiredEnv();
+    delete process.env.CHECKPOINT_DB_PATH;
+    expect(loadConfig().checkpointDbPath).toBe("data/checkpoints.sqlite");
+  });
+
+  it("loads checkpointDbPath from CHECKPOINT_DB_PATH", () => {
+    applyRequiredEnv();
+    process.env.CHECKPOINT_DB_PATH = "  /tmp/clinic-checkpoints.sqlite  ";
+    expect(loadConfig().checkpointDbPath).toBe("/tmp/clinic-checkpoints.sqlite");
   });
 });

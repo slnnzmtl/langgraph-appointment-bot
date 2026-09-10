@@ -14,3 +14,5 @@ dependency-violation-report.html
 .pnpm-store/
 .cursor/plans
 .cursor/mcp.json
+data/*.sqlite
+data/*.sqlite-*

@@ -1,5 +1,9 @@
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+
 import type { BaseCheckpointSaver } from "@langchain/langgraph";
 import type { StructuredToolInterface } from "@langchain/core/tools";
+import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 
 import type { AppConfig } from "../config.js";
 import { compileClinicGraph } from "../graph/compile.js";
@@ -36,7 +40,10 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
   const { supervisorLlm, agentModel, agentModelName, contextCache } =
     createClinicLlmStack(config);
 
-  const { graph, checkpointer } = compileClinicGraph({
+  mkdirSync(dirname(config.checkpointDbPath), { recursive: true });
+  const checkpointer = SqliteSaver.fromConnString(config.checkpointDbPath);
+
+  const { graph } = compileClinicGraph({
     agents: clinicAgents,
     agentTools,
     agentModel,
@@ -48,6 +55,7 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     messageHistoryMaxTokens: config.messageHistoryMaxTokens,
     contextCache,
     bookingPrefetchCallTool: (name, args) => adapters.callTool(name, args),
+    checkpointer,
   });
 
   const bootstrap: ClinicBootstrap = {

@@ -104,9 +104,9 @@ const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
   });
 
   if (!runtime.getCheckpointer()) {
-    throw new Error("Expected MemorySaver checkpointer from createClinicRuntime");
+    throw new Error("Expected checkpointer from createClinicRuntime");
   }
-  console.log("✓ Checkpointer attached (MemorySaver)");
+  console.log("✓ Checkpointer attached (SqliteSaver)");
   console.log("✓ EspoCRM MCP adapters connected (HTTP)");
 };
 

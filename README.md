@@ -89,7 +89,7 @@ Start the sibling MCP stack first (`espocrm-mcp-server` on network `espocrm-mcp_
 docker compose up -d --build
 ```
 
-Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base.
+Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base. Compose mounts `./data` to `/app/data` so SqliteSaver checkpoints (`CHECKPOINT_DB_PATH`, default `data/checkpoints.sqlite`) survive container restarts.
 
 **Production clinic branding:** public git keeps demo placeholders for address, Maps URL, consultation CRM id, clinic name, and welcome copy. Set `CLINIC_ADDRESS`, `CLINIC_MAPS_URL`, `CONSULTATION_SERVICE_ID`, `CLINIC_NAME_UK`, `CLINIC_NAME_EN`, `CLINIC_WELCOME_VENUE_UK`, and `CLINIC_DOCTOR_REF_UK` in the host `.env` before `docker compose up -d --build`. With `NODE_ENV=production` (Compose default), missing any of these vars makes the process exit on boot instead of greeting as a demo clinic or booking a fake service id.
 
@@ -164,7 +164,8 @@ Default visit is **Консультація** unless the patient is sure about a
 - `/start` sends two messages: a static intro (identity, capabilities, medical disclaimer, address) plus CRM working hours from `get_working_time`, then a short follow-up. Both attach **DEFAULT MENU** (no visits → «Записатись», «Послуги», «Адреса»; has a visit → «Мій запис», «Послуги», «Адреса»; plus «Головне меню»), using a Telegram contact + planned-meetings lookup. Checkpointed history stores `WELCOME_HISTORY_MARKER` + the follow-up, not the full welcome, so later hellos stay short.
 - Private chats only (groups get a short redirect); 20 messages per user per minute (text, voice, `/start`, and reply-keyboard taps)
 - `thread_id = chat.id`; per-chat exclusive graph invoke queue
-- Conversation and HITL state live in process memory (`MemorySaver` plus a pending-confirm map). A restart clears chats; there is no long-term transcript store. Run a single bot instance.
+- Conversation state (messages, booking context, HITL interrupts) persists in SqliteSaver (`CHECKPOINT_DB_PATH`, default `data/checkpoints.sqlite`, Compose mounts `./data`). Process-local pending maps for chat-text `confirmationGiven` and reminder HITL are not durable — ✅/❌ after a restart still resume from the checkpointed interrupt; typed “так”/`confirmationGiven` may need a fresh confirm card. Run a single bot instance.
+- Corrupt or unreadable checkpoint rows for a thread are deleted and the turn starts a new conversation.
 - SIGINT/SIGTERM stop Telegram polling, wait for in-flight handler work, then abort in-flight EspoCRM MCP HTTP calls (`shutdownAdapters`). MCP `/health` is checked at process start; later MCP outages fail the tool call (30s timeout).
 - Each turn runs under `runWithTelegramUserId(from.id)` (CRM `cTelegram`)
 - Meeting writes (`create_meeting`, `cancel_meeting`, `reschedule_meeting`) and `list_planned_meetings` require the Contact/`meetingId` to belong to that Telegram user

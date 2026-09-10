@@ -20,6 +20,8 @@ export interface AppConfig {
   webhookSecret?: string;
   /** Explicit Gemini CachedContent for supervisor/agent prompts. Default on. */
   geminiContextCacheEnabled: boolean;
+  /** LangGraph SqliteSaver file path (durable conversation state by thread_id). */
+  checkpointDbPath: string;
 }
 
 const getRequiredEnv = (name: string): string => {
@@ -44,6 +46,8 @@ const requireProductionClinicEnv = (): void => {
   }
 };
 
+export const DEFAULT_CHECKPOINT_DB_PATH = "data/checkpoints.sqlite";
+
 export const loadConfig = (): AppConfig => {
   const defaultModel = process.env.GEMINI_MODEL ?? DEFAULT_GEMINI_MODEL;
   requireProductionClinicEnv();
@@ -57,6 +61,7 @@ export const loadConfig = (): AppConfig => {
     espocrmApiKey: getRequiredEnv("ESPOCRM_API_KEY"),
     assignedUserId: getRequiredEnv("ESPOCRM_ASSIGNED_USER_ID"),
     geminiContextCacheEnabled: isGeminiContextCacheEnabled(),
+    checkpointDbPath: process.env.CHECKPOINT_DB_PATH?.trim() || DEFAULT_CHECKPOINT_DB_PATH,
     ...(process.env.TELEGRAM_BOT_TOKEN?.trim()
       ? { telegramBotToken: process.env.TELEGRAM_BOT_TOKEN.trim() }
       : {}),
