@@ -356,9 +356,11 @@ const coerceAvailabilityToolCalls = (
     const looksLikeSlotOffer =
       raw.includes(AVAILABILITY_DATE_HEADING) || raw.includes(AVAILABILITY_TIME_HEADING);
     // Model skipped present_availability_slots. Skip inject on a day-label tap so finalize
-    // can rewrite TIME from the checkpoint without a new CRM call.
+    // can rewrite TIME from the checkpoint without a new CRM call. Skip if slots already
+    // ran this turn — DATE copy after «Інша дата» would walk the month.
     if (
-      (looksLikeSlotOffer
+      !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      && (looksLikeSlotOffer
         || isYesReply(human)
         || (isOtherDateHuman(human) && days.length > 0))
       && matchAvailabilityDay(human, days) == null
@@ -935,6 +937,10 @@ export const createAgentToolsNode = (
     const synthetic: ToolMessage[] = [];
     const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
     let noteStatusUpdate: ClinicStateUpdate = {};
+    let otherDatePagedThisTurn = toolRanThisTurn(
+      agentMessages,
+      "present_availability_slots",
+    );
 
     if (lastAiIndex >= 0) {
       const lastAi = agentMessages[lastAiIndex] as AIMessage;
@@ -1041,7 +1047,11 @@ export const createAgentToolsNode = (
           const args = call.args as AvailabilitySlotsToolArgs;
           const lastOpen = lastOpenSnapshotDate(state.availabilityContext);
           const human = lastPatientText(state);
-          if (isOtherDateHuman(human) && lastOpen) {
+          const otherDate = isOtherDateHuman(human);
+          if (otherDate && otherDatePagedThisTurn) {
+            delete args.afterDate;
+            delete args.date;
+          } else if (otherDate && lastOpen) {
             args.afterDate = lastOpen;
             delete args.date;
           } else if (state.availabilityContext == null) {
@@ -1067,6 +1077,9 @@ export const createAgentToolsNode = (
               }),
             );
             continue;
+          }
+          if (otherDate) {
+            otherDatePagedThisTurn = true;
           }
         }
 
