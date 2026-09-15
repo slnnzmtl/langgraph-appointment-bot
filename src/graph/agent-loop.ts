@@ -28,7 +28,10 @@ import {
 } from "./types.js";
 import {
   normalizePresentAvailabilityResult,
+  alignToAnchors,
   tryAvailabilityCacheHit,
+  KYIV_LOCAL_ISO_SCHEMA,
+  presentAvailabilitySlotsArgsSchema,
   type AvailabilityContext,
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
@@ -324,6 +327,27 @@ const lastOpenSnapshotDate = (
 ): string | undefined => {
   const open = ctx?.days.filter((day) => day.slots.length > 0) ?? [];
   return open.at(-1)?.date;
+};
+
+const bookingDateAnchors = (state: ClinicState): string[] => [
+  ...(state.selectedSlot
+    ? [state.selectedSlot.dateStart, state.selectedSlot.dateEnd]
+    : []),
+  ...(state.availabilityContext?.days ?? []).map((day) => day.date),
+];
+
+const alignArgDates = (
+  args: object,
+  keys: readonly string[],
+  anchors: readonly string[],
+): void => {
+  const record = args as Record<string, unknown>;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string") {
+      record[key] = alignToAnchors(value, anchors);
+    }
+  }
 };
 
 /** Turn Gemini XML-in-content into `tool_calls`; inject slots when booking skipped the tool. */
@@ -1041,6 +1065,38 @@ export const createAgentToolsNode = (
           }
         }
 
+        if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
+          call.args = { ...(call.args ?? {}) };
+          const args = call.args as { dateStart?: string; dateEnd?: string };
+          if (call.name === "create_meeting" && state.selectedSlot) {
+            args.dateStart = state.selectedSlot.dateStart;
+            args.dateEnd = state.selectedSlot.dateEnd;
+          } else {
+            alignArgDates(args, ["dateStart", "dateEnd"], bookingDateAnchors(state));
+          }
+          if (
+            (call.name === "reschedule_meeting" || state.selectedSlot == null)
+            && (
+              !KYIV_LOCAL_ISO_SCHEMA.safeParse(args.dateStart).success
+              || !KYIV_LOCAL_ISO_SCHEMA.safeParse(args.dateEnd).success
+            )
+          ) {
+            trackToolError(call.name, "Invalid meeting datetime");
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: "Invalid meeting datetime",
+                  hint:
+                    "Use YYYY-MM-DDTHH:mm:ss from <selected_slot> or present_availability_slots.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
+        }
+
         if (call.name === "present_availability_slots") {
           // Own paging cursor from checkpoint — LLM afterDate is often wrong-year or omitted.
           call.args = { ...(call.args ?? {}) };
@@ -1062,12 +1118,34 @@ export const createAgentToolsNode = (
             delete args.afterDate;
             delete args.date;
           }
-          const hit = tryAvailabilityCacheHit(state.availabilityContext, args);
+          alignArgDates(
+            args,
+            ["date", "afterDate", "startDate"],
+            bookingDateAnchors(state),
+          );
+          const parsed = presentAvailabilitySlotsArgsSchema.safeParse(args);
+          if (!parsed.success) {
+            trackToolError(call.name, "Invalid availability arguments");
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: "Invalid availability arguments",
+                  hint:
+                    "Use YYYY-MM-DD for date/afterDate/startDate; durationMinutes 15–180.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
+          call.args = parsed.data;
+          const hit = tryAvailabilityCacheHit(state.availabilityContext, parsed.data);
           if (hit) {
             trackEvent("availability_cache_hit", {
               outcome: "success",
               kind: hit.kind,
-              ...(typeof args.date === "string" ? { date: args.date } : {}),
+              ...(typeof parsed.data.date === "string" ? { date: parsed.data.date } : {}),
             });
             synthetic.push(
               new ToolMessage({

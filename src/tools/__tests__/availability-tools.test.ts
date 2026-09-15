@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  alignToAnchors,
   createPresentAvailabilitySlotsTool,
   normalizePresentAvailabilityResult,
+  presentAvailabilitySlotsArgsSchema,
   resolveNextAvailableStart,
   tryAvailabilityCacheHit,
   type AvailabilityContext,
@@ -625,6 +627,26 @@ describe("normalizePresentAvailabilityResult", () => {
   });
 });
 
+describe("presentAvailabilitySlotsArgsSchema", () => {
+  it("accepts a valid date and coerces durationMinutes from a string", () => {
+    const parsed = presentAvailabilitySlotsArgsSchema.safeParse({
+      date: "2026-10-13",
+      durationMinutes: "60",
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.date).toBe("2026-10-13");
+      expect(parsed.data.durationMinutes).toBe(60);
+    }
+  });
+
+  it("rejects a non YYYY-MM-DD date", () => {
+    expect(presentAvailabilitySlotsArgsSchema.safeParse({ date: "not-a-date" }).success).toBe(
+      false,
+    );
+  });
+});
+
 describe("tryAvailabilityCacheHit", () => {
   const snapshot: AvailabilityContext = {
     days: [
@@ -662,6 +684,16 @@ describe("tryAvailabilityCacheHit", () => {
     const parsed = JSON.parse(hit!.json) as { days: unknown[]; cacheHit: boolean };
     expect(parsed.days).toHaveLength(2);
     expect(parsed.cacheHit).toBe(true);
+  });
+
+  it("aligns a wrong-year calendar day or slot ISO to the snapshot", () => {
+    expect(alignToAnchors("2025-10-13", ["2026-10-12", "2026-10-13"])).toBe("2026-10-13");
+    expect(alignToAnchors("2026-10-13", ["2026-10-13"])).toBe("2026-10-13");
+    expect(alignToAnchors("2025-11-01", ["2026-10-13"])).toBe("2025-11-01");
+    expect(
+      alignToAnchors("2025-10-13T11:00:00", ["2026-10-13T11:00:00", "2026-10-13T12:00:00"]),
+    ).toBe("2026-10-13T11:00:00");
+    expect(alignToAnchors("2025-10-13T11:00:00", ["2026-10-13"])).toBe("2026-10-13T11:00:00");
   });
 
   it("hits for a dated day already in the snapshot", () => {

@@ -2869,7 +2869,11 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
               {
                 id: "c1",
                 name: "create_meeting",
-                args: { serviceId: CONSULTATION_SERVICE_ID },
+                args: {
+                  serviceId: CONSULTATION_SERVICE_ID,
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                },
                 type: "tool_call",
               },
             ],
@@ -2906,7 +2910,11 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
               {
                 id: "c1",
                 name: "create_meeting",
-                args: { serviceId: CONSULTATION_SERVICE_ID },
+                args: {
+                  serviceId: CONSULTATION_SERVICE_ID,
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                },
                 type: "tool_call",
               },
             ],
@@ -2944,7 +2952,11 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
               {
                 id: "r1",
                 name: "reschedule_meeting",
-                args: { serviceId: CONSULTATION_SERVICE_ID },
+                args: {
+                  serviceId: CONSULTATION_SERVICE_ID,
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                },
                 type: "tool_call",
               },
             ],
@@ -2973,7 +2985,17 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         agentMessages: [
           new AIMessage({
             content: "",
-            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+            tool_calls: [
+              {
+                id: "c1",
+                name: "create_meeting",
+                args: {
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                },
+                type: "tool_call",
+              },
+            ],
           }),
         ],
       }),
@@ -3227,6 +3249,208 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       expect(update.availabilityContext?.days[0]?.date).toBe("2026-10-06");
     },
   );
+
+  it("rewrites create_meeting dateStart/dateEnd from selectedSlot when the model invents the year", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const createTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ awaitingConfirmation: true });
+      },
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({
+          dateStart: z.string(),
+          dateEnd: z.string(),
+          serviceId: z.string(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-13T11:00:00",
+          dateEnd: "2026-10-13T12:00:00",
+          label: "11:00",
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "c1",
+                name: "create_meeting",
+                args: {
+                  serviceId: "svc-1",
+                  dateStart: "2025-10-13T11:00:00",
+                  dateEnd: "2025-10-13T12:00:00",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toHaveLength(1);
+    expect(invoked[0]?.dateStart).toBe("2026-10-13T11:00:00");
+    expect(invoked[0]?.dateEnd).toBe("2026-10-13T12:00:00");
+  });
+
+  it("aligns present_availability_slots date year to the snapshot so TIME cache can hit", async () => {
+    const oct13: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-10-13",
+          dayLabel: "13 жовтня (вівторок)",
+          slots: [
+            {
+              id: "a",
+              label: "14:00",
+              dateStart: "2026-10-13T14:00:00",
+              dateEnd: "2026-10-13T15:00:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 60,
+    };
+    let crmCalls = 0;
+    const slotsTool = tool(
+      async () => {
+        crmCalls += 1;
+        return JSON.stringify({ days: [], stepMinutes: 60 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          date: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        availabilityContext: oct13,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { durationMinutes: 60, date: "2025-10-13" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(crmCalls).toBe(0);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    const body = JSON.parse(String(toolMsg.content)) as { date: string; cacheHit: boolean };
+    expect(body.cacheHit).toBe(true);
+    expect(body.date).toBe("2026-10-13");
+  });
+
+  it("rejects present_availability_slots with invalid date before CRM", async () => {
+    let crmCalls = 0;
+    const slotsTool = tool(
+      async () => {
+        crmCalls += 1;
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          date: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { durationMinutes: 30, date: "not-a-date" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(crmCalls).toBe(0);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content))).toMatchObject({
+      error: "Invalid availability arguments",
+    });
+  });
+
+  it("rejects reschedule_meeting with invalid dateStart after align", async () => {
+    let invoked = 0;
+    const rescheduleTool = tool(
+      async () => {
+        invoked += 1;
+        return JSON.stringify({ awaitingConfirmation: true });
+      },
+      {
+        name: "reschedule_meeting",
+        description: "reschedule",
+        schema: z.object({
+          meetingId: z.string(),
+          dateStart: z.string(),
+          dateEnd: z.string(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([rescheduleTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        availabilityContext: snapshot,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "r1",
+                name: "reschedule_meeting",
+                args: {
+                  meetingId: "m-1",
+                  dateStart: "not-a-datetime",
+                  dateEnd: "2026-09-10T15:00:00",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toBe(0);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content))).toMatchObject({
+      error: "Invalid meeting datetime",
+    });
+  });
 
   it("hydrates TIME «Інша дата» XML into slots tool_calls and pages from last snapshot day", async () => {
     const { createAgentLlmNode } = await import("../agent-loop.js");
