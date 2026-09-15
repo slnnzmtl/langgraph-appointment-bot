@@ -38,6 +38,46 @@ export type AvailabilityContext = {
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const LOCAL_ISO_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/;
+
+export const KYIV_DAY_SCHEMA = z
+  .string()
+  .regex(DAY_RE)
+  .describe("Calendar day YYYY-MM-DD");
+
+export const KYIV_LOCAL_ISO_SCHEMA = z
+  .string()
+  .regex(LOCAL_ISO_RE)
+  .describe("Datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)");
+
+const ymdOf = (value: string): string | undefined => {
+  if (DAY_RE.test(value)) {
+    return value;
+  }
+  const prefix = value.slice(0, 10);
+  return prefix.length === 10 && DAY_RE.test(prefix) ? prefix : undefined;
+};
+
+export const alignToAnchors = (
+  value: string | undefined,
+  anchors: readonly string[],
+): string | undefined => {
+  if (value == null) {
+    return value;
+  }
+  const ymd = ymdOf(value);
+  if (!ymd) {
+    return value;
+  }
+  const monthDay = ymd.slice(5);
+  for (const anchor of anchors) {
+    const anchorYmd = ymdOf(anchor);
+    if (anchorYmd && anchorYmd.slice(5) === monthDay) {
+      return value.length === 10 ? anchorYmd : `${anchorYmd}${value.slice(10)}`;
+    }
+  }
+  return value;
+};
 
 const parseAvailabilitySlot = (value: unknown): AvailabilitySlot | null => {
   const record = asJsonRecord(value);
@@ -139,13 +179,32 @@ const sameExcludeIds = (
   return a.every((id, index) => id === b[index]);
 };
 
-export type AvailabilitySlotsToolArgs = {
-  date?: string;
-  startDate?: string;
-  afterDate?: string;
-  durationMinutes?: number;
-  excludeMeetingIds?: string[];
-};
+export const presentAvailabilitySlotsArgsSchema = z.object({
+  date: KYIV_DAY_SCHEMA.optional().describe(
+    "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
+  ),
+  startDate: KYIV_DAY_SCHEMA.optional().describe(
+    "When date is omitted: first day of the next-available search (default Kyiv today).",
+  ),
+  afterDate: KYIV_DAY_SCHEMA.optional().describe(
+    "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates («Інша дата» / Another date / коли ще / покажи ще). afterDate is the last offered day, or the specific day they rejected. If both afterDate and startDate are set, the later day wins.",
+  ),
+  durationMinutes: z.coerce
+    .number()
+    .int()
+    .min(15)
+    .max(180)
+    .optional()
+    .describe("Slot length in minutes from the service duration (default 30)"),
+  excludeMeetingIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Meeting ids to ignore as busy (pass the meeting being rescheduled so later times in that block can open; its current start is not offered).",
+    ),
+});
+
+export type AvailabilitySlotsToolArgs = z.infer<typeof presentAvailabilitySlotsArgsSchema>;
 
 /**
  * When the request matches the checkpointed snapshot, return the same JSON shape as a
@@ -201,11 +260,6 @@ export const tryAvailabilityCacheHit = (
     }),
   };
 };
-
-const DAY_SCHEMA = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/)
-  .describe("Calendar day YYYY-MM-DD");
 
 /** MCP search_meetings validates limit <= 200. */
 const RANGED_MEETINGS_LIMIT = 200;
@@ -426,30 +480,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
       name: "present_availability_slots",
       description:
         `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Always call this tool to show DATE (and to re-show a day already in the last snapshot) — the graph may return the checkpointed snapshot without a CRM search when the request matches. Call with afterDate when they want other dates («${OTHER_DATE_LABEL}» / "${OTHER_DATE_LABEL_EN}"). Do not invent days or HH:mm and do not quote a free/busy list from memory — the graph attaches DATE/TIME text and reply keyboards from this tool result.`,
-      schema: z.object({
-        date: DAY_SCHEMA.optional().describe(
-          "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
-        ),
-        startDate: DAY_SCHEMA.optional().describe(
-          "When date is omitted: first day of the next-available search (default Kyiv today).",
-        ),
-        afterDate: DAY_SCHEMA.optional().describe(
-          "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates («Інша дата» / Another date / коли ще / покажи ще). afterDate is the last offered day, or the specific day they rejected. If both afterDate and startDate are set, the later day wins.",
-        ),
-        durationMinutes: z
-          .number()
-          .int()
-          .min(15)
-          .max(180)
-          .optional()
-          .describe("Slot length in minutes from the service duration (default 30)"),
-        excludeMeetingIds: z
-          .array(z.string().min(1))
-          .optional()
-          .describe(
-            "Meeting ids to ignore as busy (pass the meeting being rescheduled so later times in that block can open; its current start is not offered).",
-          ),
-      }),
+      schema: presentAvailabilitySlotsArgsSchema,
     },
   );
 };

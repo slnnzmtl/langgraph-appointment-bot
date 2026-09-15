@@ -5,7 +5,10 @@ import { finishTrackedWrite, trackEvent, type Tier1EventName } from "../analytic
 import { asJsonRecord } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { normalizeLocalIsoDatetime } from "./availability-slots.js";
-import { createPresentAvailabilitySlotsTool } from "./availability-tools.js";
+import {
+  createPresentAvailabilitySlotsTool,
+  KYIV_LOCAL_ISO_SCHEMA,
+} from "./availability-tools.js";
 import {
   contactMissingFields,
   lookupContactByTelegram,
@@ -325,8 +328,12 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .describe(
             'Meeting title as "[service-name] - [firstName lastName]" (e.g. "Консультація - Daniel Kovalenko")',
           ),
-        dateStart: z.string().describe("Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
-        dateEnd: z.string().describe("End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
+        dateStart: KYIV_LOCAL_ISO_SCHEMA.describe(
+          "Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <selected_slot> or present_availability_slots",
+        ),
+        dateEnd: KYIV_LOCAL_ISO_SCHEMA.describe(
+          "End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <selected_slot> or present_availability_slots",
+        ),
         contactId: z.string().min(1).describe("Patient Contact id"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
         serviceId: z.string().min(1).describe("Required cService entity id — from <list_services> when present, else the consultation id in the booking prompt, else resolve via list_services once"),
@@ -399,14 +406,12 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           .string()
           .optional()
           .describe("Meeting name for the Yes/No caption (from list_planned_meetings)"),
-        dateStart: z
-          .string()
-          .optional()
-          .describe("Visit start YYYY-MM-DDTHH:mm:ss from list_planned_meetings (HITL caption)"),
-        dateEnd: z
-          .string()
-          .optional()
-          .describe("Visit end YYYY-MM-DDTHH:mm:ss from list_planned_meetings (HITL caption)"),
+        dateStart: KYIV_LOCAL_ISO_SCHEMA.optional().describe(
+          "Visit start YYYY-MM-DDTHH:mm:ss from list_planned_meetings (HITL caption)",
+        ),
+        dateEnd: KYIV_LOCAL_ISO_SCHEMA.optional().describe(
+          "Visit end YYYY-MM-DDTHH:mm:ss from list_planned_meetings (HITL caption)",
+        ),
         confirmationGiven: CONFIRMATION_GIVEN_SCHEMA,
       }),
     },
@@ -481,8 +486,12 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         "Move an existing meeting to a new start/end (same meeting id). Resolve meetingId via list_planned_meetings; pick a free slot with present_availability_slots (pass excludeMeetingIds; do not offer the current start). Meeting must belong to this Telegram user's Contact. Requires confirmMessage (patient language). Once the new slot is chosen, call immediately — never ask Yes/No in chat first. First call pauses for HITL ✅/❌ reply keyboard; after explicit chat affirmation (not ✅), re-call with the same args and confirmationGiven true (ignored unless a matching HITL card was shown).",
       schema: z.object({
         meetingId: z.string().min(1).describe("Meeting id from list_planned_meetings"),
-        dateStart: z.string().describe("New start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
-        dateEnd: z.string().describe("New end datetime YYYY-MM-DDTHH:mm:ss (Kyiv local)"),
+        dateStart: KYIV_LOCAL_ISO_SCHEMA.describe(
+          "New start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from present_availability_slots",
+        ),
+        dateEnd: KYIV_LOCAL_ISO_SCHEMA.describe(
+          "New end datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from present_availability_slots",
+        ),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
         name: z
           .string()
