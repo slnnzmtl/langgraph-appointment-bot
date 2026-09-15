@@ -95,13 +95,13 @@ Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still 
 
 ### Tomorrow-reminder webhook
 
-When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also listens for `POST /webhooks/tomorrow-reminder` (default port `8080`, override with `WEBHOOK_PORT`). Compose does **not** publish `8080` to the host — only containers on `espocrm-mcp_default` can reach it. Use a long random `WEBHOOK_SECRET` (header `X-Webhook-Secret`).
+When both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_SECRET` are set, the process also listens for `POST /webhooks/tomorrow-reminder` (default port `8080`, override with `WEBHOOK_PORT`). Compose does **not** publish `8080` to the host — only containers on `clinic-webhook` (Espo) and `espocrm-mcp_default` (MCP clients) that share a network with the bot can reach it. Use a long random `WEBHOOK_SECRET` (header `X-Webhook-Secret`).
 
 **EspoCRM (same host):** set `meetingTomorrowWebhookUrl` to:
 
 `http://appointment-bot:8080/webhooks/tomorrow-reminder`
 
-(`espocrm` / `espocrm-daemon` already share `espocrm-mcp_default` with `appointment-bot`.) There is no public HTTPS path for this webhook.
+(`espocrm` / `espocrm-daemon` share `clinic-webhook` with `appointment-bot`.) There is no public HTTPS path for this webhook.
 
 ```sh
 # From the EspoCRM container (HITL needs id + status Planned)
