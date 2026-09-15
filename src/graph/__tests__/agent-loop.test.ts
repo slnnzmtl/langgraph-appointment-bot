@@ -3398,6 +3398,106 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     ]);
   });
 
+  it("does not re-inject slots after «Інша дата» already paged this turn", async () => {
+    const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        agentMessages: [
+          new HumanMessage(OTHER_DATE_LABEL),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { afterDate: "2026-09-10", durationMinutes: 30 },
+                type: "tool_call",
+              },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              days: snapshot.days,
+              stepMinutes: 30,
+            }),
+            tool_call_id: "s1",
+            name: "present_availability_slots",
+          }),
+        ],
+        availabilityContext: snapshot,
+        next: "booking",
+      }),
+    );
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(ai.tool_calls ?? []).toEqual([]);
+  });
+
+  it("does not page CRM again on a second «Інша дата» slots call this turn", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          date: z.string().optional(),
+          afterDate: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        availabilityContext: snapshot,
+        agentMessages: [
+          new HumanMessage(OTHER_DATE_LABEL),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { durationMinutes: 30, afterDate: "2026-09-10" },
+                type: "tool_call",
+              },
+            ],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({ days: snapshot.days, stepMinutes: 30 }),
+            tool_call_id: "s1",
+            name: "present_availability_slots",
+          }),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s2",
+                name: "present_availability_slots",
+                args: { durationMinutes: 30, afterDate: "2026-09-10" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([]);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    const body = JSON.parse(String(toolMsg.content)) as {
+      days: Array<{ date: string }>;
+      cacheHit: boolean;
+    };
+    expect(body.cacheHit).toBe(true);
+    expect(body.days[0]?.date).toBe("2026-09-10");
+  });
+
   it("does not rewrite afterDate for «Інша процедура»", async () => {
     let crmCalls = 0;
     const slotsTool = tool(
