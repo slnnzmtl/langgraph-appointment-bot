@@ -2717,6 +2717,24 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     stepMinutes: 30,
   };
 
+  const bookingLlmReturning = (content: string) => {
+    const invoke = vi.fn(async () => new AIMessage(content));
+    const slotsTool = tool(
+      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({}),
+      },
+    );
+    return createAgentLlmNode({
+      agent,
+      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
+      tools: [slotsTool],
+      formatSystemMetadata: () => "DYN",
+    });
+  };
+
   it("matches clock-time picks from the availability snapshot", () => {
     expect(matchAvailabilitySlot("14:00", snapshot)?.dateStart).toBe("2026-09-10T14:00:00");
     expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
@@ -3348,23 +3366,24 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(ai.tool_calls ?? []).toEqual([]);
   });
 
-  it("injects present_availability_slots when TIME «Інша дата» has no tool_calls", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop.js");
-    const invoke = vi.fn(async () => new AIMessage("Добре"));
-    const slotsTool = tool(
-      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({}),
-      },
+  it("injects present_availability_slots when DATE copy has no tool_calls", async () => {
+    const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage("Так")],
+        agentMessages: [new HumanMessage("Так")],
+        availabilityContext: null,
+        next: "booking",
+      }),
     );
-    const llm = createAgentLlmNode({
-      agent,
-      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
-      tools: [slotsTool],
-      formatSystemMetadata: () => "DYN",
-    });
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(ai.tool_calls).toEqual([
+      expect.objectContaining({ name: "present_availability_slots", args: {} }),
+    ]);
+  });
+
+  it("injects present_availability_slots when TIME «Інша дата» has no tool_calls", async () => {
+    const llm = bookingLlmReturning("Добре");
     const llmUpdate = await llm(
       clinicState({
         messages: [new HumanMessage(OTHER_DATE_LABEL)],

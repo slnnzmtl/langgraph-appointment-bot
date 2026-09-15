@@ -66,6 +66,7 @@ import {
   extractRawMessageText,
   extractReplyButtons,
   isBookingOfferQuestion,
+  isYesReply,
   parseLeakedModelToolCalls,
   patientAgreedToConsultation,
   stripLeakedModelToolCalls,
@@ -225,6 +226,9 @@ export const captureServicesFromMessages = (
 ): ServicesContext | null | undefined =>
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
+const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
+const AVAILABILITY_TIME_HEADING = "Вільні години на ";
+
 /** DATE offer from a multi-day availability snapshot (code-owned when the model invents hours). */
 export const formatAvailabilityDateOffer = (
   days: AvailabilityContext["days"],
@@ -238,7 +242,7 @@ export const formatAvailabilityDateOffer = (
     })
     .join("\n");
   return {
-    replyText: `Найближчі вільні дні 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`,
+    replyText: `${AVAILABILITY_DATE_HEADING} 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`,
     replyButtons: [
       ...open.map((day) => shortDayMonthLabel(day.dayLabel ?? day.date)),
       OTHER_DATE_LABEL,
@@ -254,7 +258,7 @@ export const formatAvailabilityTimeOffer = (
   const labels = day.slots.map((slot) => slot.label);
   const bullets = labels.map((label) => `  - ${label}`).join("\n");
   return {
-    replyText: `Вільні години на ${dayLabel} 🗓️\n\n${bullets}\n\nЯкий час вам зручний?`,
+    replyText: `${AVAILABILITY_TIME_HEADING}${dayLabel} 🗓️\n\n${bullets}\n\nЯкий час вам зручний?`,
     replyButtons: [...labels.slice(0, 3), OTHER_DATE_LABEL],
   };
 };
@@ -322,7 +326,7 @@ const lastOpenSnapshotDate = (
   return open.at(-1)?.date;
 };
 
-/** Turn Gemini XML-in-content into `tool_calls`; on «Інша дата» force a slots page. */
+/** Turn Gemini XML-in-content into `tool_calls`; inject slots when booking skipped the tool. */
 const coerceAvailabilityToolCalls = (
   response: AIMessage,
   state: ClinicState,
@@ -345,19 +349,30 @@ const coerceAvailabilityToolCalls = (
   }
   if (
     agentId === BOOKING_AGENT_ID
-    && isOtherDateHuman(lastPatientText(state))
-    && (state.availabilityContext?.days.length ?? 0) > 0
     && !toolCalls.some((call) => call.name === "present_availability_slots")
   ) {
-    toolCalls = [
-      ...toolCalls,
-      {
-        id: `other_date_${state.stepCount ?? 0}`,
-        name: "present_availability_slots",
-        args: {},
-        type: "tool_call" as const,
-      },
-    ];
+    const human = lastPatientText(state);
+    const days = state.availabilityContext?.days ?? [];
+    const looksLikeSlotOffer =
+      raw.includes(AVAILABILITY_DATE_HEADING) || raw.includes(AVAILABILITY_TIME_HEADING);
+    // Model skipped present_availability_slots. Skip inject on a day-label tap so finalize
+    // can rewrite TIME from the checkpoint without a new CRM call.
+    if (
+      (looksLikeSlotOffer
+        || isYesReply(human)
+        || (isOtherDateHuman(human) && days.length > 0))
+      && matchAvailabilityDay(human, days) == null
+    ) {
+      toolCalls = [
+        ...toolCalls,
+        {
+          id: `slots_coerce_${state.stepCount ?? 0}`,
+          name: "present_availability_slots",
+          args: {},
+          type: "tool_call" as const,
+        },
+      ];
+    }
   }
 
   const contentWasString = typeof response.content === "string";
