@@ -19,13 +19,20 @@ import {
   VISIT_CHANGE_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
+  OTHER_DATE_LABEL,
+  OTHER_DATE_LABEL_EN,
   defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 import {
   extractMessageTextContent,
   extractReplyButtons,
+  isBookingOfferQuestion,
+  isYesReply,
+  mentionsCatalogProcedure,
   replyButtonLabels,
+  requestsConsultation,
 } from "../shared/message-content.js";
+import { normalizeClinicPhone } from "../shared/phone.js";
 import {
   attachPrefetchVisits,
   formatGreetingContact,
@@ -119,6 +126,15 @@ const lastHumanLineFromMessages = (messages: BaseMessage[]): string => {
   );
 };
 
+/** Full latest human message (all lines) — for intent regexes, not exact chip labels. */
+const lastHumanTextFromMessages = (messages: BaseMessage[]): string => {
+  const lastHuman = [...messages].reverse().find((m) => m instanceof HumanMessage);
+  if (!lastHuman) {
+    return "";
+  }
+  return extractMessageTextContent(lastHuman.content).trim();
+};
+
 /**
  * Skip the supervisor LLM when the patient taps a shortcut the specialist just
  * offered. Supervisor-owned labels, free text, and yielded handoffs still go
@@ -172,6 +188,124 @@ export const stickyContinueAgentId = (
     return shouldContinueInSpecialist(state, agentId) ? agentId : null;
   }
   return null;
+};
+
+const escapeRegExp = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const OTHER_DATE_PATTERN = new RegExp(
+  `(?:${[OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map(escapeRegExp).join("|")}|інша\\s*дат|another\\s*date)`,
+  "i",
+);
+
+const DAY_OR_TIME =
+  /(?:\d{1,2}\s*(?:січн|лют|берез|квіт|травн|червн|липн|серпн|верес|жовт|листоп|грудн|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|(?:сьогодні|завтра|післязавтра|today|tomorrow)|\d{1,2}:\d{2})/i;
+
+/** Cancel / reschedule paraphrases (not only exact chip labels). */
+const VISIT_CHANGE_INTENT =
+  /(?:скасува\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*)/i;
+
+const isDayOrTimeReply = (human: string): boolean =>
+  DAY_OR_TIME.test(human) || OTHER_DATE_PATTERN.test(human);
+
+const isVisitChangeIntent = (human: string): boolean =>
+  VISIT_CHANGE_INTENT.test(human)
+  || VISIT_CHANGE_ROUTE_LABELS.has(human.trim());
+
+/**
+ * Default-to-FAQ after a consultation / book-this-procedure yes/no when the reply
+ * is not owned by booking (Так, consultation request, day/time, visit-change, phone).
+ * Not a named-procedure detector — leftover free text after an offer goes to FAQ
+ * so booking cannot silently attach consultation slots without catalog chips.
+ */
+export const shouldRouteProcedureBrowseToFaq = (state: ClinicState): boolean => {
+  const handoff = state.lastHandoff;
+  if (
+    (handoff?.agentId !== BOOKING_AGENT_ID && handoff?.agentId !== FAQ_AGENT_ID)
+    || handoff.status !== "ok"
+  ) {
+    return false;
+  }
+  const offerText = handoff.replyText ?? "";
+  if (!isBookingOfferQuestion(offerText)) {
+    return false;
+  }
+  const human = lastHumanTextFromMessages(state.messages);
+  const humanLine = lastHumanLineFromMessages(state.messages);
+  if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+    return false;
+  }
+  if (isYesReply(human) || requestsConsultation(human)) {
+    return false;
+  }
+  if (isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+    return false;
+  }
+  // After book-this-procedure, a day/time is agreement to book that CRM row.
+  // After a consultation offer, day/time still belongs to booking (slots), not FAQ.
+  if (isDayOrTimeReply(human)) {
+    return false;
+  }
+  return true;
+};
+
+/** @deprecated Use shouldRouteProcedureBrowseToFaq */
+export const shouldRouteNamedProcedureToFaq = shouldRouteProcedureBrowseToFaq;
+
+/**
+ * Mid-booking ladder (DATE/TIME/details), naming a catalog procedure is a browse
+ * intent, not a booking step. Booking has no catalog keyboard, so it would answer
+ * with a chip-less CRM list and could book a service the patient never confirmed.
+ */
+export const shouldRouteCatalogMentionToFaq = (state: ClinicState): boolean => {
+  const handoff = state.lastHandoff;
+  if (handoff?.agentId !== BOOKING_AGENT_ID || handoff.status !== "ok") {
+    return false;
+  }
+  const human = lastHumanTextFromMessages(state.messages);
+  const humanLine = lastHumanLineFromMessages(state.messages);
+  if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+    return false;
+  }
+  if (isYesReply(human) || requestsConsultation(human)) {
+    return false;
+  }
+  if (isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+    return false;
+  }
+  if (isDayOrTimeReply(human)) {
+    return false;
+  }
+  const names = (state.servicesContext?.list ?? []).map((service) => service.name);
+  return mentionsCatalogProcedure(human, names);
+};
+
+/**
+ * Catalog-browse fallback: FAQ chip sticky is exact taps only. Free text during
+ * that browse (e.g. naming another family) otherwise goes to booking, which has
+ * no catalog keyboard — keep FAQ unless the reply is owned (Так, visit-change, phone).
+ */
+export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {
+  const handoff = state.lastHandoff;
+  if (handoff?.agentId !== FAQ_AGENT_ID || handoff.status !== "ok") {
+    return false;
+  }
+  if (handoff.yieldToSupervisor) {
+    return false;
+  }
+  const human = lastHumanTextFromMessages(state.messages);
+  const humanLine = lastHumanLineFromMessages(state.messages);
+  if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+    return false;
+  }
+  if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+    return false;
+  }
+  const labels = replyButtonLabels(handoff.replyButtons);
+  if (labels.length === 0 || labels.includes(human) || labels.includes(humanLine)) {
+    return false;
+  }
+  return true;
 };
 
 const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
@@ -340,6 +474,19 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       };
     }
 
+    if (
+      shouldRouteProcedureBrowseToFaq(state)
+      || shouldStayInFaqCatalog(state)
+      || shouldRouteCatalogMentionToFaq(state)
+    ) {
+      return {
+        next: FAQ_AGENT_ID,
+        lastHandoff: null,
+        ...prefetchUpdate,
+        availabilityContext: null,
+      };
+    }
+
     const dynamic = [
       options.buildSupervisorDynamicContext?.().trim() ?? "",
       formatGreetingContact(contactContext),
@@ -386,9 +533,17 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       return { ...routingFailureUpdate(message), ...prefetchUpdate };
     }
 
+    const routed = resolveRoutingDecision(decision, state, enabledIds, bookingContext);
+    // Drop paged DATE snapshot unless this is in-booking free text (not an owned menu label).
+    const keepAvailability =
+      state.lastHandoff?.agentId === BOOKING_AGENT_ID
+      && routed.next === BOOKING_AGENT_ID
+      && !SUPERVISOR_OWNED_REPLY_LABELS.has(lastHumanLine);
+
     return {
-      ...resolveRoutingDecision(decision, state, enabledIds, bookingContext),
+      ...routed,
       ...prefetchUpdate,
+      ...(keepAvailability ? {} : { availabilityContext: null }),
     };
   };
 };

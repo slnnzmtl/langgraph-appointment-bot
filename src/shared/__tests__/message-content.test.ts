@@ -1,3 +1,4 @@
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { CLINIC_ADDRESS } from "../clinic-constants.js";
@@ -7,7 +8,12 @@ import {
   extractReplyButtons,
   catalogChoiceButtonsFromText,
   isBookingOfferQuestion,
+  isConsultationOfferQuestion,
+  isYesReply,
+  parseLeakedModelToolCalls,
+  patientAgreedToConsultation,
   replyButtonLabels,
+  requestsConsultation,
   unescapeModelLineBreaks,
 } from "../message-content.js";
 
@@ -102,6 +108,81 @@ describe("isBookingOfferQuestion", () => {
   });
 });
 
+describe("isConsultationOfferQuestion", () => {
+  it("detects consultation offers only", () => {
+    expect(isConsultationOfferQuestion("Підібрати вільний час на консультацію?")).toBe(true);
+    expect(isConsultationOfferQuestion("Бажаєте записатися на цю процедуру?")).toBe(false);
+  });
+});
+
+describe("isYesReply / requestsConsultation", () => {
+  it("detects yes replies", () => {
+    expect(isYesReply("Так")).toBe(true);
+    expect(isYesReply("yes")).toBe(true);
+    expect(isYesReply("запиши")).toBe(false);
+  });
+
+  it("detects consultation book requests, not topic questions or declines", () => {
+    expect(requestsConsultation("запиши на консультацію")).toBe(true);
+    expect(requestsConsultation("консультація")).toBe(true);
+    expect(requestsConsultation("чи є у вас консультація?")).toBe(false);
+    expect(requestsConsultation("не хочу консультацію")).toBe(false);
+    expect(requestsConsultation("запиши на ботокс")).toBe(false);
+  });
+});
+
+describe("patientAgreedToConsultation", () => {
+  it("is true after Так to a consultation offer", () => {
+    expect(
+      patientAgreedToConsultation([
+        new AIMessage("Підібрати вільний час на консультацію?"),
+        new HumanMessage("Так"),
+      ]),
+    ).toBe(true);
+  });
+
+  it("is true when they name consultation", () => {
+    expect(
+      patientAgreedToConsultation([new HumanMessage("запиши на консультацію")]),
+    ).toBe(true);
+  });
+
+  it("is false when they name another procedure after a consultation offer", () => {
+    expect(
+      patientAgreedToConsultation([
+        new AIMessage("Підібрати вільний час на консультацію?"),
+        new HumanMessage("запиши на ботулінотерапію"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("is false when a topic question about consultation precedes another procedure", () => {
+    expect(
+      patientAgreedToConsultation([
+        new HumanMessage("чи є у вас консультація?"),
+        new AIMessage("Так, консультація доступна."),
+        new HumanMessage("запиши на ботокс"),
+      ]),
+    ).toBe(false);
+  });
+
+  it("is false on an explicit decline", () => {
+    expect(
+      patientAgreedToConsultation([new HumanMessage("не хочу консультацію")]),
+    ).toBe(false);
+  });
+
+  it("is cleared when they later book another procedure", () => {
+    expect(
+      patientAgreedToConsultation([
+        new AIMessage("Підібрати вільний час на консультацію?"),
+        new HumanMessage("Так"),
+        new HumanMessage("запиши на ліполітики"),
+      ]),
+    ).toBe(false);
+  });
+});
+
 describe("extractReplyButtons yield trailer", () => {
   it("strips yield tag and sets yieldToSupervisor", () => {
     const result = extractReplyButtons(
@@ -121,6 +202,30 @@ describe("extractReplyButtons yield trailer", () => {
   it("defaults yieldToSupervisor to false when tag is absent", () => {
     const result = extractReplyButtons("Just text");
     expect(result.yieldToSupervisor).toBe(false);
+  });
+
+  it("strips leaked Gemini tool XML so it never reaches Telegram", () => {
+    const result = extractReplyButtons(
+      "<call:default_api:present_availability_slots{afterDate: 2026-09-29,durationMinutes:30}></call:default_api:present_availability_slots>",
+    );
+    expect(result.text).toBe("");
+    expect(result.text).not.toContain("call:default_api");
+    expect(result.buttons).toEqual([]);
+  });
+});
+
+describe("parseLeakedModelToolCalls", () => {
+  it("parses Gemini default_api XML with unquoted keys", () => {
+    expect(
+      parseLeakedModelToolCalls(
+        "<call:default_api:present_availability_slots{afterDate: 2026-09-29,durationMinutes:30}></call:default_api:present_availability_slots>",
+      ),
+    ).toEqual([
+      {
+        name: "present_availability_slots",
+        args: { afterDate: "2026-09-29", durationMinutes: 30 },
+      },
+    ]);
   });
 });
 

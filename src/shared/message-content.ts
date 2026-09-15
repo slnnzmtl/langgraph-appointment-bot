@@ -1,4 +1,4 @@
-import type { BaseMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, type BaseMessage } from "@langchain/core/messages";
 
 type NonTextContentPart = Exclude<
   Extract<BaseMessage["content"], readonly unknown[]>[number],
@@ -67,6 +67,77 @@ const REPLY_BUTTON_TAG = /<\/?reply_buttons\b[^>]*>/gi;
 
 const YIELD_TO_SUPERVISOR_TAG = /<yield_to_supervisor\s*\/?>/gi;
 
+/** Gemini sometimes writes a function call as XML text instead of `tool_calls`. */
+const LEAKED_MODEL_TOOL_CALL =
+  /<call:default_api:([A-Za-z0-9_]+)\{([^}]*)\}(?:><\/call:default_api:\1>)?/g;
+
+export type LeakedModelToolCall = {
+  name: string;
+  args: Record<string, unknown>;
+};
+
+const parseLeakedToolArgValue = (raw: string): unknown => {
+  const value = raw.trim();
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  if (value === "null") {
+    return null;
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(value)) {
+    return Number(value);
+  }
+  return value.replace(/^["']|["']$/g, "");
+};
+
+const parseLeakedToolArgs = (body: string): Record<string, unknown> => {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed.startsWith("{") ? trimmed : `{${trimmed}}`);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Gemini emits `{afterDate: 2026-09-29, durationMinutes: 30}` — not JSON.
+  }
+  const args: Record<string, unknown> = {};
+  for (const part of trimmed.split(",")) {
+    const colon = part.indexOf(":");
+    if (colon < 0) {
+      continue;
+    }
+    const key = part.slice(0, colon).trim();
+    if (key.length === 0) {
+      continue;
+    }
+    args[key] = parseLeakedToolArgValue(part.slice(colon + 1));
+  }
+  return args;
+};
+
+export const parseLeakedModelToolCalls = (text: string): LeakedModelToolCall[] => {
+  LEAKED_MODEL_TOOL_CALL.lastIndex = 0;
+  return [...text.matchAll(LEAKED_MODEL_TOOL_CALL)].map((match) => ({
+    name: match[1]!,
+    args: parseLeakedToolArgs(match[2] ?? ""),
+  }));
+};
+
+export const stripLeakedModelToolCalls = (text: string): string => {
+  LEAKED_MODEL_TOOL_CALL.lastIndex = 0;
+  const stripped = text.replace(LEAKED_MODEL_TOOL_CALL, "");
+  if (stripped === text) {
+    return text;
+  }
+  return stripped.replace(/(?:\r?\n){3,}/g, "\n\n").trim();
+};
+
 export type ExtractedReplyButtons = {
   text: string;
   buttons: string[];
@@ -102,9 +173,139 @@ export const isBookingOfferQuestion = (text: string): boolean => {
   return lastLine.includes("?") && BOOKING_OFFER_QUESTION.test(lastLine);
 };
 
+const YES_REPLY = /^(так|yes|да)$/i;
+const MENTIONS_CONSULTATION = /консультац|consultation/i;
+/** Declines — avoid `\b` before Cyrillic (JS word chars are ASCII-only without `u`). */
+const CONSULTATION_NEGATION =
+  /(?:(?:^|\s)не\s+(?:хочу|треба|потрібно|бажаю|буду)|без\s+консультац|(?:^|\s)(?:not|don'?t|no)(?:\s|$))/i;
+/** Book/browse request naming consultation — not a topic question or decline. */
+const CONSULTATION_REQUEST =
+  /(?:запиш\w*|записат\w*|хочу|бажаю|потрібн\w*|треба|book|want|need).{0,40}(?:консультац|consultation)|(?:консультац|consultation).{0,40}(?:запиш\w*|записат\w*|будь\s*ласка|please)|^(?:консультація|consultation)$/i;
+/** Book intent naming a non-consultation procedure/family. */
+const OTHER_PROCEDURE_BOOK =
+  /(?:запиш\w*|записат\w*|на\s+\S+.{0,40}запиш\w*|book|want).{0,60}/i;
+
+/** Exact «Так» / Yes / Да (booking-offer keyboard). */
+export const isYesReply = (text: string): boolean => YES_REPLY.test(text.trim());
+
+/**
+ * True when the patient asks to book «Консультація» (not a topic question or decline).
+ * Bare «консультація» counts; «чи є консультація?» and «не хочу консультацію» do not.
+ */
+export const requestsConsultation = (text: string): boolean => {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes("?")) {
+    return false;
+  }
+  if (CONSULTATION_NEGATION.test(trimmed)) {
+    return false;
+  }
+  if (!MENTIONS_CONSULTATION.test(trimmed)) {
+    return false;
+  }
+  return CONSULTATION_REQUEST.test(trimmed);
+};
+
+/** Mentions consultation as a topic without requesting to book it. */
+const declinesOrQuestionsConsultation = (text: string): boolean => {
+  const trimmed = text.trim();
+  if (!MENTIONS_CONSULTATION.test(trimmed)) {
+    return false;
+  }
+  return trimmed.includes("?") || CONSULTATION_NEGATION.test(trimmed);
+};
+
+/** Book/browse intent for something other than consultation. */
+export const namesOtherProcedureBook = (text: string): boolean => {
+  const trimmed = text.trim();
+  if (!trimmed || requestsConsultation(trimmed) || isYesReply(trimmed)) {
+    return false;
+  }
+  if (MENTIONS_CONSULTATION.test(trimmed) && !CONSULTATION_NEGATION.test(trimmed)) {
+    return false;
+  }
+  return OTHER_PROCEDURE_BOOK.test(trimmed);
+};
+
+/** True when the booking-offer question is specifically for «Консультація». */
+export const isConsultationOfferQuestion = (text: string): boolean => {
+  if (!isBookingOfferQuestion(text)) {
+    return false;
+  }
+  return MENTIONS_CONSULTATION.test(lastNonEmptyLine(text));
+};
+
+/**
+ * True when the latest agreement state is to book «Консультація»
+ * («Так» after a consultation offer, or an explicit consultation request).
+ * Topic questions, declines, and a later other-procedure book clear agreement.
+ */
+export const patientAgreedToConsultation = (messages: BaseMessage[]): boolean => {
+  let awaitingYes = false;
+  let agreed = false;
+  for (const message of messages) {
+    if (message instanceof AIMessage) {
+      if (isConsultationOfferQuestion(extractMessageTextContent(message.content))) {
+        awaitingYes = true;
+      }
+      continue;
+    }
+    if (!(message instanceof HumanMessage)) {
+      continue;
+    }
+    const text = extractMessageTextContent(message.content).trim();
+    if (requestsConsultation(text)) {
+      agreed = true;
+      awaitingYes = false;
+      continue;
+    }
+    if (awaitingYes && isYesReply(text)) {
+      agreed = true;
+      awaitingYes = false;
+      continue;
+    }
+    if (
+      namesOtherProcedureBook(text)
+      || declinesOrQuestionsConsultation(text)
+      || (awaitingYes && text.length > 0 && !isYesReply(text))
+    ) {
+      agreed = false;
+      awaitingYes = false;
+    }
+  }
+  return agreed;
+};
+
 /** Catalog drill-down closing questions (direction / family / zone / brand). */
 const CATALOG_CHOICE_QUESTION =
-  /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?(?:процедура|послуга)|який\s+варіант|який\s+препарат|which\s+(?:direction|procedure|service|variant|preparation))/i;
+  /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?(?:процедура|послуга|зона|ділянка|область|частина)|які\s+(?:саме\s+)?зони|який\s+(?:саме\s+)?варіант|який\s+(?:саме\s+)?препарат|which\s+(?:direction|procedure|service|variant|preparation|zone|area))/i;
+
+/**
+ * Stems of CRM service names for loose Ukrainian-declension matching
+ * («ботулінотерапія» / «ботулінотерапію» both match the stem «ботулінотерапі»).
+ * Short and consultation tokens are skipped — they are not browse signals.
+ */
+const catalogNameStems = (names: string[]): string[] => {
+  const stems = new Set<string>();
+  for (const name of names) {
+    for (const token of name.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+      if (token.length < 7 || MENTIONS_CONSULTATION.test(token)) {
+        continue;
+      }
+      stems.add(token.length > 7 ? token.slice(0, token.length - 2) : token);
+    }
+  }
+  return [...stems];
+};
+
+/** True when the text names a procedure/family from the CRM catalog. */
+export const mentionsCatalogProcedure = (text: string, names: string[]): boolean => {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return false;
+  }
+  return catalogNameStems(names).some((stem) => normalized.includes(stem));
+};
 
 /** Bullet or numbered CRM-style list item (`• label`, `1. label`, `1) label`). */
 const LIST_ITEM_PREFIX = /^(?:[\s•\u2022\-\*]+\s*|\d+[\.\)]\s+)(.+)$/;
@@ -160,7 +361,9 @@ export const catalogChoiceButtonsFromText = (text: string): string[] => {
  * Labels are not the markup channel — the graph writes `lastHandoff.replyButtons`.
  */
 export const extractReplyButtons = (raw: string): ExtractedReplyButtons => {
-  const { cleaned, yieldToSupervisor } = stripYieldToSupervisorTags(raw);
+  const { cleaned, yieldToSupervisor } = stripYieldToSupervisorTags(
+    stripLeakedModelToolCalls(raw),
+  );
   const match = cleaned.match(REPLY_BUTTONS_TRAILER);
   if (!match || match.index === undefined) {
     return { text: cleaned, buttons: [], yieldToSupervisor };

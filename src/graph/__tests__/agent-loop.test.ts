@@ -27,8 +27,10 @@ import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
   CLINIC_ADDRESS,
+  CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   OTHER_DATE_LABEL,
+  OTHER_DATE_LABEL_EN,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
 } from "../../shared/clinic-constants.js";
@@ -1131,7 +1133,7 @@ describe("createAgentLlmNode context cache", () => {
     expect(String(bookingDynamic.content)).toContain("svc-1");
   });
 
-  it("omits list_services from booking when availabilityContext has days", async () => {
+  it("keeps list_services on booking when availabilityContext has days", async () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
@@ -1179,7 +1181,7 @@ describe("createAgentLlmNode context cache", () => {
 
     const bookingDynamic = (cachedInvoke.mock.calls[0]?.[0] as unknown[])[0] as HumanMessage;
     expect(String(bookingDynamic.content)).not.toContain("<availability>");
-    expect(String(bookingDynamic.content)).not.toContain("<list_services>");
+    expect(String(bookingDynamic.content)).toContain("<list_services>");
   });
 
   it("still appends list_services to FAQ when availabilityContext is set", async () => {
@@ -1533,6 +1535,25 @@ describe("createAgentFinalizeNode", () => {
       replyButtons: [...BOOKING_OFFER_MENU],
     });
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
+  });
+
+  it("does not send leaked Gemini tool XML as the patient reply", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        agentMessages: [
+          new AIMessage(
+            "<call:default_api:present_availability_slots{afterDate: 2026-09-29,durationMinutes:30}></call:default_api:present_availability_slots>",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText ?? "").not.toContain("call:default_api");
+    expect(String((update.messages?.[0] as AIMessage | undefined)?.content ?? "")).not.toContain(
+      "call:default_api",
+    );
   });
 
   it("DDD-53: attaches BOOKING OFFER when the consultation question has no trailer", () => {
@@ -2615,6 +2636,8 @@ describe("availability offer helpers", () => {
   it("matchAvailabilityDay accepts short keyboard labels", () => {
     expect(matchAvailabilityDay("10 вересня", days)?.date).toBe("2026-09-10");
     expect(matchAvailabilityDay(OTHER_DATE_LABEL, days)).toBeNull();
+    expect(matchAvailabilityDay("Інша", days)).toBeNull();
+    expect(matchAvailabilityDay(OTHER_DATE_LABEL_EN, days)).toBeNull();
     expect(matchAvailabilityDay("14:00", days)).toBeNull();
   });
 
@@ -2698,6 +2721,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(matchAvailabilitySlot("14:00", snapshot)?.dateStart).toBe("2026-09-10T14:00:00");
     expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
     expect(matchAvailabilitySlot(OTHER_DATE_LABEL, snapshot)).toBeNull();
+    expect(matchAvailabilitySlot("Інша", snapshot)).toBeNull();
   });
 
   it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", () => {
@@ -2801,6 +2825,118 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     expect(update.lastHandoff?.replyText).toBe(BOOKING_NOTE_QUESTION_UK);
     expect(update.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
+  });
+
+  it("blocks create_meeting with consultation id without explicit agreement", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ id: "should-not-run" }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({ serviceId: z.string() }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const toolsUpdate = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        messages: [
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("запиши на ботулінотерапію"),
+        ],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "c1",
+                name: "create_meeting",
+                args: { serviceId: CONSULTATION_SERVICE_ID },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content)).error).toBe("Consultation agreement required");
+  });
+
+  it("allows create_meeting with consultation id after Так to consultation offer", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ awaitingConfirmation: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({ serviceId: z.string() }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const toolsUpdate = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        messages: [
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("Так"),
+        ],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "c1",
+                name: "create_meeting",
+                args: { serviceId: CONSULTATION_SERVICE_ID },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(JSON.parse(String((toolsUpdate.agentMessages as ToolMessage[])[0]!.content))).toEqual({
+      awaitingConfirmation: true,
+    });
+  });
+
+  it("blocks reschedule_meeting with consultation id without explicit agreement", async () => {
+    const rescheduleTool = tool(
+      async () => JSON.stringify({ id: "should-not-run" }),
+      {
+        name: "reschedule_meeting",
+        description: "reschedule",
+        schema: z.object({ serviceId: z.string() }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([rescheduleTool], "booking");
+    const toolsUpdate = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        messages: [
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("запиши на ботулінотерапію"),
+        ],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "r1",
+                name: "reschedule_meeting",
+                args: { serviceId: CONSULTATION_SERVICE_ID },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content)).error).toBe("Consultation agreement required");
   });
 
   it("allows create_meeting after note step is skipped", async () => {
@@ -2951,6 +3087,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         schema: z.object({
           durationMinutes: z.number().optional(),
           date: z.string().optional(),
+          afterDate: z.string().optional(),
         }),
       },
     );
@@ -2983,6 +3120,410 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(body.cacheHit).toBe(true);
     expect(body.days).toHaveLength(1);
     expect(update.availabilityContext?.days).toHaveLength(1);
+  });
+
+  it.each([
+    { label: OTHER_DATE_LABEL, llmAfter: "2025-10-05" },
+    { label: OTHER_DATE_LABEL_EN, llmAfter: "2025-10-05" },
+    { label: "Інша", llmAfter: undefined },
+  ])(
+    "rewrites afterDate from checkpoint on other-date ($label)",
+    async ({ label, llmAfter }) => {
+      const multiDay: AvailabilityContext = {
+        days: [
+          snapshot.days[0]!,
+          {
+            date: "2026-10-05",
+            dayLabel: "5 жовтня (понеділок)",
+            slots: [
+              {
+                id: "c",
+                label: "11:00",
+                dateStart: "2026-10-05T11:00:00",
+                dateEnd: "2026-10-05T11:30:00",
+              },
+            ],
+          },
+        ],
+        stepMinutes: 30,
+      };
+      const invoked: Array<Record<string, unknown>> = [];
+      const slotsTool = tool(
+        async (input: Record<string, unknown>) => {
+          invoked.push(input);
+          return JSON.stringify({
+            days: [
+              {
+                date: "2026-10-06",
+                dayLabel: "6 жовтня (вівторок)",
+                slots: [
+                  {
+                    id: "d",
+                    label: "11:00",
+                    dateStart: "2026-10-06T11:00:00",
+                    dateEnd: "2026-10-06T11:30:00",
+                  },
+                ],
+              },
+            ],
+            stepMinutes: 30,
+          });
+        },
+        {
+          name: "present_availability_slots",
+          description: "slots",
+          schema: z.object({
+            durationMinutes: z.number().optional(),
+            date: z.string().optional(),
+            afterDate: z.string().optional(),
+          }),
+        },
+      );
+      const toolsNode = createAgentToolsNode([slotsTool], "booking");
+      const update = await toolsNode(
+        clinicState({
+          messages: [new HumanMessage(label)],
+          availabilityContext: multiDay,
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [
+                {
+                  id: "s1",
+                  name: "present_availability_slots",
+                  args: {
+                    durationMinutes: 30,
+                    ...(llmAfter ? { afterDate: llmAfter } : {}),
+                    date: "2026-09-10",
+                  },
+                  type: "tool_call",
+                },
+              ],
+            }),
+          ],
+        }),
+        { configurable: {} },
+      );
+      expect(invoked).toHaveLength(1);
+      expect(invoked[0]).toEqual({ durationMinutes: 30, afterDate: "2026-10-05" });
+      expect(update.availabilityContext?.days[0]?.date).toBe("2026-10-06");
+    },
+  );
+
+  it("hydrates TIME «Інша дата» XML into slots tool_calls and pages from last snapshot day", async () => {
+    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const leaked =
+      "<call:default_api:present_availability_slots{afterDate: 2026-09-29,durationMinutes:30}></call:default_api:present_availability_slots>";
+    const invoke = vi.fn(async () => new AIMessage(leaked));
+    const slotsTool = tool(
+      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          afterDate: z.string().optional(),
+        }),
+      },
+    );
+    const llm = createAgentLlmNode({
+      agent,
+      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
+      tools: [slotsTool],
+      formatSystemMetadata: () => "DYN",
+    });
+    const timeViewSnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-09-29",
+          dayLabel: "29 вересня (вівторок)",
+          slots: [
+            {
+              id: "a",
+              label: "11:00",
+              dateStart: "2026-09-29T11:00:00",
+              dateEnd: "2026-09-29T11:30:00",
+            },
+          ],
+        },
+        {
+          date: "2026-10-01",
+          dayLabel: "1 жовтня (четвер)",
+          slots: [
+            {
+              id: "b",
+              label: "11:00",
+              dateStart: "2026-10-01T11:00:00",
+              dateEnd: "2026-10-01T11:30:00",
+            },
+          ],
+        },
+        {
+          date: "2026-10-02",
+          dayLabel: "2 жовтня (п'ятниця)",
+          slots: [
+            {
+              id: "c",
+              label: "11:00",
+              dateStart: "2026-10-02T11:00:00",
+              dateEnd: "2026-10-02T11:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+    };
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        agentMessages: [new HumanMessage(OTHER_DATE_LABEL)],
+        availabilityContext: timeViewSnapshot,
+        next: "booking",
+      }),
+    );
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(String(ai.content)).not.toContain("call:default_api");
+    expect(ai.tool_calls).toEqual([
+      expect.objectContaining({
+        name: "present_availability_slots",
+        args: { afterDate: "2026-09-29", durationMinutes: 30 },
+      }),
+    ]);
+
+    const invoked: Array<Record<string, unknown>> = [];
+    const runSlotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          afterDate: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([runSlotsTool], "booking");
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        availabilityContext: timeViewSnapshot,
+        agentMessages: llmUpdate.agentMessages as never,
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([{ afterDate: "2026-10-02", durationMinutes: 30 }]);
+  });
+
+  it("ignores leaked Gemini XML for tools not bound to the agent", async () => {
+    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const leaked =
+      "<call:default_api:create_meeting{serviceId: demo}></call:default_api:create_meeting>";
+    const invoke = vi.fn(async () => new AIMessage(leaked));
+    const slotsTool = tool(
+      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({}),
+      },
+    );
+    const llm = createAgentLlmNode({
+      agent,
+      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
+      tools: [slotsTool],
+      formatSystemMetadata: () => "DYN",
+    });
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage("ok")],
+        agentMessages: [new HumanMessage("ok")],
+        next: "booking",
+      }),
+    );
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(String(ai.content)).not.toContain("call:default_api");
+    expect(ai.tool_calls ?? []).toEqual([]);
+  });
+
+  it("injects present_availability_slots when TIME «Інша дата» has no tool_calls", async () => {
+    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const invoke = vi.fn(async () => new AIMessage("Добре"));
+    const slotsTool = tool(
+      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({}),
+      },
+    );
+    const llm = createAgentLlmNode({
+      agent,
+      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
+      tools: [slotsTool],
+      formatSystemMetadata: () => "DYN",
+    });
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        agentMessages: [new HumanMessage(OTHER_DATE_LABEL)],
+        availabilityContext: snapshot,
+        next: "booking",
+      }),
+    );
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(ai.tool_calls).toEqual([
+      expect.objectContaining({ name: "present_availability_slots", args: {} }),
+    ]);
+  });
+
+  it("does not rewrite afterDate for «Інша процедура»", async () => {
+    let crmCalls = 0;
+    const slotsTool = tool(
+      async () => {
+        crmCalls += 1;
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          afterDate: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("Інша процедура")],
+        availabilityContext: snapshot,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { durationMinutes: 30 },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(crmCalls).toBe(0);
+    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content)).cacheHit).toBe(true);
+  });
+
+  it("drops afterDate and date when the snapshot has no open days", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          date: z.string().optional(),
+          afterDate: z.string().optional(),
+          startDate: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    await toolsNode(
+      clinicState({
+        availabilityContext: {
+          days: [
+            {
+              date: "2026-10-05",
+              dayLabel: "5 жовтня (понеділок)",
+              slots: [],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: {
+                  durationMinutes: 30,
+                  afterDate: "2025-10-05",
+                  date: "2026-10-01",
+                  startDate: "2026-09-11",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      { durationMinutes: 30, startDate: "2026-09-11" },
+    ]);
+  });
+
+  it("keeps a patient-named date when there is no availability snapshot", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          durationMinutes: z.number().optional(),
+          date: z.string().optional(),
+          afterDate: z.string().optional(),
+          startDate: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    await toolsNode(
+      clinicState({
+        availabilityContext: null,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: {
+                  durationMinutes: 30,
+                  afterDate: "2025-10-05",
+                  date: "2026-10-01",
+                  startDate: "2026-09-11",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      { durationMinutes: 30, date: "2026-10-01", startDate: "2026-09-11" },
+    ]);
   });
 
   it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", () => {

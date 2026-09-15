@@ -26,7 +26,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, stickyContinueAgentId } =
+const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, shouldRouteProcedureBrowseToFaq, shouldStayInFaqCatalog, stickyContinueAgentId } =
   await import("../supervisor.js");
 
 const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
@@ -268,6 +268,7 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(update).toEqual({
       next: "booking",
       lastHandoff: null,
+      availabilityContext: null,
     });
     expect(update.messages).toBeUndefined();
   });
@@ -1073,6 +1074,277 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
   });
 });
 
+describe("shouldRouteProcedureBrowseToFaq", () => {
+  it("is true when they name a procedure family after a consultation offer", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підібрати вільний час на консультацію?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("запиши на ботулінотерапію"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false after Так to a consultation offer", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підібрати вільний час на консультацію?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("Так"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false after a book-this-procedure offer when they name a day", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Бажаєте записатися на цю процедуру?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Бажаєте записатися на цю процедуру?"),
+            new HumanMessage("2 жовтня"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is true when they name another family after a FAQ book-this-procedure offer", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            yieldToSupervisor: true,
+            replyText: "Бажаєте записатися на цю процедуру?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Чудово, обрано: Ботулінотерапія Botox, Disport 1 зона.\n\nБажаєте записатися на цю процедуру?"),
+            new HumanMessage("на ліполітики запиши"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for visit-change paraphrases after a consultation offer", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підібрати вільний час на консультацію?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("перенеси будь ласка"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for a phone number after a consultation offer", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підібрати вільний час на консультацію?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("+380501112233"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("is false for English tomorrow after a consultation offer", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підібрати вільний час на консультацію?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("tomorrow"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("uses full message text when a named procedure is followed by thanks", () => {
+    expect(
+      shouldRouteProcedureBrowseToFaq(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підібрати вільний час на консультацію?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Підібрати вільний час на консультацію?"),
+            new HumanMessage("запиши на ботулінотерапію\nдякую"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the LLM and routes to faq after запиши на ботулінотерапію", async () => {
+    const invoke = vi.fn();
+    const supervisorLlm = {
+      bindRoutingTools: vi.fn(() => ({ invoke })),
+    } as unknown as ILLMConnector;
+    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Підібрати вільний час на консультацію?",
+          replyButtons: ["Так", "Обрати іншу процедуру"],
+        },
+        messages: [
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("запиши на ботулінотерапію"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update).toMatchObject({ next: "faq", lastHandoff: null, availabilityContext: null });
+  });
+
+  it("skips the LLM and routes to faq after на ліполітики запиши on a FAQ book-this-procedure offer", async () => {
+    const invoke = vi.fn();
+    const supervisorLlm = {
+      bindRoutingTools: vi.fn(() => ({ invoke })),
+    } as unknown as ILLMConnector;
+    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          yieldToSupervisor: true,
+          replyText: "Бажаєте записатися на цю процедуру?",
+          replyButtons: ["Так", "Обрати іншу процедуру"],
+        },
+        messages: [
+          new AIMessage("Бажаєте записатися на цю процедуру?"),
+          new HumanMessage("на ліполітики запиши"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update).toMatchObject({ next: "faq", lastHandoff: null, availabilityContext: null });
+  });
+});
+
+describe("shouldStayInFaqCatalog", () => {
+  it("keeps free text in FAQ while catalog chips are showing", () => {
+    expect(
+      shouldStayInFaqCatalog(
+        supervisorState({
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            replyText: "Який препарат вас цікавить?",
+            replyButtons: ["Disport", "Nabota", "Botox"],
+          },
+          messages: [
+            new AIMessage("Який препарат вас цікавить?"),
+            new HumanMessage("запиши на ботокс"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false when FAQ yielded a book-this-procedure offer", () => {
+    expect(
+      shouldStayInFaqCatalog(
+        supervisorState({
+          lastHandoff: {
+            agentId: "faq",
+            agentName: "FAQ",
+            status: "ok",
+            yieldToSupervisor: true,
+            replyText: "Бажаєте записатися на цю процедуру?",
+            replyButtons: ["Так", "Обрати іншу процедуру"],
+          },
+          messages: [
+            new AIMessage("Бажаєте записатися на цю процедуру?"),
+            new HumanMessage("на ліполітики запиши"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("createClinicSupervisorNode sticky booking continue", () => {
   const invoke = vi.fn();
   const bindRoutingTools = vi.fn(() => ({ invoke }));
@@ -1146,6 +1418,183 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
+  });
+});
+
+describe("createClinicSupervisorNode availability session reset", () => {
+  const invoke = vi.fn();
+  const bindRoutingTools = vi.fn(() => ({ invoke }));
+  const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
+  const listedContact = {
+    contacts: [{ id: "c-1", firstName: "Марія", missingFields: [] as string[] }],
+  };
+  const listedMeetings = {
+    meetings: [] as Array<{ id: string; name: string; dateStart: string; dateEnd: string }>,
+    dateFrom: "2026-09-11",
+  };
+  const pagedSnapshot = {
+    days: [
+      {
+        date: "2026-10-05",
+        dayLabel: "5 жовтня (понеділок)",
+        slots: [
+          {
+            id: "a",
+            label: "11:00",
+            dateStart: "2026-10-05T11:00:00",
+            dateEnd: "2026-10-05T11:30:00",
+          },
+        ],
+      },
+    ],
+    stepMinutes: 30,
+  };
+
+  beforeEach(() => {
+    invoke.mockReset();
+    bindRoutingTools.mockClear();
+  });
+
+  it.each(["Записатись", "Послуги", "Обрати іншу процедуру"] as const)(
+    "nulls availabilityContext on owned label %s (prefetch reuse)",
+    async (label) => {
+      invoke.mockResolvedValue({ next: label === "Записатись" ? "booking" : "faq", reply: "ok" });
+      const prefetch = vi.fn(async () => ({
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+      }));
+      const node = createClinicSupervisorNode({
+        agents,
+        supervisorLlm,
+        loadSupervisorPrompt: () => "STATIC",
+        prefetch,
+      });
+
+      const update = await node(
+        supervisorState({
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyButtons: ["28 вересня", "Інша дата"],
+          },
+          messages: [
+            new AIMessage("Який день вам зручний?"),
+            new HumanMessage(label),
+          ],
+          contactContext: listedContact,
+          bookingContext: listedMeetings,
+          availabilityContext: pagedSnapshot,
+          prefetchFetchedAt: Date.now(),
+        }),
+      );
+
+      expect(prefetch).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledOnce();
+      expect(update.availabilityContext).toBeNull();
+    },
+  );
+
+  it("nulls availabilityContext when FAQ routes to booking", async () => {
+    invoke.mockResolvedValue({ next: "booking", reply: "" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          yieldToSupervisor: true,
+          replyButtons: ["Консультація"],
+        },
+        messages: [
+          new AIMessage("Яка процедура?"),
+          new HumanMessage("хочу записатися на консультацію"),
+        ],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: pagedSnapshot,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.availabilityContext).toBeNull();
+  });
+
+  it("keeps availabilityContext on sticky Інша дата (prefetch reuse)", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["28 вересня", "Інша дата"],
+        },
+        messages: [
+          new AIMessage("Який день вам зручний?"),
+          new HumanMessage("Інша дата"),
+        ],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: pagedSnapshot,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(prefetch).not.toHaveBeenCalled();
+    expect(update.next).toBe("booking");
+    expect(update.availabilityContext).toBeUndefined();
+  });
+
+  it("keeps availabilityContext on in-booking free text routed to booking", async () => {
+    invoke.mockResolvedValue({ next: "booking", reply: "" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["28 вересня", "Інша дата"],
+        },
+        messages: [
+          new AIMessage("Який день вам зручний?"),
+          new HumanMessage("а можна після обіду?"),
+        ],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: pagedSnapshot,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.availabilityContext).toBeUndefined();
   });
 });
 

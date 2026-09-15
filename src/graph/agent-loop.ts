@@ -43,12 +43,20 @@ import { trackEvent, trackToolError } from "../analytics/track.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
+  BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
+  BOOKING_REPLACE_MENU_EN,
+  CONSULTATION_SERVICE_ID,
+  DEFAULT_MENU_HAS_VISITS,
+  DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
   INTENT_SKIP_LABEL_EN,
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
+  OTHER_DATE_LABEL_EN,
   PATIENT_FALLBACK_MESSAGE,
+  VISIT_CHANGE_MENU,
+  VISIT_CHANGE_MENU_EN,
   defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
@@ -58,6 +66,9 @@ import {
   extractRawMessageText,
   extractReplyButtons,
   isBookingOfferQuestion,
+  parseLeakedModelToolCalls,
+  patientAgreedToConsultation,
+  stripLeakedModelToolCalls,
 } from "../shared/message-content.js";
 import { normalizeClinicPhone } from "../shared/phone.js";
 import {
@@ -107,11 +118,35 @@ const MEETING_MUTATION_TOOLS = new Set([
   "reschedule_meeting",
 ]);
 
+const CREATE_CONSULTATION_REQUIRED_ERROR = "Consultation agreement required";
+
+const CONSULTATION_AGREEMENT_TOOLS = new Set(["create_meeting", "reschedule_meeting"]);
+
+const toolCallServiceId = (call: { args?: unknown }): string | null => {
+  const args = call.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return null;
+  }
+  const serviceId = (args as { serviceId?: unknown }).serviceId;
+  return typeof serviceId === "string" ? serviceId : null;
+};
+
+const blocksConsultationWithoutAgreement = (
+  agentId: string | undefined,
+  call: { name: string; args?: unknown },
+  messages: BaseMessage[],
+): boolean =>
+  agentId === BOOKING_AGENT_ID
+  && CONSULTATION_AGREEMENT_TOOLS.has(call.name)
+  && toolCallServiceId(call) === CONSULTATION_SERVICE_ID
+  && !patientAgreedToConsultation(messages);
+
 const BLOCKED_MEETING_ERRORS = new Set([
   "Contact incomplete",
   "Already booked",
   "Not authorized",
   "Note step required",
+  CREATE_CONSULTATION_REQUIRED_ERROR,
 ]);
 
 export type MeetingMutationOutcome = "committed" | "pending" | "blocked" | "failed" | null;
@@ -234,13 +269,152 @@ const lastHumanText = (messages: BaseMessage[]): string => {
   return "";
 };
 
+const lastPatientText = (state: ClinicState): string =>
+  lastHumanText(state.messages) || lastHumanText(state.agentMessages ?? []);
+
+/** Known keyboard labels that must not collide with an «Інша дата» prefix tap. */
+const OTHER_DATE_COLLISION_LABELS = [
+  MAIN_MENU_LABEL,
+  ...DEFAULT_MENU_NO_VISITS,
+  ...DEFAULT_MENU_HAS_VISITS,
+  ...BOOKING_OFFER_MENU,
+  ...BOOKING_OFFER_MENU_EN,
+  ...BOOKING_REPLACE_MENU,
+  ...BOOKING_REPLACE_MENU_EN,
+  ...VISIT_CHANGE_MENU,
+  ...VISIT_CHANGE_MENU_EN,
+  INTENT_SKIP_LABEL,
+  INTENT_SKIP_LABEL_EN,
+  "Book",
+  "Services",
+  "Address",
+  "My visit",
+].map((label) => label.toLowerCase());
+
+/**
+ * Exact UK/EN «Інша дата», or a unique prefix of that label (≥4 chars, e.g. «Інша»).
+ * Rejects a prefix that also prefixes another known keyboard label.
+ */
+const isOtherDateHuman = (humanText: string): boolean => {
+  const normalized = humanText.trim().toLowerCase();
+  if (normalized.length < 4) {
+    return false;
+  }
+  const targets = [OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map((label) => label.toLowerCase());
+  const matched = targets.find(
+    (target) => normalized === target || target.startsWith(normalized),
+  );
+  if (!matched) {
+    return false;
+  }
+  if (normalized === matched) {
+    return true;
+  }
+  return !OTHER_DATE_COLLISION_LABELS.some(
+    (label) => label.startsWith(normalized) && !targets.includes(label),
+  );
+};
+
+const lastOpenSnapshotDate = (
+  ctx: AvailabilityContext | null | undefined,
+): string | undefined => {
+  const open = ctx?.days.filter((day) => day.slots.length > 0) ?? [];
+  return open.at(-1)?.date;
+};
+
+/** Turn Gemini XML-in-content into `tool_calls`; on «Інша дата» force a slots page. */
+const coerceAvailabilityToolCalls = (
+  response: AIMessage,
+  state: ClinicState,
+  agentId: string,
+  allowedToolNames: ReadonlySet<string>,
+): AIMessage => {
+  const raw = extractRawMessageText(response.content);
+  const leaked = parseLeakedModelToolCalls(raw).filter((call) =>
+    allowedToolNames.has(call.name),
+  );
+  const existing = response.tool_calls ?? [];
+  let toolCalls = existing;
+  if (existing.length === 0 && leaked.length > 0) {
+    toolCalls = leaked.map((call, index) => ({
+      id: `leaked_${call.name}_${index}`,
+      name: call.name,
+      args: call.args,
+      type: "tool_call" as const,
+    }));
+  }
+  if (
+    agentId === BOOKING_AGENT_ID
+    && isOtherDateHuman(lastPatientText(state))
+    && (state.availabilityContext?.days.length ?? 0) > 0
+    && !toolCalls.some((call) => call.name === "present_availability_slots")
+  ) {
+    toolCalls = [
+      ...toolCalls,
+      {
+        id: `other_date_${state.stepCount ?? 0}`,
+        name: "present_availability_slots",
+        args: {},
+        type: "tool_call" as const,
+      },
+    ];
+  }
+
+  const contentWasString = typeof response.content === "string";
+  let nextContent: AIMessage["content"] = response.content;
+  let contentChanged = false;
+  if (contentWasString) {
+    const original = response.content as string;
+    const stripped = stripLeakedModelToolCalls(original);
+    if (stripped !== original) {
+      nextContent = stripped;
+      contentChanged = true;
+    }
+  } else if (Array.isArray(response.content)) {
+    const originalParts = response.content;
+    const strippedParts = originalParts.map((part) => {
+      if (typeof part === "string") {
+        return stripLeakedModelToolCalls(part);
+      }
+      if (part && typeof part === "object" && "type" in part && part.type === "text" && "text" in part) {
+        const text = String((part as { text: string }).text);
+        const stripped = stripLeakedModelToolCalls(text);
+        return stripped === text ? part : { ...part, text: stripped };
+      }
+      return part;
+    });
+    const partsChanged = strippedParts.some((part, index) => part !== originalParts[index]);
+    if (partsChanged) {
+      nextContent = strippedParts as typeof response.content;
+      contentChanged = true;
+    }
+  } else {
+    const stripped = stripLeakedModelToolCalls(raw);
+    if (stripped !== raw) {
+      nextContent = stripped;
+      contentChanged = true;
+    }
+  }
+
+  if (!contentChanged && toolCalls === existing) {
+    return response;
+  }
+
+  return new AIMessage({
+    content: nextContent,
+    tool_calls: toolCalls,
+    additional_kwargs: response.additional_kwargs,
+    response_metadata: response.response_metadata,
+  });
+};
+
 /** Match a patient day pick to a snapshot day (keyboard short label, dayLabel, or YYYY-MM-DD). */
 export const matchAvailabilityDay = (
   humanText: string,
   days: AvailabilityContext["days"],
 ): AvailabilityContext["days"][number] | null => {
   const trimmed = humanText.trim();
-  if (!trimmed || trimmed === OTHER_DATE_LABEL) {
+  if (!trimmed || isOtherDateHuman(trimmed)) {
     return null;
   }
   const normalized = trimmed.toLowerCase();
@@ -280,7 +454,7 @@ export const matchAvailabilitySlot = (
     return null;
   }
   const trimmed = humanText.trim();
-  if (!trimmed || trimmed === OTHER_DATE_LABEL) {
+  if (!trimmed || isOtherDateHuman(trimmed)) {
     return null;
   }
   const normalized = trimmed.toLowerCase().replace(/\s+/g, "");
@@ -619,6 +793,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
 
   const boundModel = model.bindTools(tools);
   const displayName = cache?.displayName ?? `clinic-${agent.id}`;
+  const allowedToolNames = new Set(tools.map((tool) => tool.name));
 
   const invokeUncached = async (
     staticPrompt: string,
@@ -668,12 +843,9 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     if (agent.id === BOOKING_AGENT_ID) {
       dynamicParts.push(formatSelectedSlotContext(state.selectedSlot));
     }
-    const bookingHasAvailabilityDays =
-      (state.availabilityContext?.days.length ?? 0) > 0;
     if (
       (agent.id === FAQ_AGENT_ID || agent.id === BOOKING_AGENT_ID)
       && !toolRanThisTurn(state.agentMessages, "list_services")
-      && !(agent.id === BOOKING_AGENT_ID && bookingHasAvailabilityDays)
     ) {
       dynamicParts.push(formatServicesContext(state.servicesContext));
     }
@@ -714,7 +886,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
       }
 
       return {
-        agentMessages: [response],
+        agentMessages: [coerceAvailabilityToolCalls(response, state, agent.id, allowedToolNames)],
         stepCount,
       };
     } catch (error) {
@@ -775,6 +947,26 @@ export const createAgentToolsNode = (
           continue;
         }
 
+        if (
+          blocksConsultationWithoutAgreement(agentId, call, [
+            ...state.messages,
+            ...agentMessages,
+          ])
+        ) {
+          synthetic.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                error: CREATE_CONSULTATION_REQUIRED_ERROR,
+                hint:
+                  "serviceId is the consultation id but the patient has not explicitly agreed to «Консультація» (Так after a consultation offer, or they named consultation). Do not present times or book consultation. If they named another procedure/family, that belongs to FAQ catalog browse — do not substitute consultation.",
+              }),
+              tool_call_id: call.id ?? "",
+              name: call.name,
+            }),
+          );
+          continue;
+        }
+
         if (PHONE_GROUNDED_TOOLS.has(call.name)) {
           const rawPhone = (call.args ?? {}).phoneNumber;
           if (typeof rawPhone === "string" && rawPhone.trim() !== "") {
@@ -829,7 +1021,22 @@ export const createAgentToolsNode = (
         }
 
         if (call.name === "present_availability_slots") {
-          const args = (call.args ?? {}) as AvailabilitySlotsToolArgs;
+          // Own paging cursor from checkpoint — LLM afterDate is often wrong-year or omitted.
+          call.args = { ...(call.args ?? {}) };
+          const args = call.args as AvailabilitySlotsToolArgs;
+          const lastOpen = lastOpenSnapshotDate(state.availabilityContext);
+          const human = lastPatientText(state);
+          if (isOtherDateHuman(human) && lastOpen) {
+            args.afterDate = lastOpen;
+            delete args.date;
+          } else if (state.availabilityContext == null) {
+            // No snapshot yet: keep a patient-named date; drop unanchorable afterDate only.
+            delete args.afterDate;
+          } else if (!lastOpen) {
+            // Snapshot present but no open days — fresh next-available search.
+            delete args.afterDate;
+            delete args.date;
+          }
           const hit = tryAvailabilityCacheHit(state.availabilityContext, args);
           if (hit) {
             trackEvent("availability_cache_hit", {
@@ -1048,6 +1255,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
         ];
         trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+      } else {
+        // Booking drifted into catalog drill-down: never ship that list without its chips.
+        replyButtons = catalogChoiceButtonsFromText(replyText);
       }
     }
 
@@ -1080,7 +1290,6 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...(replyButtons.length > 0 ? { replyButtons } : {}),
       ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
-
     if (status === "empty") {
       return { ...cleared, lastHandoff, ...noteStatusForHandoff };
     }
