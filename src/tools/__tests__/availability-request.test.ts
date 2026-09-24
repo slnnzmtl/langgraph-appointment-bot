@@ -29,6 +29,6 @@ describe("resolveAvailabilityRequest", () => {
 
   it("rejects invalid and non-date text", () => {
     expect(resolveAvailabilityRequest("31 лютого", today)).toBeNull();
-    expect(resolveAvailabilityRequest("другая дата", today)).toBeNull();
+    expect(resolveAvailabilityRequest("другая дата", today)).toEqual({ kind: "later" });
   });
 });

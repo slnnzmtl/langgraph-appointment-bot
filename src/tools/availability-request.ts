@@ -50,7 +50,8 @@ const MONTHS: Record<string, number> = {
 };
 
 const normalize = (text: string): string =>
-  text.trim().toLocaleLowerCase().replace(/[,.]/g, " ").replace(/\s+/g, " ");
+  // Keep dots intact: they are meaningful in numeric dates such as 20.10.
+  text.trim().toLocaleLowerCase().replace(/,/g, " ").replace(/\s+/g, " ");
 
 const validDay = (year: number, month: number, day: number): string | null => {
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
@@ -165,5 +166,22 @@ export const resolveAvailabilityRequest = (
   if (!DAY_RE.test(today)) {
     return null;
   }
-  return exactDate(text, today) ?? relativeDate(text, today);
+  const exact = exactDate(text, today) ?? relativeDate(text, today);
+  if (exact) {
+    return exact;
+  }
+
+  const normalized = normalize(text);
+  if (/(?:раніш|раньше|скоріш|earlier|sooner|earliest)/iu.test(normalized)) {
+    return { kind: "earlier" };
+  }
+  if (/(?:пізніш|позніш|далі|коли\s+ще|позже|когда\s+ещ[её]|later|next|when\s+else|another\s+date|other\s+date)/iu.test(normalized)
+    || /(?:^|\s)інш(?:а|у|і)\s+дат(?:а|у|и|е)(?:\s|$)/iu.test(normalized)
+    || /^(?:інш(?:а|у|і)|друг(?:ая|ую|ие|ой))(?:\s+(?:дат[ауые]|день|дни))?$/iu.test(normalized)) {
+    return { kind: "later" };
+  }
+  if (/(?:найближч|ближч|ближайш|nearest|closest)/iu.test(normalized)) {
+    return { kind: "nearest" };
+  }
+  return null;
 };

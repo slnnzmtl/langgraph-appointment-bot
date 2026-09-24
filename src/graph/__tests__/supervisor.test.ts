@@ -38,6 +38,7 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   bookingContext: null,
   contactContext: null,
   availabilityContext: null,
+  availabilityCursor: null,
   servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
@@ -270,6 +271,7 @@ describe("createClinicSupervisorNode context cache", () => {
       next: "booking",
       lastHandoff: null,
       availabilityContext: null,
+      availabilityCursor: null,
     });
     expect(update.messages).toBeUndefined();
   });
@@ -388,6 +390,12 @@ describe("createClinicSupervisorNode patient prefetch", () => {
           days: [{ date: "2026-08-25", slots: [] }],
           stepMinutes: 30,
         },
+        availabilityCursor: {
+          direction: "later",
+          searchedThrough: "2026-08-25",
+          firstDate: "2026-08-25",
+          lastDate: "2026-08-25",
+        },
         servicesContext: {
           list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
           total: 1,
@@ -401,6 +409,51 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.servicesContext).toBeUndefined();
+    // Greeting starts a fresh booking session, so the durable cursor resets too.
+    expect(update.availabilityCursor).toBeNull();
+  });
+
+  it("preserves the availability cursor when prefetch expires during booking", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+      prefetchTtlMs: 1_000,
+    });
+    const cursor = {
+      direction: "later" as const,
+      searchedThrough: "2026-10-05",
+      firstDate: "2026-09-29",
+      lastDate: "2026-10-05",
+    };
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("другая дата")],
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["Інша дата"],
+        },
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: null,
+        availabilityCursor: cursor,
+        prefetchFetchedAt: Date.now() - 1_000,
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("booking");
+    expect(update.availabilityContext).toBeNull();
+    expect(update.availabilityCursor).toEqual(cursor);
   });
 
   it("keeps note ladder across TTL when patient taps INTENT skip", async () => {
@@ -1076,6 +1129,28 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 });
 
 describe("shouldRouteProcedureBrowseToFaq", () => {
+  it.each(["20 октября", "20.10", "2026-10-20"])(
+    "is false for a supported date format after a consultation offer (%s)", (date) => {
+      expect(
+        shouldRouteProcedureBrowseToFaq(
+          supervisorState({
+            lastHandoff: {
+              agentId: "booking",
+              agentName: "Booking",
+              status: "ok",
+              replyText: "Підібрати вільний час на консультацію?",
+              replyButtons: ["Так", "Обрати іншу процедуру"],
+            },
+            messages: [
+              new AIMessage("Підібрати вільний час на консультацію?"),
+              new HumanMessage(date),
+            ],
+          }),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("is true when they name a procedure family after a consultation offer", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(

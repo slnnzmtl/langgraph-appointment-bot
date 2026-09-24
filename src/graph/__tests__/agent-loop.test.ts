@@ -78,6 +78,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   bookingContext: null,
   contactContext: null,
   availabilityContext: null,
+  availabilityCursor: null,
   servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
@@ -3988,6 +3989,44 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     }
   });
 
+  it("drops a stale model date for a nearest search", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.string().optional(),
+          date: z.string().optional(),
+          durationMinutes: z.number().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("найближча дата")],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "nearest-stale-date",
+              name: "present_availability_slots",
+              args: { direction: "nearest", date: "2025-10-20", durationMinutes: 30 },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([{ direction: "nearest", durationMinutes: 30 }]);
+  });
+
   it("does not re-inject slots after «Інша дата» already paged this turn", async () => {
     const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
     const llmUpdate = await llm(
@@ -4231,7 +4270,54 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       { configurable: {} },
     );
     expect(invoked).toEqual([
-      { durationMinutes: 30, date: "2026-10-01", startDate: "2026-09-11" },
+      { durationMinutes: 30, date: "2026-10-01" },
+    ]);
+  });
+
+  it("uses the durable cursor after the availability snapshot expires", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.string().optional(),
+          afterDate: z.string().optional(),
+          durationMinutes: z.number().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("другая")],
+        availabilityContext: null,
+        availabilityCursor: {
+          direction: "later",
+          searchedThrough: "2026-10-05",
+          firstDate: "2026-09-29",
+          lastDate: "2026-10-05",
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "s1",
+              name: "present_availability_slots",
+              args: { direction: "later", durationMinutes: 30 },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      { direction: "later", afterDate: "2026-10-05", durationMinutes: 30 },
     ]);
   });
 

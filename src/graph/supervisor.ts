@@ -33,6 +33,9 @@ import {
   requestsConsultation,
 } from "../shared/message-content.js";
 import { normalizeClinicPhone } from "../shared/phone.js";
+import { resolveAvailabilityRequest } from "../tools/availability-request.js";
+import { kyivToday } from "../tools/availability-slots.js";
+import { availabilityCursorFromContext } from "../tools/availability-tools.js";
 import {
   attachPrefetchVisits,
   formatGreetingContact,
@@ -163,12 +166,17 @@ export const shouldContinueInSpecialist = (
   // Alternative-date wording may be free text in the patient's language rather
   // than an exact Ukrainian keyboard label. Keep it in Booking while a snapshot
   // exists so agent-loop can derive the cursor deterministically.
-  if (
-    agentId === BOOKING_AGENT_ID
-    && state.availabilityContext != null
-    && isOtherDateReply(humanText)
-  ) {
-    return true;
+  if (agentId === BOOKING_AGENT_ID && (state.availabilityContext != null || state.availabilityCursor != null)) {
+    const availabilityRequest = resolveAvailabilityRequest(humanText, kyivToday());
+    if (
+      isOtherDateReply(humanText)
+      || availabilityRequest?.kind === "exact"
+      || availabilityRequest?.kind === "earlier"
+      || availabilityRequest?.kind === "later"
+      || availabilityRequest?.kind === "nearest"
+    ) {
+      return true;
+    }
   }
 
   const labels = replyButtonLabels(state.lastHandoff.replyButtons);
@@ -214,15 +222,14 @@ const RUSSIAN_OTHER_DATE_PATTERN =
 const isOtherDateReply = (human: string): boolean =>
   OTHER_DATE_PATTERN.test(human) || RUSSIAN_OTHER_DATE_PATTERN.test(human.trim());
 
-const DAY_OR_TIME =
-  /(?:\d{1,2}\s*(?:січн|лют|берез|квіт|травн|червн|липн|серпн|верес|жовт|листоп|грудн|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|(?:сьогодні|завтра|післязавтра|today|tomorrow)|\d{1,2}:\d{2})/i;
-
 /** Cancel / reschedule paraphrases (not only exact chip labels). */
 const VISIT_CHANGE_INTENT =
   /(?:скасува\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*)/i;
 
 const isDayOrTimeReply = (human: string): boolean =>
-  DAY_OR_TIME.test(human) || isOtherDateReply(human);
+  resolveAvailabilityRequest(human, kyivToday()) != null
+  || /\b\d{1,2}:\d{2}\b/.test(human)
+  || isOtherDateReply(human);
 
 const isVisitChangeIntent = (human: string): boolean =>
   VISIT_CHANGE_INTENT.test(human)
@@ -471,6 +478,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           prefetchDirty: false,
           prefetchFetchedAt: Date.now(),
           availabilityContext: null,
+          availabilityCursor: resetBookingLadder
+            ? null
+            : state.availabilityCursor ?? availabilityCursorFromContext(state.availabilityContext),
           ...(resetBookingLadder
             ? {
               bookingNoteStatus: "unasked" as const,
@@ -506,6 +516,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         lastHandoff: null,
         ...prefetchUpdate,
         availabilityContext: null,
+        availabilityCursor: null,
         ...(state.selectedAvailabilityDate != null
           ? { selectedAvailabilityDate: null }
           : {}),
@@ -572,6 +583,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         ? {}
         : {
           availabilityContext: null,
+          availabilityCursor: null,
           ...(state.selectedAvailabilityDate != null
             ? { selectedAvailabilityDate: null }
             : {}),

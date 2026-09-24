@@ -52,6 +52,44 @@ export type AvailabilityQuery = {
   coverageComplete: boolean;
 };
 
+/** Search metadata that survives prefetch refreshes without retaining slot data. */
+export type AvailabilityCursor = {
+  direction: "exact" | "earlier" | "later" | "nearest";
+  anchor?: string;
+  searchedFrom?: string;
+  searchedThrough?: string;
+  firstDate?: string;
+  lastDate?: string;
+  query?: AvailabilityQuery;
+};
+
+export const availabilityCursorFromContext = (
+  context: AvailabilityContext | null | undefined,
+): AvailabilityCursor | null => {
+  if (!context) {
+    return null;
+  }
+  const direction = context.query?.kind ?? context.searchDirection;
+  if (!direction) {
+    return null;
+  }
+  return {
+    direction,
+    ...(context.query?.anchor ?? context.searchAnchor
+      ? { anchor: context.query?.anchor ?? context.searchAnchor }
+      : {}),
+    ...(context.query?.rangeFrom ?? context.searchedFrom
+      ? { searchedFrom: context.query?.rangeFrom ?? context.searchedFrom }
+      : {}),
+    ...(context.query?.rangeThrough ?? context.searchedThrough
+      ? { searchedThrough: context.query?.rangeThrough ?? context.searchedThrough }
+      : {}),
+    ...(context.days[0]?.date ? { firstDate: context.days[0].date } : {}),
+    ...(context.days.at(-1)?.date ? { lastDate: context.days.at(-1)!.date } : {}),
+    ...(context.query ? { query: context.query } : {}),
+  };
+};
+
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const LOCAL_ISO_RE = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/;
 

@@ -29,12 +29,14 @@ import {
 import {
   normalizePresentAvailabilityResult,
   alignToAnchors,
+  availabilityCursorFromContext,
   tryAvailabilityCacheHit,
   KYIV_LOCAL_ISO_SCHEMA,
   presentAvailabilitySlotsArgsSchema,
   type AvailabilityContext,
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
+import { normalizeAvailabilityToolArgs } from "../tools/availability-args.js";
 import { formatKyivDayLabel, kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
 import { resolveAvailabilityRequest } from "../tools/availability-request.js";
 import { normalizeContactLookupResult } from "../tools/contact-tools.js";
@@ -416,67 +418,20 @@ const isOtherDateHuman = (humanText: string): boolean => {
   );
 };
 
-type AvailabilitySearchDirection = NonNullable<AvailabilitySlotsToolArgs["direction"]>;
-
-const EARLIER_SEARCH_RE =
-  /(?:раніш|раньше|скоріш|ближч(?:а|у|ий|е)\s+(?:дата|date)|earlier|sooner|earliest)/i;
-const LATER_SEARCH_RE =
-  /(?:пізніш|позніш|далі|коли\s+ще|інші?\s+дат|позже|когда\s+ещ[её]|друг(?:ая|ую|ие|ой)\s+(?:дат[ауые]|день|дни)|later|next|when\s+else|another\s+date)/i;
-
-const isEarlierAvailabilityHuman = (humanText: string): boolean =>
-  EARLIER_SEARCH_RE.test(humanText.trim());
-
-const isLaterAvailabilityHuman = (humanText: string): boolean =>
-  isOtherDateHuman(humanText) || LATER_SEARCH_RE.test(humanText.trim());
-
-const firstSnapshotDate = (
-  ctx: AvailabilityContext | null | undefined,
-): string | undefined => ctx?.days[0]?.date;
-
-const lastSnapshotDate = (
-  ctx: AvailabilityContext | null | undefined,
-): string | undefined => ctx?.days.at(-1)?.date;
-
-const availabilityDirectionFromRequest = (
-  args: AvailabilitySlotsToolArgs,
-  humanText: string,
-  ctx: AvailabilityContext | null | undefined,
-): AvailabilitySearchDirection => {
-  const explicit = resolveAvailabilityRequest(humanText, kyivToday());
-  if (explicit?.kind === "exact" && matchAvailabilityDay(humanText, ctx?.days ?? []) == null) {
-    return "exact";
-  }
-  if (isEarlierAvailabilityHuman(humanText)) {
-    return "earlier";
-  }
-  if (isLaterAvailabilityHuman(humanText)) {
-    return "later";
-  }
-  if (args.direction) {
-    return args.direction;
-  }
-  if (args.date) {
-    return "exact";
-  }
-  if (!ctx) {
-    return "nearest";
-  }
-  return ctx.searchDirection === "exact" ? "later" : "nearest";
-};
-
-const lastOpenSnapshotDate = (
-  ctx: AvailabilityContext | null | undefined,
-): string | undefined => {
-  const open = ctx?.days.filter((day) => day.slots.length > 0) ?? [];
-  return open.at(-1)?.date;
-};
-
 const bookingDateAnchors = (state: ClinicState): string[] => [
   ...(state.selectedAvailabilityDate ? [state.selectedAvailabilityDate] : []),
   ...(state.selectedSlot
     ? [state.selectedSlot.dateStart, state.selectedSlot.dateEnd]
     : []),
   ...(state.availabilityContext?.days ?? []).map((day) => day.date),
+  ...(state.availabilityCursor
+    ? [
+      state.availabilityCursor.firstDate,
+      state.availabilityCursor.lastDate,
+      state.availabilityCursor.searchedFrom,
+      state.availabilityCursor.searchedThrough,
+    ].filter((date): date is string => date != null)
+    : []),
 ];
 
 const alignArgDates = (
@@ -525,11 +480,9 @@ const coerceAvailabilityToolCalls = (
     const consultationAccepted = isConsultationOfferAcceptance(state);
     const semanticDirection = consultationAccepted
       ? "nearest"
-      : isEarlierAvailabilityHuman(human)
-        ? "earlier"
-        : isLaterAvailabilityHuman(human)
-          ? "later"
-          : isYesReply(human) ? "nearest" : undefined;
+      : request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
+        ? request.kind
+        : isYesReply(human) ? "nearest" : undefined;
     // Recovery is allowed only for a structured patient action. Never turn arbitrary
     // availability-looking prose into an argument-less call that can replay a cache.
     if (
@@ -1299,82 +1252,21 @@ export const createAgentToolsNode = (
         if (call.name === "present_availability_slots") {
           // Own paging cursors from checkpoint — the model chooses semantic direction,
           // but must not invent calendar boundaries.
-          call.args = { ...(call.args ?? {}) };
-          const args = call.args as AvailabilitySlotsToolArgs;
-          const lastOpen = lastOpenSnapshotDate(state.availabilityContext);
-          const human = lastPatientText(state);
-          const consultationAccepted = isConsultationOfferAcceptance(state);
-          const direction = consultationAccepted
-            ? "nearest"
-            : availabilityDirectionFromRequest(args, human, state.availabilityContext);
-          const explicitRequest = resolveAvailabilityRequest(human, kyivToday());
-          const pickedOfferedDay = matchAvailabilityDay(
-            human,
-            state.availabilityContext?.days ?? [],
-          );
-          const directionalRequest = direction === "earlier" || direction === "later";
-          if (consultationAccepted) {
-            // A positive answer to the consultation offer is a new DATE action.
-            // Do not carry an exact-date cursor from an earlier conversation turn.
-            args.direction = "nearest";
-            delete args.date;
-            delete args.afterDate;
-            delete args.beforeDate;
-            delete args.startDate;
-          } else if (directionalRequest && availabilityPagedThisTurn) {
-            delete args.afterDate;
-            delete args.beforeDate;
-            delete args.date;
-            delete args.startDate;
-            args.direction = state.availabilityContext?.searchDirection ?? direction;
-          } else if (direction === "earlier") {
-            args.direction = "earlier";
-            const earlierAnchor =
-              state.availabilityContext?.searchedFrom
-              ?? firstSnapshotDate(state.availabilityContext)
-              ?? kyivToday();
-            args.beforeDate = earlierAnchor;
-            delete args.afterDate;
-            delete args.startDate;
-            delete args.date;
-          } else if (direction === "later") {
-            args.direction = "later";
-            const laterAnchor =
-              state.availabilityContext?.searchedThrough
-              ?? lastOpen
-              ?? lastSnapshotDate(state.availabilityContext);
-            if (laterAnchor) {
-              args.afterDate = laterAnchor;
-            } else {
-              delete args.afterDate;
-            }
-            delete args.beforeDate;
-            delete args.startDate;
-            delete args.date;
-          } else if (direction === "exact") {
-            args.direction = "exact";
-            if (explicitRequest?.kind === "exact" && pickedOfferedDay == null) {
-              args.date = explicitRequest.date;
-            }
-            delete args.afterDate;
-            delete args.beforeDate;
-          } else {
-            args.direction = "nearest";
-            delete args.afterDate;
-            delete args.beforeDate;
-          }
-          if (direction === "later" && !args.afterDate) {
-            delete args.afterDate;
-          }
-          if (direction === "earlier" && !args.beforeDate) {
-            delete args.beforeDate;
-          }
-          alignArgDates(
-            args,
-            ["date", "afterDate", "beforeDate", "startDate"],
-            bookingDateAnchors(state),
-          );
-          if (direction === "exact" && !args.date) {
+          const args = normalizeAvailabilityToolArgs({
+            args: (call.args ?? {}) as AvailabilitySlotsToolArgs,
+            availabilityContext: state.availabilityContext,
+            availabilityCursor: state.availabilityCursor,
+            humanText: lastPatientText(state),
+            pickedOfferedDay: matchAvailabilityDay(
+              lastPatientText(state),
+              state.availabilityContext?.days ?? [],
+            ) != null,
+            consultationAccepted: isConsultationOfferAcceptance(state),
+            availabilityPagedThisTurn,
+            anchors: bookingDateAnchors(state),
+          });
+          call.args = args;
+          if (args.direction === "exact" && !args.date) {
             trackToolError(call.name, "Exact availability date missing");
             synthetic.push(
               new ToolMessage({
@@ -1421,7 +1313,7 @@ export const createAgentToolsNode = (
             );
             continue;
           }
-          if (directionalRequest) {
+          if (args.direction === "earlier" || args.direction === "later") {
             availabilityPagedThisTurn = true;
           }
         }
@@ -1467,6 +1359,7 @@ export const createAgentToolsNode = (
 
     if (meetingMutationClearsAvailability(resultMessages)) {
       update.availabilityContext = null;
+      update.availabilityCursor = null;
       // REPLACE cancel-and-rebook: keep selectedSlot + note so create_meeting can reuse them.
       // Only skip reset when cancel_meeting is the sole committed mutation this turn.
       const committed = resultMessages.filter(
@@ -1490,6 +1383,7 @@ export const createAgentToolsNode = (
       const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
       if (capturedAvailability !== undefined) {
         update.availabilityContext = capturedAvailability;
+        update.availabilityCursor = availabilityCursorFromContext(capturedAvailability);
         if (
           state.selectedAvailabilityDate != null
           && (
