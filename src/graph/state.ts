@@ -78,6 +78,11 @@ export const createClinicStateAnnotation = ({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
+    /** Calendar day selected from a multi-day availability snapshot before a time pick. */
+    selectedAvailabilityDate: Annotation<string | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
   });
 
 export type ClinicStateAnnotation = ReturnType<typeof createClinicStateAnnotation>;

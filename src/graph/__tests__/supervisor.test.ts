@@ -43,6 +43,7 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   prefetchFetchedAt: null,
   bookingNoteStatus: "unasked",
   selectedSlot: null,
+  selectedAvailabilityDate: null,
   ...overrides,
 });
 

@@ -472,8 +472,14 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           prefetchFetchedAt: Date.now(),
           availabilityContext: null,
           ...(resetBookingLadder
-            ? { bookingNoteStatus: "unasked" as const, selectedSlot: null }
-            : {}),
+            ? {
+              bookingNoteStatus: "unasked" as const,
+              selectedSlot: null,
+              selectedAvailabilityDate: null,
+            }
+            : state.selectedSlot == null
+              ? { selectedAvailabilityDate: null }
+              : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -500,6 +506,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         lastHandoff: null,
         ...prefetchUpdate,
         availabilityContext: null,
+        ...(state.selectedAvailabilityDate != null
+          ? { selectedAvailabilityDate: null }
+          : {}),
       };
     }
 
@@ -559,7 +568,14 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     return {
       ...routed,
       ...prefetchUpdate,
-      ...(keepAvailability ? {} : { availabilityContext: null }),
+      ...(keepAvailability
+        ? {}
+        : {
+          availabilityContext: null,
+          ...(state.selectedAvailabilityDate != null
+            ? { selectedAvailabilityDate: null }
+            : {}),
+        }),
     };
   };
 };

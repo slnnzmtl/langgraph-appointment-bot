@@ -12,6 +12,7 @@ export const TIER1_EVENTS = [
   "contact_updated",
   "availability_presented",
   "availability_cache_hit",
+  "booking_date_selected",
   "booking_confirmation_requested",
   "booking_declined",
   "booking_awaiting_chat_confirm",

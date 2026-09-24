@@ -128,6 +128,7 @@ const MEETING_MUTATION_TOOLS = new Set([
 ]);
 
 const CREATE_CONSULTATION_REQUIRED_ERROR = "Consultation agreement required";
+const SLOT_SELECTION_REQUIRED_ERROR = "Availability slot selection required";
 
 const CONSULTATION_AGREEMENT_TOOLS = new Set(["create_meeting", "reschedule_meeting"]);
 
@@ -156,6 +157,7 @@ const BLOCKED_MEETING_ERRORS = new Set([
   "Not authorized",
   "Note step required",
   CREATE_CONSULTATION_REQUIRED_ERROR,
+  SLOT_SELECTION_REQUIRED_ERROR,
 ]);
 
 export type MeetingMutationOutcome = "committed" | "pending" | "blocked" | "failed" | null;
@@ -470,6 +472,7 @@ const lastOpenSnapshotDate = (
 };
 
 const bookingDateAnchors = (state: ClinicState): string[] => [
+  ...(state.selectedAvailabilityDate ? [state.selectedAvailabilityDate] : []),
   ...(state.selectedSlot
     ? [state.selectedSlot.dateStart, state.selectedSlot.dateEnd]
     : []),
@@ -638,6 +641,7 @@ const clockKey = (text: string): string | null => {
 export const matchAvailabilitySlot = (
   humanText: string,
   availabilityContext: AvailabilityContext | null | undefined,
+  selectedDate?: string | null,
 ): SelectedBookingSlot | null => {
   if (!availabilityContext || availabilityContext.days.length === 0) {
     return null;
@@ -648,7 +652,16 @@ export const matchAvailabilitySlot = (
   }
   const normalized = trimmed.toLowerCase().replace(/\s+/g, "");
   const wantClock = clockKey(normalized);
-  for (const day of availabilityContext.days) {
+  const openDays = availabilityContext.days.filter((day) => day.slots.length > 0);
+  // A bare time is safe without an explicit day only for a single-day snapshot.
+  // With multiple days, choosing the first matching clock time silently books the
+  // wrong day when common hours occur on more than one date.
+  const candidateDays = selectedDate != null
+    ? availabilityContext.days.filter((day) => day.date === selectedDate)
+    : openDays.length === 1
+      ? openDays
+      : [];
+  for (const day of candidateDays) {
     for (const slot of day.slots) {
       const labelNorm = slot.label.trim().toLowerCase().replace(/\s+/g, "");
       if (normalized === labelNorm || (wantClock != null && clockKey(labelNorm) === wantClock)) {
@@ -733,8 +746,23 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   }
   const status = state.bookingNoteStatus ?? "unasked";
   const availability = state.availabilityContext;
-  const matchedSlot = matchAvailabilitySlot(human, availability);
   const matchedDay = matchAvailabilityDay(human, availability?.days ?? []);
+
+  // DATE is a state transition, not just a presentation choice. Keep it until
+  // the following TIME message so repeated clock labels cannot resolve against
+  // another day in the same availability page.
+  if (matchedDay) {
+    trackEvent("booking_date_selected", { date: matchedDay.date });
+    return {
+      bookingNoteStatus: "unasked",
+      selectedAvailabilityDate: matchedDay.date,
+      selectedSlot: null,
+    };
+  }
+
+  const selectedDate = state.selectedAvailabilityDate
+    ?? (state.selectedSlot?.dateStart.slice(0, 10) || null);
+  const matchedSlot = matchAvailabilitySlot(human, availability, selectedDate);
 
   const sameSlot =
     matchedSlot != null
@@ -748,10 +776,11 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     }
     if (matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });
-      return { bookingNoteStatus: "awaiting", selectedSlot: matchedSlot };
-    }
-    if (matchedDay) {
-      return { bookingNoteStatus: "unasked", selectedSlot: null };
+      return {
+        bookingNoteStatus: "awaiting",
+        selectedAvailabilityDate: matchedSlot.dateStart.slice(0, 10),
+        selectedSlot: matchedSlot,
+      };
     }
     trackEvent("booking_note_step", { phase: "answered" });
     return { bookingNoteStatus: "answered" };
@@ -759,11 +788,11 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
 
   if (matchedSlot && (status === "unasked" || !sameSlot)) {
     trackEvent("booking_note_step", { phase: "awaiting" });
-    return { bookingNoteStatus: "awaiting", selectedSlot: matchedSlot };
-  }
-
-  if (matchedDay && (status === "skipped" || status === "answered")) {
-    return { bookingNoteStatus: "unasked", selectedSlot: null };
+    return {
+      bookingNoteStatus: "awaiting",
+      selectedAvailabilityDate: matchedSlot.dateStart.slice(0, 10),
+      selectedSlot: matchedSlot,
+    };
   }
 
   return {};
@@ -772,6 +801,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
 const resetBookingNoteState = (): ClinicStateUpdate => ({
   bookingNoteStatus: "unasked",
   selectedSlot: null,
+  selectedAvailabilityDate: null,
 });
 
 /**
@@ -1160,6 +1190,27 @@ export const createAgentToolsNode = (
           continue;
         }
 
+        if (
+          agentId === BOOKING_AGENT_ID
+          && call.name === "create_meeting"
+          && state.selectedSlot == null
+          && (state.availabilityContext?.days.filter((day) => day.slots.length > 0).length ?? 0) > 1
+        ) {
+          trackToolError(call.name, SLOT_SELECTION_REQUIRED_ERROR);
+          synthetic.push(
+            new ToolMessage({
+              content: JSON.stringify({
+                error: SLOT_SELECTION_REQUIRED_ERROR,
+                hint:
+                  "Ask the patient to choose a day and then a time from the current availability. Do not invent a date.",
+              }),
+              tool_call_id: call.id ?? "",
+              name: call.name,
+            }),
+          );
+          continue;
+        }
+
         if (PHONE_GROUNDED_TOOLS.has(call.name)) {
           const rawPhone = (call.args ?? {}).phoneNumber;
           if (typeof rawPhone === "string" && rawPhone.trim() !== "") {
@@ -1439,6 +1490,19 @@ export const createAgentToolsNode = (
       const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
       if (capturedAvailability !== undefined) {
         update.availabilityContext = capturedAvailability;
+        if (
+          state.selectedAvailabilityDate != null
+          && (
+            capturedAvailability == null
+            || !capturedAvailability.days.some(
+              (day) => day.date === state.selectedAvailabilityDate && day.slots.length > 0,
+            )
+          )
+        ) {
+          update.selectedAvailabilityDate = null;
+          update.selectedSlot = null;
+          update.bookingNoteStatus = "unasked";
+        }
       }
     }
 

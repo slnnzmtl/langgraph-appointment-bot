@@ -83,6 +83,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   prefetchFetchedAt: null,
   bookingNoteStatus: "unasked",
   selectedSlot: null,
+  selectedAvailabilityDate: null,
   ...overrides,
 });
 
@@ -2798,6 +2799,139 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
     expect(matchAvailabilitySlot(OTHER_DATE_LABEL, snapshot)).toBeNull();
     expect(matchAvailabilitySlot("Інша", snapshot)).toBeNull();
+  });
+
+  it("never resolves a repeated clock time from the wrong day", () => {
+    const multiDaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-10-13",
+          dayLabel: "13 жовтня (вівторок)",
+          slots: [{
+            id: "old",
+            label: "11:30",
+            dateStart: "2026-10-13T11:30:00",
+            dateEnd: "2026-10-13T12:00:00",
+          }],
+        },
+        {
+          date: "2026-10-17",
+          dayLabel: "17 жовтня (субота)",
+          slots: [{
+            id: "chosen",
+            label: "11:30",
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+          }],
+        },
+      ],
+      stepMinutes: 30,
+    };
+    expect(matchAvailabilitySlot("11:30", multiDaySnapshot)).toBeNull();
+    expect(matchAvailabilitySlot("11:30", multiDaySnapshot, "2026-10-17")?.dateStart)
+      .toBe("2026-10-17T11:30:00");
+  });
+
+  it("checkpoints the selected day before resolving its time", () => {
+    const multiDaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-10-08",
+          dayLabel: "8 жовтня (четвер)",
+          slots: [{
+            id: "old",
+            label: "13:30",
+            dateStart: "2026-10-08T13:30:00",
+            dateEnd: "2026-10-08T14:00:00",
+          }],
+        },
+        {
+          date: "2026-10-09",
+          dayLabel: "9 жовтня (пʼятниця)",
+          slots: [{
+            id: "chosen",
+            label: "13:30",
+            dateStart: "2026-10-09T13:30:00",
+            dateEnd: "2026-10-09T14:00:00",
+          }],
+        },
+      ],
+      stepMinutes: 30,
+    };
+    const dateUpdate = advanceBookingNoteStep(clinicState({
+      messages: [new HumanMessage("9 жовтня (пʼятниця)")],
+      availabilityContext: multiDaySnapshot,
+    }));
+    expect(dateUpdate.selectedAvailabilityDate).toBe("2026-10-09");
+    expect(dateUpdate.selectedSlot).toBeNull();
+
+    const timeUpdate = advanceBookingNoteStep(clinicState({
+      messages: [
+        new HumanMessage("9 жовтня (пʼятниця)"),
+        new HumanMessage("13:30"),
+      ],
+      availabilityContext: multiDaySnapshot,
+      selectedAvailabilityDate: "2026-10-09",
+    }));
+    expect(timeUpdate.selectedSlot?.dateStart).toBe("2026-10-09T13:30:00");
+  });
+
+  it("blocks a multi-day booking mutation until a validated slot exists", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ id: "must-not-run" }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({ dateStart: z.string(), dateEnd: z.string() }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool], "booking");
+    const update = await toolsNode(
+      clinicState({
+        bookingNoteStatus: "skipped",
+        availabilityContext: {
+          days: [
+            {
+              date: "2026-10-08",
+              slots: [{
+                id: "a",
+                label: "13:30",
+                dateStart: "2026-10-08T13:30:00",
+                dateEnd: "2026-10-08T14:00:00",
+              }],
+            },
+            {
+              date: "2026-10-09",
+              slots: [{
+                id: "b",
+                label: "13:30",
+                dateStart: "2026-10-09T13:30:00",
+                dateEnd: "2026-10-09T14:00:00",
+              }],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "create",
+              name: "create_meeting",
+              args: {
+                dateStart: "2026-10-08T13:30:00",
+                dateEnd: "2026-10-08T14:00:00",
+              },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
+      error: "Availability slot selection required",
+    });
   });
 
   it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", () => {
