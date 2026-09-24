@@ -336,14 +336,21 @@ const OTHER_DATE_COLLISION_LABELS = [
   "My visit",
 ].map((label) => label.toLowerCase());
 
+const RUSSIAN_OTHER_DATE_RE =
+  /^(?:другая|другой|другую|другие)(?:\s+(?:дата|дату|даты|день|дни|вариант(?:ы)?))?$/i;
+
 /**
- * Exact UK/EN «Інша дата», or a unique prefix of that label (≥4 chars, e.g. «Інша»).
+ * Exact Ukrainian/English keyboard label, its unique prefix (≥4 chars, e.g. «Інша»),
+ * or a standalone Russian equivalent (e.g. «другая», «другой»).
  * Rejects a prefix that also prefixes another known keyboard label.
  */
 const isOtherDateHuman = (humanText: string): boolean => {
   const normalized = humanText.trim().toLowerCase();
   if (normalized.length < 4) {
     return false;
+  }
+  if (RUSSIAN_OTHER_DATE_RE.test(normalized)) {
+    return true;
   }
   const targets = [OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map((label) => label.toLowerCase());
   const matched = targets.find(
@@ -365,7 +372,7 @@ type AvailabilitySearchDirection = NonNullable<AvailabilitySlotsToolArgs["direct
 const EARLIER_SEARCH_RE =
   /(?:раніш|раньше|скоріш|ближч(?:а|у|ий|е)\s+(?:дата|date)|earlier|sooner|earliest)/i;
 const LATER_SEARCH_RE =
-  /(?:пізніш|позніш|далі|коли\s+ще|інші?\s+дат|later|next|when\s+else|another\s+date)/i;
+  /(?:пізніш|позніш|далі|коли\s+ще|інші?\s+дат|позже|когда\s+ещ[её]|друг(?:ая|ую|ие|ой)\s+(?:дат[ауые]|день|дни)|later|next|when\s+else|another\s+date)/i;
 
 const isEarlierAvailabilityHuman = (humanText: string): boolean =>
   EARLIER_SEARCH_RE.test(humanText.trim());

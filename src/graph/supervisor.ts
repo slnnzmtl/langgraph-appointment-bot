@@ -160,6 +160,17 @@ export const shouldContinueInSpecialist = (
     return false;
   }
 
+  // Alternative-date wording may be free text in the patient's language rather
+  // than an exact Ukrainian keyboard label. Keep it in Booking while a snapshot
+  // exists so agent-loop can derive the cursor deterministically.
+  if (
+    agentId === BOOKING_AGENT_ID
+    && state.availabilityContext != null
+    && isOtherDateReply(humanText)
+  ) {
+    return true;
+  }
+
   const labels = replyButtonLabels(state.lastHandoff.replyButtons);
   return labels.includes(humanText);
 };
@@ -197,6 +208,11 @@ const OTHER_DATE_PATTERN = new RegExp(
   `(?:${[OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map(escapeRegExp).join("|")}|інша\\s*дат|another\\s*date)`,
   "i",
 );
+const RUSSIAN_OTHER_DATE_PATTERN =
+  /^(?:другая|другой|другую|другие)(?:\s+(?:дата|дату|даты|день|дни|вариант(?:ы)?))?$/i;
+
+const isOtherDateReply = (human: string): boolean =>
+  OTHER_DATE_PATTERN.test(human) || RUSSIAN_OTHER_DATE_PATTERN.test(human.trim());
 
 const DAY_OR_TIME =
   /(?:\d{1,2}\s*(?:січн|лют|берез|квіт|травн|червн|липн|серпн|верес|жовт|листоп|грудн|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|(?:сьогодні|завтра|післязавтра|today|tomorrow)|\d{1,2}:\d{2})/i;
@@ -206,7 +222,7 @@ const VISIT_CHANGE_INTENT =
   /(?:скасува\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*)/i;
 
 const isDayOrTimeReply = (human: string): boolean =>
-  DAY_OR_TIME.test(human) || OTHER_DATE_PATTERN.test(human);
+  DAY_OR_TIME.test(human) || isOtherDateReply(human);
 
 const isVisitChangeIntent = (human: string): boolean =>
   VISIT_CHANGE_INTENT.test(human)

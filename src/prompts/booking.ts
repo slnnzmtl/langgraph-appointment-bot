@@ -61,7 +61,7 @@ Availability comes from \`present_availability_slots\` in **this turn** (the gra
 
 **Call \`present_availability_slots\` when:**
 - **DATE** — no day chosen yet (including «так» to a consultation / "найближче") → **always call**. No \`date\` unless they named a specific calendar day;
-- they want other dates («${OTHER_DATE_LABEL}», «коли ще», "when else") → **always call** with \`direction: "later"\`. No \`date\` or cursor; runtime derives the next window;
+- they want other dates («${OTHER_DATE_LABEL}», «коли ще», "when else", «другая дата» / «другая» / «другой») → **always call** with \`direction: "later"\`. No \`date\` or cursor; runtime derives the next window;
 - they ask for an earlier/sooner calendar date («раніше», «є щось раніше?», "earlier", "sooner", «раньше») → **always call** with \`direction: "earlier"\`. No \`date\` or cursor; runtime searches before the rejected or earliest offered date and never before today;
 - ambiguous "other dates" means later dates. "Nearest/closest" means \`direction: "nearest"\` from today. "Earlier" means an earlier calendar date because all available times for a day are already shown;
 - they named a day → pass that \`date\`; if the dated call is empty, report it and ask whether to search earlier or later before making another availability call;

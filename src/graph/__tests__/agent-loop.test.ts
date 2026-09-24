@@ -3606,12 +3606,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     ]);
   });
 
-  it("injects present_availability_slots when TIME «Інша дата» has no tool_calls", async () => {
+  it.each([OTHER_DATE_LABEL, "другая дата", "другая", "другой"])(
+    "injects present_availability_slots for alternative-date reply %s when TIME has no tool_calls",
+    async (otherDateReply) => {
     const llm = bookingLlmReturning("Добре");
     const llmUpdate = await llm(
       clinicState({
-        messages: [new HumanMessage(OTHER_DATE_LABEL)],
-        agentMessages: [new HumanMessage(OTHER_DATE_LABEL)],
+        messages: [new HumanMessage(otherDateReply)],
+        agentMessages: [new HumanMessage(otherDateReply)],
         availabilityContext: snapshot,
         next: "booking",
       }),
@@ -3620,7 +3622,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(ai.tool_calls).toEqual([
       expect.objectContaining({ name: "present_availability_slots", args: {} }),
     ]);
-  });
+    },
+  );
 
   it("does not re-inject slots after «Інша дата» already paged this turn", async () => {
     const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
@@ -3764,7 +3767,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(JSON.parse(String(toolMsg.content)).cacheHit).toBe(true);
   });
 
-  it("pages later from the empty snapshot date instead of dropping the boundary", async () => {
+  it("pages later for Russian «другая» from the empty snapshot date instead of dropping the boundary", async () => {
     const invoked: Array<Record<string, unknown>> = [];
     const slotsTool = tool(
       async (input: Record<string, unknown>) => {
@@ -3785,7 +3788,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
       clinicState({
-        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        messages: [new HumanMessage("другая")],
         availabilityContext: {
           days: [
             {
@@ -3797,7 +3800,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           stepMinutes: 30,
         },
         agentMessages: [
-          new HumanMessage(OTHER_DATE_LABEL),
+          new HumanMessage("другая"),
           new AIMessage({
             content: "",
             tool_calls: [

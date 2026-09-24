@@ -1528,7 +1528,9 @@ describe("createClinicSupervisorNode availability session reset", () => {
     expect(update.availabilityContext).toBeNull();
   });
 
-  it("keeps availabilityContext on sticky Інша дата (prefetch reuse)", async () => {
+  it.each(["Інша дата", "другая дата", "другая", "другой"])(
+    "keeps availabilityContext on sticky alternative-date reply %s (prefetch reuse)",
+    async (otherDateReply) => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,
       bookingContext: listedMeetings,
@@ -1550,7 +1552,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
         },
         messages: [
           new AIMessage("Який день вам зручний?"),
-          new HumanMessage("Інша дата"),
+          new HumanMessage(otherDateReply),
         ],
         contactContext: listedContact,
         bookingContext: listedMeetings,
@@ -1563,7 +1565,8 @@ describe("createClinicSupervisorNode availability session reset", () => {
     expect(prefetch).not.toHaveBeenCalled();
     expect(update.next).toBe("booking");
     expect(update.availabilityContext).toBeUndefined();
-  });
+    },
+  );
 
   it("keeps availabilityContext on in-booking free text routed to booking", async () => {
     invoke.mockResolvedValue({ next: "booking", reply: "" });
