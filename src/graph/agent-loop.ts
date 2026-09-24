@@ -72,6 +72,7 @@ import {
   extractRawMessageText,
   extractReplyButtons,
   isBookingOfferQuestion,
+  isConsultationOfferQuestion,
   isYesReply,
   parseLeakedModelToolCalls,
   patientAgreedToConsultation,
@@ -318,6 +319,21 @@ const lastHumanText = (messages: BaseMessage[]): string => {
 const lastPatientText = (state: ClinicState): string =>
   lastHumanText(state.messages) || lastHumanText(state.agentMessages ?? []);
 
+/**
+ * A consultation offer is an explicit pending conversation action. An affirmative
+ * answer starts the DATE step from today, even when an older exact-date snapshot
+ * is still checkpointed. It must not inherit that snapshot's pagination cursor.
+ */
+export const isConsultationOfferAcceptance = (state: ClinicState): boolean => {
+  const handoff = state.lastHandoff;
+  return (
+    (handoff?.agentId === BOOKING_AGENT_ID || handoff?.agentId === FAQ_AGENT_ID)
+    && handoff.status === "ok"
+    && isConsultationOfferQuestion(handoff.replyText ?? "")
+    && isYesReply(lastPatientText(state))
+  );
+};
+
 /** Known keyboard labels that must not collide with an «Інша дата» prefix tap. */
 const OTHER_DATE_COLLISION_LABELS = [
   MAIN_MENU_LABEL,
@@ -473,13 +489,14 @@ const coerceAvailabilityToolCalls = (
     const days = state.availabilityContext?.days ?? [];
     const request = resolveAvailabilityRequest(human, kyivToday());
     const dayPick = matchAvailabilityDay(human, days);
-    const semanticDirection = isEarlierAvailabilityHuman(human)
-      ? "earlier"
-      : isLaterAvailabilityHuman(human)
-        ? "later"
-        : isYesReply(human)
-          ? state.availabilityContext?.searchDirection === "exact" ? "later" : "nearest"
-          : undefined;
+    const consultationAccepted = isConsultationOfferAcceptance(state);
+    const semanticDirection = consultationAccepted
+      ? "nearest"
+      : isEarlierAvailabilityHuman(human)
+        ? "earlier"
+        : isLaterAvailabilityHuman(human)
+          ? "later"
+          : isYesReply(human) ? "nearest" : undefined;
     // Recovery is allowed only for a structured patient action. Never turn arbitrary
     // availability-looking prose into an argument-less call that can replay a cache.
     if (
@@ -1205,18 +1222,25 @@ export const createAgentToolsNode = (
           const args = call.args as AvailabilitySlotsToolArgs;
           const lastOpen = lastOpenSnapshotDate(state.availabilityContext);
           const human = lastPatientText(state);
-          const direction = availabilityDirectionFromRequest(
-            args,
-            human,
-            state.availabilityContext,
-          );
+          const consultationAccepted = isConsultationOfferAcceptance(state);
+          const direction = consultationAccepted
+            ? "nearest"
+            : availabilityDirectionFromRequest(args, human, state.availabilityContext);
           const explicitRequest = resolveAvailabilityRequest(human, kyivToday());
           const pickedOfferedDay = matchAvailabilityDay(
             human,
             state.availabilityContext?.days ?? [],
           );
           const directionalRequest = direction === "earlier" || direction === "later";
-          if (directionalRequest && availabilityPagedThisTurn) {
+          if (consultationAccepted) {
+            // A positive answer to the consultation offer is a new DATE action.
+            // Do not carry an exact-date cursor from an earlier conversation turn.
+            args.direction = "nearest";
+            delete args.date;
+            delete args.afterDate;
+            delete args.beforeDate;
+            delete args.startDate;
+          } else if (directionalRequest && availabilityPagedThisTurn) {
             delete args.afterDate;
             delete args.beforeDate;
             delete args.date;

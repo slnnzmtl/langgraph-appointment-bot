@@ -20,6 +20,7 @@ import {
   matchAvailabilitySlot,
   meetingMutationClearsAvailability,
   resolveAvailabilityOffer,
+  isConsultationOfferAcceptance,
 } from "../agent-loop.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
@@ -3609,6 +3610,97 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         args: { direction: "nearest" },
       }),
     ]);
+  });
+
+  it("starts a fresh nearest search after accepting a consultation offer", async () => {
+    const llm = bookingLlmReturning("Добре");
+    const state = clinicState({
+      messages: [new HumanMessage("Так")],
+      agentMessages: [new HumanMessage("Так")],
+      availabilityContext: {
+        ...snapshot,
+        searchDirection: "exact",
+        searchAnchor: "2026-10-08",
+        query: {
+          kind: "exact",
+          date: "2026-10-08",
+          rangeFrom: "2026-10-08",
+          rangeThrough: "2026-10-08",
+          coverageComplete: true,
+        },
+      },
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "Підібрати вільний час на консультацію?",
+        replyButtons: ["Так", "Обрати іншу процедуру"],
+      },
+      next: "booking",
+    });
+
+    expect(isConsultationOfferAcceptance(state)).toBe(true);
+    const llmUpdate = await llm(state);
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(ai.tool_calls).toEqual([
+      expect.objectContaining({
+        name: "present_availability_slots",
+        args: { direction: "nearest" },
+      }),
+    ]);
+  });
+
+  it("does not carry an exact cursor when the model calls availability after consultation acceptance", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({ days: [], stepMinutes: 30 });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.string().optional(),
+          afterDate: z.string().optional(),
+          date: z.string().optional(),
+          durationMinutes: z.number().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([slotsTool], "booking");
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage("Так")],
+        availabilityContext: {
+          ...snapshot,
+          searchDirection: "exact",
+          searchAnchor: "2026-10-08",
+        },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Підібрати вільний час на консультацію?",
+        },
+        agentMessages: [
+          new HumanMessage("Так"),
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "s1",
+                name: "present_availability_slots",
+                args: { direction: "later", afterDate: "2026-10-08", durationMinutes: 30 },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([{ direction: "nearest", durationMinutes: 30 }]);
   });
 
   it.each([OTHER_DATE_LABEL, "другая дата", "другая", "другой"])(

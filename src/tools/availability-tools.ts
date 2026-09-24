@@ -341,7 +341,11 @@ export const tryAvailabilityCacheHit = (
     };
   }
 
-  if (input.direction == null || (ctx.query && ctx.query.kind !== input.direction)) {
+  // Legacy snapshots may not have query metadata, but their direction is still
+  // authoritative. Never let a fresh nearest/later/earlier request replay an
+  // exact snapshot merely because that snapshot predates the query field.
+  const cachedDirection = ctx.query?.kind ?? ctx.searchDirection;
+  if (input.direction == null || (cachedDirection != null && cachedDirection !== input.direction)) {
     return null;
   }
 

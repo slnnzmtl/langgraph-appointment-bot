@@ -758,6 +758,14 @@ describe("tryAvailabilityCacheHit", () => {
     expect(parsed.cacheHit).toBe(true);
   });
 
+  it("does not treat a legacy exact snapshot as a nearest DATE list", () => {
+    const hit = tryAvailabilityCacheHit(
+      { ...snapshot, searchDirection: "exact", searchAnchor: "2026-09-10" },
+      { direction: "nearest", durationMinutes: 30 },
+    );
+    expect(hit).toBeNull();
+  });
+
   it("aligns a wrong-year calendar day or slot ISO to the snapshot", () => {
     expect(alignToAnchors("2025-10-13", ["2026-10-12", "2026-10-13"])).toBe("2026-10-13");
     expect(alignToAnchors("2026-10-13", ["2026-10-13"])).toBe("2026-10-13");
