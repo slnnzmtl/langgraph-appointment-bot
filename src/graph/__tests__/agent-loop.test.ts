@@ -3604,7 +3604,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
     expect(ai.tool_calls).toEqual([
-      expect.objectContaining({ name: "present_availability_slots", args: {} }),
+      expect.objectContaining({
+        name: "present_availability_slots",
+        args: { direction: "nearest" },
+      }),
     ]);
   });
 
@@ -3622,10 +3625,87 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
     expect(ai.tool_calls).toEqual([
-      expect.objectContaining({ name: "present_availability_slots", args: {} }),
+      expect.objectContaining({
+        name: "present_availability_slots",
+        args: { direction: "later" },
+      }),
     ]);
     },
   );
+
+  it("injects the validated exact date when the model skips the availability tool", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-24T09:00:00Z"));
+      const llm = bookingLlmReturning("На 20 жовтня вільного часу немає.");
+      const llmUpdate = await llm(
+        clinicState({
+          messages: [new HumanMessage("20 жовтня")],
+          agentMessages: [new HumanMessage("20 жовтня")],
+          availabilityContext: snapshot,
+          next: "booking",
+        }),
+      );
+      const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+      expect(ai.tool_calls).toEqual([
+        expect.objectContaining({
+          name: "present_availability_slots",
+          args: { direction: "exact", date: "2026-10-20" },
+        }),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("overrides a model-supplied stale date with the patient request before CRM", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-24T09:00:00Z"));
+      const invoked: Array<Record<string, unknown>> = [];
+      const slotsTool = tool(
+        async (input: Record<string, unknown>) => {
+          invoked.push(input);
+          return JSON.stringify({ days: [], stepMinutes: 30 });
+        },
+        {
+          name: "present_availability_slots",
+          description: "slots",
+          schema: z.object({
+            direction: z.string().optional(),
+            date: z.string().optional(),
+            durationMinutes: z.number().optional(),
+          }),
+        },
+      );
+      const toolsNode = createAgentToolsNode([slotsTool], "booking");
+      await toolsNode(
+        clinicState({
+          messages: [new HumanMessage("20 жовтня")],
+          availabilityContext: snapshot,
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [
+                {
+                  id: "stale-date",
+                  name: "present_availability_slots",
+                  args: { direction: "nearest", date: "2025-10-20", durationMinutes: 30 },
+                  type: "tool_call",
+                },
+              ],
+            }),
+          ],
+        }),
+        { configurable: {} },
+      );
+      expect(invoked).toEqual([
+        { direction: "exact", date: "2026-10-20", durationMinutes: 30 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("does not re-inject slots after «Інша дата» already paged this turn", async () => {
     const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
@@ -3964,7 +4044,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(proseOnly.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("attaches earlier/later navigation when the model reports an empty manual date without a tool call", () => {
+  it("does not attach navigation when an empty-date model reply has no validated tool result", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -3987,10 +4067,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toEqual([
-      EARLIER_DATE_LABEL,
-      LATER_DATE_LABEL,
-    ]);
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
   it("injects selected_slot not full availability into booking LLM dynamic context", async () => {

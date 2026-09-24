@@ -40,6 +40,16 @@ export type AvailabilityContext = {
   searchAnchor?: string;
   searchedFrom?: string;
   searchedThrough?: string;
+  query?: AvailabilityQuery;
+};
+
+export type AvailabilityQuery = {
+  kind: "exact" | "earlier" | "later" | "nearest";
+  date?: string;
+  anchor?: string;
+  rangeFrom?: string;
+  rangeThrough?: string;
+  coverageComplete: boolean;
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -157,6 +167,32 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
     typeof record.searchedThrough === "string" && DAY_RE.test(record.searchedThrough)
       ? record.searchedThrough
       : undefined;
+  const queryRecord = asJsonRecord(record.query);
+  const queryKind =
+    queryRecord?.kind === "exact"
+    || queryRecord?.kind === "earlier"
+    || queryRecord?.kind === "later"
+    || queryRecord?.kind === "nearest"
+      ? queryRecord.kind
+      : searchDirection;
+  const query: AvailabilityQuery | undefined = queryKind
+    ? {
+        kind: queryKind,
+        ...(typeof queryRecord?.date === "string" && DAY_RE.test(queryRecord.date)
+          ? { date: queryRecord.date }
+          : queryKind === "exact" && searchAnchor ? { date: searchAnchor } : {}),
+        ...(typeof queryRecord?.anchor === "string" && DAY_RE.test(queryRecord.anchor)
+          ? { anchor: queryRecord.anchor }
+          : searchAnchor ? { anchor: searchAnchor } : {}),
+        ...(typeof queryRecord?.rangeFrom === "string" && DAY_RE.test(queryRecord.rangeFrom)
+          ? { rangeFrom: queryRecord.rangeFrom }
+          : searchedFrom ? { rangeFrom: searchedFrom } : {}),
+        ...(typeof queryRecord?.rangeThrough === "string" && DAY_RE.test(queryRecord.rangeThrough)
+          ? { rangeThrough: queryRecord.rangeThrough }
+          : searchedThrough ? { rangeThrough: searchedThrough } : {}),
+        coverageComplete: queryRecord?.coverageComplete !== false && truncated !== true,
+      }
+    : undefined;
   const excludeMeetingIds = Array.isArray(record.excludeMeetingIds)
     ? record.excludeMeetingIds.filter((id): id is string => typeof id === "string" && id.length > 0)
     : undefined;
@@ -172,6 +208,7 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
       ...(searchAnchor ? { searchAnchor } : {}),
       ...(searchedFrom ? { searchedFrom } : {}),
       ...(searchedThrough ? { searchedThrough } : {}),
+      ...(query ? { query } : {}),
     };
   }
 
@@ -193,6 +230,7 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
       ...(searchAnchor ? { searchAnchor } : {}),
       ...(searchedFrom ? { searchedFrom } : {}),
       ...(searchedThrough ? { searchedThrough } : {}),
+      ...(query ? { query } : {}),
     };
   }
 
@@ -255,8 +293,9 @@ export const tryAvailabilityCacheHit = (
   if (!ctx || (ctx.days.length === 0 && !ctx.searchDirection)) {
     return null;
   }
-  // Paging forward or shifting the search window always hits CRM.
-  if (input.afterDate || input.beforeDate || input.startDate) {
+  // Paging forward/backward or shifting the search window always hits CRM.
+  // An unqualified call must never replay an unrelated snapshot.
+  if (input.afterDate || input.beforeDate || input.startDate || (!input.direction && !input.date)) {
     return null;
   }
   const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
@@ -274,6 +313,16 @@ export const tryAvailabilityCacheHit = (
   };
 
   if (input.date) {
+    const query = ctx.query;
+    const coveredByQuery =
+      query?.coverageComplete === true
+      && query.rangeFrom != null
+      && query.rangeThrough != null
+      && query.rangeFrom <= input.date
+      && input.date <= query.rangeThrough;
+    if (query?.kind === "exact" && query.date !== input.date && !coveredByQuery) {
+      return null;
+    }
     const day = ctx.days.find((entry) => entry.date === input.date);
     if (!day) {
       return null;
@@ -286,9 +335,14 @@ export const tryAvailabilityCacheHit = (
         ...(day.dayLabel ? { dayLabel: day.dayLabel } : {}),
         ...(ctx.searchDirection ? { searchDirection: ctx.searchDirection } : {}),
         ...(ctx.searchAnchor ? { searchAnchor: ctx.searchAnchor } : {}),
+        ...(ctx.query ? { query: ctx.query } : {}),
         ...shared,
       }),
     };
+  }
+
+  if (input.direction == null || (ctx.query && ctx.query.kind !== input.direction)) {
+    return null;
   }
 
   return {
@@ -301,6 +355,7 @@ export const tryAvailabilityCacheHit = (
       ...(ctx.searchAnchor ? { searchAnchor: ctx.searchAnchor } : {}),
       ...(ctx.searchedFrom ? { searchedFrom: ctx.searchedFrom } : {}),
       ...(ctx.searchedThrough ? { searchedThrough: ctx.searchedThrough } : {}),
+      ...(ctx.query ? { query: ctx.query } : {}),
     }),
   };
 };
@@ -396,6 +451,9 @@ export const resolveNextAvailableStart = (input: {
   today: string;
 }): string => {
   let start = input.startDate ?? input.today;
+  if (start < input.today) {
+    start = input.today;
+  }
   if (input.afterDate) {
     const after = addCalendarDays(input.afterDate, 1);
     if (after > start) {
@@ -427,6 +485,13 @@ export const createPresentAvailabilitySlotsTool = (options: {
         const todayKyiv = kyivToday();
 
         if (input.date) {
+          if (input.date < todayKyiv) {
+            return JSON.stringify({
+              error: "Requested availability date is in the past",
+              date: input.date,
+              stepMinutes,
+            });
+          }
           const [working, raw, reserved] = await Promise.all([
             fetchWorkingCalendar(callTool, assignedUserId),
             callTool("search_meetings", {
@@ -468,6 +533,14 @@ export const createPresentAvailabilitySlotsTool = (options: {
             searchAnchor: input.date,
             searchedFrom: input.date,
             searchedThrough: input.date,
+            query: {
+              kind: "exact",
+              date: input.date,
+              anchor: input.date,
+              rangeFrom: input.date,
+              rangeThrough: input.date,
+              coverageComplete: true,
+            },
             ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
           });
         }
@@ -556,6 +629,13 @@ export const createPresentAvailabilitySlotsTool = (options: {
             : { searchAnchor: input.afterDate ?? start }),
           searchedFrom,
           searchedThrough,
+          query: {
+            kind: direction,
+            anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,
+            rangeFrom: searchedFrom,
+            rangeThrough: searchedThrough,
+            coverageComplete: searchedMeetings.length < RANGED_MEETINGS_LIMIT,
+          },
           ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
           ...(searchedMeetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
         });

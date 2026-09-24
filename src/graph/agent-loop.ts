@@ -36,6 +36,7 @@ import {
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
 import { kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
+import { resolveAvailabilityRequest } from "../tools/availability-request.js";
 import { normalizeContactLookupResult } from "../tools/contact-tools.js";
 import {
   normalizeListServicesResult,
@@ -304,29 +305,6 @@ export const formatAvailabilityEmptyOffer = (
   };
 };
 
-const EMPTY_EXACT_DATE_REPLY_RE =
-  /(?:на\s+(?:цю|эту)\s+дату.*(?:вільного\s+часу\s+немає|свободного\s+времени\s+нет)|(?:вільного\s+часу\s+немає|свободного\s+времени\s+нет).*на\s+(?:цю|эту)\s+дату)/i;
-
-/**
- * A model may occasionally state that a manually typed date is unavailable
- * without calling the slots tool. Keep that question actionable while a live
- * availability snapshot exists. Tool-backed empty results still own their
- * text and buttons through formatAvailabilityEmptyOffer.
- */
-const emptyExactDateReplyButtons = (
-  replyText: string,
-  context: AvailabilityContext | null | undefined,
-): string[] | null => {
-  if (!context || !EMPTY_EXACT_DATE_REPLY_RE.test(replyText)) {
-    return null;
-  }
-  const anchor = context.searchedFrom ?? context.searchAnchor ?? context.days[0]?.date;
-  return [
-    ...(anchor != null && anchor > kyivToday() ? [EARLIER_DATE_LABEL] : []),
-    LATER_DATE_LABEL,
-  ];
-};
-
 const lastHumanText = (messages: BaseMessage[]): string => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -416,6 +394,10 @@ const availabilityDirectionFromRequest = (
   humanText: string,
   ctx: AvailabilityContext | null | undefined,
 ): AvailabilitySearchDirection => {
+  const explicit = resolveAvailabilityRequest(humanText, kyivToday());
+  if (explicit?.kind === "exact" && matchAvailabilityDay(humanText, ctx?.days ?? []) == null) {
+    return "exact";
+  }
   if (isEarlierAvailabilityHuman(humanText)) {
     return "earlier";
   }
@@ -489,24 +471,31 @@ const coerceAvailabilityToolCalls = (
   ) {
     const human = lastPatientText(state);
     const days = state.availabilityContext?.days ?? [];
-    const looksLikeSlotOffer =
-      raw.includes(AVAILABILITY_DATE_HEADING) || raw.includes(AVAILABILITY_TIME_HEADING);
-    // Model skipped present_availability_slots. Skip inject on a day-label tap so finalize
-    // can rewrite TIME from the checkpoint without a new CRM call. Skip if slots already
-    // ran this turn — DATE copy after «Інша дата» would walk the month.
+    const request = resolveAvailabilityRequest(human, kyivToday());
+    const dayPick = matchAvailabilityDay(human, days);
+    const semanticDirection = isEarlierAvailabilityHuman(human)
+      ? "earlier"
+      : isLaterAvailabilityHuman(human)
+        ? "later"
+        : isYesReply(human)
+          ? state.availabilityContext?.searchDirection === "exact" ? "later" : "nearest"
+          : undefined;
+    // Recovery is allowed only for a structured patient action. Never turn arbitrary
+    // availability-looking prose into an argument-less call that can replay a cache.
     if (
       !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
-      && (looksLikeSlotOffer
-        || isYesReply(human)
-        || (isOtherDateHuman(human) && days.length > 0))
-      && matchAvailabilityDay(human, days) == null
+      && dayPick == null
+      && (request != null || semanticDirection != null)
     ) {
+      const args = request?.kind === "exact"
+        ? { direction: "exact", date: request.date }
+        : { direction: semanticDirection ?? "nearest" };
       toolCalls = [
         ...toolCalls,
         {
           id: `slots_coerce_${state.stepCount ?? 0}`,
           name: "present_availability_slots",
-          args: {},
+          args,
           type: "tool_call" as const,
         },
       ];
@@ -1221,13 +1210,18 @@ export const createAgentToolsNode = (
             human,
             state.availabilityContext,
           );
+          const explicitRequest = resolveAvailabilityRequest(human, kyivToday());
+          const pickedOfferedDay = matchAvailabilityDay(
+            human,
+            state.availabilityContext?.days ?? [],
+          );
           const directionalRequest = direction === "earlier" || direction === "later";
           if (directionalRequest && availabilityPagedThisTurn) {
             delete args.afterDate;
             delete args.beforeDate;
             delete args.date;
             delete args.startDate;
-            delete args.direction;
+            args.direction = state.availabilityContext?.searchDirection ?? direction;
           } else if (direction === "earlier") {
             args.direction = "earlier";
             const earlierAnchor =
@@ -1254,15 +1248,15 @@ export const createAgentToolsNode = (
             delete args.date;
           } else if (direction === "exact") {
             args.direction = "exact";
+            if (explicitRequest?.kind === "exact" && pickedOfferedDay == null) {
+              args.date = explicitRequest.date;
+            }
             delete args.afterDate;
             delete args.beforeDate;
           } else {
             args.direction = "nearest";
             delete args.afterDate;
             delete args.beforeDate;
-          }
-          if (directionalRequest && availabilityPagedThisTurn) {
-            delete args.direction;
           }
           if (direction === "later" && !args.afterDate) {
             delete args.afterDate;
@@ -1275,6 +1269,20 @@ export const createAgentToolsNode = (
             ["date", "afterDate", "beforeDate", "startDate"],
             bookingDateAnchors(state),
           );
+          if (direction === "exact" && !args.date) {
+            trackToolError(call.name, "Exact availability date missing");
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: "Exact availability date missing",
+                  hint: "Resolve the patient's named calendar date before searching availability.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: "present_availability_slots",
+              }),
+            );
+            continue;
+          }
           const parsed = presentAvailabilitySlotsArgsSchema.safeParse(args);
           if (!parsed.success) {
             trackToolError(call.name, "Invalid availability arguments");
@@ -1501,26 +1509,21 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         replyButtons = accidentalButtons;
       }
     } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
-      const emptyDateButtons = emptyExactDateReplyButtons(replyText, state.availabilityContext);
-      if (emptyDateButtons) {
-        replyButtons = emptyDateButtons;
+      // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
+      const idle = agentMessages.some(
+        (message) =>
+          message instanceof ToolMessage
+          && (classifyMeetingMutationToolMessage(message) === "committed"
+            || meetingMutationIsHitlDecline(message)),
+      );
+      if (idle) {
+        replyButtons = [
+          ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+        ];
+        trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
       } else {
-        // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
-        const idle = agentMessages.some(
-          (message) =>
-            message instanceof ToolMessage
-            && (classifyMeetingMutationToolMessage(message) === "committed"
-              || meetingMutationIsHitlDecline(message)),
-        );
-        if (idle) {
-          replyButtons = [
-            ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
-          ];
-          trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
-        } else {
-          // Booking drifted into catalog drill-down: never ship that list without its chips.
-          replyButtons = catalogChoiceButtonsFromText(replyText);
-        }
+        // Booking drifted into catalog drill-down: never ship that list without its chips.
+        replyButtons = catalogChoiceButtonsFromText(replyText);
       }
     }
 

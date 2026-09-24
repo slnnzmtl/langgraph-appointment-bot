@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   alignToAnchors,
@@ -17,6 +17,12 @@ describe("meeting-tools availability", () => {
 
   beforeEach(() => {
     calls.length = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const crmCalendar = {
@@ -415,6 +421,15 @@ describe("resolveNextAvailableStart", () => {
 });
 
 describe("present_availability_slots excludeMeetingIds", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("does not list the excluded meeting's current start, but frees later times in that block", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {
@@ -476,6 +491,15 @@ describe("present_availability_slots excludeMeetingIds", () => {
 });
 
 describe("present_availability_slots CReservedTime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const openMorning = {
     success: true,
     calendars: [
@@ -718,8 +742,16 @@ describe("tryAvailabilityCacheHit", () => {
     stepMinutes: 30,
   };
 
-  it("hits for undated DATE list when duration matches", () => {
+  it("rejects an unqualified DATE-list cache request", () => {
     const hit = tryAvailabilityCacheHit(snapshot, { durationMinutes: 30 });
+    expect(hit).toBeNull();
+  });
+
+  it("hits for an equivalent nearest DATE list when duration matches", () => {
+    const hit = tryAvailabilityCacheHit(
+      { ...snapshot, searchDirection: "nearest" },
+      { direction: "nearest", durationMinutes: 30 },
+    );
     expect(hit?.kind).toBe("date_list");
     const parsed = JSON.parse(hit!.json) as { days: unknown[]; cacheHit: boolean };
     expect(parsed.days).toHaveLength(2);
@@ -748,6 +780,16 @@ describe("tryAvailabilityCacheHit", () => {
     expect(parsed.cacheHit).toBe(true);
   });
 
+  it("does not reuse an unrelated snapshot for an exact requested date", () => {
+    expect(
+      tryAvailabilityCacheHit(snapshot, {
+        direction: "exact",
+        date: "2026-10-20",
+        durationMinutes: 30,
+      }),
+    ).toBeNull();
+  });
+
   it("misses on afterDate, duration mismatch, or unknown date", () => {
     expect(tryAvailabilityCacheHit(snapshot, { afterDate: "2026-09-10", durationMinutes: 30 })).toBeNull();
     expect(tryAvailabilityCacheHit(snapshot, { durationMinutes: 45 })).toBeNull();
@@ -765,7 +807,7 @@ describe("tryAvailabilityCacheHit", () => {
         searchedFrom: "2026-10-06",
         searchedThrough: "2026-11-04",
       },
-      { durationMinutes: 30 },
+      { direction: "later", durationMinutes: 30 },
     );
     expect(hit?.kind).toBe("date_list");
     expect(JSON.parse(hit!.json)).toMatchObject({
@@ -777,6 +819,15 @@ describe("tryAvailabilityCacheHit", () => {
 });
 
 describe("present_availability_slots excludeMeetingIds echo", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("echoes excludeMeetingIds in tool JSON", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {
