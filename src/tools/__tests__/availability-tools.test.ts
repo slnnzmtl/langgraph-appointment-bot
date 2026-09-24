@@ -233,6 +233,46 @@ describe("meeting-tools availability", () => {
     expect(parsed.days?.[0]?.date).toBe("2026-08-11");
   });
 
+  it("present_availability_slots direction earlier scans before the exclusive boundary", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      if (name === "search_entity") {
+        return { list: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({
+      direction: "earlier",
+      beforeDate: "2099-10-14",
+      durationMinutes: 60,
+    });
+    const parsed = JSON.parse(raw as string) as {
+      days: Array<{ date: string }>;
+      searchDirection: string;
+      searchAnchor: string;
+      searchedThrough: string;
+    };
+
+    expect(parsed.searchDirection).toBe("earlier");
+    expect(parsed.searchAnchor).toBe("2099-10-14");
+    expect(parsed.searchedThrough).toBe("2099-10-13");
+    expect(parsed.days.length).toBeGreaterThan(0);
+    expect(parsed.days.map((day) => day.date)).toEqual(
+      [...parsed.days.map((day) => day.date)].sort(),
+    );
+    expect(calls.find((call) => call.name === "search_meetings")?.args).toMatchObject({
+      dateTo: "2099-10-13",
+    });
+  });
+
   it("present_availability_slots dated path still uses single-day search", async () => {
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
@@ -713,6 +753,26 @@ describe("tryAvailabilityCacheHit", () => {
     expect(tryAvailabilityCacheHit(snapshot, { durationMinutes: 45 })).toBeNull();
     expect(tryAvailabilityCacheHit(snapshot, { date: "2026-09-99", durationMinutes: 30 })).toBeNull();
     expect(tryAvailabilityCacheHit(null, { durationMinutes: 30 })).toBeNull();
+  });
+
+  it("reuses a metadata-bearing empty snapshot for a duplicate directional call", () => {
+    const hit = tryAvailabilityCacheHit(
+      {
+        days: [],
+        stepMinutes: 30,
+        searchDirection: "later",
+        searchAnchor: "2026-10-05",
+        searchedFrom: "2026-10-06",
+        searchedThrough: "2026-11-04",
+      },
+      { durationMinutes: 30 },
+    );
+    expect(hit?.kind).toBe("date_list");
+    expect(JSON.parse(hit!.json)).toMatchObject({
+      days: [],
+      searchDirection: "later",
+      cacheHit: true,
+    });
   });
 });
 

@@ -59,6 +59,8 @@ export const MAIN_MENU_LABEL = "Головне меню";
 /** DATE-step extra shortcut; TIME step may include it too. */
 export const OTHER_DATE_LABEL = "Інша дата";
 export const OTHER_DATE_LABEL_EN = "Another date";
+export const EARLIER_DATE_LABEL = "Раніші дати";
+export const LATER_DATE_LABEL = "Пізніші дати";
 
 export const DEFAULT_MENU_NO_VISITS = ["Записатись", "Послуги", "Адреса"] as const;
 export const DEFAULT_MENU_HAS_VISITS = ["Мій запис", "Послуги", "Адреса"] as const;

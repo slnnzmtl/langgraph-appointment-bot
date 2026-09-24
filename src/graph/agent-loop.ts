@@ -35,7 +35,7 @@ import {
   type AvailabilityContext,
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
-import { shortDayMonthLabel } from "../tools/availability-slots.js";
+import { kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
 import { normalizeContactLookupResult } from "../tools/contact-tools.js";
 import {
   normalizeListServicesResult,
@@ -52,8 +52,10 @@ import {
   CONSULTATION_SERVICE_ID,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
+  EARLIER_DATE_LABEL,
   INTENT_SKIP_LABEL,
   INTENT_SKIP_LABEL_EN,
+  LATER_DATE_LABEL,
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
@@ -266,6 +268,42 @@ export const formatAvailabilityTimeOffer = (
   };
 };
 
+export const formatAvailabilityEmptyOffer = (
+  context: AvailabilityContext,
+): { replyText: string; replyButtons: string[] } => {
+  const direction = context.searchDirection;
+  const anchor = context.searchAnchor ?? context.searchedFrom ?? context.days[0]?.date;
+  const canSearchEarlier =
+    direction !== "earlier"
+    && anchor != null
+    && anchor > kyivToday();
+
+  if (direction === "earlier") {
+    return {
+      replyText: "Раніших вільних дат не знайшли. Пошукати пізніші дати?",
+      replyButtons: [LATER_DATE_LABEL],
+    };
+  }
+
+  if (direction === "exact") {
+    return {
+      replyText: "На цю дату вільного часу немає. Пошукати іншу дату?",
+      replyButtons: [
+        ...(canSearchEarlier ? [EARLIER_DATE_LABEL] : []),
+        LATER_DATE_LABEL,
+      ],
+    };
+  }
+
+  return {
+    replyText: "У цьому періоді вільного часу немає. Пошукати інші дати?",
+    replyButtons: [
+      ...(canSearchEarlier ? [EARLIER_DATE_LABEL] : []),
+      LATER_DATE_LABEL,
+    ],
+  };
+};
+
 const lastHumanText = (messages: BaseMessage[]): string => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -320,6 +358,50 @@ const isOtherDateHuman = (humanText: string): boolean => {
   return !OTHER_DATE_COLLISION_LABELS.some(
     (label) => label.startsWith(normalized) && !targets.includes(label),
   );
+};
+
+type AvailabilitySearchDirection = NonNullable<AvailabilitySlotsToolArgs["direction"]>;
+
+const EARLIER_SEARCH_RE =
+  /(?:раніш|раньше|скоріш|ближч(?:а|у|ий|е)\s+(?:дата|date)|earlier|sooner|earliest)/i;
+const LATER_SEARCH_RE =
+  /(?:пізніш|позніш|далі|коли\s+ще|інші?\s+дат|later|next|when\s+else|another\s+date)/i;
+
+const isEarlierAvailabilityHuman = (humanText: string): boolean =>
+  EARLIER_SEARCH_RE.test(humanText.trim());
+
+const isLaterAvailabilityHuman = (humanText: string): boolean =>
+  isOtherDateHuman(humanText) || LATER_SEARCH_RE.test(humanText.trim());
+
+const firstSnapshotDate = (
+  ctx: AvailabilityContext | null | undefined,
+): string | undefined => ctx?.days[0]?.date;
+
+const lastSnapshotDate = (
+  ctx: AvailabilityContext | null | undefined,
+): string | undefined => ctx?.days.at(-1)?.date;
+
+const availabilityDirectionFromRequest = (
+  args: AvailabilitySlotsToolArgs,
+  humanText: string,
+  ctx: AvailabilityContext | null | undefined,
+): AvailabilitySearchDirection => {
+  if (isEarlierAvailabilityHuman(humanText)) {
+    return "earlier";
+  }
+  if (isLaterAvailabilityHuman(humanText)) {
+    return "later";
+  }
+  if (args.direction) {
+    return args.direction;
+  }
+  if (args.date) {
+    return "exact";
+  }
+  if (!ctx) {
+    return "nearest";
+  }
+  return ctx.searchDirection === "exact" ? "later" : "nearest";
 };
 
 const lastOpenSnapshotDate = (
@@ -642,7 +724,7 @@ export const availabilityOfferFromToolTurn = (
   }
   const open = captured.days.filter((day) => day.slots.length > 0);
   if (open.length === 0) {
-    return null;
+    return formatAvailabilityEmptyOffer(captured);
   }
   if (open.length === 1) {
     return formatAvailabilityTimeOffer(open[0]!);
@@ -961,7 +1043,7 @@ export const createAgentToolsNode = (
     const synthetic: ToolMessage[] = [];
     const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
     let noteStatusUpdate: ClinicStateUpdate = {};
-    let otherDatePagedThisTurn = toolRanThisTurn(
+    let availabilityPagedThisTurn = toolRanThisTurn(
       agentMessages,
       "present_availability_slots",
     );
@@ -1098,29 +1180,69 @@ export const createAgentToolsNode = (
         }
 
         if (call.name === "present_availability_slots") {
-          // Own paging cursor from checkpoint — LLM afterDate is often wrong-year or omitted.
+          // Own paging cursors from checkpoint — the model chooses semantic direction,
+          // but must not invent calendar boundaries.
           call.args = { ...(call.args ?? {}) };
           const args = call.args as AvailabilitySlotsToolArgs;
           const lastOpen = lastOpenSnapshotDate(state.availabilityContext);
           const human = lastPatientText(state);
-          const otherDate = isOtherDateHuman(human);
-          if (otherDate && otherDatePagedThisTurn) {
+          const direction = availabilityDirectionFromRequest(
+            args,
+            human,
+            state.availabilityContext,
+          );
+          const directionalRequest = direction === "earlier" || direction === "later";
+          if (directionalRequest && availabilityPagedThisTurn) {
             delete args.afterDate;
+            delete args.beforeDate;
             delete args.date;
-          } else if (otherDate && lastOpen) {
-            args.afterDate = lastOpen;
-            delete args.date;
-          } else if (state.availabilityContext == null) {
-            // No snapshot yet: keep a patient-named date; drop unanchorable afterDate only.
+            delete args.startDate;
+            delete args.direction;
+          } else if (direction === "earlier") {
+            args.direction = "earlier";
+            const earlierAnchor =
+              state.availabilityContext?.searchedFrom
+              ?? firstSnapshotDate(state.availabilityContext)
+              ?? kyivToday();
+            args.beforeDate = earlierAnchor;
             delete args.afterDate;
-          } else if (!lastOpen) {
-            // Snapshot present but no open days — fresh next-available search.
-            delete args.afterDate;
+            delete args.startDate;
             delete args.date;
+          } else if (direction === "later") {
+            args.direction = "later";
+            const laterAnchor =
+              state.availabilityContext?.searchedThrough
+              ?? lastOpen
+              ?? lastSnapshotDate(state.availabilityContext);
+            if (laterAnchor) {
+              args.afterDate = laterAnchor;
+            } else {
+              delete args.afterDate;
+            }
+            delete args.beforeDate;
+            delete args.startDate;
+            delete args.date;
+          } else if (direction === "exact") {
+            args.direction = "exact";
+            delete args.afterDate;
+            delete args.beforeDate;
+          } else {
+            args.direction = "nearest";
+            delete args.afterDate;
+            delete args.beforeDate;
+          }
+          if (directionalRequest && availabilityPagedThisTurn) {
+            delete args.direction;
+          }
+          if (direction === "later" && !args.afterDate) {
+            delete args.afterDate;
+          }
+          if (direction === "earlier" && !args.beforeDate) {
+            delete args.beforeDate;
           }
           alignArgDates(
             args,
-            ["date", "afterDate", "startDate"],
+            ["date", "afterDate", "beforeDate", "startDate"],
             bookingDateAnchors(state),
           );
           const parsed = presentAvailabilitySlotsArgsSchema.safeParse(args);
@@ -1131,7 +1253,7 @@ export const createAgentToolsNode = (
                 content: JSON.stringify({
                   error: "Invalid availability arguments",
                   hint:
-                    "Use YYYY-MM-DD for date/afterDate/startDate; durationMinutes 15–180.",
+                    "Use YYYY-MM-DD for date/afterDate/beforeDate/startDate; durationMinutes 15–180.",
                 }),
                 tool_call_id: call.id ?? "",
                 name: call.name,
@@ -1156,8 +1278,8 @@ export const createAgentToolsNode = (
             );
             continue;
           }
-          if (otherDate) {
-            otherDatePagedThisTurn = true;
+          if (directionalRequest) {
+            availabilityPagedThisTurn = true;
           }
         }
 

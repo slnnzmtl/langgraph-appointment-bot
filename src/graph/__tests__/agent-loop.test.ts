@@ -3764,7 +3764,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(JSON.parse(String(toolMsg.content)).cacheHit).toBe(true);
   });
 
-  it("drops afterDate and date when the snapshot has no open days", async () => {
+  it("pages later from the empty snapshot date instead of dropping the boundary", async () => {
     const invoked: Array<Record<string, unknown>> = [];
     const slotsTool = tool(
       async (input: Record<string, unknown>) => {
@@ -3785,6 +3785,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
       clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
         availabilityContext: {
           days: [
             {
@@ -3796,6 +3797,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           stepMinutes: 30,
         },
         agentMessages: [
+          new HumanMessage(OTHER_DATE_LABEL),
           new AIMessage({
             content: "",
             tool_calls: [
@@ -3816,9 +3818,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
       { configurable: {} },
     );
-    expect(invoked).toEqual([
-      { durationMinutes: 30, startDate: "2026-09-11" },
-    ]);
+    expect(invoked).toEqual([{ afterDate: "2026-10-05", durationMinutes: 30 }]);
   });
 
   it("keeps a patient-named date when there is no availability snapshot", async () => {

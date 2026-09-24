@@ -18,6 +18,7 @@ import {
   extractMeetingsFromSearchResult,
   fallbackClinicTimeRanges,
   findNextAvailableSlots,
+  findPreviousAvailableSlots,
   formatKyivDayLabel,
   kyivToday,
   omitSlotsAtStarts,
@@ -35,6 +36,10 @@ export type AvailabilityContext = {
   stepMinutes: number;
   excludeMeetingIds?: string[];
   truncated?: boolean;
+  searchDirection?: "exact" | "earlier" | "later" | "nearest";
+  searchAnchor?: string;
+  searchedFrom?: string;
+  searchedThrough?: string;
 };
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -133,6 +138,25 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
   const stepMinutes =
     typeof record.stepMinutes === "number" ? record.stepMinutes : CLINIC_SLOT_MINUTES;
   const truncated = record.truncated === true;
+  const searchDirection =
+    record.searchDirection === "exact"
+    || record.searchDirection === "earlier"
+    || record.searchDirection === "later"
+    || record.searchDirection === "nearest"
+      ? record.searchDirection
+      : undefined;
+  const searchAnchor =
+    typeof record.searchAnchor === "string" && DAY_RE.test(record.searchAnchor)
+      ? record.searchAnchor
+      : undefined;
+  const searchedFrom =
+    typeof record.searchedFrom === "string" && DAY_RE.test(record.searchedFrom)
+      ? record.searchedFrom
+      : undefined;
+  const searchedThrough =
+    typeof record.searchedThrough === "string" && DAY_RE.test(record.searchedThrough)
+      ? record.searchedThrough
+      : undefined;
   const excludeMeetingIds = Array.isArray(record.excludeMeetingIds)
     ? record.excludeMeetingIds.filter((id): id is string => typeof id === "string" && id.length > 0)
     : undefined;
@@ -144,6 +168,10 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
       stepMinutes,
       ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
       ...(truncated ? { truncated } : {}),
+      ...(searchDirection ? { searchDirection } : {}),
+      ...(searchAnchor ? { searchAnchor } : {}),
+      ...(searchedFrom ? { searchedFrom } : {}),
+      ...(searchedThrough ? { searchedThrough } : {}),
     };
   }
 
@@ -161,6 +189,10 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
       ],
       stepMinutes,
       ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
+      ...(searchDirection ? { searchDirection } : {}),
+      ...(searchAnchor ? { searchAnchor } : {}),
+      ...(searchedFrom ? { searchedFrom } : {}),
+      ...(searchedThrough ? { searchedThrough } : {}),
     };
   }
 
@@ -180,6 +212,9 @@ const sameExcludeIds = (
 };
 
 export const presentAvailabilitySlotsArgsSchema = z.object({
+  direction: z.enum(["exact", "earlier", "later", "nearest"]).optional().describe(
+    "Semantic search intent. Runtime owns all cursor dates; use exact for a named day, earlier/later for alternatives, nearest for the next availability.",
+  ),
   date: KYIV_DAY_SCHEMA.optional().describe(
     "Specific calendar day YYYY-MM-DD. Omit to search for the next available days.",
   ),
@@ -188,6 +223,9 @@ export const presentAvailabilitySlotsArgsSchema = z.object({
   ),
   afterDate: KYIV_DAY_SCHEMA.optional().describe(
     "When date is omitted: skip this day and all earlier — search starts the next calendar day. Required when the user rejects a date or asks for other dates («Інша дата» / Another date / коли ще / покажи ще). afterDate is the last offered day, or the specific day they rejected. If both afterDate and startDate are set, the later day wins.",
+  ),
+  beforeDate: KYIV_DAY_SCHEMA.optional().describe(
+    "When direction is earlier: exclusive upper bound. Runtime supplies the rejected or earliest offered day.",
   ),
   durationMinutes: z.coerce
     .number()
@@ -214,11 +252,11 @@ export const tryAvailabilityCacheHit = (
   ctx: AvailabilityContext | null | undefined,
   input: AvailabilitySlotsToolArgs,
 ): { json: string; kind: "date_list" | "day_slots" } | null => {
-  if (!ctx || ctx.days.length === 0) {
+  if (!ctx || (ctx.days.length === 0 && !ctx.searchDirection)) {
     return null;
   }
   // Paging forward or shifting the search window always hits CRM.
-  if (input.afterDate || input.startDate) {
+  if (input.afterDate || input.beforeDate || input.startDate) {
     return null;
   }
   const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
@@ -246,6 +284,8 @@ export const tryAvailabilityCacheHit = (
         slots: day.slots,
         date: day.date,
         ...(day.dayLabel ? { dayLabel: day.dayLabel } : {}),
+        ...(ctx.searchDirection ? { searchDirection: ctx.searchDirection } : {}),
+        ...(ctx.searchAnchor ? { searchAnchor: ctx.searchAnchor } : {}),
         ...shared,
       }),
     };
@@ -257,6 +297,10 @@ export const tryAvailabilityCacheHit = (
       days: ctx.days,
       ...shared,
       ...(ctx.truncated ? { truncated: true } : {}),
+      ...(ctx.searchDirection ? { searchDirection: ctx.searchDirection } : {}),
+      ...(ctx.searchAnchor ? { searchAnchor: ctx.searchAnchor } : {}),
+      ...(ctx.searchedFrom ? { searchedFrom: ctx.searchedFrom } : {}),
+      ...(ctx.searchedThrough ? { searchedThrough: ctx.searchedThrough } : {}),
     }),
   };
 };
@@ -369,9 +413,11 @@ export const createPresentAvailabilitySlotsTool = (options: {
 
   return tool(
     async (input: {
+      direction?: "exact" | "earlier" | "later" | "nearest";
       date?: string;
       startDate?: string;
       afterDate?: string;
+      beforeDate?: string;
       durationMinutes?: number;
       excludeMeetingIds?: string[];
     }) => {
@@ -418,26 +464,42 @@ export const createPresentAvailabilitySlotsTool = (options: {
             date: input.date,
             dayLabel: formatKyivDayLabel(input.date, todayKyiv),
             stepMinutes,
+            searchDirection: "exact",
+            searchAnchor: input.date,
+            searchedFrom: input.date,
+            searchedThrough: input.date,
             ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
           });
         }
 
         const today = todayKyiv;
+        const direction = input.direction === "earlier" ? "earlier" : input.direction === "nearest" ? "nearest" : "later";
+        const beforeDate = input.beforeDate ?? today;
         const start = resolveNextAvailableStart({
           ...(input.startDate ? { startDate: input.startDate } : {}),
           ...(input.afterDate ? { afterDate: input.afterDate } : {}),
           today,
         });
         const end = addCalendarDays(start, MAX_AVAILABILITY_SEARCH_DAYS - 1);
+        const backwardEnd = addCalendarDays(beforeDate, -1);
+        const backwardStart = addCalendarDays(
+          backwardEnd,
+          -(MAX_AVAILABILITY_SEARCH_DAYS - 1),
+        ) < today
+          ? today
+          : addCalendarDays(backwardEnd, -(MAX_AVAILABILITY_SEARCH_DAYS - 1));
+        const backwardSearchable = backwardEnd >= today;
+        const meetingFrom = direction === "earlier" && backwardSearchable ? backwardStart : start;
+        const meetingTo = direction === "earlier" && backwardSearchable ? backwardEnd : end;
         const [working, raw, reserved] = await Promise.all([
           fetchWorkingCalendar(callTool, assignedUserId),
           callTool("search_meetings", {
-            dateFrom: start,
-            dateTo: end,
+            dateFrom: meetingFrom,
+            dateTo: meetingTo,
             assignedUserId,
             limit: RANGED_MEETINGS_LIMIT,
           }),
-          searchReservedTimes(callTool, assignedUserId, start, end),
+          searchReservedTimes(callTool, assignedUserId, meetingFrom, meetingTo),
         ]);
         const searchedMeetings = extractMeetingsFromSearchResult(raw);
         const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
@@ -445,20 +507,41 @@ export const createPresentAvailabilitySlotsTool = (options: {
           ...excludeMeetingsById(searchedMeetings, excludeIds),
           ...reserved,
         ];
-        const result = findNextAvailableSlots({
-          startDate: start,
-          meetings,
-          durationMinutes: stepMinutes,
-          resolveTimeRanges: (day) => resolveRangesForDay(working, day),
-          now: new Date(),
-          omitDateStarts,
-        });
+        const result =
+          direction === "earlier"
+            ? findPreviousAvailableSlots({
+                beforeDate,
+                meetings,
+                durationMinutes: stepMinutes,
+                resolveTimeRanges: (day) => resolveRangesForDay(working, day),
+                now: new Date(),
+                omitDateStarts,
+              })
+            : findNextAvailableSlots({
+                startDate: start,
+                meetings,
+                durationMinutes: stepMinutes,
+                resolveTimeRanges: (day) => resolveRangesForDay(working, day),
+                now: new Date(),
+                omitDateStarts,
+              });
+        const searchedFrom =
+          direction === "earlier"
+            ? result.searchedDays > 0
+              ? addCalendarDays(backwardEnd, -(result.searchedDays - 1))
+              : today
+            : start;
+        const searchedThrough =
+          direction === "earlier"
+            ? backwardEnd
+            : addCalendarDays(start, Math.max(0, result.searchedDays - 1));
         trackEvent("availability_presented", {
           outcome: "success",
           ...(result.date ? { date: result.date } : {}),
           slot_count: result.days.reduce((sum, day) => sum + day.slots.length, 0),
           searched_days: result.searchedDays,
           duration_minutes: stepMinutes,
+          direction,
         });
         return JSON.stringify({
           ...result,
@@ -467,6 +550,12 @@ export const createPresentAvailabilitySlotsTool = (options: {
             dayLabel: formatKyivDayLabel(day.date, todayKyiv),
           })),
           stepMinutes,
+          searchDirection: direction,
+          ...(direction === "earlier"
+            ? { searchAnchor: beforeDate }
+            : { searchAnchor: input.afterDate ?? start }),
+          searchedFrom,
+          searchedThrough,
           ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
           ...(searchedMeetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
         });
@@ -479,7 +568,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
     {
       name: "present_availability_slots",
       description:
-        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional startDate / afterDate). When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Always call this tool to show DATE (and to re-show a day already in the last snapshot) — the graph may return the checkpointed snapshot without a CRM search when the request matches. Call with afterDate when they want other dates («${OTHER_DATE_LABEL}» / "${OTHER_DATE_LABEL_EN}"). Do not invent days or HH:mm and do not quote a free/busy list from memory — the graph attaches DATE/TIME text and reply keyboards from this tool result.`,
+        `Compute free appointment slots from CRM meetings and CReservedTime. Pass date for one day, or omit date for the next open days (optional direction, startDate, afterDate, or beforeDate). Use direction earlier/later/nearest for conversational alternatives; runtime owns cursor dates. When rescheduling, pass excludeMeetingIds for the visit being moved. Always pass durationMinutes from the matched service. Always call this tool to show DATE (and to re-show a day already in the last snapshot) — the graph may return the checkpointed snapshot without a CRM search when the request matches. Call with direction later when they want other dates («${OTHER_DATE_LABEL}» / "${OTHER_DATE_LABEL_EN}"), or direction earlier for sooner calendar dates. Do not invent days or HH:mm and do not quote a free/busy list from memory — the graph attaches DATE/TIME text and reply keyboards from this tool result.`,
       schema: presentAvailabilitySlotsArgsSchema,
     },
   );

@@ -61,8 +61,10 @@ Availability comes from \`present_availability_slots\` in **this turn** (the gra
 
 **Call \`present_availability_slots\` when:**
 - **DATE** — no day chosen yet (including «так» to a consultation / "найближче") → **always call**. No \`date\` unless they named a specific calendar day;
-- they want other dates («${OTHER_DATE_LABEL}», «коли ще», "when else") → **always call**. No \`date\`. Set \`afterDate\` to the LAST day you just offered. If they rejected one specific day, \`afterDate\` is that day instead;
-- they named a day → pass that \`date\` (or no \`date\` with \`afterDate\` if empty); if that dated call is empty, call again without \`date\` and with \`afterDate\` set to that day;
+- they want other dates («${OTHER_DATE_LABEL}», «коли ще», "when else") → **always call** with \`direction: "later"\`. No \`date\` or cursor; runtime derives the next window;
+- they ask for an earlier/sooner calendar date («раніше», «є щось раніше?», "earlier", "sooner", «раньше») → **always call** with \`direction: "earlier"\`. No \`date\` or cursor; runtime searches before the rejected or earliest offered date and never before today;
+- ambiguous "other dates" means later dates. "Nearest/closest" means \`direction: "nearest"\` from today. "Earlier" means an earlier calendar date because all available times for a day are already shown;
+- they named a day → pass that \`date\`; if the dated call is empty, report it and ask whether to search earlier or later before making another availability call;
 - MOVE: pass matching \`excludeMeetingIds\` for the visit being moved;
 - \`truncated\` is true and they want more days;
 - \`create_meeting\` / \`reschedule_meeting\` failed because the slot was taken (see WHEN A TOOL FAILS).
@@ -74,6 +76,8 @@ Availability comes from \`present_availability_slots\` in **this turn** (the gra
 **What to show — date first, then time, never both in one message**
 1. **DATE** — no day chosen yet: call \`present_availability_slots\` as above. Do **not** invent hours — the graph replaces the patient-facing DATE text and date keyboard from the tool snapshot (same pattern as REPLACE). When the tool returns empty \`days[]\`, say there are no free times and offer to look further.
 2. **TIME** — they just picked a day from the last tool snapshot and no clock time yet: do **not** invent hours — the graph attaches TIME text and the HH:mm keyboard from that day's snapshot slots.
+
+If an exact date is empty, ask whether they want earlier or later dates before searching. If an earlier search is empty, say so and ask before searching later. Never repeat an empty search with the same cursor.
 
 **When they name a time** ("11", "11:00", «завтра о 9:30»): skip the display steps and match their clock time to a slot's \`dateStart\` / \`dateEnd\` from the latest \`present_availability_slots\` result. Then go to STEP INTENT — **always ask the note question once in this turn** (do not ask for a phone, do not call \`create_meeting\`). The graph blocks \`create_meeting\` until the note step is finished.
 
