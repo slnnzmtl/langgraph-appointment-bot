@@ -592,10 +592,15 @@ export const findPreviousAvailableSlots = (
 
   const desiredStart = addCalendarDays(latest, -(horizon - 1));
   const start = desiredStart < today ? today : desiredStart;
-  const searchedDays = differenceInCalendarDays(latest, start) + 1;
+  const searchableDays = differenceInCalendarDays(latest, start) + 1;
   const days: AvailableDaySlots[] = [];
+  let searchedDays = 0;
 
-  for (let offset = 0; offset < searchedDays; offset += 1) {
+  for (let offset = 0; offset < searchableDays; offset += 1) {
+    // This is the pagination cursor, so it must describe only the days that
+    // were actually inspected.  Using the whole candidate window here skips
+    // unreturned open days when the page fills before reaching `start`.
+    searchedDays = offset + 1;
     const day = addCalendarDays(latest, -offset);
     const timeRanges = resolveTimeRanges(day);
     if (timeRanges.length === 0) {

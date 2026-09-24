@@ -16,6 +16,7 @@ import {
   resolveDayTimeRanges,
   resolveWeekdayTimeRanges,
   startsOfExcludedMeetings,
+  type TimeRangePair,
   type WorkingTimeCalendarLike,
 } from "../availability-slots.js";
 
@@ -672,6 +673,46 @@ describe("findPreviousAvailableSlots", () => {
       "2026-08-13",
     ]);
     expect(result.slots[0]?.dateStart).toContain("2026-08-11");
+    expect(result.searchedDays).toBe(3);
+  });
+
+  it("advances the backward cursor only through the returned page", () => {
+    const openDays = new Set([
+      "2026-10-08",
+      "2026-10-09",
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+    const resolveTimeRanges = (day: string): TimeRangePair[] =>
+      openDays.has(day) ? [["11:00", "12:00"]] : [];
+
+    const first = findPreviousAvailableSlots({
+      beforeDate: "2026-10-15",
+      meetings: [],
+      resolveTimeRanges,
+      maxDaysWithSlots: 3,
+      now: new Date("2026-09-24T10:00:00Z"),
+    });
+
+    expect(first.days.map((day) => day.date)).toEqual([
+      "2026-10-09",
+      "2026-10-12",
+      "2026-10-13",
+    ]);
+    expect(first.searchedDays).toBe(6);
+
+    const searchedFrom = addCalendarDays("2026-10-14", -(first.searchedDays - 1));
+    expect(searchedFrom).toBe("2026-10-09");
+
+    const second = findPreviousAvailableSlots({
+      beforeDate: searchedFrom,
+      meetings: [],
+      resolveTimeRanges,
+      maxDaysWithSlots: 3,
+      now: new Date("2026-09-24T10:00:00Z"),
+    });
+
+    expect(second.days.map((day) => day.date)).toEqual(["2026-10-08"]);
   });
 
   it("returns no result when the exclusive boundary is today", () => {
