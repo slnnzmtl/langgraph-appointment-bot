@@ -35,7 +35,7 @@ import {
   type AvailabilityContext,
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
-import { kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
+import { formatKyivDayLabel, kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
 import { resolveAvailabilityRequest } from "../tools/availability-request.js";
 import { normalizeContactLookupResult } from "../tools/contact-tools.js";
 import {
@@ -51,6 +51,7 @@ import {
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
   CONSULTATION_SERVICE_ID,
+  CLINIC_SLOT_MINUTES,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   EARLIER_DATE_LABEL,
@@ -234,12 +235,41 @@ export const captureServicesFromMessages = (
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
 const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
+const AVAILABILITY_GENERIC_DATE_HEADING = "Доступні дні";
 const AVAILABILITY_TIME_HEADING = "Вільні години на ";
+
+const availabilityHeadingAnchor = (context: AvailabilityContext): string | undefined => {
+  const query = context.query;
+  if (query?.kind === "later" || query?.kind === "earlier") {
+    return query.anchor ?? context.searchAnchor;
+  }
+  return undefined;
+};
+
+/** Heading for a DATE page, derived from the runtime-owned search query. */
+export const formatAvailabilityHeading = (context: AvailabilityContext): string => {
+  const kind = context.query?.kind ?? context.searchDirection;
+  if (kind === "nearest") {
+    return AVAILABILITY_DATE_HEADING;
+  }
+  const anchor = availabilityHeadingAnchor(context);
+  if (kind === "later" && anchor) {
+    return `Вільні дні після ${shortDayMonthLabel(formatKyivDayLabel(anchor, kyivToday()))}`;
+  }
+  if (kind === "earlier" && anchor) {
+    return `Вільні дні до ${shortDayMonthLabel(formatKyivDayLabel(anchor, kyivToday()))}`;
+  }
+  return AVAILABILITY_GENERIC_DATE_HEADING;
+};
 
 /** DATE offer from a multi-day availability snapshot (code-owned when the model invents hours). */
 export const formatAvailabilityDateOffer = (
-  days: AvailabilityContext["days"],
+  contextOrDays: AvailabilityContext | AvailabilityContext["days"],
 ): { replyText: string; replyButtons: string[] } => {
+  const context: AvailabilityContext = Array.isArray(contextOrDays)
+    ? { days: contextOrDays, stepMinutes: CLINIC_SLOT_MINUTES }
+    : contextOrDays;
+  const { days } = context;
   const open = days.filter((day) => day.slots.length > 0).slice(0, 3);
   const bullets = open
     .map((day) => {
@@ -249,7 +279,7 @@ export const formatAvailabilityDateOffer = (
     })
     .join("\n");
   return {
-    replyText: `${AVAILABILITY_DATE_HEADING} 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`,
+    replyText: `${formatAvailabilityHeading(context)} 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`,
     replyButtons: [
       ...open.map((day) => shortDayMonthLabel(day.dayLabel ?? day.date)),
       OTHER_DATE_LABEL,
@@ -765,7 +795,7 @@ export const availabilityOfferFromToolTurn = (
   if (open.length === 1) {
     return formatAvailabilityTimeOffer(open[0]!);
   }
-  return formatAvailabilityDateOffer(open);
+  return formatAvailabilityDateOffer(captured);
 };
 
 /**

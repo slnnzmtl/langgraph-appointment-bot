@@ -15,6 +15,7 @@ import {
   createAgentToolsNode,
   crmWriteDirtiesPrefetch,
   formatAvailabilityDateOffer,
+  formatAvailabilityHeading,
   formatAvailabilityTimeOffer,
   matchAvailabilityDay,
   matchAvailabilitySlot,
@@ -2004,7 +2005,7 @@ describe("createAgentFinalizeNode", () => {
 
     const text = update.lastHandoff?.replyText ?? "";
     expect(text.startsWith("На жаль, обраний час щойно зайняли.")).toBe(true);
-    expect(text).toContain("Найближчі вільні дні");
+    expect(text).toContain("Доступні дні");
     expect(text).toContain("15 вересня (вівторок): 11:00, 14:30");
     expect(text).toContain("28 вересня (понеділок): 11:00");
     expect(text).not.toContain("09:00");
@@ -2629,6 +2630,60 @@ describe("availability offer helpers", () => {
     expect(offer.replyButtons).toEqual(["10 вересня", "11 вересня", OTHER_DATE_LABEL]);
   });
 
+  it("uses the canonical search query to describe paginated date pages", () => {
+    const base: AvailabilityContext = { days, stepMinutes: 30 };
+
+    expect(formatAvailabilityHeading({
+      ...base,
+      query: {
+        kind: "nearest",
+        rangeFrom: "2026-09-24",
+        rangeThrough: "2026-10-10",
+        coverageComplete: true,
+      },
+    })).toBe("Найближчі вільні дні");
+    expect(formatAvailabilityHeading({
+      ...base,
+      query: {
+        kind: "later",
+        anchor: "2026-10-12",
+        rangeFrom: "2026-10-13",
+        rangeThrough: "2026-11-11",
+        coverageComplete: true,
+      },
+    })).toBe("Вільні дні після 12 жовтня");
+    expect(formatAvailabilityHeading({
+      ...base,
+      query: {
+        kind: "earlier",
+        anchor: "2026-10-15",
+        rangeFrom: "2026-09-16",
+        rangeThrough: "2026-10-14",
+        coverageComplete: true,
+      },
+    })).toBe("Вільні дні до 15 жовтня");
+    expect(formatAvailabilityHeading(base)).toBe("Доступні дні");
+  });
+
+  it("uses the query-aware heading in paginated date offers", () => {
+    const offer = formatAvailabilityDateOffer({
+      days,
+      stepMinutes: 30,
+      searchDirection: "later",
+      searchAnchor: "2026-10-12",
+      query: {
+        kind: "later",
+        anchor: "2026-10-12",
+        rangeFrom: "2026-10-13",
+        rangeThrough: "2026-11-11",
+        coverageComplete: true,
+      },
+    });
+
+    expect(offer.replyText).toContain("Вільні дні після 12 жовтня");
+    expect(offer.replyText).not.toContain("Найближчі вільні дні");
+  });
+
   it("formatAvailabilityTimeOffer lists all times and caps shortcuts at 3", () => {
     const offer = formatAvailabilityTimeOffer(days[0]!);
     expect(offer.replyText).toContain("14:00");
@@ -2682,7 +2737,7 @@ describe("availability offer helpers", () => {
       ],
       { days, stepMinutes: 60 },
     );
-    expect(offer?.replyText).toContain("Найближчі вільні дні");
+    expect(offer?.replyText).toContain("Доступні дні");
     expect(offer?.replyButtons?.[0]).toBe("10 вересня");
   });
 });
