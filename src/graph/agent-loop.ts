@@ -304,6 +304,29 @@ export const formatAvailabilityEmptyOffer = (
   };
 };
 
+const EMPTY_EXACT_DATE_REPLY_RE =
+  /(?:на\s+(?:цю|эту)\s+дату.*(?:вільного\s+часу\s+немає|свободного\s+времени\s+нет)|(?:вільного\s+часу\s+немає|свободного\s+времени\s+нет).*на\s+(?:цю|эту)\s+дату)/i;
+
+/**
+ * A model may occasionally state that a manually typed date is unavailable
+ * without calling the slots tool. Keep that question actionable while a live
+ * availability snapshot exists. Tool-backed empty results still own their
+ * text and buttons through formatAvailabilityEmptyOffer.
+ */
+const emptyExactDateReplyButtons = (
+  replyText: string,
+  context: AvailabilityContext | null | undefined,
+): string[] | null => {
+  if (!context || !EMPTY_EXACT_DATE_REPLY_RE.test(replyText)) {
+    return null;
+  }
+  const anchor = context.searchedFrom ?? context.searchAnchor ?? context.days[0]?.date;
+  return [
+    ...(anchor != null && anchor > kyivToday() ? [EARLIER_DATE_LABEL] : []),
+    LATER_DATE_LABEL,
+  ];
+};
+
 const lastHumanText = (messages: BaseMessage[]): string => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -1478,21 +1501,26 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         replyButtons = accidentalButtons;
       }
     } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
-      // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
-      const idle = agentMessages.some(
-        (message) =>
-          message instanceof ToolMessage
-          && (classifyMeetingMutationToolMessage(message) === "committed"
-            || meetingMutationIsHitlDecline(message)),
-      );
-      if (idle) {
-        replyButtons = [
-          ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
-        ];
-        trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+      const emptyDateButtons = emptyExactDateReplyButtons(replyText, state.availabilityContext);
+      if (emptyDateButtons) {
+        replyButtons = emptyDateButtons;
       } else {
-        // Booking drifted into catalog drill-down: never ship that list without its chips.
-        replyButtons = catalogChoiceButtonsFromText(replyText);
+        // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
+        const idle = agentMessages.some(
+          (message) =>
+            message instanceof ToolMessage
+            && (classifyMeetingMutationToolMessage(message) === "committed"
+              || meetingMutationIsHitlDecline(message)),
+        );
+        if (idle) {
+          replyButtons = [
+            ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+          ];
+          trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+        } else {
+          // Booking drifted into catalog drill-down: never ship that list without its chips.
+          replyButtons = catalogChoiceButtonsFromText(replyText);
+        }
       }
     }
 

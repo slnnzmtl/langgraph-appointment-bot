@@ -28,7 +28,9 @@ import {
   BOOKING_OFFER_MENU,
   CLINIC_ADDRESS,
   CONSULTATION_SERVICE_ID,
+  EARLIER_DATE_LABEL,
   INTENT_SKIP_LABEL,
+  LATER_DATE_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
   DEFAULT_MENU_HAS_VISITS,
@@ -3960,6 +3962,35 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
     expect(proseOnly.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("attaches earlier/later navigation when the model reports an empty manual date without a tool call", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        availabilityContext: {
+          days: [
+            {
+              date: "2099-10-19",
+              dayLabel: "19 жовтня (понеділок)",
+              slots: [],
+            },
+          ],
+          stepMinutes: 30,
+          searchDirection: "later",
+          searchedFrom: "2099-10-19",
+        },
+        agentMessages: [
+          new HumanMessage("18 жовтня"),
+          new AIMessage("На цю дату вільного часу немає. Пошукати іншу дату?"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      EARLIER_DATE_LABEL,
+      LATER_DATE_LABEL,
+    ]);
   });
 
   it("injects selected_slot not full availability into booking LLM dynamic context", async () => {
