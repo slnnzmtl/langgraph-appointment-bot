@@ -4020,6 +4020,121 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(declineUpdate.selectedSlot).toBeNull();
   });
 
+  it("preserves service duration after declined booking before an other-date search", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
+    const createTool = tool(
+      async () => JSON.stringify({ cancelled: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({
+          days: [],
+          stepMinutes: input.durationMinutes,
+          query: {
+            kind: "later",
+            rangeFrom: "2026-10-06",
+            rangeThrough: "2026-11-04",
+            coverageComplete: true,
+          },
+        });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+          durationMinutes: z.number().optional(),
+          afterDate: z.string().optional(),
+        }),
+      },
+    );
+    const toolsNode = createAgentToolsNode([createTool, slotsTool], "booking");
+    const draft = {
+      version: 1,
+      mode: "create" as const,
+      phase: "confirming" as const,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: {
+          id: "svc-long",
+          name: "Long procedure",
+          durationMinutes: 60,
+          source: "catalog" as const,
+        },
+      },
+      selectedDate: "2026-09-10",
+      selectedSlot: {
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T15:00:00",
+        label: "14:00",
+      },
+      note: { status: "skipped" as const },
+      contactId: "contact-1",
+      pendingCommand: null,
+      replacement: null,
+    };
+    const declineUpdate = await toolsNode(
+      clinicState({
+        bookingDraft: draft,
+        availabilityContext: {
+          ...snapshot,
+          stepMinutes: 60,
+          days: [{
+            ...snapshot.days[0]!,
+            slots: [{
+              ...snapshot.days[0]!.slots[0]!,
+              dateEnd: "2026-09-10T15:00:00",
+            }],
+          }],
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(declineUpdate.bookingDraft?.serviceAcceptance?.service.durationMinutes).toBe(60);
+    expect(declineUpdate.bookingDraft?.selectedSlot).toBeNull();
+    expect(declineUpdate.bookingDraft?.note.status).toBe("skipped");
+
+    await toolsNode(
+      clinicState({
+        messages: [new HumanMessage(OTHER_DATE_LABEL)],
+        bookingDraft: declineUpdate.bookingDraft,
+        availabilityContext: null,
+        availabilityCursor: null,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "slots-1",
+              name: "present_availability_slots",
+              args: { direction: "later" },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(invoked).toHaveLength(1);
+    expect(invoked[0]).toMatchObject({
+      direction: "later",
+      durationMinutes: 60,
+    });
+  });
+
   it("REPLACE cancel commit nulls availability but keeps selectedSlot and note", async () => {
     const cancelTool = tool(
       async () => JSON.stringify({ success: true, id: "m-1" }),

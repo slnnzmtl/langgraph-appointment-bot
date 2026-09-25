@@ -2321,10 +2321,17 @@ export const createAgentToolsNode = (
             message instanceof ToolMessage
             && classifyMeetingMutationToolMessage(message) === "failed",
         );
+        const mutationDeclined = resultMessages.some(
+          (message) =>
+            message instanceof ToolMessage
+            && (message.name === "create_meeting" || message.name === "reschedule_meeting")
+            && meetingMutationIsHitlDecline(message),
+        );
         const mutationCommitted = committed.length > 0;
-        if (state.bookingDraft && mutationFailed && !mutationCommitted) {
-          // A CRM race/error invalidates only the slot. The accepted service and
-          // visit note remain resumable for the next availability search.
+        if (state.bookingDraft && (mutationFailed || mutationDeclined) && !mutationCommitted) {
+          // A CRM race/error or a patient-declined booking invalidates only the
+          // selected slot. Keep the accepted service and note so a later
+          // availability search still uses the service duration.
           update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
             type: "slot_invalidated",
           });
