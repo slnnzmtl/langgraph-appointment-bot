@@ -36,10 +36,23 @@ export type BookingNote = {
 };
 
 export type PendingBookingCommand = {
-  action: BookingMode;
+  action: BookingMode | "cancel";
   payload: Record<string, unknown>;
   idempotencyKey: string;
   expiresAt: number;
+};
+
+export type ReplacementMeeting = {
+  id: string;
+  name?: string;
+  dateStart?: string;
+  dateEnd?: string;
+};
+
+export type ReplacementState = {
+  meeting: ReplacementMeeting;
+  status: "offered" | "cancelling" | "create_pending";
+  originalCommand?: PendingBookingCommand;
 };
 
 export type BookingDraft = {
@@ -53,6 +66,8 @@ export type BookingDraft = {
   note: BookingNote;
   contactId: string | null;
   pendingCommand: PendingBookingCommand | null;
+  // Optional for checkpoints created before cancel-and-rebook was introduced.
+  replacement?: ReplacementState | null;
 };
 
 export type BookingEvent =
@@ -64,6 +79,10 @@ export type BookingEvent =
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
   | { type: "contact_resolved"; contactId: string }
   | { type: "command_prepared"; command: PendingBookingCommand }
+  | { type: "existing_booking_detected"; meeting: ReplacementMeeting }
+  | { type: "cancel_existing_requested"; command: PendingBookingCommand }
+  | { type: "cancel_existing_completed" }
+  | { type: "cancel_existing_declined" }
   | { type: "slot_invalidated"; keepDate?: boolean }
   | { type: "draft_abandoned" }
   | { type: "draft_resumed" };
@@ -79,6 +98,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   note: { status: "unasked" },
   contactId: null,
   pendingCommand: null,
+  replacement: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
@@ -94,6 +114,7 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   selectedSlot: null,
   note: { status: "unasked" },
   pendingCommand: null,
+  replacement: null,
 });
 
 /**
@@ -191,6 +212,47 @@ export const reduceBookingDraft = (
       return withVersion(draft, { ...draft, contactId: event.contactId });
     case "command_prepared":
       return withVersion(draft, { ...draft, phase: "confirming", pendingCommand: event.command });
+    case "existing_booking_detected": {
+      const originalCommand =
+        draft.pendingCommand?.action === "create" || draft.pendingCommand?.action === "reschedule"
+          ? draft.pendingCommand
+          : undefined;
+      return withVersion(draft, {
+        ...draft,
+        mode: "replace",
+        phase: "confirming",
+        pendingCommand: null,
+        replacement: {
+          meeting: event.meeting,
+          status: "offered",
+          ...(originalCommand ? { originalCommand } : {}),
+        },
+      });
+    }
+    case "cancel_existing_requested":
+      return withVersion(draft, {
+        ...draft,
+        mode: "replace",
+        phase: "confirming",
+        pendingCommand: event.command,
+        replacement: draft.replacement
+          ? { ...draft.replacement, status: "cancelling" }
+          : null,
+      });
+    case "cancel_existing_completed":
+      return withVersion(draft, {
+        ...draft,
+        mode: "create",
+        phase: "confirming",
+        pendingCommand: null,
+        replacement: draft.replacement
+          ? { ...draft.replacement, status: "create_pending" }
+          : null,
+      });
+    case "cancel_existing_declined":
+      // The existing appointment is still active; never leave a ready create
+      // draft behind or the graph will immediately replay Already booked.
+      return createEmptyBookingDraft();
     case "slot_invalidated":
       return withVersion(draft, {
         ...draft,
@@ -202,6 +264,12 @@ export const reduceBookingDraft = (
         // replacement slot.
         note: draft.note,
         pendingCommand: null,
+        // If the old meeting was already cancelled, the frozen replacement
+        // command is no longer valid when its slot disappears. Build a fresh
+        // command after the patient chooses another slot.
+        replacement: draft.replacement?.status === "create_pending"
+          ? null
+          : (draft.replacement ?? null),
       });
     case "draft_resumed":
       return withVersion(draft, {

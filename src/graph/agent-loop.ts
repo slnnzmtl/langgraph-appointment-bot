@@ -37,7 +37,12 @@ import {
   type AvailabilitySlotsToolArgs,
 } from "../tools/availability-tools.js";
 import { normalizeAvailabilityToolArgs } from "../tools/availability-args.js";
-import { formatKyivDayLabel, kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
+import {
+  formatKyivDayLabel,
+  kyivToday,
+  normalizeLocalIsoDatetime,
+  shortDayMonthLabel,
+} from "../tools/availability-slots.js";
 import { resolveAvailabilityRequest } from "../tools/availability-request.js";
 import { normalizeContactLookupResult } from "../tools/contact-tools.js";
 import {
@@ -99,6 +104,7 @@ import {
   type PendingBookingCommand,
   type BookingDraft,
   type BookingService,
+  type ReplacementMeeting,
 } from "./booking-draft.js";
 import {
   isModelFailureMessage,
@@ -664,7 +670,7 @@ const normalizeMeetingMutationArgs = (
   return args;
 };
 
-const commandActionForTool = (name: string): "create" | "reschedule" | "replace" | null => {
+const commandActionForTool = (name: string): "create" | "reschedule" | "replace" | "cancel" | null => {
   if (name === "create_meeting") {
     return "create";
   }
@@ -672,21 +678,33 @@ const commandActionForTool = (name: string): "create" | "reschedule" | "replace"
     return "reschedule";
   }
   if (name === "cancel_meeting") {
-    return "replace";
+    return "cancel";
   }
   return null;
 };
 
 const commandIdempotencyKey = (
-  action: "create" | "reschedule" | "replace",
+  action: "create" | "reschedule" | "replace" | "cancel",
   payload: Record<string, unknown>,
-): string => `${action}:${JSON.stringify(payload)}`;
+): string => action + ":" + JSON.stringify(payload);
 
 /** Build the create command from the authoritative draft, without model-owned fields. */
 const createCommandFromBookingDraft = (
   state: ClinicState,
 ): PendingBookingCommand | null => {
   const draft = state.bookingDraft;
+  if (draft?.replacement?.status === "offered" || draft?.replacement?.status === "cancelling") {
+    return null;
+  }
+  if (
+    draft?.replacement?.status === "create_pending"
+    && draft.replacement.originalCommand?.action === "create"
+  ) {
+    return {
+      ...draft.replacement.originalCommand,
+      expiresAt: Date.now() + 15 * 60 * 1000,
+    };
+  }
   const acceptance = draft?.serviceAcceptance;
   const slot = draft?.selectedSlot;
   const contactId = draft?.contactId
@@ -729,13 +747,70 @@ const bookingDraftCanPrepareCommand = (state: ClinicState): boolean => {
     return false;
   }
   if (!toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")) {
-    return false;
+    return state.bookingDraft?.replacement?.status === "create_pending";
   }
   const lastAi = [...(state.agentMessages ?? [])]
     .reverse()
     .find((message) => message instanceof AIMessage);
   const calls = lastAi instanceof AIMessage ? (lastAi.tool_calls ?? []) : [];
-  return calls.length === 0 || calls.some((call) => call.name === "create_meeting");
+  return state.bookingDraft?.replacement?.status === "create_pending"
+    || calls.length === 0
+    || calls.some((call) => call.name === "create_meeting");
+};
+
+const REPLACEMENT_CANCEL_LABELS = new Set(["скасувати", "cancel", "так", "yes"]);
+const REPLACEMENT_DECLINE_LABELS = new Set(["ні, дякую", "no, thanks"]);
+
+const replacementActionForTurn = (
+  state: ClinicState,
+): "cancel" | "decline" | null => {
+  const replacementStatus = state.bookingDraft?.replacement?.status;
+  if (replacementStatus !== "offered" && replacementStatus !== "cancelling") {
+    return null;
+  }
+  const text = lastPatientText(state).trim().toLocaleLowerCase();
+  if (REPLACEMENT_CANCEL_LABELS.has(text)) {
+    return "cancel";
+  }
+  if (REPLACEMENT_DECLINE_LABELS.has(text)) {
+    return "decline";
+  }
+  return null;
+};
+
+const cancelCommandFromReplacement = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  const replacement = state.bookingDraft?.replacement;
+  if (!replacement) {
+    return null;
+  }
+  const meeting = replacement.meeting;
+  const payload: Record<string, unknown> = {
+    meetingId: meeting.id,
+    confirmMessage: "Підтвердити скасування поточного візиту?",
+    ...(meeting.name ? { name: meeting.name } : {}),
+    ...(replacement.status === "cancelling" ? { confirmationGiven: true } : {}),
+  };
+  for (const [key, value] of [
+    ["dateStart", meeting.dateStart],
+    ["dateEnd", meeting.dateEnd],
+  ] as const) {
+    if (!value) {
+      continue;
+    }
+    try {
+      payload[key] = normalizeLocalIsoDatetime(value);
+    } catch {
+      // CRM can fill an omitted/invalid display date; the meeting id is authoritative.
+    }
+  }
+  return {
+    action: "cancel",
+    payload,
+    idempotencyKey: commandIdempotencyKey("cancel", payload),
+    expiresAt: Date.now() + 15 * 60 * 1000,
+  };
 };
 
 /** Turn Gemini XML-in-content into `tool_calls`; inject slots when booking skipped the tool. */
@@ -1235,6 +1310,32 @@ const latestCreateMeetingError = (messages: BaseMessage[]): string | undefined =
 export const createMeetingAlreadyBooked = (messages: BaseMessage[]): boolean =>
   latestCreateMeetingError(messages) === "Already booked";
 
+const alreadyBookedMeetingFromMessages = (
+  messages: BaseMessage[],
+): ReplacementMeeting | null => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
+      continue;
+    }
+    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    if (record?.error !== "Already booked" || !Array.isArray(record.meetings)) {
+      return null;
+    }
+    const meeting = asJsonRecord(record.meetings[0]);
+    if (!meeting || typeof meeting.id !== "string" || meeting.id.length === 0) {
+      return null;
+    }
+    return {
+      id: meeting.id,
+      ...(typeof meeting.name === "string" ? { name: meeting.name } : {}),
+      ...(typeof meeting.dateStart === "string" ? { dateStart: meeting.dateStart } : {}),
+      ...(typeof meeting.dateEnd === "string" ? { dateEnd: meeting.dateEnd } : {}),
+    };
+  }
+  return null;
+};
+
 const SLOT_JUST_TAKEN_PREFIX = "На жаль, обраний час щойно зайняли.\n\n";
 
 /** Meeting id from a committed cancel_meeting result or its tool_call args. */
@@ -1379,6 +1480,50 @@ export const createAgentPrepareNode = (agentId: string) =>
 export const createAgentCommandPrepareNode = (agentId: string) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
     if (agentId !== BOOKING_AGENT_ID) {
+      return {};
+    }
+    const replacementAction = replacementActionForTurn(state);
+    if (replacementAction === "decline") {
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "cancel_existing_declined" }),
+        agentMessages: new Overwrite([]),
+      };
+    }
+    if (replacementAction === "cancel") {
+      const cancelCommand = cancelCommandFromReplacement(state);
+      if (cancelCommand) {
+        const lastAiIndex = [...(state.agentMessages ?? [])]
+          .map((message, index) => ({ message, index }))
+          .reverse()
+          .find(({ message }) => message instanceof AIMessage)?.index;
+        const syntheticCall = {
+          id: `booking_replace_cancel_${state.bookingDraft?.version ?? 0}`,
+          name: "cancel_meeting",
+          args: cancelCommand.payload,
+          type: "tool_call" as const,
+        };
+        const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+        const messages = state.agentMessages ?? [];
+        const agentMessages = lastAiIndex == null
+          ? [...messages, syntheticAi]
+          : [
+              ...messages.slice(0, lastAiIndex),
+              syntheticAi,
+              ...messages.slice(lastAiIndex + 1),
+            ];
+        return {
+          bookingDraft: reduceBookingDraft(state.bookingDraft, {
+            type: "cancel_existing_requested",
+            command: cancelCommand,
+          }),
+          agentMessages: new Overwrite(agentMessages),
+        };
+      }
+    }
+    if (
+      state.bookingDraft?.replacement?.status === "offered"
+      || state.bookingDraft?.replacement?.status === "cancelling"
+    ) {
       return {};
     }
     const draftCommand = createCommandFromBookingDraft(state);
@@ -1948,7 +2093,8 @@ export const createAgentToolsNode = (
           record?.awaitingConfirmation !== true
           || (command?.action !== "create"
             && command?.action !== "reschedule"
-            && command?.action !== "replace")
+            && command?.action !== "replace"
+            && command?.action !== "cancel")
           || !asJsonRecord(command.payload)
           || typeof command.idempotencyKey !== "string"
         ) {
@@ -1969,6 +2115,27 @@ export const createAgentToolsNode = (
       });
     }
 
+    const conflictMeeting = alreadyBookedMeetingFromMessages(resultMessages);
+    if (conflictMeeting && state.bookingDraft) {
+      update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+        type: "existing_booking_detected",
+        meeting: conflictMeeting,
+      });
+    }
+
+    const cancelCommitted = resultMessages.some(
+      (message) =>
+        message instanceof ToolMessage
+        && message.name === "cancel_meeting"
+        && classifyMeetingMutationToolMessage(message) === "committed",
+    );
+    const cancelDeclined = resultMessages.some(
+      (message) =>
+        message instanceof ToolMessage
+        && message.name === "cancel_meeting"
+        && meetingMutationIsHitlDecline(message),
+    );
+
     if (meetingMutationClearsAvailability(resultMessages)) {
       update.availabilityContext = null;
       update.availabilityCursor = null;
@@ -1981,7 +2148,15 @@ export const createAgentToolsNode = (
       );
       const cancelOnlyCommitted =
         committed.length > 0 && committed.every((message) => message.name === "cancel_meeting");
-      if (!cancelOnlyCommitted) {
+      if (cancelCommitted && state.bookingDraft?.replacement?.status === "cancelling") {
+        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+          type: "cancel_existing_completed",
+        });
+      } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
+        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+          type: "cancel_existing_declined",
+        });
+      } else if (!cancelOnlyCommitted) {
         Object.assign(update, resetBookingNoteState(state));
         const mutationFailed = resultMessages.some(
           (message) =>
@@ -2141,6 +2316,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     // Already booked / committed create win over DATE/TIME rewrite when both fire same turn.
     const alreadyBooked =
       agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages);
+    const replacementOffered =
+      agent.id === BOOKING_AGENT_ID
+      && state.bookingDraft?.replacement?.status === "offered";
     const createCommitted =
       agent.id === BOOKING_AGENT_ID
       && agentMessages.some(
@@ -2173,7 +2351,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       }
       replyButtons = [INTENT_SKIP_LABEL];
       trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
-    } else if (alreadyBooked) {
+    } else if (alreadyBooked || replacementOffered) {
       replyButtons = [...BOOKING_REPLACE_MENU];
     } else if (replyText.length > 0 && isBookingOfferQuestion(replyText)) {
       // DDD-79 / DDD-56: consultation / book-this-procedure yes/no from visible text.
@@ -2301,6 +2479,13 @@ export const routeAfterAgentLlm = (
 ): string => {
   if (state.stepCount >= maxSteps) {
     return finalizeName;
+  }
+
+  // Replacement consent is a runtime-owned transition. Do not let a model
+  // retry create_meeting or answer with the same menu instead of dispatching
+  // the cancellation command.
+  if (commandPrepareName && replacementActionForTurn(state) != null) {
+    return commandPrepareName;
   }
 
   // Once the draft is complete, the runtime owns command preparation. This

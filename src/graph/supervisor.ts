@@ -194,7 +194,11 @@ export const shouldContinueInFaq = (state: ClinicState): boolean =>
 
 /** True when the latest human line is Перенести / Скасувати / cancel-and-rebook (or EN). */
 export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
-  VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages));
+  VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages))
+  || (
+    state.bookingDraft?.replacement?.status === "offered"
+    && /^(так|yes)$/i.test(lastHumanLineFromMessages(state.messages).trim())
+  );
 
 /** Agent id to sticky-continue into, or null when the supervisor LLM must run. */
 export const stickyContinueAgentId = (

@@ -117,4 +117,66 @@ describe("BookingDraft reducer", () => {
     expect(recovered.selectedSlot).toBeNull();
     expect(recovered.note.status).toBe("skipped");
   });
+
+  it("preserves the replacement command and booking facts across cancellation", () => {
+    const ready = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: "svc-1", source: "catalog" },
+          accepted: true,
+        }),
+        {
+          type: "slot_selected",
+          slot: {
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+            label: "11:30",
+          },
+        },
+      ),
+      { type: "note_status", status: "skipped" },
+    );
+    const command = {
+      action: "create" as const,
+      payload: { serviceId: "svc-1", dateStart: "2026-10-17T11:30:00" },
+      idempotencyKey: "create:1",
+      expiresAt: Date.now() + 60_000,
+    };
+    const offered = reduceBookingDraft(
+      reduceBookingDraft(ready, { type: "command_prepared", command }),
+      {
+        type: "existing_booking_detected",
+        meeting: { id: "existing-1", name: "Existing visit" },
+      },
+    );
+
+    expect(offered.replacement?.status).toBe("offered");
+    expect(offered.replacement?.originalCommand).toEqual(command);
+    expect(offered.selectedSlot?.dateStart).toBe("2026-10-17T11:30:00");
+    expect(offered.note.status).toBe("skipped");
+
+    const cancelling = reduceBookingDraft(offered, {
+      type: "cancel_existing_requested",
+      command: {
+        action: "cancel",
+        payload: { meetingId: "existing-1" },
+        idempotencyKey: "cancel:existing-1",
+        expiresAt: Date.now() + 60_000,
+      },
+    });
+    const readyToReplace = reduceBookingDraft(cancelling, {
+      type: "cancel_existing_completed",
+    });
+
+    expect(readyToReplace.replacement?.status).toBe("create_pending");
+    expect(readyToReplace.replacement?.originalCommand).toEqual(command);
+    expect(readyToReplace.pendingCommand).toBeNull();
+    expect(readyToReplace.selectedSlot?.dateStart).toBe("2026-10-17T11:30:00");
+    expect(readyToReplace.note.status).toBe("skipped");
+
+    const declined = reduceBookingDraft(offered, { type: "cancel_existing_declined" });
+    expect(declined.replacement).toBeNull();
+    expect(declined.selectedSlot).toBeNull();
+  });
 });

@@ -9,6 +9,7 @@ import {
 } from "../../shared/clinic-constants.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+import { createEmptyBookingDraft } from "../booking-draft.js";
 
 const createCachedGeminiModel = vi.fn((_apiKey: string, _model: string, handle: { cacheName: string }) => ({
   kind: "cached",
@@ -65,6 +66,22 @@ const agents: ClinicAgentDefinition[] = [
     maxSteps: 10,
   },
 ];
+
+describe("cancel-and-rebook routing", () => {
+  it("routes contextual Так to booking while replacement is offered", () => {
+    const draft = createEmptyBookingDraft();
+    draft.replacement = {
+      meeting: { id: "existing-1" },
+      status: "offered",
+    };
+    const state = supervisorState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: draft,
+    });
+
+    expect(stickyContinueAgentId(state)).toBe("booking");
+  });
+});
 
 describe("createClinicSupervisorNode context cache", () => {
   const invoke = vi.fn();

@@ -2945,6 +2945,139 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.pendingCommand?.idempotencyKey).toContain("create:");
   });
 
+  it("dispatches cancel_meeting for replacement consent instead of replaying create_meeting", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      clinicState({
+        messages: [new HumanMessage("Так")],
+        bookingDraft: {
+          version: 7,
+          mode: "replace",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+          },
+          availability: null,
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+            label: "11:30",
+          },
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: {
+            meeting: { id: "existing-1", name: "Existing visit" },
+            status: "offered",
+            originalCommand: {
+              action: "create",
+              payload: { serviceId: CONSULTATION_SERVICE_ID },
+              idempotencyKey: "create:replacement",
+              expiresAt: Date.now() + 60_000,
+            },
+          },
+        },
+        agentMessages: [new AIMessage("Бажаєте скасувати поточний візит?")],
+      }),
+    );
+
+    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
+      ?? (update.agentMessages as AIMessage[]);
+    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
+      name: "cancel_meeting",
+      args: { meetingId: "existing-1" },
+    });
+    expect(update.bookingDraft?.replacement?.status).toBe("cancelling");
+    expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
+  });
+
+  it("reuses the cancellation command for explicit chat confirmation", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      clinicState({
+        messages: [new HumanMessage("Скасувати")],
+        bookingDraft: {
+          version: 8,
+          mode: "replace",
+          phase: "confirming",
+          serviceAcceptance: null,
+          availability: null,
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "unasked" },
+          contactId: null,
+          pendingCommand: null,
+          replacement: {
+            meeting: { id: "existing-1" },
+            status: "cancelling",
+          },
+        },
+        agentMessages: [new AIMessage("Підтвердьте скасування")],
+      }),
+    );
+    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
+      ?? (update.agentMessages as AIMessage[]);
+    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
+      name: "cancel_meeting",
+      args: { meetingId: "existing-1", confirmationGiven: true },
+    });
+  });
+
+  it("prepares the original create command after cancellation revalidation", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const originalCommand = {
+      action: "create" as const,
+      payload: {
+        serviceId: CONSULTATION_SERVICE_ID,
+        dateStart: "2026-10-17T11:30:00",
+        dateEnd: "2026-10-17T12:00:00",
+      },
+      idempotencyKey: "create:replacement",
+      expiresAt: Date.now() + 60_000,
+    };
+    const update = await commandPrepare(
+      clinicState({
+        bookingDraft: {
+          version: 9,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+          },
+          availability: null,
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+            label: "11:30",
+          },
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: {
+            meeting: { id: "existing-1" },
+            status: "create_pending",
+            originalCommand,
+          },
+        },
+        agentMessages: [
+          new ToolMessage({ content: "{}", name: "present_availability_slots", tool_call_id: "slots-1" }),
+          new AIMessage("Готую запис"),
+        ],
+      }),
+    );
+    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
+      ?? (update.agentMessages as AIMessage[]);
+    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
+      name: "create_meeting",
+      args: originalCommand.payload,
+    });
+    expect(update.bookingDraft?.pendingCommand?.action).toBe("create");
+  });
+
   const bookingLlmReturning = (content: string) => {
     const invoke = vi.fn(async () => new AIMessage(content));
     const slotsTool = tool(
@@ -3380,6 +3513,67 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     expect(JSON.parse(String((toolsUpdate.agentMessages as ToolMessage[])[0]!.content))).toEqual({
       awaitingConfirmation: true,
+    });
+  });
+
+  it("captures the existing meeting when create_meeting reports Already booked", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({
+        error: "Already booked",
+        meetings: [{
+          id: "existing-1",
+          name: "Консультація - Ada",
+          dateStart: "2026-09-10 11:00:00",
+          dateEnd: "2026-09-10 11:30:00",
+        }],
+      }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const update = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        availabilityContext: snapshot,
+        bookingDraft: {
+          version: 3,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", source: "catalog" },
+          },
+          availability: null,
+          selectedDate: "2026-09-10",
+          selectedSlot: {
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+            label: "14:00",
+          },
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: { serviceId: "svc-1" },
+            idempotencyKey: "create:original",
+            expiresAt: Date.now() + 60_000,
+          },
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.bookingDraft?.replacement).toMatchObject({
+      status: "offered",
+      meeting: { id: "existing-1", name: "Консультація - Ada" },
+      originalCommand: { idempotencyKey: "create:original" },
     });
   });
 
