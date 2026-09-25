@@ -36,13 +36,13 @@ export type ClinicRuntime = {
 export { buildClinicAgentTools } from "./clinic-agent-tools.js";
 
 export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRuntime> => {
-  configurePendingConfirmStore(config.checkpointDbPath);
   const adapters = await setupClinicAdapters(config);
   const agentTools = buildClinicAgentTools(config, adapters);
   const { supervisorLlm, agentModel, agentModelName, contextCache } =
     createClinicLlmStack(config);
 
   mkdirSync(dirname(config.checkpointDbPath), { recursive: true });
+  configurePendingConfirmStore(config.checkpointDbPath);
   const checkpointer = SqliteSaver.fromConnString(config.checkpointDbPath);
 
   const { graph } = compileClinicGraph({

@@ -24,12 +24,6 @@ export type ServiceAcceptance = {
   acceptedAtTurn?: number;
 };
 
-export type AvailabilitySelection = {
-  snapshotId: string;
-  query?: string;
-  expiresAt?: number;
-};
-
 export type BookingNote = {
   status: "unasked" | "awaiting" | "skipped" | "answered";
   value?: string;
@@ -38,8 +32,6 @@ export type BookingNote = {
 export type PendingBookingCommand = {
   action: BookingMode | "cancel";
   payload: Record<string, unknown>;
-  idempotencyKey: string;
-  expiresAt: number;
 };
 
 export type ReplacementMeeting = {
@@ -55,12 +47,19 @@ export type ReplacementState = {
   originalCommand?: PendingBookingCommand;
 };
 
+export type LegacyBookingState = {
+  bookingNoteStatus?: BookingNote["status"];
+  selectedSlot?: SelectedBookingSlot | null;
+  selectedAvailabilityDate?: string | null;
+  /** A service may be supplied only when recovered from an unambiguous legacy checkpoint. */
+  recoveredService?: BookingService;
+};
+
 export type BookingDraft = {
   version: number;
   mode: BookingMode;
   phase: BookingPhase;
   serviceAcceptance: ServiceAcceptance | null;
-  availability: AvailabilitySelection | null;
   selectedDate: string | null;
   selectedSlot: SelectedBookingSlot | null;
   note: BookingNote;
@@ -73,7 +72,6 @@ export type BookingDraft = {
 export type BookingEvent =
   | { type: "service_selected"; service: BookingService; accepted?: boolean; turn?: number }
   | { type: "service_accepted"; turn?: number }
-  | { type: "availability_loaded"; snapshotId: string; query?: string }
   | { type: "date_selected"; date: string }
   | { type: "slot_selected"; slot: SelectedBookingSlot }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
@@ -87,12 +85,46 @@ export type BookingEvent =
   | { type: "draft_abandoned" }
   | { type: "draft_resumed" };
 
+export const migrateLegacyBookingState = (
+  legacy: LegacyBookingState,
+): BookingDraft | null => {
+  const hasLegacyBooking =
+    (legacy.bookingNoteStatus != null && legacy.bookingNoteStatus !== "unasked")
+    || legacy.selectedSlot != null
+    || legacy.selectedAvailabilityDate != null;
+  if (!hasLegacyBooking || !legacy.recoveredService) {
+    return null;
+  }
+  const noteStatus = legacy.bookingNoteStatus ?? (legacy.selectedSlot ? "awaiting" : "unasked");
+  const selectedDate = legacy.selectedSlot?.dateStart.slice(0, 10)
+    ?? legacy.selectedAvailabilityDate
+    ?? null;
+  return {
+    version: 1,
+    mode: "create",
+    phase: legacy.selectedSlot
+      ? noteStatus === "skipped" || noteStatus === "answered" ? "details" : "note"
+      : selectedDate ? "time" : "service",
+    serviceAcceptance: {
+      status: "pending",
+      service: legacy.recoveredService,
+    },
+    selectedDate,
+    selectedSlot: legacy.selectedSlot ?? null,
+    note: {
+      status: noteStatus,
+    },
+    contactId: null,
+    pendingCommand: null,
+    replacement: null,
+  };
+};
+
 export const createEmptyBookingDraft = (): BookingDraft => ({
   version: 0,
   mode: "create",
   phase: "service",
   serviceAcceptance: null,
-  availability: null,
   selectedDate: null,
   selectedSlot: null,
   note: { status: "unasked" },
@@ -109,7 +141,6 @@ const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">)
 const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => ({
   ...draft,
   phase: "service",
-  availability: null,
   selectedDate: null,
   selectedSlot: null,
   note: { status: "unasked" },
@@ -172,15 +203,6 @@ export const reduceBookingDraft = (
         phase: "date",
       });
     }
-    case "availability_loaded":
-      return withVersion(draft, {
-        ...draft,
-        availability: {
-          snapshotId: event.snapshotId,
-          ...(event.query ? { query: event.query } : {}),
-        },
-        phase: draft.selectedSlot ? draft.phase : "date",
-      });
     case "date_selected":
       return withVersion(draft, {
         ...draft,

@@ -1,5 +1,7 @@
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
+import Database from "better-sqlite3";
 
 import { getConfig, interrupt } from "@langchain/langgraph";
 import { z } from "zod";
@@ -38,7 +40,6 @@ export type ConfirmDraft = {
   command?: {
     action: BookingAction;
     payload: Record<string, unknown>;
-    idempotencyKey: string;
   };
 };
 
@@ -93,69 +94,92 @@ export type ConfirmFingerprint = {
   dateEnd?: string;
 };
 
-type PendingConfirm = {
-  key: string;
-  expiresAt: number;
+type PendingConfirm = { key: string; expiresAt: number };
+
+export type PendingConfirmStore = {
+  remember: (threadId: string, fingerprint: string, expiresAt: number) => void;
+  consume: (threadId: string, fingerprint: string, now: number) => boolean;
+  clear: (threadId: string) => void;
+  clearExpired: (now: number) => void;
+  close?: () => void;
 };
 
-const pendingConfirms = new Map<string, PendingConfirm>();
+const createMemoryPendingConfirmStore = (): PendingConfirmStore => {
+  const pending = new Map<string, PendingConfirm>();
+  return {
+    remember: (threadId, fingerprint, expiresAt) => {
+      pending.set(threadId, { key: fingerprint, expiresAt });
+    },
+    consume: (threadId, fingerprint, now) => {
+      const value = pending.get(threadId);
+      if (!value || value.expiresAt <= now || value.key !== fingerprint) {
+        if (value && value.expiresAt <= now) pending.delete(threadId);
+        return false;
+      }
+      pending.delete(threadId);
+      return true;
+    },
+    clear: (threadId) => pending.delete(threadId),
+    clearExpired: (now) => {
+      for (const [threadId, value] of pending) {
+        if (value.expiresAt <= now) pending.delete(threadId);
+      }
+    },
+  };
+};
+
+export const createSqlitePendingConfirmStore = (databasePath: string): PendingConfirmStore => {
+  mkdirSync(dirname(databasePath), { recursive: true });
+  const db = new Database(databasePath);
+  db.pragma("busy_timeout = 5000");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_booking_confirmations (
+      thread_id TEXT PRIMARY KEY,
+      fingerprint TEXT NOT NULL,
+      expires_at INTEGER NOT NULL
+    )
+  `);
+  const remember = db.prepare(`
+    INSERT INTO pending_booking_confirmations (thread_id, fingerprint, expires_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(thread_id) DO UPDATE SET
+      fingerprint = excluded.fingerprint,
+      expires_at = excluded.expires_at
+  `);
+  const consume = db.prepare(`
+    DELETE FROM pending_booking_confirmations
+    WHERE thread_id = ? AND fingerprint = ? AND expires_at > ?
+  `);
+  const clear = db.prepare("DELETE FROM pending_booking_confirmations WHERE thread_id = ?");
+  const clearExpired = db.prepare("DELETE FROM pending_booking_confirmations WHERE expires_at <= ?");
+  return {
+    remember: (threadId, fingerprint, expiresAt) => {
+      clearExpired.run(Date.now());
+      remember.run(threadId, fingerprint, expiresAt);
+    },
+    consume: (threadId, fingerprint, now) => consume.run(threadId, fingerprint, now).changes === 1,
+    clear: (threadId) => { clear.run(threadId); },
+    clearExpired: (now) => { clearExpired.run(now); },
+    close: () => db.close(),
+  };
+};
+
+let pendingConfirmStore: PendingConfirmStore = createMemoryPendingConfirmStore();
 let configuredPendingConfirmStorePath: string | undefined;
 
-/** Configure the durable sidecar next to the graph checkpoint database. */
+/** Configure the durable confirmation store after the checkpoint directory exists. */
 export const configurePendingConfirmStore = (checkpointPath: string): void => {
-  configuredPendingConfirmStorePath = `${checkpointPath}.pending-confirms.json`;
+  if (configuredPendingConfirmStorePath === checkpointPath) return;
+  pendingConfirmStore.close?.();
+  configuredPendingConfirmStorePath = checkpointPath;
+  pendingConfirmStore = createSqlitePendingConfirmStore(checkpointPath);
 };
 
-/**
- * Chat-text confirmation is a second graph turn, so its authorization must outlive
- * the Node process. The interrupted keyboard path is already checkpointed by LangGraph;
- * this small sidecar persists only the fingerprint/expiry needed for the chat path.
- */
-const pendingConfirmStorePath = (): string | undefined => {
-  const checkpointPath = process.env.CHECKPOINT_DB_PATH?.trim();
-  if (configuredPendingConfirmStorePath && process.env.NODE_ENV !== "test") {
-    return configuredPendingConfirmStorePath;
-  }
-  if (!checkpointPath || process.env.NODE_ENV === "test") {
-    return undefined;
-  }
-  return `${checkpointPath}.pending-confirms.json`;
-};
-
-const loadPendingConfirms = (): void => {
-  const path = pendingConfirmStorePath();
-  if (!path || pendingConfirms.size > 0 || !existsSync(path)) {
-    return;
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, PendingConfirm>;
-    for (const [threadId, pending] of Object.entries(parsed)) {
-      if (
-        typeof pending?.key === "string"
-        && typeof pending.expiresAt === "number"
-        && pending.expiresAt > Date.now()
-      ) {
-        pendingConfirms.set(threadId, pending);
-      }
-    }
-  } catch {
-    // A corrupt sidecar must never block booking; the checkpoint remains authoritative.
-  }
-};
-
-const persistPendingConfirms = (): void => {
-  const path = pendingConfirmStorePath();
-  if (!path) {
-    return;
-  }
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    const temporary = `${path}.tmp`;
-    writeFileSync(temporary, JSON.stringify(Object.fromEntries(pendingConfirms)), "utf8");
-    renameSync(temporary, path);
-  } catch {
-    // The in-process map remains a safe fallback if the optional sidecar is unavailable.
-  }
+/** Test hook: use an isolated in-memory store. */
+export const resetPendingConfirmStoreForTests = (): void => {
+  pendingConfirmStore.close?.();
+  configuredPendingConfirmStorePath = undefined;
+  pendingConfirmStore = createMemoryPendingConfirmStore();
 };
 
 const confirmFingerprintKey = (fp: ConfirmFingerprint): string =>
@@ -183,41 +207,20 @@ const threadIdFromRuntime = (config?: { configurable?: { thread_id?: unknown } }
 };
 
 const rememberPendingConfirm = (threadId: string, fp: ConfirmFingerprint): void => {
-  pendingConfirms.set(threadId, {
-    key: confirmFingerprintKey(fp),
-    expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
-  });
-  persistPendingConfirms();
+  pendingConfirmStore.remember(threadId, confirmFingerprintKey(fp), Date.now() + PENDING_CONFIRM_TTL_MS);
 };
 
 const clearPendingConfirm = (threadId: string): void => {
-  pendingConfirms.delete(threadId);
-  persistPendingConfirms();
+  pendingConfirmStore.clear(threadId);
 };
 
 /** True when this thread has a non-expired HITL card for these exact write arguments. Consumes it. */
 const consumeMatchingPendingConfirm = (threadId: string, fp: ConfirmFingerprint): boolean => {
-  loadPendingConfirms();
-  const pending = pendingConfirms.get(threadId);
-  if (!pending) {
-    return false;
-  }
-  if (pending.expiresAt <= Date.now()) {
-    pendingConfirms.delete(threadId);
-    persistPendingConfirms();
-    return false;
-  }
-  if (pending.key !== confirmFingerprintKey(fp)) {
-    return false;
-  }
-  pendingConfirms.delete(threadId);
-  persistPendingConfirms();
-  return true;
+  return pendingConfirmStore.consume(threadId, confirmFingerprintKey(fp), Date.now());
 };
 
 export const clearPendingConfirmsForTests = (): void => {
-  pendingConfirms.clear();
-  persistPendingConfirms();
+  resetPendingConfirmStoreForTests();
 };
 
 /** Shared HITL pause for create / cancel / reschedule — Telegram reuses confirm_booking Yes/No. */

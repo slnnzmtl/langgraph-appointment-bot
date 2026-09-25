@@ -38,11 +38,15 @@ export type AvailabilityContext = {
   serviceId?: string;
   excludeMeetingIds?: string[];
   truncated?: boolean;
-  searchDirection?: "exact" | "earlier" | "later" | "nearest";
-  searchAnchor?: string;
-  searchedFrom?: string;
-  searchedThrough?: string;
   query?: AvailabilityQuery;
+  /** @deprecated Read-only compatibility fields for old checkpoints. New writes use query. */
+  searchDirection?: "exact" | "earlier" | "later" | "nearest";
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  searchAnchor?: string;
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  searchedFrom?: string;
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  searchedThrough?: string;
 };
 
 export type AvailabilityQuery = {
@@ -56,39 +60,61 @@ export type AvailabilityQuery = {
 
 /** Search metadata that survives prefetch refreshes without retaining slot data. */
 export type AvailabilityCursor = {
-  direction: "exact" | "earlier" | "later" | "nearest";
-  anchor?: string;
-  searchedFrom?: string;
-  searchedThrough?: string;
+  query?: AvailabilityQuery;
   firstDate?: string;
   lastDate?: string;
-  query?: AvailabilityQuery;
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  direction?: "exact" | "earlier" | "later" | "nearest";
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  anchor?: string;
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  searchedFrom?: string;
+  /** @deprecated Read-only compatibility fields for old checkpoints. */
+  searchedThrough?: string;
+};
+
+export const availabilityQueryFromContext = (
+  context: AvailabilityContext | null | undefined,
+): AvailabilityQuery | undefined => {
+  if (!context) return undefined;
+  if (context.query) return context.query;
+  const kind = context.searchDirection;
+  if (!kind) return undefined;
+  return {
+    kind,
+    ...(kind === "exact" && context.searchAnchor ? { date: context.searchAnchor } : {}),
+    ...(context.searchAnchor ? { anchor: context.searchAnchor } : {}),
+    ...(context.searchedFrom ? { rangeFrom: context.searchedFrom } : {}),
+    ...(context.searchedThrough ? { rangeThrough: context.searchedThrough } : {}),
+    coverageComplete: context.truncated !== true,
+  };
+};
+
+export const availabilityQueryFromCursor = (
+  cursor: AvailabilityCursor | null | undefined,
+): AvailabilityQuery | undefined => {
+  if (!cursor) return undefined;
+  if (cursor.query) return cursor.query;
+  if (!cursor.direction) return undefined;
+  return {
+    kind: cursor.direction,
+    ...(cursor.direction === "exact" && cursor.anchor ? { date: cursor.anchor } : {}),
+    ...(cursor.anchor ? { anchor: cursor.anchor } : {}),
+    ...(cursor.searchedFrom ? { rangeFrom: cursor.searchedFrom } : {}),
+    ...(cursor.searchedThrough ? { rangeThrough: cursor.searchedThrough } : {}),
+    coverageComplete: true,
+  };
 };
 
 export const availabilityCursorFromContext = (
   context: AvailabilityContext | null | undefined,
 ): AvailabilityCursor | null => {
-  if (!context) {
-    return null;
-  }
-  const direction = context.query?.kind ?? context.searchDirection;
-  if (!direction) {
-    return null;
-  }
+  const query = availabilityQueryFromContext(context);
+  if (!context || !query) return null;
   return {
-    direction,
-    ...(context.query?.anchor ?? context.searchAnchor
-      ? { anchor: context.query?.anchor ?? context.searchAnchor }
-      : {}),
-    ...(context.query?.rangeFrom ?? context.searchedFrom
-      ? { searchedFrom: context.query?.rangeFrom ?? context.searchedFrom }
-      : {}),
-    ...(context.query?.rangeThrough ?? context.searchedThrough
-      ? { searchedThrough: context.query?.rangeThrough ?? context.searchedThrough }
-      : {}),
+    query,
     ...(context.days[0]?.date ? { firstDate: context.days[0].date } : {}),
     ...(context.days.at(-1)?.date ? { lastDate: context.days.at(-1)!.date } : {}),
-    ...(context.query ? { query: context.query } : {}),
   };
 };
 
@@ -244,10 +270,6 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
       stepMinutes,
       ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
       ...(truncated ? { truncated } : {}),
-      ...(searchDirection ? { searchDirection } : {}),
-      ...(searchAnchor ? { searchAnchor } : {}),
-      ...(searchedFrom ? { searchedFrom } : {}),
-      ...(searchedThrough ? { searchedThrough } : {}),
       ...(query ? { query } : {}),
     };
   }
@@ -266,10 +288,6 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
       ],
       stepMinutes,
       ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
-      ...(searchDirection ? { searchDirection } : {}),
-      ...(searchAnchor ? { searchAnchor } : {}),
-      ...(searchedFrom ? { searchedFrom } : {}),
-      ...(searchedThrough ? { searchedThrough } : {}),
       ...(query ? { query } : {}),
     };
   }
@@ -332,7 +350,7 @@ export const tryAvailabilityCacheHit = (
   ctx: AvailabilityContext | null | undefined,
   input: AvailabilitySlotsToolArgs,
 ): { json: string; kind: "date_list" | "day_slots" } | null => {
-  if (!ctx || (ctx.days.length === 0 && !ctx.searchDirection)) {
+  if (!ctx || (ctx.days.length === 0 && !availabilityQueryFromContext(ctx))) {
     return null;
   }
   if (input.forceRefresh) {
@@ -358,7 +376,7 @@ export const tryAvailabilityCacheHit = (
   };
 
   if (input.date) {
-    const query = ctx.query;
+    const query = availabilityQueryFromContext(ctx);
     const coveredByQuery =
       query?.coverageComplete === true
       && query.rangeFrom != null
@@ -378,9 +396,7 @@ export const tryAvailabilityCacheHit = (
         slots: day.slots,
         date: day.date,
         ...(day.dayLabel ? { dayLabel: day.dayLabel } : {}),
-        ...(ctx.searchDirection ? { searchDirection: ctx.searchDirection } : {}),
-        ...(ctx.searchAnchor ? { searchAnchor: ctx.searchAnchor } : {}),
-        ...(ctx.query ? { query: ctx.query } : {}),
+        ...(query ? { query } : {}),
         ...shared,
       }),
     };
@@ -389,7 +405,7 @@ export const tryAvailabilityCacheHit = (
   // Legacy snapshots may not have query metadata, but their direction is still
   // authoritative. Never let a fresh nearest/later/earlier request replay an
   // exact snapshot merely because that snapshot predates the query field.
-  const cachedDirection = ctx.query?.kind ?? ctx.searchDirection;
+  const cachedDirection = availabilityQueryFromContext(ctx)?.kind;
   if (input.direction == null || (cachedDirection != null && cachedDirection !== input.direction)) {
     return null;
   }
@@ -400,11 +416,9 @@ export const tryAvailabilityCacheHit = (
       days: ctx.days,
       ...shared,
       ...(ctx.truncated ? { truncated: true } : {}),
-      ...(ctx.searchDirection ? { searchDirection: ctx.searchDirection } : {}),
-      ...(ctx.searchAnchor ? { searchAnchor: ctx.searchAnchor } : {}),
-      ...(ctx.searchedFrom ? { searchedFrom: ctx.searchedFrom } : {}),
-      ...(ctx.searchedThrough ? { searchedThrough: ctx.searchedThrough } : {}),
-      ...(ctx.query ? { query: ctx.query } : {}),
+      ...(availabilityQueryFromContext(ctx)
+        ? { query: availabilityQueryFromContext(ctx) }
+        : {}),
     }),
   };
 };
@@ -578,10 +592,6 @@ export const createPresentAvailabilitySlotsTool = (options: {
             date: input.date,
             dayLabel: formatKyivDayLabel(input.date, todayKyiv),
             stepMinutes,
-            searchDirection: "exact",
-            searchAnchor: input.date,
-            searchedFrom: input.date,
-            searchedThrough: input.date,
             query: {
               kind: "exact",
               date: input.date,
@@ -672,12 +682,6 @@ export const createPresentAvailabilitySlotsTool = (options: {
             dayLabel: formatKyivDayLabel(day.date, todayKyiv),
           })),
           stepMinutes,
-          searchDirection: direction,
-          ...(direction === "earlier"
-            ? { searchAnchor: beforeDate }
-            : { searchAnchor: input.afterDate ?? start }),
-          searchedFrom,
-          searchedThrough,
           query: {
             kind: direction,
             anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,

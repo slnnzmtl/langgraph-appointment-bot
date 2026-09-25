@@ -3105,7 +3105,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       },
     });
     expect(update.bookingDraft?.phase).toBe("confirming");
-    expect(update.bookingDraft?.pendingCommand?.idempotencyKey).toContain("create:");
+    expect(update.bookingDraft?.pendingCommand).toMatchObject({
+      action: "create",
+      payload: {
+        serviceId: CONSULTATION_SERVICE_ID,
+        contactId: "c-1",
+      },
+    });
+    expect(update.bookingDraft?.pendingCommand).not.toHaveProperty("idempotencyKey");
   });
 
   it("dispatches cancel_meeting for replacement consent instead of replaying create_meeting", async () => {

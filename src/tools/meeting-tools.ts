@@ -286,7 +286,6 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         command: {
           action: "create" as const,
           payload: command,
-          idempotencyKey: `create:${input.contactId}:${input.serviceId}:${dateStart}:${dateEnd}`,
         },
       };
       const execute = () =>
@@ -381,7 +380,6 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         command: {
           action: "cancel" as const,
           payload: command,
-          idempotencyKey: `cancel:${input.meetingId}`,
         },
       };
       const execute = () =>
@@ -469,7 +467,6 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         command: {
           action: "reschedule" as const,
           payload: command,
-          idempotencyKey: `reschedule:${input.meetingId}:${dateStart}:${dateEnd}`,
         },
       };
       const execute = () =>

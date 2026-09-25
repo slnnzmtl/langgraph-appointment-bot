@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createEmptyBookingDraft,
+  migrateLegacyBookingState,
   reduceBookingDraft,
 } from "../booking-draft.js";
 
@@ -19,7 +20,6 @@ describe("BookingDraft reducer", () => {
     const withSlot = reduceBookingDraft(withDate, {
       type: "slot_selected",
       slot: {
-        snapshotId: "availability-1",
         slotId: "slot-1",
         dateStart: "2026-10-17T11:30:00",
         dateEnd: "2026-10-17T12:00:00",
@@ -140,8 +140,6 @@ describe("BookingDraft reducer", () => {
     const command = {
       action: "create" as const,
       payload: { serviceId: "svc-1", dateStart: "2026-10-17T11:30:00" },
-      idempotencyKey: "create:1",
-      expiresAt: Date.now() + 60_000,
     };
     const offered = reduceBookingDraft(
       reduceBookingDraft(ready, { type: "command_prepared", command }),
@@ -161,8 +159,6 @@ describe("BookingDraft reducer", () => {
       command: {
         action: "cancel",
         payload: { meetingId: "existing-1" },
-        idempotencyKey: "cancel:existing-1",
-        expiresAt: Date.now() + 60_000,
       },
     });
     const readyToReplace = reduceBookingDraft(cancelling, {
@@ -178,5 +174,28 @@ describe("BookingDraft reducer", () => {
     const declined = reduceBookingDraft(offered, { type: "cancel_existing_declined" });
     expect(declined.replacement).toBeNull();
     expect(declined.selectedSlot).toBeNull();
+  });
+
+  it("does not fabricate a service while normalizing legacy state", () => {
+    expect(migrateLegacyBookingState({
+      selectedAvailabilityDate: "2026-10-17",
+    })).toBeNull();
+
+    const migrated = migrateLegacyBookingState({
+      selectedAvailabilityDate: "2026-10-17",
+      recoveredService: {
+        id: "svc-1",
+        name: "Consultation",
+        source: "catalog",
+      },
+    });
+    expect(migrated).toMatchObject({
+      phase: "time",
+      serviceAcceptance: {
+        status: "pending",
+        service: { id: "svc-1" },
+      },
+      selectedDate: "2026-10-17",
+    });
   });
 });

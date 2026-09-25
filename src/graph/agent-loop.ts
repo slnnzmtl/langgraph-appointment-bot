@@ -30,6 +30,7 @@ import {
   normalizePresentAvailabilityResult,
   alignToAnchors,
   availabilityCursorFromContext,
+  availabilityQueryFromContext,
   tryAvailabilityCacheHit,
   KYIV_LOCAL_ISO_SCHEMA,
   presentAvailabilitySlotsArgsSchema,
@@ -298,16 +299,16 @@ const AVAILABILITY_GENERIC_DATE_HEADING = "Доступні дні";
 const AVAILABILITY_TIME_HEADING = "Вільні години на ";
 
 const availabilityHeadingAnchor = (context: AvailabilityContext): string | undefined => {
-  const query = context.query;
+  const query = availabilityQueryFromContext(context);
   if (query?.kind === "later" || query?.kind === "earlier") {
-    return query.anchor ?? context.searchAnchor;
+    return query.anchor;
   }
   return undefined;
 };
 
 /** Heading for a DATE page, derived from the runtime-owned search query. */
 export const formatAvailabilityHeading = (context: AvailabilityContext): string => {
-  const kind = context.query?.kind ?? context.searchDirection;
+  const kind = availabilityQueryFromContext(context)?.kind;
   if (kind === "nearest") {
     return AVAILABILITY_DATE_HEADING;
   }
@@ -362,8 +363,9 @@ export const formatAvailabilityTimeOffer = (
 export const formatAvailabilityEmptyOffer = (
   context: AvailabilityContext,
 ): { replyText: string; replyButtons: string[] } => {
-  const direction = context.searchDirection;
-  const anchor = context.searchAnchor ?? context.searchedFrom ?? context.days[0]?.date;
+  const query = availabilityQueryFromContext(context);
+  const direction = query?.kind;
+  const anchor = query?.anchor ?? query?.rangeFrom ?? context.days[0]?.date;
   const canSearchEarlier =
     direction !== "earlier"
     && anchor != null
@@ -489,8 +491,8 @@ const bookingDateAnchors = (state: ClinicState): string[] => [
     ? [
       state.availabilityCursor.firstDate,
       state.availabilityCursor.lastDate,
-      state.availabilityCursor.searchedFrom,
-      state.availabilityCursor.searchedThrough,
+      state.availabilityCursor.query?.rangeFrom,
+      state.availabilityCursor.query?.rangeThrough,
     ].filter((date): date is string => date != null)
     : []),
 ];
@@ -500,24 +502,6 @@ const authoritativeSelectedSlot = (state: ClinicState): SelectedBookingSlot | nu
 
 const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =>
   state.bookingDraft?.note.status ?? state.bookingNoteStatus ?? "unasked";
-
-/** Stable identity for the exact availability snapshot used by a slot selection. */
-export const availabilitySnapshotId = (context: AvailabilityContext): string => {
-  const payload = JSON.stringify({
-    days: context.days,
-    stepMinutes: context.stepMinutes,
-    serviceId: context.serviceId ?? null,
-    excludeMeetingIds: context.excludeMeetingIds ?? [],
-    query: context.query ?? null,
-  });
-  // FNV-1a is sufficient here: this is an equality/version key, not a security hash.
-  let hash = 2166136261;
-  for (let index = 0; index < payload.length; index += 1) {
-    hash ^= payload.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return `availability-${(hash >>> 0).toString(16)}`;
-};
 
 const consultationService = (source: "catalog" | "direct"): {
   id: string;
@@ -725,11 +709,6 @@ const commandActionForTool = (name: string): "create" | "reschedule" | "replace"
   return null;
 };
 
-const commandIdempotencyKey = (
-  action: "create" | "reschedule" | "replace" | "cancel",
-  payload: Record<string, unknown>,
-): string => action + ":" + JSON.stringify(payload);
-
 const DIRECT_CANCEL_INTENT = /^(?:скасувати|скасування|cancel|cancel appointment|cancel visit)$/iu;
 
 const DIRECT_RESCHEDULE_INTENT = /^(?:перенести|перенесення|reschedule|reschedule appointment|reschedule visit|move appointment|move visit)$/iu;
@@ -795,12 +774,7 @@ const cancelCommandFromBookingContext = (
       // The meeting id is authoritative; CRM can fill a malformed display date.
     }
   }
-  return {
-    action: "cancel",
-    payload,
-    idempotencyKey: commandIdempotencyKey("cancel", payload),
-    expiresAt: Date.now() + 15 * 60 * 1000,
-  };
+  return { action: "cancel", payload };
 };
 
 const cancellationPurposeForState = (state: ClinicState): CancellationPurpose =>
@@ -821,10 +795,7 @@ const createCommandFromBookingDraft = (
     draft?.replacement?.status === "create_pending"
     && draft.replacement.originalCommand?.action === "create"
   ) {
-    return {
-      ...draft.replacement.originalCommand,
-      expiresAt: Date.now() + 15 * 60 * 1000,
-    };
+    return { ...draft.replacement.originalCommand };
   }
   const acceptance = draft?.serviceAcceptance;
   const slot = draft?.selectedSlot;
@@ -855,12 +826,7 @@ const createCommandFromBookingDraft = (
     confirmMessage: `Підтвердити запис на ${slot.label}?`,
     ...(draft.note.value ? { description: draft.note.value } : {}),
   };
-  return {
-    action: "create",
-    payload,
-    idempotencyKey: commandIdempotencyKey("create", payload),
-    expiresAt: Date.now() + 15 * 60 * 1000,
-  };
+  return { action: "create", payload };
 };
 
 const bookingDraftCanPrepareCommand = (state: ClinicState): boolean => {
@@ -930,12 +896,7 @@ const cancelCommandFromReplacement = (
       // CRM can fill an omitted/invalid display date; the meeting id is authoritative.
     }
   }
-  return {
-    action: "cancel",
-    payload,
-    idempotencyKey: commandIdempotencyKey("cancel", payload),
-    expiresAt: Date.now() + 15 * 60 * 1000,
-  };
+  return { action: "cancel", payload };
 };
 
 /** Turn Gemini XML-in-content into `tool_calls`; inject slots when booking skipped the tool. */
@@ -1131,7 +1092,6 @@ export const matchAvailabilitySlot = (
       const labelNorm = slot.label.trim().toLowerCase().replace(/\s+/g, "");
       if (normalized === labelNorm || (wantClock != null && clockKey(labelNorm) === wantClock)) {
         return {
-          snapshotId: availabilitySnapshotId(availabilityContext),
           slotId: slot.id,
           dateStart: slot.dateStart,
           dateEnd: slot.dateEnd,
@@ -1797,12 +1757,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
       return {};
     }
     const payload = normalizeMeetingMutationArgs(state, call);
-    const command: PendingBookingCommand = {
-      action,
-      payload,
-      idempotencyKey: commandIdempotencyKey(action, payload),
-      expiresAt: Date.now() + 15 * 60 * 1000,
-    };
+    const command: PendingBookingCommand = { action, payload };
     const bookingDraft = reduceBookingDraft(state.bookingDraft, {
       type: "command_prepared",
       command,
@@ -2302,15 +2257,12 @@ export const createAgentToolsNode = (
             && command?.action !== "replace"
             && command?.action !== "cancel")
           || !asJsonRecord(command.payload)
-          || typeof command.idempotencyKey !== "string"
         ) {
           return null;
         }
         return {
           action: command.action,
           payload: asJsonRecord(command.payload)!,
-          idempotencyKey: command.idempotencyKey,
-          expiresAt: Date.now() + 15 * 60 * 1000,
         } satisfies PendingBookingCommand;
       })
       .find((command): command is PendingBookingCommand => command != null);
@@ -2397,17 +2349,7 @@ export const createAgentToolsNode = (
           : capturedAvailability;
         update.availabilityContext = bookingAvailability;
         update.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
-        let bookingDraft = state.bookingDraft;
-        if (bookingAvailability != null) {
-          bookingDraft = reduceBookingDraft(bookingDraft, {
-            type: "availability_loaded",
-            snapshotId: availabilitySnapshotId(bookingAvailability),
-            ...(bookingAvailability.query
-              ? { query: JSON.stringify(bookingAvailability.query) }
-              : {}),
-          });
-          update.bookingDraft = bookingDraft;
-        }
+        const bookingDraft = state.bookingDraft;
         const selectedDate = bookingDraft != null
           ? bookingDraft.selectedDate
           : state.selectedAvailabilityDate;

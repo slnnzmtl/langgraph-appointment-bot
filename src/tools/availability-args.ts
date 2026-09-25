@@ -1,5 +1,7 @@
 import {
   alignToAnchors,
+  availabilityQueryFromContext,
+  availabilityQueryFromCursor,
   type AvailabilityContext,
   type AvailabilityCursor,
   type AvailabilitySlotsToolArgs,
@@ -54,7 +56,9 @@ export const normalizeAvailabilityToolArgs = ({
   const args = { ...input };
   const request = resolveAvailabilityRequest(humanText, kyivToday());
   const cursor = availabilityCursor;
-  const contextDirection = availabilityContext?.searchDirection ?? cursor?.direction;
+  const contextQuery = availabilityQueryFromContext(availabilityContext);
+  const cursorQuery = availabilityQueryFromCursor(cursor);
+  const contextDirection = contextQuery?.kind ?? cursorQuery?.kind;
   const direction = consultationAccepted
     ? "nearest"
     : request?.kind === "exact" && !pickedOfferedDay
@@ -82,14 +86,17 @@ export const normalizeAvailabilityToolArgs = ({
     args.direction = contextDirection ?? direction;
   } else if (direction === "earlier") {
     args.direction = "earlier";
-    args.beforeDate = cursor?.searchedFrom ?? availabilityContext?.searchedFrom ?? firstDate ?? kyivToday();
+    args.beforeDate = cursorQuery?.rangeFrom
+      ?? contextQuery?.rangeFrom
+      ?? firstDate
+      ?? kyivToday();
     delete args.afterDate;
     delete args.startDate;
     delete args.date;
   } else if (direction === "later") {
     args.direction = "later";
-    const afterDate = cursor?.searchedThrough
-      ?? availabilityContext?.searchedThrough
+    const afterDate = cursorQuery?.rangeThrough
+      ?? contextQuery?.rangeThrough
       ?? lastOpen
       ?? lastDate;
     if (afterDate) {
@@ -136,8 +143,8 @@ export const normalizeAvailabilityToolArgs = ({
         ...anchors,
         ...(cursor?.firstDate ? [cursor.firstDate] : []),
         ...(cursor?.lastDate ? [cursor.lastDate] : []),
-        ...(cursor?.searchedFrom ? [cursor.searchedFrom] : []),
-        ...(cursor?.searchedThrough ? [cursor.searchedThrough] : []),
+        ...(cursorQuery?.rangeFrom ? [cursorQuery.rangeFrom] : []),
+        ...(cursorQuery?.rangeThrough ? [cursorQuery.rangeThrough] : []),
       ]) as never;
     }
   }

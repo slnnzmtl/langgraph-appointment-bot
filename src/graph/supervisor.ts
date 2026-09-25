@@ -54,7 +54,10 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { reduceBookingDraft } from "./booking-draft.js";
+import {
+  migrateLegacyBookingState,
+  reduceBookingDraft,
+} from "./booking-draft.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -451,6 +454,38 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
   };
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
+    // Old checkpoints may contain only the deprecated booking projection. Recover it
+    // only when the service catalog has exactly one candidate; otherwise leave the
+    // projection untouched until the patient explicitly selects a service.
+    if (state.bookingDraft == null && state.servicesContext?.list.length === 1) {
+      const service = state.servicesContext.list[0];
+      const migrated = migrateLegacyBookingState({
+        bookingNoteStatus: state.bookingNoteStatus,
+        selectedSlot: state.selectedSlot,
+        selectedAvailabilityDate: state.selectedAvailabilityDate,
+        ...(service
+          ? {
+              recoveredService: {
+                id: service.id,
+                name: service.name,
+                ...(service.duration != null ? { durationMinutes: service.duration } : {}),
+                source: "catalog" as const,
+              },
+            }
+          : {}),
+      });
+      if (migrated) {
+        return {
+          bookingDraft: migrated,
+          bookingNoteStatus: "unasked",
+          selectedSlot: null,
+          selectedAvailabilityDate: null,
+          next: BOOKING_AGENT_ID,
+          lastHandoff: null,
+        };
+      }
+    }
+
     const staticPrompt = options.loadSupervisorPrompt().trim();
     const history = stripToolNoiseFromMessages(state.messages);
     const ttlMs = options.prefetchTtlMs ?? PREFETCH_TTL_MS;

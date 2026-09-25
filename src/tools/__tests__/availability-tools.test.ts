@@ -262,14 +262,18 @@ describe("meeting-tools availability", () => {
     });
     const parsed = JSON.parse(raw as string) as {
       days: Array<{ date: string }>;
-      searchDirection: string;
-      searchAnchor: string;
-      searchedThrough: string;
+      query: {
+        kind: string;
+        anchor: string;
+        rangeThrough: string;
+      };
+      searchDirection?: string;
     };
 
-    expect(parsed.searchDirection).toBe("earlier");
-    expect(parsed.searchAnchor).toBe("2099-10-14");
-    expect(parsed.searchedThrough).toBe("2099-10-13");
+    expect(parsed.query.kind).toBe("earlier");
+    expect(parsed.query.anchor).toBe("2099-10-14");
+    expect(parsed.query.rangeThrough).toBe("2099-10-13");
+    expect(parsed.searchDirection).toBeUndefined();
     expect(parsed.days.length).toBeGreaterThan(0);
     expect(parsed.days.map((day) => day.date)).toEqual(
       [...parsed.days.map((day) => day.date)].sort(),
@@ -820,7 +824,12 @@ describe("tryAvailabilityCacheHit", () => {
     expect(hit?.kind).toBe("date_list");
     expect(JSON.parse(hit!.json)).toMatchObject({
       days: [],
-      searchDirection: "later",
+      query: {
+        kind: "later",
+        anchor: "2026-10-05",
+        rangeFrom: "2026-10-06",
+        rangeThrough: "2026-11-04",
+      },
       cacheHit: true,
     });
   });
