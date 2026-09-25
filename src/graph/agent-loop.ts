@@ -681,6 +681,62 @@ const commandIdempotencyKey = (
   payload: Record<string, unknown>,
 ): string => `${action}:${JSON.stringify(payload)}`;
 
+/** Build the create command from the authoritative draft, without model-owned fields. */
+const createCommandFromBookingDraft = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  const draft = state.bookingDraft;
+  const acceptance = draft?.serviceAcceptance;
+  const slot = draft?.selectedSlot;
+  const contactId = draft?.contactId
+    ?? state.contactContext?.contacts.find(
+      (contact) => typeof contact.id === "string" && contact.id.length > 0,
+    )?.id;
+  if (
+    !draft
+    || acceptance?.status !== "accepted"
+    || slot == null
+    || !contactId
+    || (draft.note.status !== "skipped" && draft.note.status !== "answered")
+  ) {
+    return null;
+  }
+  const contact = state.contactContext?.contacts.find((row) => row.id === contactId);
+  const firstName = typeof contact?.firstName === "string" ? contact.firstName.trim() : "";
+  const lastName = typeof contact?.lastName === "string" ? contact.lastName.trim() : "";
+  const fullName = [firstName, lastName].filter(Boolean).join(" ");
+  const serviceName = acceptance.service.name?.trim() || acceptance.service.id;
+  const payload: Record<string, unknown> = {
+    name: fullName ? `${serviceName} - ${fullName}` : serviceName,
+    dateStart: slot.dateStart,
+    dateEnd: slot.dateEnd,
+    contactId,
+    serviceId: acceptance.service.id,
+    confirmMessage: `Підтвердити запис на ${slot.label}?`,
+    ...(draft.note.value ? { description: draft.note.value } : {}),
+  };
+  return {
+    action: "create",
+    payload,
+    idempotencyKey: commandIdempotencyKey("create", payload),
+    expiresAt: Date.now() + 15 * 60 * 1000,
+  };
+};
+
+const bookingDraftCanPrepareCommand = (state: ClinicState): boolean => {
+  if (createCommandFromBookingDraft(state) == null) {
+    return false;
+  }
+  if (!toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")) {
+    return false;
+  }
+  const lastAi = [...(state.agentMessages ?? [])]
+    .reverse()
+    .find((message) => message instanceof AIMessage);
+  const calls = lastAi instanceof AIMessage ? (lastAi.tool_calls ?? []) : [];
+  return calls.length === 0 || calls.some((call) => call.name === "create_meeting");
+};
+
 /** Turn Gemini XML-in-content into `tool_calls`; inject slots when booking skipped the tool. */
 const coerceAvailabilityToolCalls = (
   response: AIMessage,
@@ -939,6 +995,30 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   const status = authoritativeNoteStatus(state);
   const availability = state.availabilityContext;
   const matchedDay = matchAvailabilityDay(human, availability?.days ?? []);
+  const explicitDate = resolveAvailabilityRequest(human, kyivToday());
+
+  // Date intent wins over free-text note interpretation. A date outside the
+  // current snapshot is still a date change, not a visit note.
+  if (
+    explicitDate?.kind === "exact"
+    && explicitDate.date !== (state.bookingDraft?.selectedDate ?? state.selectedAvailabilityDate)
+  ) {
+    trackEvent("booking_date_selected", { date: explicitDate.date });
+    const bookingDraft = reduceBookingDraft(state.bookingDraft, {
+      type: "date_selected",
+      date: explicitDate.date,
+    });
+    return {
+      ...(state.bookingDraft == null
+        ? {
+            bookingNoteStatus: status,
+            selectedAvailabilityDate: explicitDate.date,
+            selectedSlot: null,
+          }
+        : {}),
+      bookingDraft,
+    };
+  }
 
   // DATE is a state transition, not just a presentation choice. Keep it until
   // the following TIME message so repeated clock labels cannot resolve against
@@ -970,6 +1050,33 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     matchedSlot != null
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
+
+  // A displayed note prompt and its typed reply must be one runtime-owned
+  // transition. Accept the skip/value even if an older checkpoint still says
+  // `unasked`.
+  if (authoritativeSelectedSlot(state) != null && status === "unasked") {
+    if (isNoteSkipReply(human)) {
+      trackEvent("booking_note_step", { phase: "skipped" });
+      return {
+        ...(state.bookingDraft == null ? { bookingNoteStatus: "skipped" as const } : {}),
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "note_status",
+          status: "skipped",
+        }),
+      };
+    }
+    if (!matchedSlot && human.length > 0) {
+      trackEvent("booking_note_step", { phase: "answered" });
+      return {
+        ...(state.bookingDraft == null ? { bookingNoteStatus: "answered" as const } : {}),
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "note_status",
+          status: "answered",
+          value: human,
+        }),
+      };
+    }
+  }
 
   if (status === "awaiting") {
     if (isNoteSkipReply(human) || sameSlot) {
@@ -1265,6 +1372,63 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     if (agentId !== BOOKING_AGENT_ID) {
       return {};
     }
+    const draftCommand = createCommandFromBookingDraft(state);
+    if (
+      draftCommand
+      && !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      && state.bookingDraft?.selectedDate
+    ) {
+      const revalidationCall = {
+        id: `booking_revalidate_${state.bookingDraft.version}`,
+        name: "present_availability_slots",
+        args: {
+          direction: "exact",
+          date: state.bookingDraft.selectedDate,
+          ...(state.bookingDraft.serviceAcceptance?.service.durationMinutes
+            ? { durationMinutes: state.bookingDraft.serviceAcceptance.service.durationMinutes }
+            : {}),
+          forceRefresh: true,
+        },
+        type: "tool_call" as const,
+      };
+      const revalidationAi = new AIMessage({
+        content: "",
+        tool_calls: [revalidationCall],
+      });
+      const messages = state.agentMessages ?? [];
+      return { agentMessages: new Overwrite([...messages, revalidationAi]) };
+    }
+    if (draftCommand && bookingDraftCanPrepareCommand(state)) {
+      const lastAiIndex = [...(state.agentMessages ?? [])]
+        .map((message, index) => ({ message, index }))
+        .reverse()
+        .find(({ message }) => message instanceof AIMessage)?.index;
+      const syntheticCall = {
+        id: `booking_draft_create_${state.bookingDraft?.version ?? 0}`,
+        name: "create_meeting",
+        args: draftCommand.payload,
+        type: "tool_call" as const,
+      };
+      const syntheticAi = new AIMessage({
+        content: "",
+        tool_calls: [syntheticCall],
+      });
+      const messages = state.agentMessages ?? [];
+      const agentMessages = lastAiIndex == null
+        ? [...messages, syntheticAi]
+        : [
+            ...messages.slice(0, lastAiIndex),
+            syntheticAi,
+            ...messages.slice(lastAiIndex + 1),
+          ];
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: draftCommand,
+        }),
+        agentMessages: new Overwrite(agentMessages),
+      };
+    }
     const lastAi = [...(state.agentMessages ?? [])]
       .reverse()
       .find((message) => message instanceof AIMessage && (message.tool_calls?.length ?? 0) > 0);
@@ -1471,7 +1635,12 @@ export const createAgentToolsNode = (
         ) {
           noteStatusUpdate = state.bookingDraft == null
             ? { bookingNoteStatus: "awaiting" }
-            : {};
+            : {
+                bookingDraft: reduceBookingDraft(state.bookingDraft, {
+                  type: "note_status",
+                  status: "awaiting",
+                }),
+              };
           trackEvent("booking_create_blocked_note", {
             phase: authoritativeNoteStatus(state),
           });
@@ -2013,9 +2182,18 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       yieldFlag = true;
     }
 
-    const noteStatusForHandoff =
-      awaitingNote && !slotOffer && state.bookingDraft == null
-        ? ({ bookingNoteStatus: "awaiting" as const } satisfies ClinicStateUpdate)
+    const noteStatusForHandoff: ClinicStateUpdate =
+      awaitingNote && !slotOffer
+        ? state.bookingDraft
+          ? {
+              bookingDraft: state.bookingDraft.note.status === "awaiting"
+                ? state.bookingDraft
+                : reduceBookingDraft(state.bookingDraft, {
+                    type: "note_status",
+                    status: "awaiting",
+                  }),
+            }
+          : { bookingNoteStatus: "awaiting" as const }
         : {};
     const offeredService =
       (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
@@ -2094,6 +2272,13 @@ export const routeAfterAgentLlm = (
 ): string => {
   if (state.stepCount >= maxSteps) {
     return finalizeName;
+  }
+
+  // Once the draft is complete, the runtime owns command preparation. This
+  // prevents an LLM mutation retry/error from becoming the booking state
+  // machine and also supports a model response containing plain text.
+  if (commandPrepareName && bookingDraftCanPrepareCommand(state)) {
+    return commandPrepareName;
   }
 
   if (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages)) {

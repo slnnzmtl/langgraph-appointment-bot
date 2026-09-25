@@ -316,6 +316,8 @@ export const presentAvailabilitySlotsArgsSchema = z.object({
     .describe(
       "Meeting ids to ignore as busy (pass the meeting being rescheduled so later times in that block can open; its current start is not offered).",
     ),
+  /** Runtime-only escape hatch for final slot revalidation; never changes the CRM query. */
+  forceRefresh: z.boolean().optional().describe("Internal runtime flag: bypass the checkpointed availability cache."),
 });
 
 export type AvailabilitySlotsToolArgs = z.infer<typeof presentAvailabilitySlotsArgsSchema>;
@@ -329,6 +331,9 @@ export const tryAvailabilityCacheHit = (
   input: AvailabilitySlotsToolArgs,
 ): { json: string; kind: "date_list" | "day_slots" } | null => {
   if (!ctx || (ctx.days.length === 0 && !ctx.searchDirection)) {
+    return null;
+  }
+  if (input.forceRefresh) {
     return null;
   }
   // Paging forward/backward or shifting the search window always hits CRM.

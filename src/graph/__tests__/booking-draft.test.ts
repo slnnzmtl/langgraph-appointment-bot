@@ -61,6 +61,37 @@ describe("BookingDraft reducer", () => {
     expect(changed.note.status).toBe("unasked");
   });
 
+  it("does not clear downstream facts when the same service is reaffirmed", () => {
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: "svc-1", name: "Консультація", source: "catalog" },
+          accepted: true,
+        }),
+        { type: "date_selected", date: "2026-10-17" },
+      ),
+      {
+        type: "slot_selected",
+        slot: {
+          dateStart: "2026-10-17T11:30:00",
+          dateEnd: "2026-10-17T12:00:00",
+          label: "11:30",
+        },
+      },
+    );
+    const reaffirmed = reduceBookingDraft(draft, {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Консультація", source: "direct" },
+      accepted: true,
+    });
+
+    expect(reaffirmed.serviceAcceptance?.status).toBe("accepted");
+    expect(reaffirmed.selectedDate).toBe("2026-10-17");
+    expect(reaffirmed.selectedSlot?.dateStart).toBe("2026-10-17T11:30:00");
+    expect(reaffirmed.note.status).toBe("awaiting");
+  });
+
   it("invalidates only the slot after an availability refresh", () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "slot_selected",

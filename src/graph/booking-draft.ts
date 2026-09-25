@@ -108,6 +108,23 @@ export const reduceBookingDraft = (
 
   switch (event.type) {
     case "service_selected": {
+      const existing = draft.serviceAcceptance;
+      // Re-selecting/reaffirming the same service is not a service change. Keep
+      // the date, slot, note, and command so an LLM retry or a patient restating
+      // their choice cannot restart the booking ladder.
+      if (existing?.service.id === event.service.id) {
+        const accepted = existing.status === "accepted" || event.accepted === true;
+        return withVersion(draft, {
+          ...draft,
+          serviceAcceptance: {
+            ...existing,
+            status: accepted ? "accepted" : existing.status,
+            service: { ...existing.service, ...event.service },
+            ...(accepted && event.turn != null ? { acceptedAtTurn: event.turn } : {}),
+          },
+          phase: accepted && draft.phase === "service" ? "date" : draft.phase,
+        });
+      }
       const reset = clearDownstream(draft);
       const acceptance: ServiceAcceptance = {
         status: event.accepted ? "accepted" : "pending",

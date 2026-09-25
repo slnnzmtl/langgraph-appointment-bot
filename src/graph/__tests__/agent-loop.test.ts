@@ -2886,6 +2886,65 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
+  it("prepares a create call from a ready draft without an LLM mutation call", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      clinicState({
+        contactContext: { contacts: [{ id: "c-1", firstName: "Ada", lastName: "Lovelace" }] },
+        bookingDraft: {
+          version: 4,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+          },
+          availability: null,
+          selectedDate: "2026-09-10",
+          selectedSlot: {
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+            label: "14:00",
+          },
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: null,
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: "{}",
+            name: "present_availability_slots",
+            tool_call_id: "slots-1",
+          }),
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "model-create-1",
+              name: "create_meeting",
+              args: {},
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+    );
+
+    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
+      ?? (update.agentMessages as AIMessage[]);
+    const message = messages.at(-1)!;
+    expect(message.tool_calls?.[0]).toMatchObject({
+      name: "create_meeting",
+      args: {
+        serviceId: CONSULTATION_SERVICE_ID,
+        contactId: "c-1",
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+      },
+    });
+    expect(update.bookingDraft?.phase).toBe("confirming");
+    expect(update.bookingDraft?.pendingCommand?.idempotencyKey).toContain("create:");
+  });
+
   const bookingLlmReturning = (content: string) => {
     const invoke = vi.fn(async () => new AIMessage(content));
     const slotsTool = tool(
@@ -3080,6 +3139,39 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         }),
       ).bookingNoteStatus,
     ).toBe("answered");
+  });
+
+  it("treats a new explicit date as a date change while the note prompt is visible", () => {
+    const draft = {
+      version: 3,
+      mode: "create" as const,
+      phase: "note" as const,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: CONSULTATION_SERVICE_ID, source: "catalog" as const },
+      },
+      availability: null,
+      selectedDate: "2026-11-20",
+      selectedSlot: {
+        dateStart: "2026-11-20T11:00:00",
+        dateEnd: "2026-11-20T11:30:00",
+        label: "11:00",
+      },
+      note: { status: "awaiting" as const },
+      contactId: null,
+      pendingCommand: null,
+    };
+    const update = advanceBookingNoteStep(
+      clinicState({
+        messages: [new HumanMessage("на 21.11")],
+        bookingDraft: draft,
+        availabilityContext: snapshot,
+      }),
+    );
+
+    expect(update.bookingDraft?.selectedDate).toBe("2026-11-21");
+    expect(update.bookingDraft?.selectedSlot).toBeNull();
+    expect(update.bookingDraft?.note.status).toBe("awaiting");
   });
 
   it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", () => {
