@@ -54,6 +54,11 @@ export type ComputeFreeSlotsInput = {
   meetings: BusyMeeting[];
   /** Open intervals as HH:mm pairs. Empty = closed day. */
   timeRanges: TimeRangePair[];
+  /** Appointment length used to calculate each slot's end time. */
+  durationMinutes?: number;
+  /** Candidate start-time increment. Defaults to the clinic's 30-minute cadence. */
+  startIntervalMinutes?: number;
+  /** @deprecated Use durationMinutes. Kept for callers using the low-level helper. */
   stepMinutes?: number;
   maxSlots?: number;
 };
@@ -272,14 +277,17 @@ export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot
     day,
     meetings,
     timeRanges,
-    stepMinutes = CLINIC_SLOT_MINUTES,
+    durationMinutes: requestedDurationMinutes,
+    startIntervalMinutes = CLINIC_SLOT_MINUTES,
+    stepMinutes,
     maxSlots = MAX_PRESENTED_SLOTS,
   } = input;
+  const durationMinutes = requestedDurationMinutes ?? stepMinutes ?? CLINIC_SLOT_MINUTES;
 
   if (!DAY_RE.test(day)) {
     throw new Error(`day must be YYYY-MM-DD, got: ${day}`);
   }
-  if (stepMinutes <= 0 || timeRanges.length === 0) {
+  if (durationMinutes <= 0 || startIntervalMinutes <= 0 || timeRanges.length === 0) {
     return [];
   }
 
@@ -300,10 +308,10 @@ export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot
     }
 
     let minutesFromMidnight = rangeStart;
-    while (minutesFromMidnight + stepMinutes <= rangeEnd) {
+    while (minutesFromMidnight + durationMinutes <= rangeEnd) {
       const hour = Math.floor(minutesFromMidnight / 60);
       const minute = minutesFromMidnight % 60;
-      const endTotal = minutesFromMidnight + stepMinutes;
+      const endTotal = minutesFromMidnight + durationMinutes;
       const endHour = Math.floor(endTotal / 60);
       const endMinute = endTotal % 60;
 
@@ -326,7 +334,7 @@ export const computeFreeSlots = (input: ComputeFreeSlotsInput): AvailabilitySlot
         }
       }
 
-      minutesFromMidnight += stepMinutes;
+      minutesFromMidnight += startIntervalMinutes;
     }
   }
 
@@ -527,7 +535,8 @@ export const findNextAvailableSlots = (
       day,
       meetings,
       timeRanges,
-      stepMinutes: durationMinutes,
+      durationMinutes,
+      startIntervalMinutes: CLINIC_SLOT_MINUTES,
     });
 
     if (day === today) {
@@ -611,7 +620,8 @@ export const findPreviousAvailableSlots = (
       day,
       meetings,
       timeRanges,
-      stepMinutes: durationMinutes,
+      durationMinutes,
+      startIntervalMinutes: CLINIC_SLOT_MINUTES,
     });
     if (day === today) {
       slots = filterSlotsAfterNow(slots, now);

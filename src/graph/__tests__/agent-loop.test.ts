@@ -2955,6 +2955,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       },
     ],
     stepMinutes: 30,
+    startIntervalMinutes: 30,
   };
 
   it("keeps consultation consent and the selected slot through note skip", async () => {
@@ -4412,6 +4413,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         },
       ],
       stepMinutes: 60,
+      startIntervalMinutes: 30,
     };
     let crmCalls = 0;
     const slotsTool = tool(

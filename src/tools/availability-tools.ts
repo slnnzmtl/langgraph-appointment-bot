@@ -36,6 +36,8 @@ export type AvailabilityContext = {
   stepMinutes: number;
   /** Accepted booking service that produced this snapshot, when known. */
   serviceId?: string;
+  /** Candidate start cadence used to generate this snapshot. */
+  startIntervalMinutes?: number;
   excludeMeetingIds?: string[];
   truncated?: boolean;
   query?: AvailabilityQuery;
@@ -213,6 +215,8 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
 
   const stepMinutes =
     typeof record.stepMinutes === "number" ? record.stepMinutes : CLINIC_SLOT_MINUTES;
+  const startIntervalMinutes =
+    typeof record.startIntervalMinutes === "number" ? record.startIntervalMinutes : undefined;
   const truncated = record.truncated === true;
   const searchDirection =
     record.searchDirection === "exact"
@@ -268,6 +272,7 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
     return {
       days,
       stepMinutes,
+      ...(startIntervalMinutes != null ? { startIntervalMinutes } : {}),
       ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
       ...(truncated ? { truncated } : {}),
       ...(query ? { query } : {}),
@@ -287,6 +292,7 @@ export const normalizePresentAvailabilityResult = (raw: string): AvailabilityCon
         },
       ],
       stepMinutes,
+      ...(startIntervalMinutes != null ? { startIntervalMinutes } : {}),
       ...(excludeMeetingIds && excludeMeetingIds.length > 0 ? { excludeMeetingIds } : {}),
       ...(query ? { query } : {}),
     };
@@ -356,7 +362,12 @@ export const tryAvailabilityCacheHit = (
   if (input.forceRefresh) {
     return null;
   }
-  // Paging forward/backward or shifting the search window always hits CRM.
+  // Snapshots created before the 30-minute start cadence was introduced must
+  // be regenerated instead of replaying potentially incomplete slot lists.
+  if (ctx.startIntervalMinutes !== CLINIC_SLOT_MINUTES) {
+    return null;
+  }
+  // Paging forward or shifting the search window always hits CRM.
   // An unqualified call must never replay an unrelated snapshot.
   if (input.afterDate || input.beforeDate || input.startDate || (!input.direction && !input.date)) {
     return null;
@@ -371,6 +382,7 @@ export const tryAvailabilityCacheHit = (
 
   const shared = {
     stepMinutes: ctx.stepMinutes,
+    startIntervalMinutes: ctx.startIntervalMinutes,
     ...(ctx.excludeMeetingIds?.length ? { excludeMeetingIds: ctx.excludeMeetingIds } : {}),
     cacheHit: true as const,
   };
@@ -577,7 +589,8 @@ export const createPresentAvailabilitySlotsTool = (options: {
               day: input.date,
               meetings,
               timeRanges,
-              stepMinutes,
+              durationMinutes: stepMinutes,
+              startIntervalMinutes: CLINIC_SLOT_MINUTES,
             }),
             omitDateStarts,
           );
@@ -592,6 +605,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
             date: input.date,
             dayLabel: formatKyivDayLabel(input.date, todayKyiv),
             stepMinutes,
+            startIntervalMinutes: CLINIC_SLOT_MINUTES,
             query: {
               kind: "exact",
               date: input.date,
@@ -682,6 +696,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
             dayLabel: formatKyivDayLabel(day.date, todayKyiv),
           })),
           stepMinutes,
+          startIntervalMinutes: CLINIC_SLOT_MINUTES,
           query: {
             kind: direction,
             anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,

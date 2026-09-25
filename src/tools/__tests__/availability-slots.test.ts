@@ -207,6 +207,22 @@ describe("computeFreeSlots", () => {
     expect(slots.map((s) => s.label)).toEqual(["11:00", "11:30", "12:00"]);
   });
 
+  it("uses 30-minute starts while preserving service duration and range boundaries", () => {
+    const slots = computeFreeSlots({
+      day: "2026-08-10",
+      meetings: [],
+      timeRanges: [["11:00", "14:00"]],
+      durationMinutes: 60,
+      startIntervalMinutes: 30,
+    });
+
+    expect(slots.map((s) => s.label)).toEqual(["11:00", "11:30", "12:00", "12:30", "13:00"]);
+    expect(slots.at(-1)).toMatchObject({
+      label: "13:00",
+      dateEnd: localIso("2026-08-10", 14, 0),
+    });
+  });
+
   it("supports multiple ranges per day", () => {
     const slots = computeFreeSlots({
       day: "2026-08-10",
@@ -530,7 +546,7 @@ describe("findNextAvailableSlots", () => {
     expect(result.days[0]?.date).toBe("2026-08-11");
   });
 
-  it("uses 60-minute steps from durationMinutes", () => {
+  it("uses 30-minute starts for a 60-minute service", () => {
     const result = findNextAvailableSlots({
       startDate: "2026-08-10",
       meetings: [],
@@ -539,8 +555,17 @@ describe("findNextAvailableSlots", () => {
       now: new Date("2026-08-01T10:00:00Z"),
     });
 
-    expect(result.slots.map((s) => s.label)).toEqual(["11:00", "12:00", "13:00", "14:00"]);
+    expect(result.slots.map((s) => s.label)).toEqual([
+      "11:00",
+      "11:30",
+      "12:00",
+      "12:30",
+      "13:00",
+      "13:30",
+      "14:00",
+    ]);
     expect(result.slots[0]?.dateEnd).toBe(localIso("2026-08-10", 12, 0));
+    expect(result.slots.at(-1)?.dateEnd).toBe(localIso("2026-08-10", 15, 0));
   });
 
   it("filters past slots on Kyiv today then continues if none remain", () => {
@@ -575,7 +600,7 @@ describe("findNextAvailableSlots", () => {
     });
 
     expect(result.date).toBe("2026-08-11");
-    expect(result.slots.map((s) => s.label)).toEqual(["12:00", "13:00", "14:00"]);
+    expect(result.slots.map((s) => s.label)).toEqual(["12:00", "12:30", "13:00", "13:30", "14:00"]);
   });
 
   it("returns empty when no slots in horizon", () => {
@@ -674,6 +699,28 @@ describe("findPreviousAvailableSlots", () => {
     ]);
     expect(result.slots[0]?.dateStart).toContain("2026-08-11");
     expect(result.searchedDays).toBe(3);
+  });
+
+  it("uses half-hour starts and excludes appointments past closing time", () => {
+    const result = findPreviousAvailableSlots({
+      beforeDate: "2026-08-14",
+      meetings: [],
+      resolveTimeRanges: (day) => resolveDayTimeRanges(calendar, day),
+      durationMinutes: 60,
+      maxDaysWithSlots: 1,
+      now: new Date("2026-08-10T10:00:00Z"),
+    });
+
+    expect(result.slots.map((slot) => slot.label)).toEqual([
+      "11:00",
+      "11:30",
+      "12:00",
+      "12:30",
+      "13:00",
+      "13:30",
+      "14:00",
+    ]);
+    expect(result.slots.at(-1)?.dateEnd).toBe(localIso("2026-08-13", 15, 0));
   });
 
   it("advances the backward cursor only through the returned page", () => {
