@@ -17,6 +17,7 @@ import {
   formatKyivSystemMetadata,
 } from "./clinic-datetime.js";
 import { createClinicLlmStack } from "./clinic-llm.js";
+import { configurePendingConfirmStore } from "../tools/meeting-confirm.js";
 
 export type ClinicBootstrap = {
   config: AppConfig;
@@ -35,6 +36,7 @@ export type ClinicRuntime = {
 export { buildClinicAgentTools } from "./clinic-agent-tools.js";
 
 export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRuntime> => {
+  configurePendingConfirmStore(config.checkpointDbPath);
   const adapters = await setupClinicAdapters(config);
   const agentTools = buildClinicAgentTools(config, adapters);
   const { supervisorLlm, agentModel, agentModelName, contextCache } =

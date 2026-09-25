@@ -7,6 +7,7 @@ import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
+import type { BookingDraft } from "./booking-draft.js";
 
 export type ClinicStateAnnotationOptions = {
   messageHistoryMaxTokens: number;
@@ -85,6 +86,11 @@ export const createClinicStateAnnotation = ({
     }),
     /** Calendar day selected from a multi-day availability snapshot before a time pick. */
     selectedAvailabilityDate: Annotation<string | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /** Authoritative checkpointed booking aggregate. Legacy fields above are projections during migration. */
+    bookingDraft: Annotation<BookingDraft | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),

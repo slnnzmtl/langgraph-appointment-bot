@@ -19,6 +19,8 @@ import {
   VISIT_CHANGE_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
+  BOOKING_OFFER_MENU,
+  BOOKING_OFFER_MENU_EN,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
   defaultMenuLabels,
@@ -52,6 +54,7 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
+import { reduceBookingDraft } from "./booking-draft.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -472,7 +475,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         const resetBookingLadder =
           isGreetingOrMainMenuLine(lastHumanLine)
           || isMyVisitLine(lastHumanLine)
-          || (/^(скасувати|cancel)$/i.test(lastHumanLine) && state.selectedSlot == null);
+          || (/^(скасувати|cancel)$/i.test(lastHumanLine)
+            && state.bookingDraft?.selectedSlot == null
+            && state.selectedSlot == null);
         prefetchUpdate = {
           ...prefetched,
           prefetchDirty: false,
@@ -486,8 +491,11 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
               bookingNoteStatus: "unasked" as const,
               selectedSlot: null,
               selectedAvailabilityDate: null,
+              ...(state.bookingDraft
+                ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+                : {}),
             }
-            : state.selectedSlot == null
+            : state.bookingDraft?.selectedSlot == null && state.selectedSlot == null
               ? { selectedAvailabilityDate: null }
               : {}),
         };
@@ -517,6 +525,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         ...prefetchUpdate,
         availabilityContext: null,
         availabilityCursor: null,
+        ...(state.bookingDraft
+          ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+          : {}),
         ...(state.selectedAvailabilityDate != null
           ? { selectedAvailabilityDate: null }
           : {}),
@@ -575,10 +586,23 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       state.lastHandoff?.agentId === BOOKING_AGENT_ID
       && routed.next === BOOKING_AGENT_ID
       && !SUPERVISOR_OWNED_REPLY_LABELS.has(lastHumanLine);
+    const abandonDraft = isGreetingOrMainMenuLine(lastHumanLine);
+    const chooseAnotherService = [BOOKING_OFFER_MENU[1], BOOKING_OFFER_MENU_EN[1]]
+      .some((label) => label.toLowerCase() === lastHumanLine.toLowerCase());
 
     return {
       ...routed,
       ...prefetchUpdate,
+      ...((abandonDraft || chooseAnotherService) && state.bookingDraft
+        ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+        : {}),
+      ...((abandonDraft || chooseAnotherService)
+        ? {
+            bookingNoteStatus: "unasked" as const,
+            selectedSlot: null,
+            selectedAvailabilityDate: null,
+          }
+        : {}),
       ...(keepAvailability
         ? {}
         : {

@@ -85,6 +85,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   bookingNoteStatus: "unasked",
   selectedSlot: null,
   selectedAvailabilityDate: null,
+  bookingDraft: null,
   ...overrides,
 });
 
@@ -3092,6 +3093,25 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsUpdate = await toolsNode(
       clinicState({
         bookingNoteStatus: "skipped",
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "date",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: CONSULTATION_SERVICE_ID,
+              name: "Консультація",
+              source: "catalog",
+            },
+          },
+          availability: null,
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "skipped" },
+          contactId: null,
+          pendingCommand: null,
+        },
         messages: [
           new AIMessage("Підібрати вільний час на консультацію?"),
           new HumanMessage("Так"),
@@ -3116,6 +3136,64 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
       { configurable: {} },
     );
+    expect(JSON.parse(String((toolsUpdate.agentMessages as ToolMessage[])[0]!.content))).toEqual({
+      awaitingConfirmation: true,
+    });
+  });
+
+  it("records catalog consultation selection before accepting a generic procedure offer", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const prepared = await prepare(clinicState({
+      messages: [
+        new HumanMessage("Консультація первинна"),
+        new AIMessage("Бажаєте записатися на цю процедуру?"),
+        new HumanMessage("Так"),
+      ],
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "Бажаєте записатися на цю процедуру?",
+      },
+    }));
+
+    expect(prepared.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "accepted",
+      service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+    });
+
+    const createTool = tool(
+      async () => JSON.stringify({ awaitingConfirmation: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({ serviceId: z.string() }),
+      },
+    );
+    const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        ...prepared,
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:30:00",
+          dateEnd: "2026-10-17T12:00:00",
+          label: "11:30",
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "catalog-consent",
+              name: "create_meeting",
+              args: { serviceId: CONSULTATION_SERVICE_ID },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
     expect(JSON.parse(String((toolsUpdate.agentMessages as ToolMessage[])[0]!.content))).toEqual({
       awaitingConfirmation: true,
     });

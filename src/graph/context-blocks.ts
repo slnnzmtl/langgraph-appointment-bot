@@ -4,6 +4,7 @@ import type { AvailabilityContext } from "../tools/availability-tools.js";
 import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
+import type { BookingDraft } from "./booking-draft.js";
 
 export { CONTEXT_TAGS };
 
@@ -178,6 +179,31 @@ export const formatSelectedSlotContext = (
     dateStart: slot.dateStart,
     dateEnd: slot.dateEnd,
     label: slot.label,
+  });
+};
+
+/** Booking: durable state projection used to keep the model aligned with runtime facts. */
+export const formatBookingDraftContext = (
+  draft: BookingDraft | null | undefined,
+): string => {
+  if (!draft) {
+    return "";
+  }
+  return block(CONTEXT_TAGS.bookingDraft, {
+    version: draft.version,
+    mode: draft.mode,
+    phase: draft.phase,
+    serviceAcceptance: draft.serviceAcceptance
+      ? {
+          status: draft.serviceAcceptance.status,
+          service: draft.serviceAcceptance.service,
+        }
+      : null,
+    availability: draft.availability,
+    selectedDate: draft.selectedDate,
+    selectedSlot: draft.selectedSlot,
+    note: draft.note,
+    contactId: draft.contactId,
   });
 };
 

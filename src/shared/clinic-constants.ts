@@ -75,6 +75,7 @@ export const CONTEXT_TAGS = {
   /** One tag; projections differ per agent (flag vs full meetings). */
   meetings: "list_planned_meetings",
   availability: "availability",
+  bookingDraft: "booking_draft",
   selectedSlot: "selected_slot",
   services: "list_services",
 } as const;

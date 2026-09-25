@@ -523,8 +523,8 @@ describe("create_meeting HITL interrupt", () => {
               {
                 id: "mtg-existing",
                 name: "Consult: Ada",
-                dateStart: "2026-09-12T10:00:00",
-                dateEnd: "2026-09-12T10:30:00",
+                dateStart: "2026-10-12T10:00:00",
+                dateEnd: "2026-10-12T10:30:00",
               },
             ],
           };

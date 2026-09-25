@@ -1,3 +1,6 @@
+import { dirname } from "node:path";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
 import { getConfig, interrupt } from "@langchain/langgraph";
 import { z } from "zod";
 
@@ -31,6 +34,12 @@ export type ConfirmDraft = {
   name?: string;
   dateStart?: string;
   dateEnd?: string;
+  /** The exact low-level command frozen before the patient confirms. */
+  command?: {
+    action: BookingAction;
+    payload: Record<string, unknown>;
+    idempotencyKey: string;
+  };
 };
 
 export type ConfirmAnalytics = {
@@ -90,6 +99,64 @@ type PendingConfirm = {
 };
 
 const pendingConfirms = new Map<string, PendingConfirm>();
+let configuredPendingConfirmStorePath: string | undefined;
+
+/** Configure the durable sidecar next to the graph checkpoint database. */
+export const configurePendingConfirmStore = (checkpointPath: string): void => {
+  configuredPendingConfirmStorePath = `${checkpointPath}.pending-confirms.json`;
+};
+
+/**
+ * Chat-text confirmation is a second graph turn, so its authorization must outlive
+ * the Node process. The interrupted keyboard path is already checkpointed by LangGraph;
+ * this small sidecar persists only the fingerprint/expiry needed for the chat path.
+ */
+const pendingConfirmStorePath = (): string | undefined => {
+  const checkpointPath = process.env.CHECKPOINT_DB_PATH?.trim();
+  if (configuredPendingConfirmStorePath && process.env.NODE_ENV !== "test") {
+    return configuredPendingConfirmStorePath;
+  }
+  if (!checkpointPath || process.env.NODE_ENV === "test") {
+    return undefined;
+  }
+  return `${checkpointPath}.pending-confirms.json`;
+};
+
+const loadPendingConfirms = (): void => {
+  const path = pendingConfirmStorePath();
+  if (!path || pendingConfirms.size > 0 || !existsSync(path)) {
+    return;
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, PendingConfirm>;
+    for (const [threadId, pending] of Object.entries(parsed)) {
+      if (
+        typeof pending?.key === "string"
+        && typeof pending.expiresAt === "number"
+        && pending.expiresAt > Date.now()
+      ) {
+        pendingConfirms.set(threadId, pending);
+      }
+    }
+  } catch {
+    // A corrupt sidecar must never block booking; the checkpoint remains authoritative.
+  }
+};
+
+const persistPendingConfirms = (): void => {
+  const path = pendingConfirmStorePath();
+  if (!path) {
+    return;
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    const temporary = `${path}.tmp`;
+    writeFileSync(temporary, JSON.stringify(Object.fromEntries(pendingConfirms)), "utf8");
+    renameSync(temporary, path);
+  } catch {
+    // The in-process map remains a safe fallback if the optional sidecar is unavailable.
+  }
+};
 
 const confirmFingerprintKey = (fp: ConfirmFingerprint): string =>
   JSON.stringify({
@@ -120,31 +187,37 @@ const rememberPendingConfirm = (threadId: string, fp: ConfirmFingerprint): void 
     key: confirmFingerprintKey(fp),
     expiresAt: Date.now() + PENDING_CONFIRM_TTL_MS,
   });
+  persistPendingConfirms();
 };
 
 const clearPendingConfirm = (threadId: string): void => {
   pendingConfirms.delete(threadId);
+  persistPendingConfirms();
 };
 
 /** True when this thread has a non-expired HITL card for these exact write arguments. Consumes it. */
 const consumeMatchingPendingConfirm = (threadId: string, fp: ConfirmFingerprint): boolean => {
+  loadPendingConfirms();
   const pending = pendingConfirms.get(threadId);
   if (!pending) {
     return false;
   }
   if (pending.expiresAt <= Date.now()) {
     pendingConfirms.delete(threadId);
+    persistPendingConfirms();
     return false;
   }
   if (pending.key !== confirmFingerprintKey(fp)) {
     return false;
   }
   pendingConfirms.delete(threadId);
+  persistPendingConfirms();
   return true;
 };
 
 export const clearPendingConfirmsForTests = (): void => {
   pendingConfirms.clear();
+  persistPendingConfirms();
 };
 
 /** Shared HITL pause for create / cancel / reschedule — Telegram reuses confirm_booking Yes/No. */
