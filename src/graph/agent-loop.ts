@@ -690,8 +690,38 @@ const commandIdempotencyKey = (
 
 const DIRECT_CANCEL_INTENT = /^(?:скасувати|скасування|cancel|cancel appointment|cancel visit)$/iu;
 
+const DIRECT_RESCHEDULE_INTENT = /^(?:перенести|перенесення|reschedule|reschedule appointment|reschedule visit|move appointment|move visit)$/iu;
+
 const isDirectCancelIntent = (state: ClinicState): boolean =>
   DIRECT_CANCEL_INTENT.test(lastPatientText(state).trim());
+
+const isDirectRescheduleIntent = (state: ClinicState): boolean =>
+  DIRECT_RESCHEDULE_INTENT.test(lastPatientText(state).trim());
+
+/**
+ * A direct move from «Мій запис» has one authoritative target. Keep the
+ * availability query tied to that target so its current slot is not offered
+ * again and a model-generated DATE prompt cannot bypass the lookup.
+ */
+const rescheduleAvailabilityArgsFromBookingContext = (
+  state: ClinicState,
+  args: Record<string, unknown> = {},
+): Record<string, unknown> | null => {
+  if (!isDirectRescheduleIntent(state) || state.bookingContext?.meetings.length !== 1) {
+    return null;
+  }
+  const meeting = state.bookingContext.meetings[0];
+  if (!meeting) {
+    return null;
+  }
+  const durationMinutes = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
+  return {
+    ...args,
+    direction: args.direction ?? "nearest",
+    excludeMeetingIds: [meeting.id],
+    ...(durationMinutes != null ? { durationMinutes } : {}),
+  };
+};
 
 /** Build a cancellation command from the supervisor's authoritative meeting list. */
 const cancelCommandFromBookingContext = (
@@ -905,6 +935,28 @@ const coerceAvailabilityToolCalls = (
         ...toolCalls,
         {
           id: `slots_coerce_${state.stepCount ?? 0}`,
+          name: "present_availability_slots",
+          args,
+          type: "tool_call" as const,
+        },
+      ];
+    }
+  }
+
+  // Rescheduling is a runtime-owned availability transition. A model may ask
+  // the patient to choose a day without emitting the required tool call; when
+  // the supervisor has exactly one authoritative visit, synthesize the query
+  // and bind it to that visit. Multiple visits remain model/selection-driven.
+  if (
+    agentId === BOOKING_AGENT_ID
+    && !toolCalls.some((call) => call.name === "present_availability_slots")
+  ) {
+    const args = rescheduleAvailabilityArgsFromBookingContext(state);
+    if (args && !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")) {
+      toolCalls = [
+        ...toolCalls,
+        {
+          id: `slots_reschedule_${state.stepCount ?? 0}`,
           name: "present_availability_slots",
           args,
           type: "tool_call" as const,
@@ -2058,8 +2110,12 @@ export const createAgentToolsNode = (
         if (call.name === "present_availability_slots") {
           // Own paging cursors from checkpoint — the model chooses semantic direction,
           // but must not invent calendar boundaries.
+          const rescheduleArgs = rescheduleAvailabilityArgsFromBookingContext(
+            state,
+            (call.args ?? {}) as Record<string, unknown>,
+          );
           const args = normalizeAvailabilityToolArgs({
-            args: (call.args ?? {}) as AvailabilitySlotsToolArgs,
+            args: (rescheduleArgs ?? call.args ?? {}) as AvailabilitySlotsToolArgs,
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
             ...(state.bookingDraft?.serviceAcceptance?.service.durationMinutes != null

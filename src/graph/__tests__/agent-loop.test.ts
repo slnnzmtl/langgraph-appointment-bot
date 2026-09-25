@@ -4437,6 +4437,29 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     ]);
   });
 
+  it("forces availability lookup for direct reschedule instead of accepting a day prompt", async () => {
+    const llm = bookingLlmReturning("Оберіть новий день для перенесення візиту:");
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage("Перенести")],
+        agentMessages: [new HumanMessage("Перенести")],
+        bookingContext: listedMeetings,
+        availabilityContext: null,
+        next: "booking",
+      }),
+    );
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(ai.tool_calls).toEqual([
+      expect.objectContaining({
+        name: "present_availability_slots",
+        args: {
+          direction: "nearest",
+          excludeMeetingIds: ["m-1"],
+        },
+      }),
+    ]);
+  });
+
   it("starts a fresh nearest search after accepting a consultation offer", async () => {
     const llm = bookingLlmReturning("Добре");
     const state = clinicState({
