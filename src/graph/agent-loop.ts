@@ -688,6 +688,45 @@ const commandIdempotencyKey = (
   payload: Record<string, unknown>,
 ): string => action + ":" + JSON.stringify(payload);
 
+const DIRECT_CANCEL_INTENT = /^(?:скасувати|скасування|cancel|cancel appointment|cancel visit)$/iu;
+
+const isDirectCancelIntent = (state: ClinicState): boolean =>
+  DIRECT_CANCEL_INTENT.test(lastPatientText(state).trim());
+
+/** Build a cancellation command from the supervisor's authoritative meeting list. */
+const cancelCommandFromBookingContext = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  if (!isDirectCancelIntent(state) || state.bookingContext?.meetings.length !== 1) {
+    return null;
+  }
+  const meeting = state.bookingContext.meetings[0];
+  if (!meeting) {
+    return null;
+  }
+  const payload: Record<string, unknown> = {
+    meetingId: meeting.id,
+    confirmMessage: "Підтвердити скасування поточного візиту?",
+    ...(meeting.name ? { name: meeting.name } : {}),
+  };
+  for (const [key, value] of [
+    ["dateStart", meeting.dateStart],
+    ["dateEnd", meeting.dateEnd],
+  ] as const) {
+    try {
+      payload[key] = normalizeLocalIsoDatetime(value);
+    } catch {
+      // The meeting id is authoritative; CRM can fill a malformed display date.
+    }
+  }
+  return {
+    action: "cancel",
+    payload,
+    idempotencyKey: commandIdempotencyKey("cancel", payload),
+    expiresAt: Date.now() + 15 * 60 * 1000,
+  };
+};
+
 /** Build the create command from the authoritative draft, without model-owned fields. */
 const createCommandFromBookingDraft = (
   state: ClinicState,
@@ -743,6 +782,10 @@ const createCommandFromBookingDraft = (
 };
 
 const bookingDraftCanPrepareCommand = (state: ClinicState): boolean => {
+  if (cancelCommandFromBookingContext(state) != null
+    && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")) {
+    return true;
+  }
   if (createCommandFromBookingDraft(state) == null) {
     return false;
   }
@@ -1481,6 +1524,38 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
     if (agentId !== BOOKING_AGENT_ID) {
       return {};
+    }
+    const directCancelCommand = cancelCommandFromBookingContext(state);
+    if (
+      directCancelCommand
+      && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+    ) {
+      const lastAiIndex = [...(state.agentMessages ?? [])]
+        .map((message, index) => ({ message, index }))
+        .reverse()
+        .find(({ message }) => message instanceof AIMessage)?.index;
+      const syntheticCall = {
+        id: `booking_direct_cancel_${state.bookingDraft?.version ?? 0}`,
+        name: "cancel_meeting",
+        args: directCancelCommand.payload,
+        type: "tool_call" as const,
+      };
+      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      const messages = state.agentMessages ?? [];
+      const agentMessages = lastAiIndex == null
+        ? [...messages, syntheticAi]
+        : [
+            ...messages.slice(0, lastAiIndex),
+            syntheticAi,
+            ...messages.slice(lastAiIndex + 1),
+          ];
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: directCancelCommand,
+        }),
+        agentMessages: new Overwrite(agentMessages),
+      };
     }
     const replacementAction = replacementActionForTurn(state);
     if (replacementAction === "decline") {

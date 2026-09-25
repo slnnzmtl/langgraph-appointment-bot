@@ -23,6 +23,7 @@ import {
   meetingMutationClearsAvailability,
   resolveAvailabilityOffer,
   isConsultationOfferAcceptance,
+  routeAfterAgentLlm,
 } from "../agent-loop.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
@@ -1511,6 +1512,25 @@ describe("createAgentLlmNode context cache", () => {
   });
 });
 
+describe("routeAfterAgentLlm", () => {
+  it("routes a direct cancellation to runtime command preparation even after plain model text", () => {
+    expect(
+      routeAfterAgentLlm(
+        clinicState({
+          messages: [new HumanMessage("Скасувати")],
+          bookingContext: listedMeetings,
+          agentMessages: [new AIMessage("Запис скасовано")],
+          stepCount: 1,
+        }),
+        5,
+        "booking__tools",
+        "booking__finalize",
+        "booking__command_prepare",
+      ),
+    ).toBe("booking__command_prepare");
+  });
+});
+
 describe("createAgentFinalizeNode", () => {
   const agent: ClinicAgentDefinition = {
     id: "booking",
@@ -2991,6 +3011,30 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
     expect(update.bookingDraft?.replacement?.status).toBe("cancelling");
     expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
+  });
+
+  it("dispatches direct cancellation from the authoritative single-visit list", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      clinicState({
+        messages: [new HumanMessage("Скасувати")],
+        bookingContext: listedMeetings,
+        agentMessages: [new AIMessage("Запис скасовано")],
+      }),
+    );
+
+    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
+      ?? (update.agentMessages as AIMessage[]);
+    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
+      name: "cancel_meeting",
+      args: {
+        meetingId: "m-1",
+        dateStart: "2026-08-17T11:00:00",
+        dateEnd: "2026-08-17T11:30:00",
+      },
+    });
+    expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
+    expect(update.bookingDraft?.phase).toBe("confirming");
   });
 
   it("reuses the cancellation command for explicit chat confirmation", async () => {
