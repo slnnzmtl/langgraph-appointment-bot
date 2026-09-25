@@ -1525,7 +1525,17 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     if (agentId !== BOOKING_AGENT_ID) {
       return {};
     }
-    const directCancelCommand = cancelCommandFromBookingContext(state);
+    // Replacement is a compound mutation. Once it has started, the original
+    // patient message (often `Скасувати`) and the stale meeting snapshot must
+    // not be interpreted as a new direct-cancellation request. The replacement
+    // phase is the authoritative source for the next command.
+    const replacementStatus = state.bookingDraft?.replacement?.status;
+    const replacementInProgress = replacementStatus === "offered"
+      || replacementStatus === "cancelling"
+      || replacementStatus === "create_pending";
+    const directCancelCommand = replacementInProgress
+      ? null
+      : cancelCommandFromBookingContext(state);
     if (
       directCancelCommand
       && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")

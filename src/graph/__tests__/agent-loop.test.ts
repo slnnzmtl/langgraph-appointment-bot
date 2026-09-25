@@ -3083,6 +3083,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     };
     const update = await commandPrepare(
       clinicState({
+        messages: [new HumanMessage("Скасувати")],
+        bookingContext: listedMeetings,
         bookingDraft: {
           version: 9,
           mode: "create",
@@ -3120,6 +3122,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       args: originalCommand.payload,
     });
     expect(update.bookingDraft?.pendingCommand?.action).toBe("create");
+    expect(messages.at(-1)?.tool_calls?.[0]?.name).not.toBe("cancel_meeting");
   });
 
   const bookingLlmReturning = (content: string) => {
