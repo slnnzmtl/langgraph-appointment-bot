@@ -18,6 +18,7 @@ import {
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import {
   createAgentFinalizeNode,
+  createAgentMutationFinalizeNode,
   createAgentCommandPrepareNode,
   createAgentLlmNode,
   createAgentPrepareNode,
@@ -26,6 +27,7 @@ import {
   llmNodeName,
   prepareNodeName,
   commandPrepareNodeName,
+  mutationFinalizeNodeName,
   routeAfterAgentLlm,
   routeAfterAgentTools,
   toolsNodeName,
@@ -113,10 +115,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const llm = llmNodeName(agent.id);
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
+    const mutationFinalize = mutationFinalizeNodeName(agent.id);
 
     graph = graph
       .addNode(prepare, createAgentPrepareNode(agent.id))
       .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
+      .addNode(mutationFinalize, createAgentMutationFinalizeNode(agent))
       .addNode(
         llm,
         createAgentLlmNode({
@@ -158,13 +162,21 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       .addConditionalEdges(
         toolsNode,
         (state: { agentMessages: unknown[] }) =>
-          routeAfterAgentTools(state as never, llm, toolsNode),
+          routeAfterAgentTools(
+            state as never,
+            llm,
+            toolsNode,
+            agent.id === "booking" ? mutationFinalize : undefined,
+          ),
         {
           [llm]: llm,
           [toolsNode]: toolsNode,
+          [mutationFinalize]: mutationFinalize,
         },
       )
       .addEdge(finalize, END);
+
+    graph = graph.addEdge(mutationFinalize, END);
 
     supervisorRoutes[agent.id] = prepare;
   }

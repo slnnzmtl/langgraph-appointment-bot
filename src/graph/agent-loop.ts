@@ -117,6 +117,7 @@ export const commandPrepareNodeName = (agentId: string): string => `${agentId}__
 export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
 export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
 export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
+export const mutationFinalizeNodeName = (agentId: string): string => `${agentId}__mutation_finalize`;
 
 export type CreateAgentLoopOptions = {
   agent: ClinicAgentDefinition;
@@ -180,7 +181,13 @@ const BLOCKED_MEETING_ERRORS = new Set([
   SELECTED_SLOT_NOT_AVAILABLE_ERROR,
 ]);
 
-export type MeetingMutationOutcome = "committed" | "pending" | "blocked" | "failed" | null;
+export type MeetingMutationOutcome =
+  | "committed"
+  | "pending_confirmation"
+  | "declined"
+  | "blocked"
+  | "failed"
+  | null;
 
 export const classifyMeetingMutationToolMessage = (
   message: ToolMessage,
@@ -197,8 +204,11 @@ export const classifyMeetingMutationToolMessage = (
   if (!record) {
     return "committed";
   }
-  if (record.cancelled === true || record.awaitingConfirmation === true) {
-    return "pending";
+  if (record.awaitingConfirmation === true) {
+    return "pending_confirmation";
+  }
+  if (record.cancelled === true) {
+    return "declined";
   }
   if (typeof record.error === "string") {
     return BLOCKED_MEETING_ERRORS.has(record.error) ? "blocked" : "failed";
@@ -209,6 +219,26 @@ export const classifyMeetingMutationToolMessage = (
 const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
   MEETING_MUTATION_TOOLS.has(message.name ?? "")
   && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
+
+const terminalDirectCancellation = (state: ClinicState): ToolMessage | null => {
+  // A replacement cancellation is a continuation, not a patient-facing terminal
+  // outcome: its committed result must continue into the replacement create flow.
+  if (state.bookingDraft?.replacement != null) {
+    return null;
+  }
+  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = state.agentMessages?.[index];
+    if (!(message instanceof ToolMessage) || message.name !== "cancel_meeting") {
+      continue;
+    }
+    const outcome = classifyMeetingMutationToolMessage(message);
+    if (outcome === "committed" || outcome === "declined" || outcome === "failed") {
+      return message;
+    }
+    return null;
+  }
+  return null;
+};
 
 /** Committed, failed, or HITL ❌ — stale free/busy and note step must not survive. */
 export const meetingMutationClearsAvailability = (messages: BaseMessage[]): boolean =>
@@ -652,6 +682,11 @@ const normalizeMeetingMutationArgs = (
   };
   const selectedSlot = authoritativeSelectedSlot(state);
   const acceptedService = state.bookingDraft?.serviceAcceptance;
+  if (call.name === "cancel_meeting") {
+    // The model may request the mutation, but it does not own the safety copy
+    // shown before the CRM write.
+    args.confirmMessage = cancelConfirmationMessage();
+  }
   if (call.name === "create_meeting" && acceptedService?.status === "accepted") {
     args.serviceId = acceptedService.service.id;
   }
@@ -698,6 +733,10 @@ const isDirectCancelIntent = (state: ClinicState): boolean =>
 const isDirectRescheduleIntent = (state: ClinicState): boolean =>
   DIRECT_RESCHEDULE_INTENT.test(lastPatientText(state).trim());
 
+function cancelConfirmationMessage(): string {
+  return "Скасувати цей візит? Після підтвердження запис буде скасовано.";
+}
+
 /**
  * A direct move from «Мій запис» has one authoritative target. Keep the
  * availability query tied to that target so its current slot is not offered
@@ -736,7 +775,7 @@ const cancelCommandFromBookingContext = (
   }
   const payload: Record<string, unknown> = {
     meetingId: meeting.id,
-    confirmMessage: "Підтвердити скасування поточного візиту?",
+    confirmMessage: cancelConfirmationMessage(),
     ...(meeting.name ? { name: meeting.name } : {}),
   };
   for (const [key, value] of [
@@ -861,7 +900,7 @@ const cancelCommandFromReplacement = (
   const meeting = replacement.meeting;
   const payload: Record<string, unknown> = {
     meetingId: meeting.id,
-    confirmMessage: "Підтвердити скасування поточного візиту?",
+    confirmMessage: cancelConfirmationMessage(),
     ...(meeting.name ? { name: meeting.name } : {}),
     ...(replacement.status === "cancelling" ? { confirmationGiven: true } : {}),
   };
@@ -2406,6 +2445,46 @@ export const createAgentToolsNode = (
   };
 };
 
+/**
+ * Complete a direct cancellation from the committed tool outcome. The model is
+ * intentionally not called again here: it must not turn a declined write into
+ * a success message or ask for an action without supplying its keyboard.
+ */
+export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
+  (state: ClinicState): ClinicStateUpdate => {
+    const result = terminalDirectCancellation(state);
+    if (!result) {
+      return {};
+    }
+    const outcome = classifyMeetingMutationToolMessage(result);
+    const committed = outcome === "committed";
+    const declined = outcome === "declined";
+    const replyText = committed
+      ? "Запис скасовано."
+      : declined
+        ? "Запис не було скасовано."
+        : "Не вдалося скасувати запис. Спробуйте ще раз.";
+    const replyButtons = committed
+      ? [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))]
+      : [...VISIT_CHANGE_MENU];
+    const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
+    return {
+      agentMessages: new Overwrite([] as BaseMessage[]),
+      stepCount: 0,
+      // A direct cancellation is complete; do not leave its frozen command in
+      // the draft for a later turn to replay.
+      bookingDraft: null,
+      messages: [message],
+      lastHandoff: {
+        agentId: agent.id,
+        agentName: agent.name,
+        status: "ok",
+        replyText,
+        replyButtons,
+      },
+    };
+  };
+
 export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState): ClinicStateUpdate => {
     const agentMessages = state.agentMessages ?? [];
@@ -2650,9 +2729,14 @@ export const routeAfterAgentTools = (
   state: ClinicState,
   llmName: string,
   toolsName: string,
+  mutationFinalizeName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  if (mutationFinalizeName && terminalDirectCancellation(state) != null) {
+    return mutationFinalizeName;
   }
 
   return llmName;

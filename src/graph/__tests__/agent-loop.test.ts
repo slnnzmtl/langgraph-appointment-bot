@@ -9,6 +9,7 @@ import {
   advanceBookingNoteStep,
   createAgentCommandPrepareNode,
   createAgentFinalizeNode,
+  createAgentMutationFinalizeNode,
   createAgentPrepareNode,
   captureAvailabilityFromMessages,
   captureServicesFromMessages,
@@ -24,6 +25,7 @@ import {
   resolveAvailabilityOffer,
   isConsultationOfferAcceptance,
   routeAfterAgentLlm,
+  routeAfterAgentTools,
 } from "../agent-loop.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
@@ -39,6 +41,7 @@ import {
   OTHER_DATE_LABEL_EN,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
+  VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
@@ -524,7 +527,7 @@ describe("availability context helpers", () => {
           name: "create_meeting",
         }),
       ),
-    ).toBe("pending");
+    ).toBe("pending_confirmation");
   });
 
   it("clears availability on committed, failed, or HITL decline", () => {
@@ -2628,6 +2631,75 @@ describe("createAgentFinalizeNode", () => {
   });
 });
 
+describe("runtime-owned cancellation outcomes", () => {
+  const agent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Books visits",
+    systemPrompt: "book",
+    maxSteps: 8,
+  };
+
+  const cancellationMessages = (content: unknown): [AIMessage, ToolMessage] => [
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id: "cancel-1", name: "cancel_meeting", args: { meetingId: "m-1" } }],
+    }),
+    new ToolMessage({
+      content: JSON.stringify(content),
+      tool_call_id: "cancel-1",
+      name: "cancel_meeting",
+    }),
+  ];
+
+  it("classifies cancellation decline separately from pending confirmation", () => {
+    expect(classifyMeetingMutationToolMessage(cancellationMessages({ cancelled: true })[1]))
+      .toBe("declined");
+    expect(classifyMeetingMutationToolMessage(new ToolMessage({
+      content: JSON.stringify({ awaitingConfirmation: true }),
+      tool_call_id: "pending-1",
+      name: "cancel_meeting",
+    }))).toBe("pending_confirmation");
+  });
+
+  it("renders a declined cancellation with an actionable visit-change menu", () => {
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      messages: [new HumanMessage("❌")],
+      bookingContext: listedMeetings,
+      agentMessages: cancellationMessages({ cancelled: true }),
+    }));
+
+    expect(update.lastHandoff).toMatchObject({
+      status: "ok",
+      replyText: "Запис не було скасовано.",
+      replyButtons: [...VISIT_CHANGE_MENU],
+    });
+    expect(update.bookingDraft).toBeNull();
+  });
+
+  it("renders committed cancellation without model-authored success text", () => {
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingContext: listedMeetings,
+      agentMessages: cancellationMessages({ id: "m-1", success: true }),
+    }));
+
+    expect(update.lastHandoff?.replyText).toBe("Запис скасовано.");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+  });
+
+  it("routes terminal direct cancellation outcomes around the booking LLM", () => {
+    expect(routeAfterAgentTools(
+      clinicState({
+        bookingContext: listedMeetings,
+        agentMessages: cancellationMessages({ cancelled: true }),
+      }),
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+    )).toBe("booking__mutation_finalize");
+  });
+});
+
 describe("availability offer helpers", () => {
   const days: AvailabilityContext["days"] = [
     {
@@ -3031,6 +3103,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         meetingId: "m-1",
         dateStart: "2026-08-17T11:00:00",
         dateEnd: "2026-08-17T11:30:00",
+        confirmMessage: "Скасувати цей візит? Після підтвердження запис буде скасовано.",
       },
     });
     expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
