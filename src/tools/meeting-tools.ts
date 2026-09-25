@@ -265,26 +265,31 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
 
       const dateStart = normalizeLocalIsoDatetime(input.dateStart);
       const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
+      const command = {
+        name: input.name,
+        dateStart,
+        dateEnd,
+        assignedUserId,
+        parentType: "Contact" as const,
+        parentId: input.contactId,
+        contactsIds: [input.contactId],
+        cServicesIds: [input.serviceId],
+        ...(input.description ? { description: input.description } : {}),
+        ...(input.location ? { location: input.location } : {}),
+        status: "Planned" as const,
+      };
       const draft = {
         name: input.name,
         dateStart,
         dateEnd,
         confirmMessage: input.confirmMessage.trim(),
+        command: {
+          action: "create" as const,
+          payload: command,
+        },
       };
       const execute = () =>
-        callTool("create_meeting", {
-          name: input.name,
-          dateStart,
-          dateEnd,
-          assignedUserId,
-          parentType: "Contact",
-          parentId: input.contactId,
-          contactsIds: [input.contactId],
-          cServicesIds: [input.serviceId],
-          ...(input.description ? { description: input.description } : {}),
-          ...(input.location ? { location: input.location } : {}),
-          status: "Planned",
-        });
+        callTool("create_meeting", command);
 
       const writeProps = {
         contact_id: input.contactId,
@@ -329,10 +334,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
             'Meeting title as "[service-name] - [firstName lastName]" (e.g. "Консультація - Daniel Kovalenko")',
           ),
         dateStart: KYIV_LOCAL_ISO_SCHEMA.describe(
-          "Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <selected_slot> or present_availability_slots",
+          "Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <booking_draft> or present_availability_slots",
         ),
         dateEnd: KYIV_LOCAL_ISO_SCHEMA.describe(
-          "End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <selected_slot> or present_availability_slots",
+          "End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <booking_draft> or present_availability_slots",
         ),
         contactId: z.string().min(1).describe("Patient Contact id"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,
@@ -366,11 +371,19 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         return owned.errorJson;
       }
       const draft = confirmDraftFromMeeting(input, owned.meeting);
+      const command = {
+        meetingId: input.meetingId,
+        status: "Not Held" as const,
+      };
+      const pendingDraft = {
+        ...draft,
+        command: {
+          action: "cancel" as const,
+          payload: command,
+        },
+      };
       const execute = () =>
-        callTool("update_meeting", {
-          meetingId: input.meetingId,
-          status: "Not Held",
-        });
+        callTool("update_meeting", command);
 
       const writeProps = { meeting_id: input.meetingId };
       const fingerprint: ConfirmFingerprint = {
@@ -383,7 +396,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           input.confirmationGiven,
           fingerprint,
           execute,
-          draft,
+          pendingDraft,
           {
             action: "cancel",
             cancelledMessage: "Cancellation cancelled by user.",
@@ -444,12 +457,20 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         },
         owned.meeting,
       );
+      const command = {
+        meetingId: input.meetingId,
+        dateStart,
+        dateEnd,
+      };
+      const pendingDraft = {
+        ...draft,
+        command: {
+          action: "reschedule" as const,
+          payload: command,
+        },
+      };
       const execute = () =>
-        callTool("update_meeting", {
-          meetingId: input.meetingId,
-          dateStart,
-          dateEnd,
-        });
+        callTool("update_meeting", command);
 
       const writeProps = {
         meeting_id: input.meetingId,
@@ -468,7 +489,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
           input.confirmationGiven,
           fingerprint,
           execute,
-          draft,
+          pendingDraft,
           {
             action: "reschedule",
             cancelledMessage: "Reschedule cancelled by user.",

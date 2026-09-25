@@ -19,6 +19,8 @@ import {
   VISIT_CHANGE_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
+  BOOKING_OFFER_MENU,
+  BOOKING_OFFER_MENU_EN,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
   defaultMenuLabels,
@@ -33,6 +35,9 @@ import {
   requestsConsultation,
 } from "../shared/message-content.js";
 import { normalizeClinicPhone } from "../shared/phone.js";
+import { resolveAvailabilityRequest } from "../tools/availability-request.js";
+import { kyivToday } from "../tools/availability-slots.js";
+import { availabilityCursorFromContext } from "../tools/availability-tools.js";
 import {
   attachPrefetchVisits,
   formatGreetingContact,
@@ -49,6 +54,10 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
+import {
+  migrateLegacyBookingState,
+  reduceBookingDraft,
+} from "./booking-draft.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -160,6 +169,22 @@ export const shouldContinueInSpecialist = (
     return false;
   }
 
+  // Alternative-date wording may be free text in the patient's language rather
+  // than an exact Ukrainian keyboard label. Keep it in Booking while a snapshot
+  // exists so agent-loop can derive the cursor deterministically.
+  if (agentId === BOOKING_AGENT_ID && (state.availabilityContext != null || state.availabilityCursor != null)) {
+    const availabilityRequest = resolveAvailabilityRequest(humanText, kyivToday());
+    if (
+      isOtherDateReply(humanText)
+      || availabilityRequest?.kind === "exact"
+      || availabilityRequest?.kind === "earlier"
+      || availabilityRequest?.kind === "later"
+      || availabilityRequest?.kind === "nearest"
+    ) {
+      return true;
+    }
+  }
+
   const labels = replyButtonLabels(state.lastHandoff.replyButtons);
   return labels.includes(humanText);
 };
@@ -172,7 +197,11 @@ export const shouldContinueInFaq = (state: ClinicState): boolean =>
 
 /** True when the latest human line is Перенести / Скасувати / cancel-and-rebook (or EN). */
 export const isVisitChangeRouteLabel = (state: ClinicState): boolean =>
-  VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages));
+  VISIT_CHANGE_ROUTE_LABELS.has(lastHumanLineFromMessages(state.messages))
+  || (
+    state.bookingDraft?.replacement?.status === "offered"
+    && /^(так|yes)$/i.test(lastHumanLineFromMessages(state.messages).trim())
+  );
 
 /** Agent id to sticky-continue into, or null when the supervisor LLM must run. */
 export const stickyContinueAgentId = (
@@ -197,16 +226,20 @@ const OTHER_DATE_PATTERN = new RegExp(
   `(?:${[OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map(escapeRegExp).join("|")}|інша\\s*дат|another\\s*date)`,
   "i",
 );
+const RUSSIAN_OTHER_DATE_PATTERN =
+  /^(?:другая|другой|другую|другие)(?:\s+(?:дата|дату|даты|день|дни|вариант(?:ы)?))?$/i;
 
-const DAY_OR_TIME =
-  /(?:\d{1,2}\s*(?:січн|лют|берез|квіт|травн|червн|липн|серпн|верес|жовт|листоп|грудн|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)|(?:сьогодні|завтра|післязавтра|today|tomorrow)|\d{1,2}:\d{2})/i;
+const isOtherDateReply = (human: string): boolean =>
+  OTHER_DATE_PATTERN.test(human) || RUSSIAN_OTHER_DATE_PATTERN.test(human.trim());
 
 /** Cancel / reschedule paraphrases (not only exact chip labels). */
 const VISIT_CHANGE_INTENT =
   /(?:скасува\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*)/i;
 
 const isDayOrTimeReply = (human: string): boolean =>
-  DAY_OR_TIME.test(human) || OTHER_DATE_PATTERN.test(human);
+  resolveAvailabilityRequest(human, kyivToday()) != null
+  || /\b\d{1,2}:\d{2}\b/.test(human)
+  || isOtherDateReply(human);
 
 const isVisitChangeIntent = (human: string): boolean =>
   VISIT_CHANGE_INTENT.test(human)
@@ -421,6 +454,38 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
   };
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
+    // Old checkpoints may contain only the deprecated booking projection. Recover it
+    // only when the service catalog has exactly one candidate; otherwise leave the
+    // projection untouched until the patient explicitly selects a service.
+    if (state.bookingDraft == null && state.servicesContext?.list.length === 1) {
+      const service = state.servicesContext.list[0];
+      const migrated = migrateLegacyBookingState({
+        bookingNoteStatus: state.bookingNoteStatus,
+        selectedSlot: state.selectedSlot,
+        selectedAvailabilityDate: state.selectedAvailabilityDate,
+        ...(service
+          ? {
+              recoveredService: {
+                id: service.id,
+                name: service.name,
+                ...(service.duration != null ? { durationMinutes: service.duration } : {}),
+                source: "catalog" as const,
+              },
+            }
+          : {}),
+      });
+      if (migrated) {
+        return {
+          bookingDraft: migrated,
+          bookingNoteStatus: "unasked",
+          selectedSlot: null,
+          selectedAvailabilityDate: null,
+          next: BOOKING_AGENT_ID,
+          lastHandoff: null,
+        };
+      }
+    }
+
     const staticPrompt = options.loadSupervisorPrompt().trim();
     const history = stripToolNoiseFromMessages(state.messages);
     const ttlMs = options.prefetchTtlMs ?? PREFETCH_TTL_MS;
@@ -449,15 +514,34 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         const resetBookingLadder =
           isGreetingOrMainMenuLine(lastHumanLine)
           || isMyVisitLine(lastHumanLine)
-          || (/^(скасувати|cancel)$/i.test(lastHumanLine) && state.selectedSlot == null);
+          || (/^(скасувати|cancel)$/i.test(lastHumanLine)
+            && state.bookingDraft?.selectedSlot == null
+            && (state.bookingDraft == null ? state.selectedSlot == null : true));
         prefetchUpdate = {
           ...prefetched,
           prefetchDirty: false,
           prefetchFetchedAt: Date.now(),
           availabilityContext: null,
+          availabilityCursor: resetBookingLadder
+            ? null
+            : state.availabilityCursor ?? availabilityCursorFromContext(state.availabilityContext),
           ...(resetBookingLadder
-            ? { bookingNoteStatus: "unasked" as const, selectedSlot: null }
-            : {}),
+            ? {
+              ...(state.bookingDraft == null
+                ? {
+                    bookingNoteStatus: "unasked" as const,
+                    selectedSlot: null,
+                    selectedAvailabilityDate: null,
+                  }
+                : {}),
+              ...(state.bookingDraft
+                ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+                : {}),
+            }
+            : state.bookingDraft?.selectedSlot == null
+              && (state.bookingDraft == null ? state.selectedSlot == null : true)
+              ? { selectedAvailabilityDate: null }
+              : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -484,6 +568,13 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         lastHandoff: null,
         ...prefetchUpdate,
         availabilityContext: null,
+        availabilityCursor: null,
+        ...(state.bookingDraft
+          ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+          : {}),
+        ...(state.bookingDraft == null && state.selectedAvailabilityDate != null
+          ? { selectedAvailabilityDate: null }
+          : {}),
       };
     }
 
@@ -539,11 +630,36 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       state.lastHandoff?.agentId === BOOKING_AGENT_ID
       && routed.next === BOOKING_AGENT_ID
       && !SUPERVISOR_OWNED_REPLY_LABELS.has(lastHumanLine);
+    const abandonDraft = isGreetingOrMainMenuLine(lastHumanLine);
+    const chooseAnotherService = [BOOKING_OFFER_MENU[1], BOOKING_OFFER_MENU_EN[1]]
+      .some((label) => label.toLowerCase() === lastHumanLine.toLowerCase());
 
     return {
       ...routed,
       ...prefetchUpdate,
-      ...(keepAvailability ? {} : { availabilityContext: null }),
+      ...((abandonDraft || chooseAnotherService) && state.bookingDraft
+        ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+        : {}),
+      ...((abandonDraft || chooseAnotherService)
+        ? {
+            ...(state.bookingDraft == null
+              ? {
+                  bookingNoteStatus: "unasked" as const,
+                  selectedSlot: null,
+                  selectedAvailabilityDate: null,
+                }
+              : {}),
+          }
+        : {}),
+      ...(keepAvailability
+        ? {}
+        : {
+          availabilityContext: null,
+          availabilityCursor: null,
+          ...(state.bookingDraft == null && state.selectedAvailabilityDate != null
+            ? { selectedAvailabilityDate: null }
+            : {}),
+        }),
     };
   };
 };

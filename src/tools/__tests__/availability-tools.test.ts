@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   alignToAnchors,
@@ -17,6 +17,12 @@ describe("meeting-tools availability", () => {
 
   beforeEach(() => {
     calls.length = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   const crmCalendar = {
@@ -233,6 +239,50 @@ describe("meeting-tools availability", () => {
     expect(parsed.days?.[0]?.date).toBe("2026-08-11");
   });
 
+  it("present_availability_slots direction earlier scans before the exclusive boundary", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      if (name === "search_entity") {
+        return { list: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({
+      direction: "earlier",
+      beforeDate: "2099-10-14",
+      durationMinutes: 60,
+    });
+    const parsed = JSON.parse(raw as string) as {
+      days: Array<{ date: string }>;
+      query: {
+        kind: string;
+        anchor: string;
+        rangeThrough: string;
+      };
+      searchDirection?: string;
+    };
+
+    expect(parsed.query.kind).toBe("earlier");
+    expect(parsed.query.anchor).toBe("2099-10-14");
+    expect(parsed.query.rangeThrough).toBe("2099-10-13");
+    expect(parsed.searchDirection).toBeUndefined();
+    expect(parsed.days.length).toBeGreaterThan(0);
+    expect(parsed.days.map((day) => day.date)).toEqual(
+      [...parsed.days.map((day) => day.date)].sort(),
+    );
+    expect(calls.find((call) => call.name === "search_meetings")?.args).toMatchObject({
+      dateTo: "2099-10-13",
+    });
+  });
+
   it("present_availability_slots dated path still uses single-day search", async () => {
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
@@ -375,6 +425,15 @@ describe("resolveNextAvailableStart", () => {
 });
 
 describe("present_availability_slots excludeMeetingIds", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("does not list the excluded meeting's current start, but frees later times in that block", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {
@@ -436,6 +495,15 @@ describe("present_availability_slots excludeMeetingIds", () => {
 });
 
 describe("present_availability_slots CReservedTime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const openMorning = {
     success: true,
     calendars: [
@@ -678,12 +746,28 @@ describe("tryAvailabilityCacheHit", () => {
     stepMinutes: 30,
   };
 
-  it("hits for undated DATE list when duration matches", () => {
+  it("rejects an unqualified DATE-list cache request", () => {
     const hit = tryAvailabilityCacheHit(snapshot, { durationMinutes: 30 });
+    expect(hit).toBeNull();
+  });
+
+  it("hits for an equivalent nearest DATE list when duration matches", () => {
+    const hit = tryAvailabilityCacheHit(
+      { ...snapshot, searchDirection: "nearest" },
+      { direction: "nearest", durationMinutes: 30 },
+    );
     expect(hit?.kind).toBe("date_list");
     const parsed = JSON.parse(hit!.json) as { days: unknown[]; cacheHit: boolean };
     expect(parsed.days).toHaveLength(2);
     expect(parsed.cacheHit).toBe(true);
+  });
+
+  it("does not treat a legacy exact snapshot as a nearest DATE list", () => {
+    const hit = tryAvailabilityCacheHit(
+      { ...snapshot, searchDirection: "exact", searchAnchor: "2026-09-10" },
+      { direction: "nearest", durationMinutes: 30 },
+    );
+    expect(hit).toBeNull();
   });
 
   it("aligns a wrong-year calendar day or slot ISO to the snapshot", () => {
@@ -708,15 +792,59 @@ describe("tryAvailabilityCacheHit", () => {
     expect(parsed.cacheHit).toBe(true);
   });
 
+  it("does not reuse an unrelated snapshot for an exact requested date", () => {
+    expect(
+      tryAvailabilityCacheHit(snapshot, {
+        direction: "exact",
+        date: "2026-10-20",
+        durationMinutes: 30,
+      }),
+    ).toBeNull();
+  });
+
   it("misses on afterDate, duration mismatch, or unknown date", () => {
     expect(tryAvailabilityCacheHit(snapshot, { afterDate: "2026-09-10", durationMinutes: 30 })).toBeNull();
     expect(tryAvailabilityCacheHit(snapshot, { durationMinutes: 45 })).toBeNull();
     expect(tryAvailabilityCacheHit(snapshot, { date: "2026-09-99", durationMinutes: 30 })).toBeNull();
     expect(tryAvailabilityCacheHit(null, { durationMinutes: 30 })).toBeNull();
   });
+
+  it("reuses a metadata-bearing empty snapshot for a duplicate directional call", () => {
+    const hit = tryAvailabilityCacheHit(
+      {
+        days: [],
+        stepMinutes: 30,
+        searchDirection: "later",
+        searchAnchor: "2026-10-05",
+        searchedFrom: "2026-10-06",
+        searchedThrough: "2026-11-04",
+      },
+      { direction: "later", durationMinutes: 30 },
+    );
+    expect(hit?.kind).toBe("date_list");
+    expect(JSON.parse(hit!.json)).toMatchObject({
+      days: [],
+      query: {
+        kind: "later",
+        anchor: "2026-10-05",
+        rangeFrom: "2026-10-06",
+        rangeThrough: "2026-11-04",
+      },
+      cacheHit: true,
+    });
+  });
 });
 
 describe("present_availability_slots excludeMeetingIds echo", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-01T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("echoes excludeMeetingIds in tool JSON", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {

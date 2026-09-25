@@ -465,6 +465,27 @@ export type FindNextAvailableSlotsResult = {
   searchedDays: number;
 };
 
+const differenceInCalendarDays = (later: string, earlier: string): number => {
+  const [laterYear, laterMonth, laterDay] = later.split("-").map(Number) as [number, number, number];
+  const [earlierYear, earlierMonth, earlierDay] = earlier.split("-").map(Number) as [number, number, number];
+  return Math.round(
+    (Date.UTC(laterYear, laterMonth - 1, laterDay) - Date.UTC(earlierYear, earlierMonth - 1, earlierDay))
+      / 86_400_000,
+  );
+};
+
+export type FindPreviousAvailableSlotsInput = {
+  /** Exclusive upper bound. The day immediately before this date is searched first. */
+  beforeDate: string;
+  meetings: BusyMeeting[];
+  resolveTimeRanges: (day: string) => TimeRangePair[];
+  maxDays?: number;
+  maxDaysWithSlots?: number;
+  durationMinutes?: number;
+  now?: Date;
+  omitDateStarts?: string[];
+};
+
 /**
  * Scan calendar days from startDate and collect up to maxDaysWithSlots days with free slots.
  * Pass the full ranged meeting list — computeFreeSlots overlaps by millis.
@@ -524,6 +545,89 @@ export const findNextAvailableSlots = (
     }
   }
 
+  const first = days[0];
+  return {
+    ...(first ? { date: first.date } : {}),
+    slots: first?.slots ?? [],
+    days,
+    stepMinutes: durationMinutes,
+    searchedDays,
+  };
+};
+
+/**
+ * Scan backwards from the day before beforeDate, never crossing Kyiv today.
+ * Results are returned chronologically even though the search walks backwards.
+ */
+export const findPreviousAvailableSlots = (
+  input: FindPreviousAvailableSlotsInput,
+): FindNextAvailableSlotsResult => {
+  const {
+    beforeDate,
+    meetings,
+    resolveTimeRanges,
+    maxDays = MAX_AVAILABILITY_SEARCH_DAYS,
+    maxDaysWithSlots = MAX_PROPOSED_AVAILABILITY_DAYS,
+    durationMinutes = CLINIC_SLOT_MINUTES,
+    now = new Date(),
+    omitDateStarts,
+  } = input;
+
+  if (!DAY_RE.test(beforeDate)) {
+    throw new Error("beforeDate must be YYYY-MM-DD, got: " + beforeDate);
+  }
+
+  const today = kyivToday(now);
+  const horizon = Math.max(1, maxDays);
+  const dayCap = Math.max(1, maxDaysWithSlots);
+  const latest = addCalendarDays(beforeDate, -1);
+  if (latest < today) {
+    return {
+      slots: [],
+      days: [],
+      stepMinutes: durationMinutes,
+      searchedDays: 0,
+    };
+  }
+
+  const desiredStart = addCalendarDays(latest, -(horizon - 1));
+  const start = desiredStart < today ? today : desiredStart;
+  const searchableDays = differenceInCalendarDays(latest, start) + 1;
+  const days: AvailableDaySlots[] = [];
+  let searchedDays = 0;
+
+  for (let offset = 0; offset < searchableDays; offset += 1) {
+    // This is the pagination cursor, so it must describe only the days that
+    // were actually inspected.  Using the whole candidate window here skips
+    // unreturned open days when the page fills before reaching `start`.
+    searchedDays = offset + 1;
+    const day = addCalendarDays(latest, -offset);
+    const timeRanges = resolveTimeRanges(day);
+    if (timeRanges.length === 0) {
+      continue;
+    }
+
+    let slots = computeFreeSlots({
+      day,
+      meetings,
+      timeRanges,
+      stepMinutes: durationMinutes,
+    });
+    if (day === today) {
+      slots = filterSlotsAfterNow(slots, now);
+    }
+    if (omitDateStarts && omitDateStarts.length > 0) {
+      slots = omitSlotsAtStarts(slots, omitDateStarts);
+    }
+    if (slots.length > 0) {
+      days.push({ date: day, slots });
+      if (days.length >= dayCap) {
+        break;
+      }
+    }
+  }
+
+  days.sort((left, right) => left.date.localeCompare(right.date));
   const first = days[0];
   return {
     ...(first ? { date: first.date } : {}),

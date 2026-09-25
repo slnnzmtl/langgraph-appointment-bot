@@ -17,6 +17,7 @@ import {
   formatKyivSystemMetadata,
 } from "./clinic-datetime.js";
 import { createClinicLlmStack } from "./clinic-llm.js";
+import { configurePendingConfirmStore } from "../tools/meeting-confirm.js";
 
 export type ClinicBootstrap = {
   config: AppConfig;
@@ -41,6 +42,7 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     createClinicLlmStack(config);
 
   mkdirSync(dirname(config.checkpointDbPath), { recursive: true });
+  configurePendingConfirmStore(config.checkpointDbPath);
   const checkpointer = SqliteSaver.fromConnString(config.checkpointDbPath);
 
   const { graph } = compileClinicGraph({

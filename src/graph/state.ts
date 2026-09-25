@@ -2,11 +2,14 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { Annotation, messagesStateReducer } from "@langchain/langgraph";
 
 import type { ContactLookupContext } from "../tools/contact-tools.js";
-import type { AvailabilityContext } from "../tools/availability-tools.js";
+import type { AvailabilityContext, AvailabilityCursor } from "../tools/availability-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
+import type { BookingDraft } from "./booking-draft.js";
+
+export type CancellationPurpose = "direct" | "replacement";
 
 export type ClinicStateAnnotationOptions = {
   messageHistoryMaxTokens: number;
@@ -56,6 +59,11 @@ export const createClinicStateAnnotation = ({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
+    /** Cursor metadata is durable across prefetch TTL refreshes; slot data is not. */
+    availabilityCursor: Annotation<AvailabilityCursor | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
     servicesContext: Annotation<ServicesContext | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
@@ -68,13 +76,28 @@ export const createClinicStateAnnotation = ({
       reducer: (_left, right) => right ?? null,
       default: () => null,
     }),
-    /** Optional note after a time pick: unasked → awaiting → skipped|answered before create_meeting. */
+    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
     bookingNoteStatus: Annotation<BookingNoteStatus>({
       reducer: (_left, right) => right,
       default: () => "unasked",
     }),
-    /** Slot matched from availability while the note step is in progress. */
+    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
     selectedSlot: Annotation<SelectedBookingSlot | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
+    selectedAvailabilityDate: Annotation<string | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /** Authoritative checkpointed booking aggregate. New runtime writes must use this field. */
+    bookingDraft: Annotation<BookingDraft | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /** Purpose of the currently pending/just-completed cancellation command. */
+    pendingCancellationPurpose: Annotation<CancellationPurpose | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),

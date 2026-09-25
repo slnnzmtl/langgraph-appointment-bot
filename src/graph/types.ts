@@ -40,6 +40,8 @@ export type BookingNoteStatus = "unasked" | "awaiting" | "skipped" | "answered";
 
 /** Matched free slot held while the note step runs (ISO local wall times from availability). */
 export type SelectedBookingSlot = {
+  /** CRM/runtime slot identity; dateStart is retained as a fallback for older snapshots. */
+  slotId?: string;
   dateStart: string;
   dateEnd: string;
   label: string;

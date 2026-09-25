@@ -4,6 +4,7 @@ import type { AvailabilityContext } from "../tools/availability-tools.js";
 import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
+import type { BookingDraft } from "./booking-draft.js";
 
 export { CONTEXT_TAGS };
 
@@ -167,17 +168,32 @@ export const formatAvailabilityContext = (
   return block(CONTEXT_TAGS.availability, ctx);
 };
 
-/** Compact matched slot for BOOK after the note step — not the full days[] snapshot. */
-export const formatSelectedSlotContext = (
-  slot: { dateStart: string; dateEnd: string; label: string } | null | undefined,
+/** Booking: durable state projection used to keep the model aligned with runtime facts. */
+export const formatBookingDraftContext = (
+  draft: BookingDraft | null | undefined,
 ): string => {
-  if (!slot) {
+  if (!draft) {
     return "";
   }
-  return block(CONTEXT_TAGS.selectedSlot, {
-    dateStart: slot.dateStart,
-    dateEnd: slot.dateEnd,
-    label: slot.label,
+  return block(CONTEXT_TAGS.bookingDraft, {
+    phase: draft.phase,
+    service: draft.serviceAcceptance
+      ? {
+          status: draft.serviceAcceptance.status,
+          id: draft.serviceAcceptance.service.id,
+          name: draft.serviceAcceptance.service.name,
+          durationMinutes: draft.serviceAcceptance.service.durationMinutes,
+        }
+      : null,
+    selectedDate: draft.selectedDate,
+    slot: draft.selectedSlot
+      ? {
+          dateStart: draft.selectedSlot.dateStart,
+          dateEnd: draft.selectedSlot.dateEnd,
+          label: draft.selectedSlot.label,
+        }
+      : null,
+    note: { status: draft.note.status, ...(draft.note.value ? { value: draft.note.value } : {}) },
   });
 };
 

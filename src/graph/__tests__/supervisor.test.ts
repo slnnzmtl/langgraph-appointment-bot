@@ -9,6 +9,7 @@ import {
 } from "../../shared/clinic-constants.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+import { createEmptyBookingDraft } from "../booking-draft.js";
 
 const createCachedGeminiModel = vi.fn((_apiKey: string, _model: string, handle: { cacheName: string }) => ({
   kind: "cached",
@@ -38,11 +39,15 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   bookingContext: null,
   contactContext: null,
   availabilityContext: null,
+  availabilityCursor: null,
   servicesContext: null,
   prefetchDirty: false,
   prefetchFetchedAt: null,
   bookingNoteStatus: "unasked",
   selectedSlot: null,
+  selectedAvailabilityDate: null,
+  bookingDraft: null,
+  pendingCancellationPurpose: null,
   ...overrides,
 });
 
@@ -62,6 +67,22 @@ const agents: ClinicAgentDefinition[] = [
     maxSteps: 10,
   },
 ];
+
+describe("cancel-and-rebook routing", () => {
+  it("routes contextual Так to booking while replacement is offered", () => {
+    const draft = createEmptyBookingDraft();
+    draft.replacement = {
+      meeting: { id: "existing-1" },
+      status: "offered",
+    };
+    const state = supervisorState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: draft,
+    });
+
+    expect(stickyContinueAgentId(state)).toBe("booking");
+  });
+});
 
 describe("createClinicSupervisorNode context cache", () => {
   const invoke = vi.fn();
@@ -269,6 +290,7 @@ describe("createClinicSupervisorNode context cache", () => {
       next: "booking",
       lastHandoff: null,
       availabilityContext: null,
+      availabilityCursor: null,
     });
     expect(update.messages).toBeUndefined();
   });
@@ -387,6 +409,12 @@ describe("createClinicSupervisorNode patient prefetch", () => {
           days: [{ date: "2026-08-25", slots: [] }],
           stepMinutes: 30,
         },
+        availabilityCursor: {
+          direction: "later",
+          searchedThrough: "2026-08-25",
+          firstDate: "2026-08-25",
+          lastDate: "2026-08-25",
+        },
         servicesContext: {
           list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
           total: 1,
@@ -400,6 +428,51 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.servicesContext).toBeUndefined();
+    // Greeting starts a fresh booking session, so the durable cursor resets too.
+    expect(update.availabilityCursor).toBeNull();
+  });
+
+  it("preserves the availability cursor when prefetch expires during booking", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+      prefetchTtlMs: 1_000,
+    });
+    const cursor = {
+      direction: "later" as const,
+      searchedThrough: "2026-10-05",
+      firstDate: "2026-09-29",
+      lastDate: "2026-10-05",
+    };
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("другая дата")],
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["Інша дата"],
+        },
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: null,
+        availabilityCursor: cursor,
+        prefetchFetchedAt: Date.now() - 1_000,
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("booking");
+    expect(update.availabilityContext).toBeNull();
+    expect(update.availabilityCursor).toEqual(cursor);
   });
 
   it("keeps note ladder across TTL when patient taps INTENT skip", async () => {
@@ -1075,6 +1148,28 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 });
 
 describe("shouldRouteProcedureBrowseToFaq", () => {
+  it.each(["20 октября", "20.10", "2026-10-20"])(
+    "is false for a supported date format after a consultation offer (%s)", (date) => {
+      expect(
+        shouldRouteProcedureBrowseToFaq(
+          supervisorState({
+            lastHandoff: {
+              agentId: "booking",
+              agentName: "Booking",
+              status: "ok",
+              replyText: "Підібрати вільний час на консультацію?",
+              replyButtons: ["Так", "Обрати іншу процедуру"],
+            },
+            messages: [
+              new AIMessage("Підібрати вільний час на консультацію?"),
+              new HumanMessage(date),
+            ],
+          }),
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("is true when they name a procedure family after a consultation offer", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
@@ -1528,7 +1623,9 @@ describe("createClinicSupervisorNode availability session reset", () => {
     expect(update.availabilityContext).toBeNull();
   });
 
-  it("keeps availabilityContext on sticky Інша дата (prefetch reuse)", async () => {
+  it.each(["Інша дата", "другая дата", "другая", "другой"])(
+    "keeps availabilityContext on sticky alternative-date reply %s (prefetch reuse)",
+    async (otherDateReply) => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,
       bookingContext: listedMeetings,
@@ -1550,7 +1647,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
         },
         messages: [
           new AIMessage("Який день вам зручний?"),
-          new HumanMessage("Інша дата"),
+          new HumanMessage(otherDateReply),
         ],
         contactContext: listedContact,
         bookingContext: listedMeetings,
@@ -1563,7 +1660,8 @@ describe("createClinicSupervisorNode availability session reset", () => {
     expect(prefetch).not.toHaveBeenCalled();
     expect(update.next).toBe("booking");
     expect(update.availabilityContext).toBeUndefined();
-  });
+    },
+  );
 
   it("keeps availabilityContext on in-booking free text routed to booking", async () => {
     invoke.mockResolvedValue({ next: "booking", reply: "" });
