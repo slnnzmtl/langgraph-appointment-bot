@@ -335,10 +335,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
             'Meeting title as "[service-name] - [firstName lastName]" (e.g. "Консультація - Daniel Kovalenko")',
           ),
         dateStart: KYIV_LOCAL_ISO_SCHEMA.describe(
-          "Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <selected_slot> or present_availability_slots",
+          "Start datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <booking_draft> or present_availability_slots",
         ),
         dateEnd: KYIV_LOCAL_ISO_SCHEMA.describe(
-          "End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <selected_slot> or present_availability_slots",
+          "End datetime YYYY-MM-DDTHH:mm:ss (Kyiv local) from <booking_draft> or present_availability_slots",
         ),
         contactId: z.string().min(1).describe("Patient Contact id"),
         confirmMessage: CONFIRM_MESSAGE_SCHEMA,

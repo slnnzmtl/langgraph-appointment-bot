@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import {
   advanceBookingNoteStep,
+  createAgentCommandPrepareNode,
   createAgentFinalizeNode,
   createAgentPrepareNode,
   captureAvailabilityFromMessages,
@@ -1544,6 +1545,21 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
+  it("persists the consultation as a pending service when the offer is shown", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("Записатись")],
+        agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
+      }),
+    );
+
+    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+    });
+  });
+
   it("does not send leaked Gemini tool XML as the patient reply", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
@@ -2778,6 +2794,98 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     stepMinutes: 30,
   };
 
+  it("keeps consultation consent and the selected slot through note skip", async () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const offer = finalize(
+      clinicState({
+        messages: [new HumanMessage("Записатись")],
+        agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
+      }),
+    );
+    const prepare = createAgentPrepareNode("booking");
+    const picked = await prepare(
+      clinicState({
+        messages: [
+          new HumanMessage("Записатись"),
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("14:00"),
+        ],
+        bookingDraft: offer.bookingDraft,
+        availabilityContext: snapshot,
+      }),
+    );
+
+    expect(picked.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(picked.bookingDraft?.selectedSlot?.dateStart).toBe("2026-09-10T14:00:00");
+    expect(picked.bookingDraft?.note.status).toBe("awaiting");
+
+    const skipped = await prepare(
+      clinicState({
+        messages: [
+          new HumanMessage("Записатись"),
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("14:00"),
+          new AIMessage("Додати коментар?"),
+          new HumanMessage("Продовжити без коментаря"),
+        ],
+        bookingDraft: picked.bookingDraft,
+        availabilityContext: snapshot,
+      }),
+    );
+
+    expect(skipped.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(skipped.bookingDraft?.selectedSlot?.dateStart).toBe("2026-09-10T14:00:00");
+    expect(skipped.bookingDraft?.note.status).toBe("skipped");
+  });
+
+  it("checkpoints a normalized mutation command before the tools node", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const draft = {
+      version: 3,
+      mode: "create" as const,
+      phase: "details" as const,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: CONSULTATION_SERVICE_ID, source: "catalog" as const },
+      },
+      availability: null,
+      selectedDate: "2026-09-10",
+      selectedSlot: {
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+        label: "14:00",
+      },
+      note: { status: "skipped" as const },
+      contactId: null,
+      pendingCommand: null,
+    };
+    const update = await commandPrepare(
+      clinicState({
+        bookingDraft: draft,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "create-1",
+              name: "create_meeting",
+              args: { serviceId: "invented", dateStart: "2025-01-01T09:00:00" },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft?.pendingCommand).toMatchObject({
+      action: "create",
+      payload: {
+        serviceId: CONSULTATION_SERVICE_ID,
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+      },
+    });
+  });
+
   const bookingLlmReturning = (content: string) => {
     const invoke = vi.fn(async () => new AIMessage(content));
     const slotsTool = tool(
@@ -3173,11 +3281,16 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
       clinicState({
         ...prepared,
-        bookingNoteStatus: "skipped",
-        selectedSlot: {
-          dateStart: "2026-10-17T11:30:00",
-          dateEnd: "2026-10-17T12:00:00",
-          label: "11:30",
+        bookingDraft: {
+          ...prepared.bookingDraft!,
+          phase: "details",
+          note: { status: "skipped" },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+            label: "11:30",
+          },
         },
         agentMessages: [
           new AIMessage({
@@ -4515,12 +4628,12 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("injects selected_slot not full availability into booking LLM dynamic context", async () => {
+  it("injects one compact booking draft and not full availability into booking LLM context", async () => {
     const bindTools = vi.fn(() => ({
       invoke: vi.fn(async (messages: unknown[]) => {
         const dynamic = messages[0] as HumanMessage;
         expect(String(dynamic.content)).not.toContain("<availability>");
-        expect(String(dynamic.content)).toContain("<selected_slot>");
+        expect(String(dynamic.content)).toContain("<booking_draft>");
         expect(String(dynamic.content)).toContain("2026-09-10T14:00:00");
         return new AIMessage("ok");
       }),
@@ -4536,12 +4649,22 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       clinicState({
         agentMessages: [new HumanMessage("14:00")],
         availabilityContext: snapshot,
-        selectedSlot: {
-          dateStart: "2026-09-10T14:00:00",
-          dateEnd: "2026-09-10T14:30:00",
-          label: "14:00",
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "note",
+          serviceAcceptance: null,
+          availability: null,
+          selectedDate: "2026-09-10",
+          selectedSlot: {
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+            label: "14:00",
+          },
+          note: { status: "awaiting" },
+          contactId: null,
+          pendingCommand: null,
         },
-        bookingNoteStatus: "awaiting",
       }),
     );
   });

@@ -477,7 +477,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           || isMyVisitLine(lastHumanLine)
           || (/^(скасувати|cancel)$/i.test(lastHumanLine)
             && state.bookingDraft?.selectedSlot == null
-            && state.selectedSlot == null);
+            && (state.bookingDraft == null ? state.selectedSlot == null : true));
         prefetchUpdate = {
           ...prefetched,
           prefetchDirty: false,
@@ -488,14 +488,19 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
             : state.availabilityCursor ?? availabilityCursorFromContext(state.availabilityContext),
           ...(resetBookingLadder
             ? {
-              bookingNoteStatus: "unasked" as const,
-              selectedSlot: null,
-              selectedAvailabilityDate: null,
+              ...(state.bookingDraft == null
+                ? {
+                    bookingNoteStatus: "unasked" as const,
+                    selectedSlot: null,
+                    selectedAvailabilityDate: null,
+                  }
+                : {}),
               ...(state.bookingDraft
                 ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
                 : {}),
             }
-            : state.bookingDraft?.selectedSlot == null && state.selectedSlot == null
+            : state.bookingDraft?.selectedSlot == null
+              && (state.bookingDraft == null ? state.selectedSlot == null : true)
               ? { selectedAvailabilityDate: null }
               : {}),
         };
@@ -528,7 +533,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         ...(state.bookingDraft
           ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
           : {}),
-        ...(state.selectedAvailabilityDate != null
+        ...(state.bookingDraft == null && state.selectedAvailabilityDate != null
           ? { selectedAvailabilityDate: null }
           : {}),
       };
@@ -598,9 +603,13 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         : {}),
       ...((abandonDraft || chooseAnotherService)
         ? {
-            bookingNoteStatus: "unasked" as const,
-            selectedSlot: null,
-            selectedAvailabilityDate: null,
+            ...(state.bookingDraft == null
+              ? {
+                  bookingNoteStatus: "unasked" as const,
+                  selectedSlot: null,
+                  selectedAvailabilityDate: null,
+                }
+              : {}),
           }
         : {}),
       ...(keepAvailability
@@ -608,7 +617,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         : {
           availabilityContext: null,
           availabilityCursor: null,
-          ...(state.selectedAvailabilityDate != null
+          ...(state.bookingDraft == null && state.selectedAvailabilityDate != null
             ? { selectedAvailabilityDate: null }
             : {}),
         }),

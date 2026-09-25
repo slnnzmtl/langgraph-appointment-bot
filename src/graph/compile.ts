@@ -18,12 +18,14 @@ import {
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import {
   createAgentFinalizeNode,
+  createAgentCommandPrepareNode,
   createAgentLlmNode,
   createAgentPrepareNode,
   createAgentToolsNode,
   finalizeNodeName,
   llmNodeName,
   prepareNodeName,
+  commandPrepareNodeName,
   routeAfterAgentLlm,
   routeAfterAgentTools,
   toolsNodeName,
@@ -107,12 +109,14 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   for (const agent of options.agents) {
     const tools = options.agentTools[agent.id] ?? [];
     const prepare = prepareNodeName(agent.id);
+    const commandPrepare = commandPrepareNodeName(agent.id);
     const llm = llmNodeName(agent.id);
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
 
     graph = graph
       .addNode(prepare, createAgentPrepareNode(agent.id))
+      .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
       .addNode(
         llm,
         createAgentLlmNode({
@@ -142,12 +146,15 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             agent.maxSteps,
             toolsNode,
             finalize,
+            agent.id === "booking" ? commandPrepare : undefined,
           ),
         {
           [toolsNode]: toolsNode,
+          [commandPrepare]: commandPrepare,
           [finalize]: finalize,
         },
       )
+      .addEdge(commandPrepare, toolsNode)
       .addConditionalEdges(
         toolsNode,
         (state: { agentMessages: unknown[] }) =>

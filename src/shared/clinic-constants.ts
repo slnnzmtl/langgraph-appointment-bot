@@ -76,7 +76,6 @@ export const CONTEXT_TAGS = {
   meetings: "list_planned_meetings",
   availability: "availability",
   bookingDraft: "booking_draft",
-  selectedSlot: "selected_slot",
   services: "list_services",
 } as const;
 

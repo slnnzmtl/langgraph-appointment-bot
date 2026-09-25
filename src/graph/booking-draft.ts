@@ -157,6 +157,7 @@ export const reduceBookingDraft = (
         phase: "note",
         selectedDate: event.slot.dateStart.slice(0, 10),
         selectedSlot: event.slot,
+        note: { status: "awaiting" },
         pendingCommand: null,
       });
     case "note_status":
@@ -179,6 +180,7 @@ export const reduceBookingDraft = (
         phase: event.keepDate ? "time" : "date",
         selectedDate: event.keepDate ? draft.selectedDate : null,
         selectedSlot: null,
+        note: { status: "unasked" },
         pendingCommand: null,
       });
     case "draft_resumed":

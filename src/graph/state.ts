@@ -74,22 +74,22 @@ export const createClinicStateAnnotation = ({
       reducer: (_left, right) => right ?? null,
       default: () => null,
     }),
-    /** Optional note after a time pick: unasked → awaiting → skipped|answered before create_meeting. */
+    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
     bookingNoteStatus: Annotation<BookingNoteStatus>({
       reducer: (_left, right) => right,
       default: () => "unasked",
     }),
-    /** Slot matched from availability while the note step is in progress. */
+    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
     selectedSlot: Annotation<SelectedBookingSlot | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
-    /** Calendar day selected from a multi-day availability snapshot before a time pick. */
+    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
     selectedAvailabilityDate: Annotation<string | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
-    /** Authoritative checkpointed booking aggregate. Legacy fields above are projections during migration. */
+    /** Authoritative checkpointed booking aggregate. New runtime writes must use this field. */
     bookingDraft: Annotation<BookingDraft | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
