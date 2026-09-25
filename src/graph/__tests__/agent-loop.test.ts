@@ -3174,6 +3174,48 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.note.status).toBe("awaiting");
   });
 
+  it("does not select a 30-minute snapshot slot for a 60-minute service", () => {
+    const update = advanceBookingNoteStep(
+      clinicState({
+        messages: [new HumanMessage("12:30")],
+        availabilityContext: {
+          days: [{
+            date: "2026-11-21",
+            slots: [{
+              id: "12:30",
+              label: "12:30",
+              dateStart: "2026-11-21T12:30:00",
+              dateEnd: "2026-11-21T13:00:00",
+            }],
+          }],
+          stepMinutes: 30,
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "time",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-neotiva",
+              name: "Neotiva",
+              durationMinutes: 60,
+              source: "catalog",
+            },
+          },
+          availability: null,
+          selectedDate: "2026-11-21",
+          selectedSlot: null,
+          note: { status: "unasked" },
+          contactId: null,
+          pendingCommand: null,
+        },
+      }),
+    );
+
+    expect(update.bookingDraft).toBeUndefined();
+  });
+
   it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
@@ -3479,6 +3521,75 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
     expect(JSON.parse(String(toolMsg.content)).awaitingConfirmation).toBe(true);
+  });
+
+  it("rejects a selected interval whose end does not match the service snapshot", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ awaitingConfirmation: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        bookingDraft: {
+          version: 2,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-neotiva",
+              name: "Neotiva",
+              durationMinutes: 60,
+              source: "catalog",
+            },
+          },
+          availability: null,
+          selectedDate: "2026-11-21",
+          selectedSlot: {
+            slotId: "12:30",
+            dateStart: "2026-11-21T12:30:00",
+            dateEnd: "2026-11-21T13:00:00",
+            label: "12:30",
+          },
+          note: { status: "skipped" },
+          contactId: "contact-1",
+          pendingCommand: null,
+        },
+        availabilityContext: {
+          serviceId: "svc-neotiva",
+          stepMinutes: 60,
+          days: [{
+            date: "2026-11-21",
+            slots: [{
+              id: "12:30",
+              label: "12:30",
+              dateStart: "2026-11-21T12:30:00",
+              dateEnd: "2026-11-21T13:30:00",
+            }],
+          }],
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "mismatch",
+              name: "create_meeting",
+              args: {},
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(
+      JSON.parse(String((toolsUpdate.agentMessages as ToolMessage[])[0]!.content)).error,
+    ).toBe("Selected slot is no longer available");
   });
 
   it("DDD-50: HITL decline clears availability so next slots call is CRM", async () => {

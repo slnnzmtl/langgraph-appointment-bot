@@ -463,6 +463,7 @@ export const availabilitySnapshotId = (context: AvailabilityContext): string => 
   const payload = JSON.stringify({
     days: context.days,
     stepMinutes: context.stepMinutes,
+    serviceId: context.serviceId ?? null,
     excludeMeetingIds: context.excludeMeetingIds ?? [],
     query: context.query ?? null,
   });
@@ -1044,7 +1045,15 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   const selectedDate = state.bookingDraft?.selectedDate
     ?? state.selectedAvailabilityDate
     ?? (authoritativeSelectedSlot(state)?.dateStart.slice(0, 10) || null);
-  const matchedSlot = matchAvailabilitySlot(human, availability, selectedDate);
+  const expectedDuration = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
+  const availabilityMatchesService = availability == null
+    || (availability.serviceId == null
+      ? expectedDuration == null || availability.stepMinutes === expectedDuration
+      : availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id
+        && (expectedDuration == null || availability.stepMinutes === expectedDuration));
+  const matchedSlot = availabilityMatchesService
+    ? matchAvailabilitySlot(human, availability, selectedDate)
+    : null;
 
   const sameSlot =
     matchedSlot != null
@@ -1765,13 +1774,19 @@ export const createAgentToolsNode = (
             const selectedDay = availability?.days.find(
               (day) => day.date === selectedSlot.dateStart.slice(0, 10),
             );
-            const selectedSlotStillAvailable = availability == null
-              || selectedDay == null
-              ? availability == null
-              : selectedDay.slots.some((slot) =>
-                (selectedSlot.slotId != null && slot.id === selectedSlot.slotId)
-                || (slot.dateStart === selectedSlot.dateStart && slot.dateEnd === selectedSlot.dateEnd),
-              );
+            const expectedDuration = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
+            const snapshotMatchesService = availability == null
+              || (availability.serviceId == null
+                ? expectedDuration == null || availability.stepMinutes === expectedDuration
+                : availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id
+                  && (expectedDuration == null || availability.stepMinutes === expectedDuration));
+            const selectedSlotStillAvailable = snapshotMatchesService
+              && (availability == null
+                || selectedDay == null
+                ? availability == null
+                : selectedDay.slots.some((slot) =>
+                  slot.dateStart === selectedSlot.dateStart && slot.dateEnd === selectedSlot.dateEnd,
+                ));
             if (!selectedSlotStillAvailable) {
               trackToolError(call.name, SELECTED_SLOT_NOT_AVAILABLE_ERROR);
               synthetic.push(
@@ -1817,6 +1832,9 @@ export const createAgentToolsNode = (
             args: (call.args ?? {}) as AvailabilitySlotsToolArgs,
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
+            ...(state.bookingDraft?.serviceAcceptance?.service.durationMinutes != null
+              ? { serviceDurationMinutes: state.bookingDraft.serviceAcceptance.service.durationMinutes }
+              : {}),
             humanText: lastPatientText(state),
             pickedOfferedDay: matchAvailabilityDay(
               lastPatientText(state),
@@ -1991,15 +2009,20 @@ export const createAgentToolsNode = (
     } else {
       const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
       if (capturedAvailability !== undefined) {
-        update.availabilityContext = capturedAvailability;
-        update.availabilityCursor = availabilityCursorFromContext(capturedAvailability);
+        const acceptedService = state.bookingDraft?.serviceAcceptance;
+        const bookingAvailability = capturedAvailability != null
+          && acceptedService?.status === "accepted"
+          ? { ...capturedAvailability, serviceId: acceptedService.service.id }
+          : capturedAvailability;
+        update.availabilityContext = bookingAvailability;
+        update.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
         let bookingDraft = state.bookingDraft;
-        if (capturedAvailability != null) {
+        if (bookingAvailability != null) {
           bookingDraft = reduceBookingDraft(bookingDraft, {
             type: "availability_loaded",
-            snapshotId: availabilitySnapshotId(capturedAvailability),
-            ...(capturedAvailability.query
-              ? { query: JSON.stringify(capturedAvailability.query) }
+            snapshotId: availabilitySnapshotId(bookingAvailability),
+            ...(bookingAvailability.query
+              ? { query: JSON.stringify(bookingAvailability.query) }
               : {}),
           });
           update.bookingDraft = bookingDraft;
@@ -2010,16 +2033,22 @@ export const createAgentToolsNode = (
         const selectedSlot = authoritativeSelectedSlot(state);
         const selectedDay = selectedDate == null
           ? undefined
-          : capturedAvailability?.days.find((day) => day.date === selectedDate);
-        const selectedSlotStillAvailable = selectedSlot == null
-          || selectedDay?.slots.some((slot) =>
-            (selectedSlot.slotId != null && slot.id === selectedSlot.slotId)
-            || (slot.dateStart === selectedSlot.dateStart && slot.dateEnd === selectedSlot.dateEnd),
-          ) === true;
+          : bookingAvailability?.days.find((day) => day.date === selectedDate);
+        const expectedDuration = bookingDraft?.serviceAcceptance?.service.durationMinutes;
+        const snapshotMatchesService = bookingAvailability == null
+          || (bookingAvailability.serviceId == null
+            ? expectedDuration == null || bookingAvailability.stepMinutes === expectedDuration
+            : bookingAvailability.serviceId === bookingDraft?.serviceAcceptance?.service.id
+              && (expectedDuration == null || bookingAvailability.stepMinutes === expectedDuration));
+        const selectedSlotStillAvailable = snapshotMatchesService
+          && (selectedSlot == null
+            || selectedDay?.slots.some((slot) =>
+              slot.dateStart === selectedSlot.dateStart && slot.dateEnd === selectedSlot.dateEnd,
+            ) === true);
         if (
           selectedDate != null
           && (
-            capturedAvailability == null
+            bookingAvailability == null
             || selectedDay?.slots.length === 0
             || !selectedSlotStillAvailable
           )

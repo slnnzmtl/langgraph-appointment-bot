@@ -12,6 +12,7 @@ type AvailabilityNormalizationInput = {
   humanText: string;
   availabilityContext?: AvailabilityContext | null;
   availabilityCursor?: AvailabilityCursor | null;
+  serviceDurationMinutes?: number;
   pickedOfferedDay: boolean;
   consultationAccepted: boolean;
   availabilityPagedThisTurn: boolean;
@@ -44,6 +45,7 @@ export const normalizeAvailabilityToolArgs = ({
   humanText,
   availabilityContext,
   availabilityCursor,
+  serviceDurationMinutes,
   pickedOfferedDay,
   consultationAccepted,
   availabilityPagedThisTurn,
@@ -120,6 +122,11 @@ export const normalizeAvailabilityToolArgs = ({
   }
   if (direction === "earlier" && !args.beforeDate) {
     delete args.beforeDate;
+  }
+
+  // Service duration is domain state, not an LLM-owned argument.
+  if (serviceDurationMinutes != null) {
+    args.durationMinutes = serviceDurationMinutes;
   }
 
   for (const key of ["date", "afterDate", "beforeDate", "startDate"] as const) {

@@ -34,6 +34,8 @@ import {
 export type AvailabilityContext = {
   days: Array<{ date: string; dayLabel?: string; slots: AvailabilitySlot[] }>;
   stepMinutes: number;
+  /** Accepted booking service that produced this snapshot, when known. */
+  serviceId?: string;
   excludeMeetingIds?: string[];
   truncated?: boolean;
   searchDirection?: "exact" | "earlier" | "later" | "nearest";

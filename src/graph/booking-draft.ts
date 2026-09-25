@@ -197,7 +197,10 @@ export const reduceBookingDraft = (
         phase: event.keepDate ? "time" : "date",
         selectedDate: event.keepDate ? draft.selectedDate : null,
         selectedSlot: null,
-        note: { status: "unasked" },
+        // The selected time is invalid, not the patient's already supplied
+        // note. Preserve the completed note/contact while asking only for a
+        // replacement slot.
+        note: draft.note,
         pendingCommand: null,
       });
     case "draft_resumed":

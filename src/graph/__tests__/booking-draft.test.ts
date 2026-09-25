@@ -93,18 +93,28 @@ describe("BookingDraft reducer", () => {
   });
 
   it("invalidates only the slot after an availability refresh", () => {
-    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
-      type: "slot_selected",
-      slot: {
-        dateStart: "2026-10-17T11:30:00",
-        dateEnd: "2026-10-17T12:00:00",
-        label: "11:30",
-      },
-    });
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: "svc-1", source: "catalog" },
+          accepted: true,
+        }),
+        {
+          type: "slot_selected",
+          slot: {
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+            label: "11:30",
+          },
+        },
+      ),
+      { type: "note_status", status: "skipped" },
+    );
     const recovered = reduceBookingDraft(draft, { type: "slot_invalidated", keepDate: false });
 
-    expect(recovered.serviceAcceptance).toBeNull();
+    expect(recovered.serviceAcceptance?.service.id).toBe("svc-1");
     expect(recovered.selectedSlot).toBeNull();
-    expect(recovered.note.status).toBe("unasked");
+    expect(recovered.note.status).toBe("skipped");
   });
 });
