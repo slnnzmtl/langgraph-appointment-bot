@@ -47,6 +47,7 @@ const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => (
   selectedSlot: null,
   selectedAvailabilityDate: null,
   bookingDraft: null,
+  pendingCancellationPurpose: null,
   ...overrides,
 });
 

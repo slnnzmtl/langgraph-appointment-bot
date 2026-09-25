@@ -98,7 +98,7 @@ import {
   buildCachedMessages,
   buildUncachedMessages,
 } from "./gemini-cache-messages.js";
-import type { ClinicState, ClinicStateUpdate } from "./state.js";
+import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
   reduceBookingDraft,
   type PendingBookingCommand,
@@ -220,18 +220,25 @@ const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
   MEETING_MUTATION_TOOLS.has(message.name ?? "")
   && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
 
-const terminalDirectCancellation = (state: ClinicState): ToolMessage | null => {
-  // A replacement cancellation is a continuation, not a patient-facing terminal
-  // outcome: its committed result must continue into the replacement create flow.
-  if (state.bookingDraft?.replacement != null) {
-    return null;
-  }
+const terminalCancellationOutcome = (state: ClinicState): ToolMessage | null => {
   for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
     const message = state.agentMessages?.[index];
     if (!(message instanceof ToolMessage) || message.name !== "cancel_meeting") {
       continue;
     }
     const outcome = classifyMeetingMutationToolMessage(message);
+    // A committed replacement cancellation is a continuation, not a
+    // patient-facing terminal outcome: the replacement create flow owns it.
+    // Declined/failed replacement cancellation outcomes are terminal, but must
+    // retain their replacement origin for the correct response/menu.
+    if (state.pendingCancellationPurpose === "replacement") {
+      return outcome === "declined" || outcome === "failed" ? message : null;
+    }
+    // Keep the legacy state guard for checkpoints created before the explicit
+    // cancellation-purpose field existed.
+    if (state.bookingDraft?.replacement != null) {
+      return null;
+    }
     if (outcome === "committed" || outcome === "declined" || outcome === "failed") {
       return message;
     }
@@ -795,6 +802,12 @@ const cancelCommandFromBookingContext = (
     expiresAt: Date.now() + 15 * 60 * 1000,
   };
 };
+
+const cancellationPurposeForState = (state: ClinicState): CancellationPurpose =>
+  state.bookingDraft?.replacement?.status === "offered"
+    || state.bookingDraft?.replacement?.status === "cancelling"
+    ? "replacement"
+    : "direct";
 
 /** Build the create command from the authoritative draft, without model-owned fields. */
 const createCommandFromBookingDraft = (
@@ -1655,6 +1668,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
           type: "command_prepared",
           command: directCancelCommand,
         }),
+        pendingCancellationPurpose: "direct",
         agentMessages: new Overwrite(agentMessages),
       };
     }
@@ -1692,6 +1706,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
             type: "cancel_existing_requested",
             command: cancelCommand,
           }),
+          pendingCancellationPurpose: "replacement",
           agentMessages: new Overwrite(agentMessages),
         };
       }
@@ -1805,6 +1820,9 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     const lastIndex = state.agentMessages.lastIndexOf(lastAi);
     return {
       bookingDraft,
+      ...(action === "cancel"
+        ? { pendingCancellationPurpose: cancellationPurposeForState(state) }
+        : {}),
       agentMessages: new Overwrite([
         ...state.agentMessages.slice(0, lastIndex),
         normalizedAi,
@@ -2256,9 +2274,17 @@ export const createAgentToolsNode = (
     }
 
     const resultMessages = [...synthetic, ...toolResultMessages];
+    const replacementCancellationResult =
+      state.bookingDraft?.replacement?.status === "cancelling"
+      && resultMessages.some(
+        (message) => message instanceof ToolMessage && message.name === "cancel_meeting",
+      );
     const update: ClinicStateUpdate = {
       agentMessages: resultMessages,
       ...noteStatusUpdate,
+      ...(replacementCancellationResult
+        ? { pendingCancellationPurpose: "replacement" as const }
+        : {}),
     };
 
     const pendingCommand = resultMessages
@@ -2446,27 +2472,34 @@ export const createAgentToolsNode = (
 };
 
 /**
- * Complete a direct cancellation from the committed tool outcome. The model is
- * intentionally not called again here: it must not turn a declined write into
- * a success message or ask for an action without supplying its keyboard.
+ * Complete a terminal cancellation outcome. The model is intentionally not
+ * called again here: it must not turn a declined write into a success message
+ * or ask for an action without supplying its keyboard.
  */
 export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState): ClinicStateUpdate => {
-    const result = terminalDirectCancellation(state);
+    const result = terminalCancellationOutcome(state);
     if (!result) {
       return {};
     }
     const outcome = classifyMeetingMutationToolMessage(result);
     const committed = outcome === "committed";
     const declined = outcome === "declined";
+    const replacementCancellation = state.pendingCancellationPurpose === "replacement";
     const replyText = committed
       ? "Запис скасовано."
       : declined
-        ? "Запис не було скасовано."
-        : "Не вдалося скасувати запис. Спробуйте ще раз.";
+        ? replacementCancellation
+          ? "Скасування поточного візиту скасовано. Новий запис не було створено."
+          : "Запис не було скасовано."
+        : replacementCancellation
+          ? "Не вдалося скасувати поточний візит, тому новий запис не створено. Спробуйте ще раз."
+          : "Не вдалося скасувати запис. Спробуйте ще раз.";
     const replyButtons = committed
       ? [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))]
-      : [...VISIT_CHANGE_MENU];
+      : replacementCancellation
+        ? [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))]
+        : [...VISIT_CHANGE_MENU];
     const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
     return {
       agentMessages: new Overwrite([] as BaseMessage[]),
@@ -2474,6 +2507,7 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
       // A direct cancellation is complete; do not leave its frozen command in
       // the draft for a later turn to replay.
       bookingDraft: null,
+      pendingCancellationPurpose: null,
       messages: [message],
       lastHandoff: {
         agentId: agent.id,
@@ -2558,7 +2592,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       agent.id === BOOKING_AGENT_ID && !alreadyBooked && !createCommitted
         ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
         : null;
-    if (slotOffer) {
+    if (replacementOffered) {
+      replyButtons = [...BOOKING_REPLACE_MENU];
+    } else if (slotOffer) {
       replyText =
         createError != null && !noteBlockedThisTurn
           ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
@@ -2571,7 +2607,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       }
       replyButtons = [INTENT_SKIP_LABEL];
       trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
-    } else if (alreadyBooked || replacementOffered) {
+    } else if (alreadyBooked) {
       replyButtons = [...BOOKING_REPLACE_MENU];
     } else if (replyText.length > 0 && isBookingOfferQuestion(replyText)) {
       // DDD-79 / DDD-56: consultation / book-this-procedure yes/no from visible text.
@@ -2735,7 +2771,7 @@ export const routeAfterAgentTools = (
     return toolsName;
   }
 
-  if (mutationFinalizeName && terminalDirectCancellation(state) != null) {
+  if (mutationFinalizeName && terminalCancellationOutcome(state) != null) {
     return mutationFinalizeName;
   }
 

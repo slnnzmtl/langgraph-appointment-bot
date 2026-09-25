@@ -9,6 +9,8 @@ import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 import type { BookingDraft } from "./booking-draft.js";
 
+export type CancellationPurpose = "direct" | "replacement";
+
 export type ClinicStateAnnotationOptions = {
   messageHistoryMaxTokens: number;
 };
@@ -91,6 +93,11 @@ export const createClinicStateAnnotation = ({
     }),
     /** Authoritative checkpointed booking aggregate. New runtime writes must use this field. */
     bookingDraft: Annotation<BookingDraft | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /** Purpose of the currently pending/just-completed cancellation command. */
+    pendingCancellationPurpose: Annotation<CancellationPurpose | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),

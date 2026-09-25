@@ -32,6 +32,7 @@ import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
+  BOOKING_REPLACE_MENU,
   CLINIC_ADDRESS,
   CONSULTATION_SERVICE_ID,
   EARLIER_DATE_LABEL,
@@ -91,6 +92,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   selectedSlot: null,
   selectedAvailabilityDate: null,
   bookingDraft: null,
+  pendingCancellationPurpose: null,
   ...overrides,
 });
 
@@ -2687,6 +2689,20 @@ describe("runtime-owned cancellation outcomes", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
+  it("renders a replacement cancellation decline with the default booking menu", () => {
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingContext: listedMeetings,
+      pendingCancellationPurpose: "replacement",
+      agentMessages: cancellationMessages({ cancelled: true }),
+    }));
+
+    expect(update.lastHandoff).toMatchObject({
+      status: "ok",
+      replyText: "Скасування поточного візиту скасовано. Новий запис не було створено.",
+      replyButtons: [...DEFAULT_MENU_HAS_VISITS],
+    });
+  });
+
   it("routes terminal direct cancellation outcomes around the booking LLM", () => {
     expect(routeAfterAgentTools(
       clinicState({
@@ -2697,6 +2713,61 @@ describe("runtime-owned cancellation outcomes", () => {
       "booking__tools",
       "booking__mutation_finalize",
     )).toBe("booking__mutation_finalize");
+  });
+
+  it("routes a declined replacement cancellation to runtime finalization", () => {
+    expect(routeAfterAgentTools(
+      clinicState({
+        bookingContext: listedMeetings,
+        pendingCancellationPurpose: "replacement",
+        agentMessages: cancellationMessages({ cancelled: true }),
+      }),
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+    )).toBe("booking__mutation_finalize");
+  });
+});
+
+describe("replacement offer menu precedence", () => {
+  const agent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Books visits",
+    systemPrompt: "book",
+    maxSteps: 8,
+  };
+
+  it("keeps replacement consent buttons when the note step is still awaiting", () => {
+    const update = createAgentFinalizeNode(agent)(clinicState({
+      bookingDraft: {
+        version: 3,
+        mode: "replace",
+        phase: "confirming",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+        },
+        availability: null,
+        selectedDate: "2026-09-10",
+        selectedSlot: {
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+          label: "14:00",
+        },
+        note: { status: "awaiting" },
+        contactId: "c-1",
+        pendingCommand: null,
+        replacement: {
+          meeting: { id: "existing-1", name: "Existing visit" },
+          status: "offered",
+        },
+      },
+      agentMessages: [new AIMessage("Поточний запис заважає створити новий. Бажаєте замінити його?")],
+    }));
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_REPLACE_MENU]);
+    expect(update.lastHandoff?.replyButtons).not.toContain(INTENT_SKIP_LABEL);
   });
 });
 
