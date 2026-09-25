@@ -305,6 +305,38 @@ describe("meeting-tools availability", () => {
     });
   });
 
+  it("present_availability_slots exact path uses half-hour starts for long services", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") {
+        return crmCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({ date: "2026-08-10", durationMinutes: 60 });
+    const parsed = JSON.parse(raw as string) as {
+      slots: Array<{ label: string; dateEnd: string }>;
+      startIntervalMinutes: number;
+    };
+
+    expect(parsed.slots.map((slot) => slot.label)).toEqual([
+      "11:00",
+      "11:30",
+      "12:00",
+      "12:30",
+      "13:00",
+      "13:30",
+      "14:00",
+    ]);
+    expect(parsed.slots.at(-1)?.dateEnd).toBe("2026-08-10T15:00:00");
+    expect(parsed.startIntervalMinutes).toBe(30);
+  });
+
   it("present_availability_slots afterDate skips the rejected day", async () => {
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
@@ -744,6 +776,7 @@ describe("tryAvailabilityCacheHit", () => {
       },
     ],
     stepMinutes: 30,
+    startIntervalMinutes: 30,
   };
 
   it("rejects an unqualified DATE-list cache request", () => {
@@ -814,6 +847,7 @@ describe("tryAvailabilityCacheHit", () => {
       {
         days: [],
         stepMinutes: 30,
+        startIntervalMinutes: 30,
         searchDirection: "later",
         searchAnchor: "2026-10-05",
         searchedFrom: "2026-10-06",
@@ -832,6 +866,11 @@ describe("tryAvailabilityCacheHit", () => {
       },
       cacheHit: true,
     });
+  });
+
+  it("does not reuse snapshots created without the start-interval marker", () => {
+    const legacySnapshot = { ...snapshot, startIntervalMinutes: undefined };
+    expect(tryAvailabilityCacheHit(legacySnapshot, { durationMinutes: 30 })).toBeNull();
   });
 });
 
