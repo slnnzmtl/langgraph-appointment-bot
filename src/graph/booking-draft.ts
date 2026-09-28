@@ -1,4 +1,5 @@
 import type { SelectedBookingSlot } from "./types.js";
+import { CONSULTATION_SERVICE_ID } from "../shared/clinic-constants.js";
 
 export type BookingMode = "create" | "reschedule" | "replace";
 
@@ -48,11 +49,19 @@ export type ReplacementState = {
 };
 
 export type LegacyBookingState = {
+  bookingDraft?: BookingDraft | null;
   bookingNoteStatus?: BookingNote["status"];
   selectedSlot?: SelectedBookingSlot | null;
   selectedAvailabilityDate?: string | null;
   /** A service may be supplied only when recovered from an unambiguous legacy checkpoint. */
   recoveredService?: BookingService;
+};
+
+export type BookingMigrationContext = {
+  /** Human/assistant text retained in a legacy checkpoint, without tool payloads. */
+  historyText?: readonly string[];
+  /** Contact identity is safe to preserve independently of booking completion. */
+  contactId?: string | null;
 };
 
 export type BookingDraft = {
@@ -85,39 +94,124 @@ export type BookingEvent =
   | { type: "draft_abandoned" }
   | { type: "draft_resumed" };
 
+const explicitConsultationAcceptance = (historyText: readonly string[]): boolean => {
+  let consultationOffer = false;
+  for (const raw of historyText) {
+    const text = raw.trim();
+    if (/консультац|consultation/i.test(text) && /\?|так|yes|запис/i.test(text)) {
+      if (/[?]/.test(text)) {
+        consultationOffer = true;
+        continue;
+      }
+      if (consultationOffer && /^(?:так|так,?\s*запишіть|yes|запис(?:ати|атись|атися)?)/iu.test(text)) {
+        return true;
+      }
+      if (/хочу\s+(?:на\s+)?консультац|запиш(?:іть|іть мене|атись|атися).*консультац|book.*consultation/i.test(text)) {
+        return true;
+      }
+    }
+    if (/^(?:ні|no|не хочу|інша процедура|another procedure)/iu.test(text)) {
+      consultationOffer = false;
+    }
+  }
+  return false;
+};
+
+const consultationOfferInHistory = (historyText: readonly string[]): boolean =>
+  historyText.some((text) => /консультац|consultation/i.test(text) && /\?/u.test(text));
+
+const draftHasValidServiceAcceptance = (draft: BookingDraft | null | undefined): boolean =>
+  draft?.serviceAcceptance?.service.id != null
+  && (draft.serviceAcceptance.status === "accepted" || draft.serviceAcceptance.status === "pending");
+
+export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
+  if (draft.phase === "confirming" && draft.pendingCommand != null) {
+    return "confirming";
+  }
+  if (draft.serviceAcceptance == null || draft.serviceAcceptance.status !== "accepted") {
+    return "service";
+  }
+  if (draft.selectedDate == null) {
+    return "date";
+  }
+  if (draft.selectedSlot == null) {
+    return "time";
+  }
+  if (draft.note.status !== "skipped" && draft.note.status !== "answered") {
+    return "note";
+  }
+  if (draft.contactId == null) {
+    return "details";
+  }
+  return "ready";
+};
+
 export const migrateLegacyBookingState = (
   legacy: LegacyBookingState,
+  context: BookingMigrationContext = {},
 ): BookingDraft | null => {
+  const existing = legacy.bookingDraft;
+  const historyText = context.historyText ?? [];
   const hasLegacyBooking =
     (legacy.bookingNoteStatus != null && legacy.bookingNoteStatus !== "unasked")
     || legacy.selectedSlot != null
-    || legacy.selectedAvailabilityDate != null;
-  if (!hasLegacyBooking || !legacy.recoveredService) {
+    || legacy.selectedAvailabilityDate != null
+    || existing != null;
+  if (!hasLegacyBooking && existing == null) {
     return null;
   }
-  const noteStatus = legacy.bookingNoteStatus ?? (legacy.selectedSlot ? "awaiting" : "unasked");
-  const selectedDate = legacy.selectedSlot?.dateStart.slice(0, 10)
+
+  const source = existing ?? createEmptyBookingDraft();
+  const currentAcceptance = draftHasValidServiceAcceptance(source)
+    ? source.serviceAcceptance
+    : null;
+  const recoveredService = currentAcceptance?.service
+    ?? legacy.recoveredService
+    ?? null;
+  const consultation = {
+    id: CONSULTATION_SERVICE_ID,
+    name: "Консультація",
+    source: "direct" as const,
+  } satisfies BookingService;
+  const service = recoveredService
+    ?? (explicitConsultationAcceptance(historyText) || consultationOfferInHistory(historyText)
+      ? consultation
+      : null);
+  if (service == null) {
+    return existing
+      ? {
+          ...createEmptyBookingDraft(),
+          version: existing.version,
+          contactId: existing.contactId ?? context.contactId ?? null,
+        }
+      : null;
+  }
+  const accepted = currentAcceptance?.status === "accepted"
+    || explicitConsultationAcceptance(historyText);
+  const noteStatus = source.note.status !== "unasked"
+    ? source.note.status
+    : legacy.bookingNoteStatus ?? (legacy.selectedSlot ? "awaiting" : "unasked");
+  const selectedSlot = source.selectedSlot ?? legacy.selectedSlot ?? null;
+  const selectedDate = source.selectedDate
+    ?? selectedSlot?.dateStart.slice(0, 10)
     ?? legacy.selectedAvailabilityDate
     ?? null;
-  return {
-    version: 1,
-    mode: "create",
-    phase: legacy.selectedSlot
-      ? noteStatus === "skipped" || noteStatus === "answered" ? "details" : "note"
-      : selectedDate ? "time" : "service",
-    serviceAcceptance: {
-      status: "pending",
-      service: legacy.recoveredService,
-    },
+  const migrated: BookingDraft = {
+    ...source,
+    version: source.version,
+    mode: source.mode ?? "create",
+    serviceAcceptance: { status: accepted ? "accepted" : "pending", service },
     selectedDate,
-    selectedSlot: legacy.selectedSlot ?? null,
+    selectedSlot,
     note: {
+      ...source.note,
       status: noteStatus,
     },
-    contactId: null,
+    contactId: source.contactId ?? context.contactId ?? null,
     pendingCommand: null,
-    replacement: null,
+    replacement: source.replacement ?? null,
   };
+  return { ...migrated, phase: bookingDraftPhase(migrated) };
 };
 
 export const createEmptyBookingDraft = (): BookingDraft => ({
@@ -148,6 +242,11 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   replacement: null,
 });
 
+const slotDate = (slot: SelectedBookingSlot): string => slot.dateStart.slice(0, 10);
+
+const hasCompletedNote = (draft: BookingDraft): boolean =>
+  draft.note.status === "skipped" || draft.note.status === "answered";
+
 /**
  * The only place where booking-draft transitions are defined. UI/LLM layers emit
  * events; they do not mutate individual booking facts independently.
@@ -174,7 +273,14 @@ export const reduceBookingDraft = (
             service: { ...existing.service, ...event.service },
             ...(accepted && event.turn != null ? { acceptedAtTurn: event.turn } : {}),
           },
-          phase: accepted && draft.phase === "service" ? "date" : draft.phase,
+          phase: bookingDraftPhase({
+            ...draft,
+            serviceAcceptance: {
+              ...existing,
+              status: accepted ? "accepted" : existing.status,
+              service: { ...existing.service, ...event.service },
+            },
+          }),
         });
       }
       const reset = clearDownstream(draft);
@@ -186,54 +292,99 @@ export const reduceBookingDraft = (
       return withVersion(draft, {
         ...reset,
         serviceAcceptance: acceptance,
-        phase: event.accepted ? "date" : "service",
+        phase: bookingDraftPhase({
+          ...reset,
+          serviceAcceptance: acceptance,
+          version: draft.version,
+        }),
       });
     }
     case "service_accepted": {
-      if (!draft.serviceAcceptance) {
+      if (!draft.serviceAcceptance || draft.serviceAcceptance.status === "accepted") {
         return draft;
       }
-      return withVersion(draft, {
+      const next = {
         ...draft,
         serviceAcceptance: {
           ...draft.serviceAcceptance,
           status: "accepted",
           ...(event.turn != null ? { acceptedAtTurn: event.turn } : {}),
         },
-        phase: "date",
-      });
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
     }
-    case "date_selected":
-      return withVersion(draft, {
+    case "date_selected": {
+      if (draft.serviceAcceptance?.status !== "accepted") {
+        return draft;
+      }
+      const next = {
         ...draft,
-        phase: "time",
         selectedDate: event.date,
         selectedSlot: null,
         pendingCommand: null,
-      });
-    case "slot_selected":
-      return withVersion(draft, {
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
+    case "slot_selected": {
+      if (
+        draft.serviceAcceptance?.status !== "accepted"
+        || draft.selectedDate == null
+        || draft.selectedDate !== slotDate(event.slot)
+      ) {
+        return draft;
+      }
+      const next = {
         ...draft,
-        phase: "note",
-        selectedDate: event.slot.dateStart.slice(0, 10),
+        selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
         note: { status: "awaiting" },
         pendingCommand: null,
-      });
-    case "note_status":
-      return withVersion(draft, {
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
+    case "note_status": {
+      if (draft.selectedSlot == null) {
+        return draft;
+      }
+      const next = {
         ...draft,
-        phase: event.status === "skipped" || event.status === "answered" ? "details" : "note",
         note: {
           status: event.status,
           ...(event.value !== undefined ? { value: event.value } : {}),
         },
         pendingCommand: null,
-      });
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
     case "contact_resolved":
       return withVersion(draft, { ...draft, contactId: event.contactId });
-    case "command_prepared":
+    case "command_prepared": {
+      const requiresBookingAggregate = event.command.action === "create";
+      if (
+        requiresBookingAggregate
+        && (
+          draft.serviceAcceptance?.status !== "accepted"
+          || draft.selectedSlot == null
+          || !hasCompletedNote(draft)
+          || draft.contactId == null
+        )
+      ) {
+        return draft;
+      }
+      const payload = event.command.payload;
+      if (
+        requiresBookingAggregate
+        && (
+          payload.serviceId !== draft.serviceAcceptance?.service.id
+          || payload.contactId !== draft.contactId
+          || payload.dateStart !== draft.selectedSlot?.dateStart
+          || payload.dateEnd !== draft.selectedSlot?.dateEnd
+        )
+      ) {
+        return draft;
+      }
       return withVersion(draft, { ...draft, phase: "confirming", pendingCommand: event.command });
+    }
     case "existing_booking_detected": {
       const originalCommand =
         draft.pendingCommand?.action === "create" || draft.pendingCommand?.action === "reschedule"
@@ -294,10 +445,7 @@ export const reduceBookingDraft = (
           : (draft.replacement ?? null),
       });
     case "draft_resumed":
-      return withVersion(draft, {
-        ...draft,
-        phase: draft.selectedSlot ? "note" : draft.selectedDate ? "time" : "service",
-      });
+      return withVersion(draft, { ...draft, phase: bookingDraftPhase(draft) });
     case "draft_abandoned":
       return createEmptyBookingDraft();
   }

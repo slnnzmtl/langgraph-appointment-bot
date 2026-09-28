@@ -3039,7 +3039,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         label: "14:00",
       },
       note: { status: "skipped" as const },
-      contactId: null,
+      contactId: "c-1",
       pendingCommand: null,
     };
     const update = await commandPrepare(
@@ -3246,6 +3246,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       action: "create" as const,
       payload: {
         serviceId: CONSULTATION_SERVICE_ID,
+        contactId: "c-1",
         dateStart: "2026-10-17T11:30:00",
         dateEnd: "2026-10-17T12:00:00",
       },

@@ -101,6 +101,7 @@ import {
 } from "./gemini-cache-messages.js";
 import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
+  migrateLegacyBookingState,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -681,9 +682,10 @@ const normalizeMeetingMutationArgs = (
   if (call.name === "create_meeting" && acceptedService?.status === "accepted") {
     args.serviceId = acceptedService.service.id;
   }
-  const ownedContactId = state.contactContext?.contacts.find(
-    (contact) => typeof contact.id === "string" && contact.id.length > 0,
-  )?.id;
+  const ownedContactId = state.bookingDraft?.contactId
+    ?? state.contactContext?.contacts.find(
+      (contact) => typeof contact.id === "string" && contact.id.length > 0,
+    )?.id;
   if (call.name === "create_meeting" && typeof ownedContactId === "string") {
     args.contactId = ownedContactId;
   }
@@ -1242,6 +1244,20 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
 
+  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft => {
+    let draft = state.bookingDraft;
+    if (draft == null) {
+      return reduceBookingDraft(null, { type: "slot_selected", slot });
+    }
+    if (draft.selectedDate == null) {
+      draft = reduceBookingDraft(draft, {
+        type: "date_selected",
+        date: slot.dateStart.slice(0, 10),
+      });
+    }
+    return reduceBookingDraft(draft, { type: "slot_selected", slot });
+  };
+
   // A displayed note prompt and its typed reply must be one runtime-owned
   // transition. Accept the skip/value even if an older checkpoint still says
   // `unasked`.
@@ -1290,10 +1306,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
               selectedSlot: matchedSlot,
             }
           : {}),
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "slot_selected",
-          slot: matchedSlot,
-        }),
+        bookingDraft: reduceSlotSelection(matchedSlot),
       };
     }
     trackEvent("booking_note_step", { phase: "answered" });
@@ -1317,10 +1330,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
             selectedSlot: matchedSlot,
           }
         : {}),
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "slot_selected",
-        slot: matchedSlot,
-      }),
+      bookingDraft: reduceSlotSelection(matchedSlot),
     };
   }
 
@@ -1551,21 +1561,68 @@ export const createAgentPrepareNode = (agentId: string) =>
       stepCount: 0,
     };
     if (agentId === BOOKING_AGENT_ID) {
+      const contactId = state.contactContext?.contacts.find(
+        (contact) => typeof contact.id === "string" && contact.id.length > 0,
+      )?.id;
+      const historyText = [
+        ...(state.messages ?? []).map((message) => extractMessageTextContent(message.content)),
+        ...(state.lastHandoff?.replyText ? [state.lastHandoff.replyText] : []),
+      ];
+      const onlyCatalogService = state.servicesContext?.list.length === 1
+        ? state.servicesContext.list[0]
+        : undefined;
+      const recoveredService = onlyCatalogService
+        ? {
+            id: onlyCatalogService.id,
+            name: onlyCatalogService.name,
+            ...(onlyCatalogService.duration != null
+              ? { durationMinutes: onlyCatalogService.duration }
+              : {}),
+            source: "catalog" as const,
+          }
+        : undefined;
+      const hasMalformedDraft = state.bookingDraft != null
+        && state.bookingDraft.serviceAcceptance?.service.id == null;
+      const hasLegacyProjection = state.bookingDraft == null
+        && (
+          state.bookingNoteStatus !== "unasked"
+          || state.selectedSlot != null
+          || state.selectedAvailabilityDate != null
+        );
+      const migrated = hasMalformedDraft || hasLegacyProjection
+        ? migrateLegacyBookingState(
+            {
+              bookingDraft: state.bookingDraft,
+              bookingNoteStatus: state.bookingNoteStatus,
+              selectedSlot: state.selectedSlot,
+              selectedAvailabilityDate: state.selectedAvailabilityDate,
+              ...(recoveredService ? { recoveredService } : {}),
+            },
+            { historyText, contactId: typeof contactId === "string" ? contactId : null },
+          )
+        : null;
+      const migrationUpdate = migrated
+        ? {
+            bookingDraft: migrated,
+            bookingNoteStatus: "unasked" as const,
+            selectedSlot: null,
+            selectedAvailabilityDate: null,
+          }
+        : {};
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
-      let bookingDraft = bookingDraftForTurn(state) ?? state.bookingDraft ?? undefined;
+      const migratedState = migrated ? { ...state, bookingDraft: migrated } : state;
+      let bookingDraft = bookingDraftForTurn(migratedState) ?? migratedState.bookingDraft ?? undefined;
       const workingState: ClinicState = bookingDraft
-        ? { ...state, bookingDraft }
-        : state;
+        ? { ...migratedState, bookingDraft }
+        : migratedState;
       const noteUpdate = advanceBookingNoteStep(workingState);
       // Legacy projections are returned only for old checkpoints that have no
       // draft. New flows receive a single aggregate update.
       Object.assign(update, noteUpdate);
+      Object.assign(update, migrationUpdate);
       bookingDraft = (noteUpdate.bookingDraft as BookingDraft | undefined) ?? bookingDraft;
-      const contactId = state.contactContext?.contacts.find(
-        (contact) => typeof contact.id === "string" && contact.id.length > 0,
-      )?.id;
       if (bookingDraft && typeof contactId === "string" && contactId !== bookingDraft.contactId) {
         bookingDraft = reduceBookingDraft(bookingDraft, {
           type: "contact_resolved",

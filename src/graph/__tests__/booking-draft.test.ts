@@ -154,19 +154,19 @@ describe("BookingDraft reducer", () => {
 
   it("clears incompatible selections on service change", () => {
     const draft = reduceBookingDraft(
-      reduceBookingDraft(createEmptyBookingDraft(), {
-        type: "service_selected",
-        service: { id: "svc-1", source: "catalog" },
-        accepted: true,
-      }),
-      {
-        type: "slot_selected",
-        slot: {
-          dateStart: "2026-10-17T11:30:00",
-          dateEnd: "2026-10-17T12:00:00",
-          label: "11:30",
-        },
-      },
+      reduceBookingDraft(
+        reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: "svc-1", source: "catalog" },
+          accepted: true,
+        }),
+        { type: "date_selected", date: "2026-10-17" },
+      ),
+      { type: "slot_selected", slot: {
+        dateStart: "2026-10-17T11:30:00",
+        dateEnd: "2026-10-17T12:00:00",
+        label: "11:30",
+      } },
     );
     const changed = reduceBookingDraft(draft, {
       type: "service_selected",
@@ -220,18 +220,19 @@ describe("BookingDraft reducer", () => {
           service: { id: "svc-1", source: "catalog" },
           accepted: true,
         }),
-        {
-          type: "slot_selected",
-          slot: {
-            dateStart: "2026-10-17T11:30:00",
-            dateEnd: "2026-10-17T12:00:00",
-            label: "11:30",
-          },
-        },
+        { type: "date_selected", date: "2026-10-17" },
       ),
-      { type: "note_status", status: "skipped" },
+      {
+        type: "slot_selected",
+        slot: {
+          dateStart: "2026-10-17T11:30:00",
+          dateEnd: "2026-10-17T12:00:00",
+          label: "11:30",
+        },
+      },
     );
-    const recovered = reduceBookingDraft(draft, { type: "slot_invalidated", keepDate: false });
+    const draftWithNote = reduceBookingDraft(draft, { type: "note_status", status: "skipped" });
+    const recovered = reduceBookingDraft(draftWithNote, { type: "slot_invalidated", keepDate: false });
 
     expect(recovered.serviceAcceptance?.service.id).toBe("svc-1");
     expect(recovered.selectedSlot).toBeNull();
@@ -239,27 +240,33 @@ describe("BookingDraft reducer", () => {
   });
 
   it("preserves the replacement command and booking facts across cancellation", () => {
-    const ready = reduceBookingDraft(
+    const readyWithSlot = reduceBookingDraft(
       reduceBookingDraft(
         reduceBookingDraft(createEmptyBookingDraft(), {
           type: "service_selected",
           service: { id: "svc-1", source: "catalog" },
           accepted: true,
         }),
-        {
-          type: "slot_selected",
-          slot: {
-            dateStart: "2026-10-17T11:30:00",
-            dateEnd: "2026-10-17T12:00:00",
-            label: "11:30",
-          },
-        },
+        { type: "date_selected", date: "2026-10-17" },
       ),
-      { type: "note_status", status: "skipped" },
+      {
+        type: "slot_selected",
+        slot: {
+          dateStart: "2026-10-17T11:30:00",
+          dateEnd: "2026-10-17T12:00:00",
+          label: "11:30",
+        },
+      },
     );
+    const ready = reduceBookingDraft(readyWithSlot, { type: "note_status", status: "skipped" });
     const command = {
       action: "create" as const,
-      payload: { serviceId: "svc-1", dateStart: "2026-10-17T11:30:00" },
+      payload: {
+        serviceId: "svc-1",
+        contactId: "c-1",
+        dateStart: "2026-10-17T11:30:00",
+        dateEnd: "2026-10-17T12:00:00",
+      },
     };
     const offered = reduceBookingDraft(
       reduceBookingDraft(ready, { type: "command_prepared", command }),
@@ -310,7 +317,7 @@ describe("BookingDraft reducer", () => {
       },
     });
     expect(migrated).toMatchObject({
-      phase: "time",
+      phase: "service",
       serviceAcceptance: {
         status: "pending",
         service: { id: "svc-1" },
