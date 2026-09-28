@@ -24,6 +24,7 @@ import {
   meetingMutationClearsAvailability,
   resolveAvailabilityOffer,
   isConsultationOfferAcceptance,
+  routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
 } from "../agent-loop.js";
@@ -1656,6 +1657,121 @@ describe("routeAfterAgentLlm", () => {
         "booking__command_prepare",
       ),
     ).toBe("booking__command_prepare");
+  });
+
+  it("routes a ready draft to runtime command preparation before the step limit", () => {
+    expect(
+      routeAfterAgentLlm(
+        clinicState({
+          bookingDraft: canonicalBookingDraft(),
+          agentMessages: [new AIMessage("Готово! Запис створено.")],
+          stepCount: 5,
+        }),
+        5,
+        "booking__tools",
+        "booking__finalize",
+        "booking__command_prepare",
+      ),
+    ).toBe("booking__command_prepare");
+  });
+});
+
+describe("runtime-owned booking routing", () => {
+  it("bypasses the LLM when prepare has a complete booking draft", () => {
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({ bookingDraft: canonicalBookingDraft() }),
+        "booking__llm",
+        "booking__command_prepare",
+      ),
+    ).toBe("booking__command_prepare");
+  });
+
+  it("uses the LLM while canonical booking facts are still missing", () => {
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          bookingDraft: canonicalBookingDraft({
+            phase: "note",
+            note: { status: "awaiting" },
+          }),
+        }),
+        "booking__llm",
+        "booking__command_prepare",
+      ),
+    ).toBe("booking__llm");
+  });
+
+  it("continues successful slot revalidation directly to command preparation", () => {
+    expect(
+      routeAfterAgentTools(
+        clinicState({
+          bookingDraft: canonicalBookingDraft({
+            phase: "confirming",
+            serviceAcceptance: {
+              status: "accepted",
+              service: {
+                id: "svc-1",
+                name: "Процедура",
+                durationMinutes: 30,
+                source: "catalog",
+              },
+            },
+            pendingCommand: {
+              action: "create",
+              payload: { serviceId: "svc-1" },
+            },
+          }),
+          agentMessages: [
+            new ToolMessage({
+              content: JSON.stringify({
+                date: "2026-09-10",
+                slots: [{
+                  label: "14:00",
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                }],
+                // Snapshot metadata is not authoritative; the exact interval is.
+                stepMinutes: 45,
+              }),
+              name: "present_availability_slots",
+              tool_call_id: "revalidate-1",
+            }),
+          ],
+        }),
+        "booking__llm",
+        "booking__tools",
+        "booking__mutation_finalize",
+        "booking__command_prepare",
+      ),
+    ).toBe("booking__command_prepare");
+  });
+
+  it("does not continue command preparation when fresh revalidation fails", () => {
+    expect(
+      routeAfterAgentTools(
+        clinicState({
+          bookingDraft: canonicalBookingDraft({
+            phase: "confirming",
+            pendingCommand: {
+              action: "create",
+              payload: { serviceId: "svc-1" },
+            },
+          }),
+          agentMessages: [
+            new ToolMessage({
+              content: JSON.stringify({ error: "CRM unavailable" }),
+              name: "present_availability_slots",
+              tool_call_id: "revalidate-1",
+            }),
+          ],
+        }),
+        "booking__llm",
+        "booking__tools",
+        "booking__mutation_finalize",
+        "booking__command_prepare",
+      ),
+    ).toBe("booking__llm");
   });
 });
 
@@ -3375,7 +3491,19 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           },
         },
         agentMessages: [
-          new ToolMessage({ content: "{}", name: "present_availability_slots", tool_call_id: "slots-1" }),
+          new ToolMessage({
+            content: JSON.stringify({
+              date: "2026-10-17",
+              slots: [{
+                label: "11:30",
+                dateStart: "2026-10-17T11:30:00",
+                dateEnd: "2026-10-17T12:00:00",
+              }],
+              stepMinutes: 30,
+            }),
+            name: "present_availability_slots",
+            tool_call_id: "slots-1",
+          }),
           new AIMessage("Готую запис"),
         ],
       }),
@@ -3898,6 +4026,19 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           },
         },
         agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              date: "2026-09-10",
+              slots: [{
+                label: "14:00",
+                dateStart: "2026-09-10T14:00:00",
+                dateEnd: "2026-09-10T14:30:00",
+              }],
+              stepMinutes: 30,
+            }),
+            name: "present_availability_slots",
+            tool_call_id: "revalidate-1",
+          }),
           new AIMessage({
             content: "",
             tool_calls: [{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }],
@@ -4063,6 +4204,40 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
     expect(JSON.parse(String(toolMsg.content)).awaitingConfirmation).toBe(true);
+  });
+
+  it("fails closed when create follows an unsuccessful slot revalidation", async () => {
+    const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
+    const createTool = tool(invoke, {
+      name: "create_meeting",
+      description: "create",
+      schema: z.object({}),
+    });
+    const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "confirming",
+          pendingCommand: { action: "create", payload: { serviceId: "svc-1" } },
+        }),
+        availabilityContext: snapshot,
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ error: "CRM unavailable" }),
+            name: "present_availability_slots",
+            tool_call_id: "revalidate-1",
+          }),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
+    expect(JSON.parse(String(toolMsg.content)).error).toBe("Selected slot is no longer available");
   });
 
   it("rejects a selected interval whose end does not match the service snapshot", async () => {

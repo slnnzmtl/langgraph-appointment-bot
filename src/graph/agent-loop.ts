@@ -814,24 +814,57 @@ const createCommandFromBookingDraft = (
   return { action: "create", payload };
 };
 
-const bookingDraftCanPrepareCommand = (state: ClinicState): boolean => {
-  if (cancelCommandFromBookingContext(state) != null
-    && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")) {
+/** Fresh tool evidence that the canonical selected slot is still bookable. */
+const freshAvailabilityValidatesSelectedSlot = (state: ClinicState): boolean => {
+  const draft = state.bookingDraft;
+  const slot = draft?.selectedSlot;
+  const availability = captureAvailabilityFromMessages(state.agentMessages ?? []);
+  if (!draft || !slot || !availability) {
+    return false;
+  }
+  return availability.days
+    .find((day) => day.date === slot.dateStart.slice(0, 10))
+    ?.slots.some((candidate) =>
+      candidate.dateStart === slot.dateStart && candidate.dateEnd === slot.dateEnd,
+    ) === true;
+};
+
+/**
+ * Whether this booking turn has enough authoritative state for the runtime to
+ * own the next mutation step. This deliberately ignores model output: the LLM
+ * may gather missing facts, but it must not decide whether a complete booking
+ * draft advances to revalidation/HITL.
+ */
+const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
+  if (
+    replacementActionForTurn(state) != null
+    || (
+      cancelCommandFromBookingContext(state) != null
+      && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+    )
+  ) {
     return true;
   }
   if (createCommandFromBookingDraft(state) == null) {
     return false;
   }
-  if (!toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")) {
-    return state.bookingDraft?.replacement?.status === "create_pending";
+  return !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+    || freshAvailabilityValidatesSelectedSlot(state);
+};
+
+/**
+ * Continue a runtime-owned compound command after its prerequisite tool step.
+ * A successful revalidation can advance to create_meeting; a successful
+ * replacement cancellation can advance to revalidation/create. All other tool
+ * results still return to the LLM unless they are terminal mutation outcomes.
+ */
+const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
+  if (state.bookingDraft?.replacement?.status === "create_pending") {
+    return true;
   }
-  const lastAi = [...(state.agentMessages ?? [])]
-    .reverse()
-    .find((message) => message instanceof AIMessage);
-  const calls = lastAi instanceof AIMessage ? (lastAi.tool_calls ?? []) : [];
-  return state.bookingDraft?.replacement?.status === "create_pending"
-    || calls.length === 0
-    || calls.some((call) => call.name === "create_meeting");
+  return toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+    && createCommandFromBookingDraft(state) != null
+    && freshAvailabilityValidatesSelectedSlot(state);
 };
 
 const REPLACEMENT_CANCEL_LABELS = new Set(["скасувати", "cancel", "так", "yes"]);
@@ -1602,6 +1635,31 @@ export const createAgentPrepareNode = (agentId: string) =>
   };
 
 /**
+ * Add a runtime-owned tool call without breaking the AI/tool protocol. Replace
+ * the latest AI message only while its tool call is still pending; after a
+ * fulfilled prerequisite (for example slot revalidation), append the next call.
+ */
+const appendOrReplacePendingToolCall = (
+  messages: BaseMessage[],
+  runtimeCall: AIMessage,
+): BaseMessage[] => {
+  if (!hasPendingToolCalls(messages)) {
+    return [...messages, runtimeCall];
+  }
+  const lastAiIndex = [...messages]
+    .map((message, index) => ({ message, index }))
+    .reverse()
+    .find(({ message }) => message instanceof AIMessage)?.index;
+  return lastAiIndex == null
+    ? [...messages, runtimeCall]
+    : [
+        ...messages.slice(0, lastAiIndex),
+        runtimeCall,
+        ...messages.slice(lastAiIndex + 1),
+      ];
+};
+
+/**
  * Checkpoint the normalized mutation command before ToolNode can reach HITL.
  * LangGraph does not apply a node's return value when a later node interrupts,
  * so preparing this in the tools node is too late for restart-safe confirmation.
@@ -1626,10 +1684,6 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
       directCancelCommand
       && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
     ) {
-      const lastAiIndex = [...(state.agentMessages ?? [])]
-        .map((message, index) => ({ message, index }))
-        .reverse()
-        .find(({ message }) => message instanceof AIMessage)?.index;
       const syntheticCall = {
         id: `booking_direct_cancel_${state.bookingDraft?.version ?? 0}`,
         name: "cancel_meeting",
@@ -1638,20 +1692,13 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
       };
       const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
       const messages = state.agentMessages ?? [];
-      const agentMessages = lastAiIndex == null
-        ? [...messages, syntheticAi]
-        : [
-            ...messages.slice(0, lastAiIndex),
-            syntheticAi,
-            ...messages.slice(lastAiIndex + 1),
-          ];
       return {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "command_prepared",
           command: directCancelCommand,
         }),
         pendingCancellationPurpose: "direct",
-        agentMessages: new Overwrite(agentMessages),
+        agentMessages: new Overwrite(appendOrReplacePendingToolCall(messages, syntheticAi)),
       };
     }
     const replacementAction = replacementActionForTurn(state);
@@ -1664,10 +1711,6 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     if (replacementAction === "cancel") {
       const cancelCommand = cancelCommandFromReplacement(state);
       if (cancelCommand) {
-        const lastAiIndex = [...(state.agentMessages ?? [])]
-          .map((message, index) => ({ message, index }))
-          .reverse()
-          .find(({ message }) => message instanceof AIMessage)?.index;
         const syntheticCall = {
           id: `booking_replace_cancel_${state.bookingDraft?.version ?? 0}`,
           name: "cancel_meeting",
@@ -1676,20 +1719,13 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         };
         const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
         const messages = state.agentMessages ?? [];
-        const agentMessages = lastAiIndex == null
-          ? [...messages, syntheticAi]
-          : [
-              ...messages.slice(0, lastAiIndex),
-              syntheticAi,
-              ...messages.slice(lastAiIndex + 1),
-            ];
         return {
           bookingDraft: reduceBookingDraft(state.bookingDraft, {
             type: "cancel_existing_requested",
             command: cancelCommand,
           }),
           pendingCancellationPurpose: "replacement",
-          agentMessages: new Overwrite(agentMessages),
+          agentMessages: new Overwrite(appendOrReplacePendingToolCall(messages, syntheticAi)),
         };
       }
     }
@@ -1728,14 +1764,12 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
           type: "command_prepared",
           command: draftCommand,
         }),
-        agentMessages: new Overwrite([...messages, revalidationAi]),
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(messages, revalidationAi),
+        ),
       };
     }
-    if (draftCommand && bookingDraftCanPrepareCommand(state)) {
-      const lastAiIndex = [...(state.agentMessages ?? [])]
-        .map((message, index) => ({ message, index }))
-        .reverse()
-        .find(({ message }) => message instanceof AIMessage)?.index;
+    if (draftCommand && freshAvailabilityValidatesSelectedSlot(state)) {
       const syntheticCall = {
         id: `booking_draft_create_${state.bookingDraft?.version ?? 0}`,
         name: "create_meeting",
@@ -1747,19 +1781,12 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         tool_calls: [syntheticCall],
       });
       const messages = state.agentMessages ?? [];
-      const agentMessages = lastAiIndex == null
-        ? [...messages, syntheticAi]
-        : [
-            ...messages.slice(0, lastAiIndex),
-            syntheticAi,
-            ...messages.slice(lastAiIndex + 1),
-          ];
       return {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "command_prepared",
           command: draftCommand,
         }),
-        agentMessages: new Overwrite(agentMessages),
+        agentMessages: new Overwrite(appendOrReplacePendingToolCall(messages, syntheticAi)),
       };
     }
     const lastAi = [...(state.agentMessages ?? [])]
@@ -2094,6 +2121,22 @@ export const createAgentToolsNode = (
             contactId?: string;
           };
           const selectedSlot = authoritativeSelectedSlot(state);
+          const requiresFreshCreateValidation = call.name === "create_meeting"
+            && state.bookingDraft?.pendingCommand?.action === "create";
+          if (requiresFreshCreateValidation && !freshAvailabilityValidatesSelectedSlot(state)) {
+            trackToolError(call.name, SELECTED_SLOT_NOT_AVAILABLE_ERROR);
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: SELECTED_SLOT_NOT_AVAILABLE_ERROR,
+                  hint: "Refresh availability and offer another slot before booking.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
           if (selectedSlot) {
             const availability = state.bookingDraft?.selectedSlot
               ? state.availabilityContext
@@ -2746,22 +2789,15 @@ export const routeAfterAgentLlm = (
   finalizeName: string,
   commandPrepareName?: string,
 ): string => {
+  // Runtime-owned booking transitions outrank both model text and the model's
+  // step budget. Once canonical state is ready, no LLM-authored terminal claim
+  // is eligible for finalization.
+  if (commandPrepareName && bookingTurnNeedsCommandPreparation(state)) {
+    return commandPrepareName;
+  }
+
   if (state.stepCount >= maxSteps) {
     return finalizeName;
-  }
-
-  // Replacement consent is a runtime-owned transition. Do not let a model
-  // retry create_meeting or answer with the same menu instead of dispatching
-  // the cancellation command.
-  if (commandPrepareName && replacementActionForTurn(state) != null) {
-    return commandPrepareName;
-  }
-
-  // Once the draft is complete, the runtime owns command preparation. This
-  // prevents an LLM mutation retry/error from becoming the booking state
-  // machine and also supports a model response containing plain text.
-  if (commandPrepareName && bookingDraftCanPrepareCommand(state)) {
-    return commandPrepareName;
   }
 
   if (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages)) {
@@ -2774,11 +2810,21 @@ export const routeAfterAgentLlm = (
   return finalizeName;
 };
 
+export const routeAfterAgentPrepare = (
+  state: ClinicState,
+  llmName: string,
+  commandPrepareName?: string,
+): string =>
+  commandPrepareName && bookingTurnNeedsCommandPreparation(state)
+    ? commandPrepareName
+    : llmName;
+
 export const routeAfterAgentTools = (
   state: ClinicState,
   llmName: string,
   toolsName: string,
   mutationFinalizeName?: string,
+  commandPrepareName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
@@ -2786,6 +2832,10 @@ export const routeAfterAgentTools = (
 
   if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
     return mutationFinalizeName;
+  }
+
+  if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
+    return commandPrepareName;
   }
 
   return llmName;
