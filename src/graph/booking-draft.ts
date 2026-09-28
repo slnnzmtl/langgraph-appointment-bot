@@ -86,6 +86,7 @@ export type BookingEvent =
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
   | { type: "contact_resolved"; contactId: string }
   | { type: "command_prepared"; command: PendingBookingCommand }
+  | { type: "command_cleared" }
   | { type: "existing_booking_detected"; meeting: ReplacementMeeting }
   | { type: "cancel_existing_requested"; command: PendingBookingCommand }
   | { type: "cancel_existing_completed" }
@@ -98,13 +99,13 @@ const explicitConsultationAcceptance = (historyText: readonly string[]): boolean
   let consultationOffer = false;
   for (const raw of historyText) {
     const text = raw.trim();
+    if (consultationOffer && /^(?:так|yes|так,?\s*запишіть)/iu.test(text)) {
+      return true;
+    }
     if (/консультац|consultation/i.test(text) && /\?|так|yes|запис/i.test(text)) {
       if (/[?]/.test(text)) {
         consultationOffer = true;
         continue;
-      }
-      if (consultationOffer && /^(?:так|так,?\s*запишіть|yes|запис(?:ати|атись|атися)?)/iu.test(text)) {
-        return true;
       }
       if (/хочу\s+(?:на\s+)?консультац|запиш(?:іть|іть мене|атись|атися).*консультац|book.*consultation/i.test(text)) {
         return true;
@@ -178,13 +179,11 @@ export const migrateLegacyBookingState = (
       ? consultation
       : null);
   if (service == null) {
-    return existing
-      ? {
-          ...createEmptyBookingDraft(),
-          version: existing.version,
-          contactId: existing.contactId ?? context.contactId ?? null,
-        }
-      : null;
+    return {
+      ...createEmptyBookingDraft(),
+      version: existing?.version ?? 0,
+      contactId: existing?.contactId ?? context.contactId ?? null,
+    };
   }
   const accepted = currentAcceptance?.status === "accepted"
     || explicitConsultationAcceptance(historyText);
@@ -385,6 +384,12 @@ export const reduceBookingDraft = (
       }
       return withVersion(draft, { ...draft, phase: "confirming", pendingCommand: event.command });
     }
+    case "command_cleared":
+      return withVersion(draft, {
+        ...draft,
+        pendingCommand: null,
+        phase: bookingDraftPhase({ ...draft, pendingCommand: null, version: draft.version }),
+      });
     case "existing_booking_detected": {
       const originalCommand =
         draft.pendingCommand?.action === "create" || draft.pendingCommand?.action === "reschedule"

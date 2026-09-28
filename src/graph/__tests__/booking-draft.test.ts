@@ -63,7 +63,12 @@ describe("BookingDraft reducer", () => {
     });
     const command = {
       action: "create" as const,
-      payload: { serviceId: "svc-1", dateStart: selectedSlot.dateStart, contactId: "c-1" },
+      payload: {
+        serviceId: "svc-1",
+        dateStart: selectedSlot.dateStart,
+        dateEnd: selectedSlot.dateEnd,
+        contactId: "c-1",
+      },
     };
     const incomplete = reduceBookingDraft(accepted, { type: "command_prepared", command });
     const ready = reduceBookingDraft(

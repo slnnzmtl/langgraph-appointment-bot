@@ -59,6 +59,8 @@ import {
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
   CONSULTATION_SERVICE_ID,
+  CLINIC_ADDRESS,
+  CLINIC_MAPS_MARKDOWN,
   CLINIC_SLOT_MINUTES,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
@@ -204,7 +206,7 @@ export const classifyMeetingMutationToolMessage = (
   }
   const record = asJsonRecord(body);
   if (!record) {
-    return "committed";
+    return "failed";
   }
   if (record.awaitingConfirmation === true) {
     return "pending_confirmation";
@@ -215,20 +217,34 @@ export const classifyMeetingMutationToolMessage = (
   if (typeof record.error === "string") {
     return BLOCKED_MEETING_ERRORS.has(record.error) ? "blocked" : "failed";
   }
-  return "committed";
+  const entityId = typeof record.id === "string" && record.id.length > 0
+    ? record.id
+    : typeof record.meetingId === "string" && record.meetingId.length > 0
+      ? record.meetingId
+      : null;
+  if (entityId != null || (name === "cancel_meeting" && record.success === true)) {
+    return "committed";
+  }
+  return "failed";
 };
 
 const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
   MEETING_MUTATION_TOOLS.has(message.name ?? "")
   && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
 
-const terminalCancellationOutcome = (state: ClinicState): ToolMessage | null => {
+const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage | null => {
   for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
     const message = state.agentMessages?.[index];
-    if (!(message instanceof ToolMessage) || message.name !== "cancel_meeting") {
+    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
       continue;
     }
     const outcome = classifyMeetingMutationToolMessage(message);
+    if (message.name !== "cancel_meeting") {
+      if (outcome === "committed" || outcome === "declined" || outcome === "blocked" || outcome === "failed") {
+        return message;
+      }
+      continue;
+    }
     // A committed replacement cancellation is a continuation, not a
     // patient-facing terminal outcome: the replacement create flow owns it.
     // Declined/failed replacement cancellation outcomes are terminal, but must
@@ -241,7 +257,7 @@ const terminalCancellationOutcome = (state: ClinicState): ToolMessage | null => 
     if (state.bookingDraft?.replacement != null) {
       return null;
     }
-    if (outcome === "committed" || outcome === "declined" || outcome === "failed") {
+    if (outcome === "committed" || outcome === "declined" || outcome === "blocked" || outcome === "failed") {
       return message;
     }
     return null;
@@ -481,12 +497,6 @@ const bookingDateAnchors = (state: ClinicState): string[] => [
   ...(state.bookingDraft?.selectedSlot
     ? [state.bookingDraft.selectedSlot.dateStart, state.bookingDraft.selectedSlot.dateEnd]
     : []),
-  ...(state.bookingDraft == null && state.selectedAvailabilityDate
-    ? [state.selectedAvailabilityDate]
-    : []),
-  ...(state.bookingDraft == null && state.selectedSlot
-    ? [state.selectedSlot.dateStart, state.selectedSlot.dateEnd]
-    : []),
   ...(state.availabilityContext?.days ?? []).map((day) => day.date),
   ...(state.availabilityCursor
     ? [
@@ -499,10 +509,10 @@ const bookingDateAnchors = (state: ClinicState): string[] => [
 ];
 
 const authoritativeSelectedSlot = (state: ClinicState): SelectedBookingSlot | null =>
-  state.bookingDraft != null ? state.bookingDraft.selectedSlot : state.selectedSlot;
+  state.bookingDraft?.selectedSlot ?? null;
 
 const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =>
-  state.bookingDraft?.note.status ?? state.bookingNoteStatus ?? "unasked";
+  state.bookingDraft?.note.status ?? "unasked";
 
 const consultationService = (source: "catalog" | "direct"): {
   id: string;
@@ -537,11 +547,6 @@ const catalogServiceForText = (
   };
 };
 
-const mentionsConsultationSelection = (text: string): boolean =>
-  /консультац|consultation/i.test(text)
-  && !text.includes("?")
-  && !/\b(?:не|без|not|don't|no)\b/i.test(text);
-
 /** Resolve explicit service acceptance into a durable draft event for this turn. */
 const bookingDraftForTurn = (state: ClinicState): BookingDraft | undefined => {
   const humanMessages = (state.messages ?? []).filter(
@@ -552,22 +557,8 @@ const bookingDraftForTurn = (state: ClinicState): BookingDraft | undefined => {
     return undefined;
   }
   const currentText = extractMessageTextContent(current.content).trim();
-  const previousText = humanMessages.at(-2)
-    ? extractMessageTextContent(humanMessages.at(-2)!.content).trim()
-    : "";
-  const latestAssistantText = [...(state.messages ?? [])]
-    .reverse()
-    .find((message) => message instanceof AIMessage);
-  const handoffQuestion = state.lastHandoff?.replyText
-    ?? (latestAssistantText ? extractMessageTextContent(latestAssistantText.content) : "");
-  const consultationOffer = isConsultationOfferQuestion(handoffQuestion);
-  const selectedCatalogServiceBeforeYes = catalogServiceForText(previousText, state);
-  const selectedConsultationBeforeYes =
-    selectedCatalogServiceBeforeYes != null || mentionsConsultationSelection(previousText);
   const directCatalogService = catalogServiceForText(currentText, state);
   const directRequest = requestsConsultation(currentText);
-  const affirmativeConsultation =
-    isYesReply(currentText) && (consultationOffer || selectedConsultationBeforeYes);
   const pendingService = state.bookingDraft?.serviceAcceptance;
   const isAvailabilityContinuation =
     resolveAvailabilityRequest(currentText, kyivToday()) != null
@@ -600,22 +591,11 @@ const bookingDraftForTurn = (state: ClinicState): BookingDraft | undefined => {
       turn: state.stepCount,
     });
   }
-  if (!affirmativeConsultation) {
+  if (!(isYesReply(currentText) && pendingService?.status === "pending")) {
     return undefined;
   }
-  if (
-    state.bookingDraft?.serviceAcceptance?.status === "pending"
-    && state.bookingDraft.serviceAcceptance.service.id === CONSULTATION_SERVICE_ID
-  ) {
-    return reduceBookingDraft(state.bookingDraft, {
-      type: "service_accepted",
-      turn: state.stepCount,
-    });
-  }
   return reduceBookingDraft(state.bookingDraft, {
-    type: "service_selected",
-    service: selectedCatalogServiceBeforeYes ?? consultationService("catalog"),
-    accepted: true,
+    type: "service_accepted",
     turn: state.stepCount,
   });
 };
@@ -1186,23 +1166,14 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   // current snapshot is still a date change, not a visit note.
   if (
     explicitDate?.kind === "exact"
-    && explicitDate.date !== (state.bookingDraft?.selectedDate ?? state.selectedAvailabilityDate)
+    && explicitDate.date !== state.bookingDraft?.selectedDate
   ) {
     trackEvent("booking_date_selected", { date: explicitDate.date });
     const bookingDraft = reduceBookingDraft(state.bookingDraft, {
       type: "date_selected",
       date: explicitDate.date,
     });
-    return {
-      ...(state.bookingDraft == null
-        ? {
-            bookingNoteStatus: status,
-            selectedAvailabilityDate: explicitDate.date,
-            selectedSlot: null,
-          }
-        : {}),
-      bookingDraft,
-    };
+    return { bookingDraft };
   }
 
   // DATE is a state transition, not just a presentation choice. Keep it until
@@ -1214,20 +1185,10 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
       type: "date_selected",
       date: matchedDay.date,
     });
-    return {
-      ...(state.bookingDraft == null
-        ? {
-            bookingNoteStatus: "unasked" as const,
-            selectedAvailabilityDate: matchedDay.date,
-            selectedSlot: null,
-          }
-        : {}),
-      bookingDraft,
-    };
+    return { bookingDraft };
   }
 
   const selectedDate = state.bookingDraft?.selectedDate
-    ?? state.selectedAvailabilityDate
     ?? (authoritativeSelectedSlot(state)?.dateStart.slice(0, 10) || null);
   const expectedDuration = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
   const availabilityMatchesService = availability == null
@@ -1265,7 +1226,6 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     if (isNoteSkipReply(human)) {
       trackEvent("booking_note_step", { phase: "skipped" });
       return {
-        ...(state.bookingDraft == null ? { bookingNoteStatus: "skipped" as const } : {}),
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "note_status",
           status: "skipped",
@@ -1275,7 +1235,6 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     if (!matchedSlot && human.length > 0) {
       trackEvent("booking_note_step", { phase: "answered" });
       return {
-        ...(state.bookingDraft == null ? { bookingNoteStatus: "answered" as const } : {}),
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "note_status",
           status: "answered",
@@ -1289,7 +1248,6 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     if (isNoteSkipReply(human) || sameSlot) {
       trackEvent("booking_note_step", { phase: "skipped" });
       return {
-        ...(state.bookingDraft == null ? { bookingNoteStatus: "skipped" as const } : {}),
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "note_status",
           status: "skipped",
@@ -1298,20 +1256,10 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     }
     if (matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });
-      return {
-        ...(state.bookingDraft == null
-          ? {
-              bookingNoteStatus: "awaiting" as const,
-              selectedAvailabilityDate: matchedSlot.dateStart.slice(0, 10),
-              selectedSlot: matchedSlot,
-            }
-          : {}),
-        bookingDraft: reduceSlotSelection(matchedSlot),
-      };
+      return { bookingDraft: reduceSlotSelection(matchedSlot) };
     }
     trackEvent("booking_note_step", { phase: "answered" });
     return {
-      ...(state.bookingDraft == null ? { bookingNoteStatus: "answered" as const } : {}),
       bookingDraft: reduceBookingDraft(state.bookingDraft, {
         type: "note_status",
         status: "answered",
@@ -1322,25 +1270,13 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
 
   if (matchedSlot && (status === "unasked" || !sameSlot)) {
     trackEvent("booking_note_step", { phase: "awaiting" });
-    return {
-      ...(state.bookingDraft == null
-        ? {
-            bookingNoteStatus: "awaiting" as const,
-            selectedAvailabilityDate: matchedSlot.dateStart.slice(0, 10),
-            selectedSlot: matchedSlot,
-          }
-        : {}),
-      bookingDraft: reduceSlotSelection(matchedSlot),
-    };
+    return { bookingDraft: reduceSlotSelection(matchedSlot) };
   }
 
   return {};
 };
 
-const resetBookingNoteState = (state?: ClinicState): ClinicStateUpdate =>
-  state?.bookingDraft == null
-    ? { bookingNoteStatus: "unasked", selectedSlot: null, selectedAvailabilityDate: null }
-    : {};
+const resetBookingNoteState = (_state?: ClinicState): ClinicStateUpdate => ({});
 
 /**
  * When present_availability_slots ran this turn, replace invented DATE/TIME copy with the
@@ -1993,14 +1929,14 @@ export const createAgentToolsNode = (
           && call.name === "create_meeting"
           && noteStepBlocksCreate(authoritativeNoteStatus(state))
         ) {
-          noteStatusUpdate = state.bookingDraft == null
-            ? { bookingNoteStatus: "awaiting" }
-            : {
+          noteStatusUpdate = state.bookingDraft
+            ? {
                 bookingDraft: reduceBookingDraft(state.bookingDraft, {
                   type: "note_status",
                   status: "awaiting",
                 }),
-              };
+              }
+            : {};
           trackEvent("booking_create_blocked_note", {
             phase: authoritativeNoteStatus(state),
           });
@@ -2414,9 +2350,7 @@ export const createAgentToolsNode = (
         update.availabilityContext = bookingAvailability;
         update.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
         const bookingDraft = state.bookingDraft;
-        const selectedDate = bookingDraft != null
-          ? bookingDraft.selectedDate
-          : state.selectedAvailabilityDate;
+        const selectedDate = bookingDraft?.selectedDate;
         const selectedSlot = authoritativeSelectedSlot(state);
         const selectedDay = selectedDate == null
           ? undefined
@@ -2440,11 +2374,6 @@ export const createAgentToolsNode = (
             || !selectedSlotStillAvailable
           )
         ) {
-          if (bookingDraft == null) {
-            update.selectedAvailabilityDate = null;
-            update.selectedSlot = null;
-            update.bookingNoteStatus = "unasked";
-          }
           if (bookingDraft) {
             update.bookingDraft = reduceBookingDraft(bookingDraft, {
               type: "slot_invalidated",
@@ -2484,35 +2413,61 @@ export const createAgentToolsNode = (
  */
 export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState): ClinicStateUpdate => {
-    const result = terminalCancellationOutcome(state);
+    const result = terminalMeetingMutationOutcome(state);
     if (!result) {
       return {};
     }
     const outcome = classifyMeetingMutationToolMessage(result);
     const committed = outcome === "committed";
     const declined = outcome === "declined";
+    const blocked = outcome === "blocked";
+    const mutationName = result.name ?? "";
     const replacementCancellation = state.pendingCancellationPurpose === "replacement";
-    const replyText = committed
-      ? "Запис скасовано."
-      : declined
-        ? replacementCancellation
-          ? "Скасування поточного візиту скасовано. Новий запис не було створено."
-          : "Запис не було скасовано."
-        : replacementCancellation
-          ? "Не вдалося скасувати поточний візит, тому новий запис не створено. Спробуйте ще раз."
-          : "Не вдалося скасувати запис. Спробуйте ще раз.";
-    const replyButtons = committed
-      ? [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))]
-      : replacementCancellation
-        ? [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))]
-        : [...VISIT_CHANGE_MENU];
+    const draftSlot = state.bookingDraft?.selectedSlot;
+    const draftDate = state.bookingDraft?.selectedDate;
+    const when = draftDate && draftSlot?.label ? ` на ${draftDate} о ${draftSlot.label}` : "";
+    const address = `\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`;
+    const replyText = mutationName === "create_meeting"
+      ? committed
+        ? `Запис створено${when}.${address}`
+        : declined
+          ? "Запис не було створено."
+          : blocked
+            ? "Не вдалося створити запис через невідповідність даних. Ваші дані збережено."
+            : "Не вдалося створити запис. Спробуйте ще раз."
+      : mutationName === "reschedule_meeting"
+        ? committed
+          ? `Запис перенесено${when}.${address}`
+          : declined
+            ? "Запис не було перенесено."
+            : "Не вдалося перенести запис. Спробуйте ще раз."
+        : committed
+          ? "Запис скасовано."
+          : declined
+            ? replacementCancellation
+              ? "Скасування поточного візиту скасовано. Новий запис не було створено."
+              : "Запис не було скасовано."
+            : replacementCancellation
+              ? "Не вдалося скасувати поточний візит, тому новий запис не створено. Спробуйте ще раз."
+              : "Не вдалося скасувати запис. Спробуйте ще раз.";
+    const replyButtons = mutationName === "cancel_meeting" && !committed && !replacementCancellation
+      ? [...VISIT_CHANGE_MENU]
+      : [...defaultMenuLabels(
+          committed && mutationName === "create_meeting"
+            ? true
+            : defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext),
+        )];
     const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
     return {
       agentMessages: new Overwrite([] as BaseMessage[]),
       stepCount: 0,
       // A direct cancellation is complete; do not leave its frozen command in
       // the draft for a later turn to replay.
-      bookingDraft: null,
+      bookingDraft: committed || declined || mutationName === "cancel_meeting"
+        ? null
+        : state.bookingDraft
+          ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
+          : null,
       pendingCancellationPurpose: null,
       messages: [message],
       lastHandoff: {
@@ -2528,6 +2483,9 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
 export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState): ClinicStateUpdate => {
     const agentMessages = state.agentMessages ?? [];
+    if (terminalMeetingMutationOutcome(state) != null) {
+      return createAgentMutationFinalizeNode(agent)(state);
+    }
     const stepCount = state.stepCount ?? 0;
     const lastMessage = agentMessages[agentMessages.length - 1];
 
@@ -2662,7 +2620,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
                     status: "awaiting",
                   }),
             }
-          : { bookingNoteStatus: "awaiting" as const }
+          : {}
         : {};
     const offeredService =
       (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
@@ -2777,7 +2735,7 @@ export const routeAfterAgentTools = (
     return toolsName;
   }
 
-  if (mutationFinalizeName && terminalCancellationOutcome(state) != null) {
+  if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
     return mutationFinalizeName;
   }
 
