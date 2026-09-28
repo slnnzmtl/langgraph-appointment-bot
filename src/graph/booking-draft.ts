@@ -122,7 +122,7 @@ const consultationOfferInHistory = (historyText: readonly string[]): boolean =>
   historyText.some((text) => /консультац|consultation/i.test(text) && /\?/u.test(text));
 
 const draftHasValidServiceAcceptance = (draft: BookingDraft | null | undefined): boolean =>
-  draft?.serviceAcceptance?.service.id != null
+  draft?.serviceAcceptance?.service?.id != null
   && (draft.serviceAcceptance.status === "accepted" || draft.serviceAcceptance.status === "pending");
 
 export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
@@ -187,24 +187,27 @@ export const migrateLegacyBookingState = (
   }
   const accepted = currentAcceptance?.status === "accepted"
     || explicitConsultationAcceptance(historyText);
-  const noteStatus = source.note.status !== "unasked"
-    ? source.note.status
-    : legacy.bookingNoteStatus ?? (legacy.selectedSlot ? "awaiting" : "unasked");
   const selectedSlot = source.selectedSlot ?? legacy.selectedSlot ?? null;
-  const selectedDate = source.selectedDate
+  const retainedDate = source.selectedDate
     ?? selectedSlot?.dateStart.slice(0, 10)
     ?? legacy.selectedAvailabilityDate
     ?? null;
+  const noteStatus = source.note.status !== "unasked"
+    ? source.note.status
+    : legacy.bookingNoteStatus ?? (legacy.selectedSlot ? "awaiting" : "unasked");
   const migrated: BookingDraft = {
     ...source,
     version: source.version,
     mode: source.mode ?? "create",
     serviceAcceptance: { status: accepted ? "accepted" : "pending", service },
-    selectedDate,
-    selectedSlot,
+    // A pending service is the only safe migration result when the checkpoint
+    // contains an offer without acceptance. Do not carry facts that the
+    // reducer would reject before accepted service evidence exists.
+    selectedDate: accepted ? retainedDate : null,
+    selectedSlot: accepted ? selectedSlot : null,
     note: {
       ...source.note,
-      status: noteStatus,
+      status: accepted ? noteStatus : "unasked",
     },
     contactId: source.contactId ?? context.contactId ?? null,
     pendingCommand: null,

@@ -5,6 +5,7 @@ import {
   migrateLegacyBookingState,
   reduceBookingDraft,
 } from "../booking-draft.js";
+import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 
 describe("BookingDraft reducer", () => {
   const selectedSlot = {
@@ -263,7 +264,10 @@ describe("BookingDraft reducer", () => {
         },
       },
     );
-    const ready = reduceBookingDraft(readyWithSlot, { type: "note_status", status: "skipped" });
+    const ready = reduceBookingDraft(
+      reduceBookingDraft(readyWithSlot, { type: "note_status", status: "skipped" }),
+      { type: "contact_resolved", contactId: "c-1" },
+    );
     const command = {
       action: "create" as const,
       payload: {
@@ -311,7 +315,7 @@ describe("BookingDraft reducer", () => {
   it("does not fabricate a service while normalizing legacy state", () => {
     expect(migrateLegacyBookingState({
       selectedAvailabilityDate: "2026-10-17",
-    })).toBeNull();
+    })).toMatchObject({ phase: "service", serviceAcceptance: null });
 
     const migrated = migrateLegacyBookingState({
       selectedAvailabilityDate: "2026-10-17",
@@ -327,7 +331,64 @@ describe("BookingDraft reducer", () => {
         status: "pending",
         service: { id: "svc-1" },
       },
+      selectedDate: null,
+    });
+  });
+
+  it("migrates an accepted consultation checkpoint idempotently", () => {
+    const malformed = {
+      ...createEmptyBookingDraft(),
+      version: 7,
+      serviceAcceptance: {
+        status: "accepted",
+        service: undefined,
+      },
       selectedDate: "2026-10-17",
+      selectedSlot,
+      note: { status: "answered", value: "потрібен час" },
+      contactId: "contact-1",
+    } as never;
+    const context = {
+      historyText: ["Бажаєте записатися на консультацію?", "Так"],
+      contactId: "contact-1",
+    };
+    const migrated = migrateLegacyBookingState({ bookingDraft: malformed }, context);
+    const repeated = migrateLegacyBookingState({ bookingDraft: migrated }, context);
+
+    expect(migrated).toMatchObject({
+      version: 7,
+      phase: "ready",
+      serviceAcceptance: {
+        status: "accepted",
+        service: { id: CONSULTATION_SERVICE_ID, source: "direct" },
+      },
+      selectedDate: "2026-10-17",
+      selectedSlot,
+      note: { status: "answered", value: "потрібен час" },
+      contactId: "contact-1",
+    });
+    expect(repeated).toEqual(migrated);
+  });
+
+  it("keeps an unaccepted offer at service phase without downstream facts", () => {
+    const migrated = migrateLegacyBookingState(
+      {
+        selectedAvailabilityDate: "2026-10-17",
+        selectedSlot,
+        bookingNoteStatus: "awaiting",
+      },
+      { historyText: ["Бажаєте записатися на консультацію?"] },
+    );
+
+    expect(migrated).toMatchObject({
+      phase: "service",
+      serviceAcceptance: {
+        status: "pending",
+        service: { id: CONSULTATION_SERVICE_ID },
+      },
+      selectedDate: null,
+      selectedSlot: null,
+      note: { status: "unasked" },
     });
   });
 });
