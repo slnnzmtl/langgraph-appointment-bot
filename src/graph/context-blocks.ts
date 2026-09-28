@@ -70,8 +70,11 @@ export const attachPrefetchVisits = (
   intent: FinishVisitIntent,
 ): string => {
   if (intent === "visit_ask") {
-    if (!ctx || ctx.meetings.length === 0) {
-      return text;
+    if (!ctx) {
+      return "Наразі не можу перевірити ваш запис. Спробуйте, будь ласка, трохи пізніше.";
+    }
+    if (ctx.meetings.length === 0) {
+      return "Актуального запису на прийом не знайдено. Бажаєте записатися?";
     }
     return formatMyVisitReply(ctx);
   }
