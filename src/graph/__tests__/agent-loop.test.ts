@@ -530,6 +530,25 @@ describe("availability context helpers", () => {
         }),
       ),
     ).toBe("pending_confirmation");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({ content: "", tool_call_id: "1", name: "create_meeting" }),
+      ),
+    ).toBe("failed");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({ content: "not json", tool_call_id: "1", name: "create_meeting" }),
+      ),
+    ).toBe("failed");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ ok: true }),
+          tool_call_id: "1",
+          name: "create_meeting",
+        }),
+      ),
+    ).toBe("failed");
   });
 
   it("clears availability on committed, failed, or HITL decline", () => {

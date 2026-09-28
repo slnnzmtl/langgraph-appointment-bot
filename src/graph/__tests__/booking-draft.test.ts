@@ -7,6 +7,126 @@ import {
 } from "../booking-draft.js";
 
 describe("BookingDraft reducer", () => {
+  const selectedSlot = {
+    dateStart: "2026-10-17T11:30:00",
+    dateEnd: "2026-10-17T12:00:00",
+    label: "11:30",
+  };
+
+  it("does not advance date, slot, or note before service acceptance", () => {
+    const empty = createEmptyBookingDraft();
+    const afterDate = reduceBookingDraft(empty, { type: "date_selected", date: "2026-10-17" });
+    const afterSlot = reduceBookingDraft(afterDate, { type: "slot_selected", slot: selectedSlot });
+    const afterNote = reduceBookingDraft(afterSlot, { type: "note_status", status: "skipped" });
+
+    expect(afterDate).toEqual(empty);
+    expect(afterSlot).toEqual(empty);
+    expect(afterNote).toEqual(empty);
+  });
+
+  it("does not select a slot until an accepted service and matching date exist", () => {
+    const pending = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", source: "catalog" },
+      accepted: false,
+    });
+    const accepted = reduceBookingDraft(pending, { type: "service_accepted" });
+    const wrongDate = reduceBookingDraft(accepted, { type: "slot_selected", slot: selectedSlot });
+    const withDate = reduceBookingDraft(accepted, { type: "date_selected", date: "2026-10-17" });
+    const withSlot = reduceBookingDraft(withDate, { type: "slot_selected", slot: selectedSlot });
+
+    expect(wrongDate).toEqual(accepted);
+    expect(withSlot.selectedSlot).toEqual(selectedSlot);
+    expect(withSlot.phase).toBe("note");
+  });
+
+  it("does not complete the note step before a slot is selected", () => {
+    const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", source: "catalog" },
+      accepted: true,
+    });
+    const unchanged = reduceBookingDraft(accepted, {
+      type: "note_status",
+      status: "answered",
+      value: "detail",
+    });
+
+    expect(unchanged).toEqual(accepted);
+  });
+
+  it("does not prepare a command until all booking prerequisites are present", () => {
+    const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", source: "catalog" },
+      accepted: true,
+    });
+    const command = {
+      action: "create" as const,
+      payload: { serviceId: "svc-1", dateStart: selectedSlot.dateStart, contactId: "c-1" },
+    };
+    const incomplete = reduceBookingDraft(accepted, { type: "command_prepared", command });
+    const ready = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(
+          reduceBookingDraft(accepted, { type: "date_selected", date: "2026-10-17" }),
+          { type: "slot_selected", slot: selectedSlot },
+        ),
+        { type: "note_status", status: "skipped" },
+      ),
+      { type: "contact_resolved", contactId: "c-1" },
+    );
+    const prepared = reduceBookingDraft(ready, { type: "command_prepared", command });
+
+    expect(incomplete).toEqual(accepted);
+    expect(prepared.phase).toBe("confirming");
+    expect(prepared.pendingCommand).toEqual(command);
+  });
+
+  it("folds consultation acceptance before a following date event", () => {
+    const pending = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "consultation", name: "Консультація", source: "catalog" },
+      accepted: false,
+    });
+    const accepted = reduceBookingDraft(pending, { type: "service_accepted" });
+    const withDate = reduceBookingDraft(accepted, { type: "date_selected", date: "2026-10-16" });
+
+    expect(withDate.serviceAcceptance?.status).toBe("accepted");
+    expect(withDate.selectedDate).toBe("2026-10-16");
+    expect(withDate.phase).toBe("time");
+  });
+
+  it("preserves downstream facts when the same service is reaffirmed", () => {
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(
+          reduceBookingDraft(
+            reduceBookingDraft(createEmptyBookingDraft(), {
+              type: "service_selected",
+              service: { id: "svc-1", source: "catalog" },
+              accepted: true,
+            }),
+            { type: "date_selected", date: "2026-10-17" },
+          ),
+          { type: "slot_selected", slot: selectedSlot },
+        ),
+        { type: "note_status", status: "answered", value: "concern" },
+      ),
+      { type: "contact_resolved", contactId: "c-1" },
+    );
+    const reaffirmed = reduceBookingDraft(draft, {
+      type: "service_selected",
+      service: { id: "svc-1", source: "direct" },
+      accepted: true,
+    });
+
+    expect(reaffirmed.selectedDate).toBe(draft.selectedDate);
+    expect(reaffirmed.selectedSlot).toEqual(draft.selectedSlot);
+    expect(reaffirmed.note).toEqual(draft.note);
+    expect(reaffirmed.contactId).toBe("c-1");
+  });
+
   it("accepts a catalog service without clearing later facts", () => {
     const selected = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",

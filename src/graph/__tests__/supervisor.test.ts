@@ -1829,6 +1829,53 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   const visitAsk =
     "Заплановані візити:\n🗓️ Консультація - 21 серпня (п'ятниця) о 11:00\n\nБажаєте перенести або скасувати цей візит?";
 
+  it.each([
+    "Я вже записалася на 16 число",
+    "Я же уже записалась на 16 число",
+    "У мене вже є запис?",
+    "I already booked an appointment",
+    "Do I have an appointment?",
+  ])("owns visit-status assertion %s even when the model routes to FAQ", async (text) => {
+    invoke.mockResolvedValue({ next: "faq", reply: "У вас точно є запис." });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: { contacts: [] },
+        bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+      }),
+    });
+
+    const update = await node(supervisorState({ messages: [new HumanMessage(text)] }));
+
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyText).toContain("не знайдено");
+    expect(update.lastHandoff?.replyText).not.toContain("точно є");
+    expect(update.lastHandoff?.replyButtons).toEqual(DEFAULT_MENU_NO_VISITS);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("reports unverifiable status when the fresh prefetch fails", async () => {
+    invoke.mockResolvedValue({ next: "faq", reply: "Так, ваш запис підтверджено." });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => { throw new Error("CRM down"); },
+    });
+
+    const update = await node(supervisorState({
+      messages: [new HumanMessage("I already booked an appointment")],
+    }));
+
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyText).toContain("перевірити");
+    expect(update.lastHandoff?.replyText).not.toContain("підтверджено");
+    expect(update.lastHandoff?.replyButtons).toEqual(DEFAULT_MENU_NO_VISITS);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     invoke.mockReset();
     bindRoutingTools.mockClear();
