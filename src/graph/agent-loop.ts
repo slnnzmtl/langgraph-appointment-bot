@@ -829,6 +829,42 @@ const freshAvailabilityValidatesSelectedSlot = (state: ClinicState): boolean => 
     ) === true;
 };
 
+/** Runtime-owned exact-day lookup when DATE has no trusted snapshot day yet. */
+const availabilityRequestFromBookingDraft = (
+  state: ClinicState,
+): AvailabilitySlotsToolArgs | null => {
+  const human = lastPatientText(state);
+  const request = resolveBookingAvailabilityRequest(human, state);
+  const selectedDate = state.bookingDraft?.selectedDate;
+  if (
+    request?.kind !== "exact"
+    || selectedDate == null
+    || request.date !== selectedDate
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return null;
+  }
+  const availability = state.availabilityContext;
+  const acceptedServiceId = state.bookingDraft?.serviceAcceptance?.status === "accepted"
+    ? state.bookingDraft.serviceAcceptance.service.id
+    : null;
+  const snapshotMatchesService = availability == null
+    || availability.serviceId == null
+    || availability.serviceId === acceptedServiceId;
+  const trustedDay = snapshotMatchesService
+    ? availability?.days.find((day) => day.date === selectedDate && day.slots.length > 0)
+    : undefined;
+  if (trustedDay) {
+    return null;
+  }
+  const durationMinutes = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
+  return {
+    direction: "exact",
+    date: selectedDate,
+    ...(durationMinutes != null ? { durationMinutes } : {}),
+  };
+};
+
 /**
  * Whether this booking turn has enough authoritative state for the runtime to
  * own the next mutation step. This deliberately ignores model output: the LLM
@@ -843,6 +879,9 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
       && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
     )
   ) {
+    return true;
+  }
+  if (availabilityRequestFromBookingDraft(state) != null) {
     return true;
   }
   if (createCommandFromBookingDraft(state) == null) {
@@ -944,7 +983,7 @@ const coerceAvailabilityToolCalls = (
   ) {
     const human = lastPatientText(state);
     const days = state.availabilityContext?.days ?? [];
-    const request = resolveAvailabilityRequest(human, kyivToday());
+    const request = resolveBookingAvailabilityRequest(human, state);
     const dayPick = matchAvailabilityDay(human, days);
     const consultationAccepted = isConsultationOfferAcceptance(state);
     const semanticDirection = consultationAccepted
@@ -1070,7 +1109,95 @@ export const matchAvailabilityDay = (
       return day;
     }
   }
+  // Telegram users often type only the day number after DATE buttons are shown.
+  // Resolve it only against the trusted snapshot and only when it is unique;
+  // never invent a month or silently choose between two matching months.
+  const bareDay = /^(\d{1,2})$/.exec(trimmed);
+  if (bareDay) {
+    const wanted = Number(bareDay[1]);
+    const matches = days.filter(
+      (day) => day.slots.length > 0 && Number(day.date.slice(8, 10)) === wanted,
+    );
+    if (matches.length === 1) {
+      return matches[0]!;
+    }
+  }
   return null;
+};
+
+const dateWithAnchoredMonth = (anchor: string, day: number): string | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(anchor) || day < 1 || day > 31) {
+    return null;
+  }
+  const year = Number(anchor.slice(0, 4));
+  const month = Number(anchor.slice(5, 7));
+  const candidate = new Date(Date.UTC(year, month - 1, day, 12));
+  if (
+    candidate.getUTCFullYear() !== year
+    || candidate.getUTCMonth() !== month - 1
+    || candidate.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day.toString().padStart(2, "0")}`;
+};
+
+/**
+ * Resolve a DATE-step bare day (for example `27`) from checkpointed calendar
+ * anchors. A bare number remains a TIME pick once the selected day has slots.
+ */
+const resolveAnchoredBareDay = (humanText: string, state: ClinicState): string | null => {
+  const match = /^(\d{1,2})$/.exec(humanText.trim());
+  if (!match) {
+    return null;
+  }
+  const day = Number(match[1]);
+  const availability = state.availabilityContext;
+  const selectedDate = state.bookingDraft?.selectedDate;
+  const selectedDay = selectedDate == null
+    ? undefined
+    : availability?.days.find((candidate) => candidate.date === selectedDate);
+  // Once trusted times are visible for the selected date, `11` means 11:00.
+  if (day <= 23 && selectedDay && selectedDay.slots.length > 0) {
+    return null;
+  }
+
+  const offered = matchAvailabilityDay(humanText, availability?.days ?? []);
+  if (offered) {
+    return offered.date;
+  }
+
+  const query = availabilityQueryFromContext(availability);
+  const anchors = [
+    selectedDate,
+    query?.date,
+    query?.anchor,
+    query?.rangeThrough,
+    query?.rangeFrom,
+    state.availabilityCursor?.query?.date,
+    state.availabilityCursor?.query?.anchor,
+    state.availabilityCursor?.lastDate,
+    state.availabilityCursor?.firstDate,
+  ].filter((value): value is string => typeof value === "string");
+  for (const anchor of anchors) {
+    const candidate = dateWithAnchoredMonth(anchor, day);
+    if (candidate && candidate >= kyivToday()) {
+      return candidate;
+    }
+  }
+  return null;
+};
+
+const resolveBookingAvailabilityRequest = (
+  humanText: string,
+  state: ClinicState,
+): ReturnType<typeof resolveAvailabilityRequest> => {
+  const explicit = resolveAvailabilityRequest(humanText, kyivToday());
+  if (explicit) {
+    return explicit;
+  }
+  const anchoredDate = resolveAnchoredBareDay(humanText, state);
+  return anchoredDate ? { kind: "exact", date: anchoredDate } : null;
 };
 
 const clockKey = (text: string): string | null => {
@@ -1143,6 +1270,8 @@ const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boo
   status !== "skipped" && status !== "answered";
 
 const CREATE_NOTE_REQUIRED_ERROR = "Note step required";
+const BOOKING_SLOT_REQUIRED_UK =
+  "Будь ласка, спочатку оберіть дату й час із запропонованих варіантів.";
 
 const PHONE_GROUNDED_TOOLS = new Set([
   "find_contact_by_phone",
@@ -1195,8 +1324,19 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   }
   const status = authoritativeNoteStatus(state);
   const availability = state.availabilityContext;
-  const matchedDay = matchAvailabilityDay(human, availability?.days ?? []);
-  const explicitDate = resolveAvailabilityRequest(human, kyivToday());
+  const bareNumber = /^(\d{1,2})$/.exec(human.trim());
+  const currentSelectedDate = state.bookingDraft?.selectedDate;
+  const currentSelectedDay = currentSelectedDate == null
+    ? undefined
+    : availability?.days.find((day) => day.date === currentSelectedDate);
+  const bareNumberIsTime = bareNumber != null
+    && Number(bareNumber[1]) <= 23
+    && currentSelectedDay != null
+    && currentSelectedDay.slots.length > 0;
+  const matchedDay = bareNumberIsTime
+    ? null
+    : matchAvailabilityDay(human, availability?.days ?? []);
+  const explicitDate = resolveBookingAvailabilityRequest(human, state);
 
   // Date intent wins over free-text note interpretation. A date outside the
   // current snapshot is still a date change, not a visit note.
@@ -1226,12 +1366,9 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
 
   const selectedDate = state.bookingDraft?.selectedDate
     ?? (authoritativeSelectedSlot(state)?.dateStart.slice(0, 10) || null);
-  const expectedDuration = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
   const availabilityMatchesService = availability == null
-    || (availability.serviceId == null
-      ? expectedDuration == null || availability.stepMinutes === expectedDuration
-      : availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id
-        && (expectedDuration == null || availability.stepMinutes === expectedDuration));
+    || availability.serviceId == null
+    || availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id;
   const matchedSlot = availabilityMatchesService
     ? matchAvailabilitySlot(human, availability, selectedDate)
     : null;
@@ -1346,14 +1483,39 @@ export const availabilityOfferFromToolTurn = (
 export const resolveAvailabilityOffer = (
   messages: BaseMessage[],
   availabilityContext: AvailabilityContext | null | undefined,
+  allowCheckpointDayPick = true,
 ): { replyText: string; replyButtons: string[] } | null => {
   const days =
     captureAvailabilityFromMessages(messages)?.days ?? availabilityContext?.days ?? [];
-  const day = matchAvailabilityDay(lastHumanText(messages), days);
+  const day = allowCheckpointDayPick
+    ? matchAvailabilityDay(lastHumanText(messages), days)
+    : null;
   if (day) {
     return formatAvailabilityTimeOffer(day);
   }
   return availabilityOfferFromToolTurn(messages);
+};
+
+/** Re-render trusted checkpoint availability after an invalid premature create call. */
+const availabilityRecoveryOffer = (
+  state: ClinicState,
+): { replyText: string; replyButtons: string[] } | null => {
+  const availability = state.availabilityContext;
+  if (!availability) {
+    return null;
+  }
+  const selectedDate = state.bookingDraft?.selectedDate;
+  const selectedDay = selectedDate == null
+    ? undefined
+    : availability.days.find((day) => day.date === selectedDate);
+  if (selectedDay && selectedDay.slots.length > 0) {
+    return formatAvailabilityTimeOffer(selectedDay);
+  }
+  const open = availability.days.filter((day) => day.slots.length > 0);
+  if (open.length === 0) {
+    return formatAvailabilityEmptyOffer(availability);
+  }
+  return formatAvailabilityDateOffer(availability);
 };
 
 export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
@@ -1735,6 +1897,21 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     ) {
       return {};
     }
+    const availabilityRequest = availabilityRequestFromBookingDraft(state);
+    if (availabilityRequest) {
+      const availabilityCall = {
+        id: `booking_availability_${state.bookingDraft?.version ?? 0}`,
+        name: "present_availability_slots",
+        args: availabilityRequest,
+        type: "tool_call" as const,
+      };
+      const availabilityAi = new AIMessage({ content: "", tool_calls: [availabilityCall] });
+      return {
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
+        ),
+      };
+    }
     const draftCommand = createCommandFromBookingDraft(state);
     if (
       draftCommand
@@ -1887,6 +2064,23 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const last = state.agentMessages[state.agentMessages.length - 1];
     const isContinuation = last instanceof ToolMessage;
     const stepCount = isContinuation ? state.stepCount + 1 : 1;
+
+    // `Note step required` is a deterministic invariant guard, not new model
+    // context. Repair presentation from canonical state without another model
+    // pass, which otherwise repeats the same note question indefinitely.
+    if (
+      agent.id === BOOKING_AGENT_ID
+      && latestCreateMeetingError(state.agentMessages) === CREATE_NOTE_REQUIRED_ERROR
+    ) {
+      return {
+        agentMessages: [new AIMessage(
+          authoritativeSelectedSlot(state) != null
+            ? BOOKING_NOTE_QUESTION_UK
+            : BOOKING_SLOT_REQUIRED_UK,
+        )],
+        stepCount,
+      };
+    }
 
     const staticPrompt = agent.systemPrompt.trim();
     const dynamicParts = [
@@ -2144,12 +2338,9 @@ export const createAgentToolsNode = (
             const selectedDay = availability?.days.find(
               (day) => day.date === selectedSlot.dateStart.slice(0, 10),
             );
-            const expectedDuration = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
             const snapshotMatchesService = availability == null
-              || (availability.serviceId == null
-                ? expectedDuration == null || availability.stepMinutes === expectedDuration
-                : availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id
-                  && (expectedDuration == null || availability.stepMinutes === expectedDuration));
+              || availability.serviceId == null
+              || availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id;
             const selectedSlotStillAvailable = snapshotMatchesService
               && (availability == null
                 || selectedDay == null
@@ -2198,12 +2389,17 @@ export const createAgentToolsNode = (
         if (call.name === "present_availability_slots") {
           // Own paging cursors from checkpoint — the model chooses semantic direction,
           // but must not invent calendar boundaries.
+          const runtimeRequest = resolveBookingAvailabilityRequest(lastPatientText(state), state);
+          const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;
+          const runtimeOwnedArgs = runtimeRequest?.kind === "exact"
+            ? { ...rawArgs, direction: "exact" as const, date: runtimeRequest.date }
+            : rawArgs;
           const rescheduleArgs = rescheduleAvailabilityArgsFromBookingContext(
             state,
-            (call.args ?? {}) as Record<string, unknown>,
+            runtimeOwnedArgs as Record<string, unknown>,
           );
           const args = normalizeAvailabilityToolArgs({
-            args: (rescheduleArgs ?? call.args ?? {}) as AvailabilitySlotsToolArgs,
+            args: (rescheduleArgs ?? runtimeOwnedArgs) as AvailabilitySlotsToolArgs,
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
             ...(state.bookingDraft?.serviceAcceptance?.service.durationMinutes != null
@@ -2438,12 +2634,9 @@ export const createAgentToolsNode = (
         const selectedDay = selectedDate == null
           ? undefined
           : bookingAvailability?.days.find((day) => day.date === selectedDate);
-        const expectedDuration = bookingDraft?.serviceAcceptance?.service.durationMinutes;
         const snapshotMatchesService = bookingAvailability == null
-          || (bookingAvailability.serviceId == null
-            ? expectedDuration == null || bookingAvailability.stepMinutes === expectedDuration
-            : bookingAvailability.serviceId === bookingDraft?.serviceAcceptance?.service.id
-              && (expectedDuration == null || bookingAvailability.stepMinutes === expectedDuration));
+          || bookingAvailability.serviceId == null
+          || bookingAvailability.serviceId === bookingDraft?.serviceAcceptance?.service.id;
         const selectedSlotStillAvailable = snapshotMatchesService
           && (selectedSlot == null
             || selectedDay?.slots.some((slot) =>
@@ -2642,11 +2835,19 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const awaitingNote =
       agent.id === BOOKING_AGENT_ID
       && (authoritativeNoteStatus(state) === "awaiting" || noteBlockedThisTurn)
+      && authoritativeSelectedSlot(state) != null
       && !alreadyBooked;
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
     const slotOffer =
       agent.id === BOOKING_AGENT_ID && !alreadyBooked && !createCommitted
-        ? resolveAvailabilityOffer(agentMessages, state.availabilityContext)
+        ? resolveAvailabilityOffer(
+            agentMessages,
+            state.availabilityContext,
+            authoritativeSelectedSlot(state) == null,
+          )
+          ?? (noteBlockedThisTurn && authoritativeSelectedSlot(state) == null
+            ? availabilityRecoveryOffer(state)
+            : null)
         : null;
     if (replacementOffered) {
       replyButtons = [...BOOKING_REPLACE_MENU];
@@ -2657,10 +2858,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           : slotOffer.replyText;
       replyButtons = slotOffer.replyButtons;
     } else if (awaitingNote) {
-      // Code-own INTENT skip (DDD-48); force the note question when create was blocked (DDD-49/51).
-      if (noteBlockedThisTurn || replyText.length === 0) {
-        replyText = BOOKING_NOTE_QUESTION_UK;
-      }
+      // The visible note prompt is a projection of canonical note phase, never
+      // model prose. Seeing it therefore guarantees a checkpointed slot.
+      replyText = BOOKING_NOTE_QUESTION_UK;
       replyButtons = [INTENT_SKIP_LABEL];
       trackEvent("reply_menu_filled", { menu: "intent_skip", reason: "code_owned" });
     } else if (alreadyBooked) {

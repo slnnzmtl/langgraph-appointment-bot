@@ -7,7 +7,11 @@ import { z } from "zod";
 
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
-import { CONSULTATION_SERVICE_ID, INTENT_SKIP_LABEL } from "../../shared/clinic-constants.js";
+import {
+  BOOKING_NOTE_QUESTION_UK,
+  CONSULTATION_SERVICE_ID,
+  INTENT_SKIP_LABEL,
+} from "../../shared/clinic-constants.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 
 describe("prefetchBookingContext", () => {
@@ -267,112 +271,163 @@ describe("compileClinicGraph prefetch once", () => {
 });
 
 describe("compileClinicGraph runtime-owned booking transition", () => {
-  it("routes note skip through fresh slot validation directly into meeting HITL", async () => {
-    const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
-    const availabilityInvoke = vi.fn(async () => JSON.stringify({
-      date: "2026-10-01",
-      slots: [{
-        id: "slot-1",
-        label: "14:00",
-        dateStart: "2026-10-01T14:00:00",
-        dateEnd: "2026-10-01T14:30:00",
-      }],
-      stepMinutes: 30,
-      query: {
-        kind: "exact",
-        date: "2026-10-01",
-        rangeFrom: "2026-10-01",
-        rangeThrough: "2026-10-01",
-        coverageComplete: true,
-      },
-    }));
-    const createInvoke = vi.fn(async (input: Record<string, unknown>) =>
-      interrupt({ type: "confirm_booking", draft: input }));
-    const presentAvailability = tool(availabilityInvoke, {
-      name: "present_availability_slots",
-      description: "revalidate a selected slot",
-      schema: z.object({
-        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
-        date: z.string().optional(),
-        durationMinutes: z.number().optional(),
-        forceRefresh: z.boolean().optional(),
-      }),
-    });
-    const createMeeting = tool(createInvoke, {
-      name: "create_meeting",
-      description: "create a meeting after confirmation",
-      schema: z.object({
-        name: z.string(),
-        dateStart: z.string(),
-        dateEnd: z.string(),
-        contactId: z.string(),
-        serviceId: z.string(),
-        confirmMessage: z.string(),
-        description: z.string().optional(),
-      }),
-    });
-    const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability, createMeeting] },
-      agentModel: {
-        bindTools: () => ({ invoke: modelInvoke }),
-      } as unknown as BaseChatModel,
-      supervisorLlm: {
-        bindRoutingTools: () => ({
-          invoke: async () => ({ next: "booking" }),
+  it.each(["без коментаря", INTENT_SKIP_LABEL])(
+    "routes bare day → bare hour → %s through fresh validation into meeting HITL",
+    async (skipReply) => {
+      const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
+      const availabilityInvoke = vi.fn(async () => JSON.stringify({
+        date: "2026-10-27",
+        slots: [{
+          id: "slot-27-11",
+          label: "11:00",
+          dateStart: "2026-10-27T11:00:00",
+          dateEnd: "2026-10-27T11:30:00",
+        }],
+        stepMinutes: 30,
+        query: {
+          kind: "exact",
+          date: "2026-10-27",
+          rangeFrom: "2026-10-27",
+          rangeThrough: "2026-10-27",
+          coverageComplete: true,
+        },
+      }));
+      const createInvoke = vi.fn(async (input: Record<string, unknown>) =>
+        interrupt({ type: "confirm_booking", draft: input }));
+      const presentAvailability = tool(availabilityInvoke, {
+        name: "present_availability_slots",
+        description: "revalidate a selected slot",
+        schema: z.object({
+          direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+          date: z.string().optional(),
+          durationMinutes: z.number().optional(),
+          forceRefresh: z.boolean().optional(),
         }),
-      } as ILLMConnector,
-      loadSupervisorPrompt: () => "STATIC",
-      formatSystemMetadata: () => "META",
-      messageHistoryMaxTokens: 6_000,
-    });
+      });
+      const createMeeting = tool(createInvoke, {
+        name: "create_meeting",
+        description: "create a meeting after confirmation",
+        schema: z.object({
+          name: z.string(),
+          dateStart: z.string(),
+          dateEnd: z.string(),
+          contactId: z.string(),
+          serviceId: z.string(),
+          confirmMessage: z.string(),
+          description: z.string().optional(),
+        }),
+      });
+      const { graph } = compileClinicGraph({
+        agents: [bookingAgent],
+        agentTools: { booking: [presentAvailability, createMeeting] },
+        agentModel: {
+          bindTools: () => ({ invoke: modelInvoke }),
+        } as unknown as BaseChatModel,
+        supervisorLlm: {
+          bindRoutingTools: () => ({
+            invoke: async () => ({ next: "booking" }),
+          }),
+        } as ILLMConnector,
+        loadSupervisorPrompt: () => "STATIC",
+        formatSystemMetadata: () => "META",
+        messageHistoryMaxTokens: 6_000,
+      });
+      const config = {
+        configurable: { thread_id: `bare-date-note-skip-${skipReply}` },
+      };
 
-    const result = await graph.invoke(
-      {
-        messages: [new HumanMessage(INTENT_SKIP_LABEL)],
-        contactContext: {
-          contacts: [{
-            id: "c-1",
-            firstName: "Ada",
-            lastName: "Lovelace",
-            phoneNumber: "+380501112233",
-            missingFields: [],
-          }],
-        },
-        bookingDraft: {
-          version: 3,
-          mode: "create",
-          phase: "note",
-          serviceAcceptance: {
-            status: "accepted",
-            service: {
-              id: CONSULTATION_SERVICE_ID,
-              name: "Консультація",
-              durationMinutes: 30,
-              source: "catalog",
+      const dateResult = await graph.invoke(
+        {
+          messages: [new HumanMessage("27")],
+          contactContext: {
+            contacts: [{
+              id: "c-1",
+              firstName: "Ada",
+              lastName: "Lovelace",
+              phoneNumber: "+380501112233",
+              missingFields: [],
+            }],
+          },
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Доступні дні — оберіть дату.",
+            replyButtons: ["27 жовтня", "28 жовтня"],
+          },
+          availabilityContext: {
+            days: [
+              {
+                date: "2026-10-27",
+                dayLabel: "27 жовтня (вівторок)",
+                slots: [{
+                  id: "slot-27-11",
+                  label: "11:00",
+                  dateStart: "2026-10-27T11:00:00",
+                  dateEnd: "2026-10-27T11:30:00",
+                }],
+              },
+              {
+                date: "2026-10-28",
+                dayLabel: "28 жовтня (середа)",
+                slots: [{
+                  id: "slot-28-11",
+                  label: "11:00",
+                  dateStart: "2026-10-28T11:00:00",
+                  dateEnd: "2026-10-28T11:30:00",
+                }],
+              },
+            ],
+            stepMinutes: 45,
+            serviceId: CONSULTATION_SERVICE_ID,
+          },
+          bookingDraft: {
+            version: 3,
+            mode: "create",
+            phase: "date",
+            serviceAcceptance: {
+              status: "accepted",
+              service: {
+                id: CONSULTATION_SERVICE_ID,
+                name: "Консультація",
+                durationMinutes: 30,
+                source: "catalog",
+              },
             },
+            selectedDate: null,
+            selectedSlot: null,
+            note: { status: "unasked" },
+            contactId: "c-1",
+            pendingCommand: null,
+            replacement: null,
           },
-          selectedDate: "2026-10-01",
-          selectedSlot: {
-            id: "slot-1",
-            label: "14:00",
-            dateStart: "2026-10-01T14:00:00",
-            dateEnd: "2026-10-01T14:30:00",
-          },
-          note: { status: "awaiting" },
-          contactId: "c-1",
-          pendingCommand: null,
-          replacement: null,
-        },
-      } as never,
-      { configurable: { thread_id: "note-skip-to-hitl" } },
-    );
+        } as never,
+        config,
+      );
+      expect(String(dateResult.messages.at(-1)?.content)).toContain("Вільні години на 27 жовтня");
 
-    expect(modelInvoke).not.toHaveBeenCalled();
-    expect(availabilityInvoke).toHaveBeenCalledOnce();
-    expect(createInvoke).toHaveBeenCalledOnce();
-    expect(result.__interrupt__).toHaveLength(1);
-    expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
-    expect(result.messages.filter((message) => message instanceof AIMessage)).toEqual([]);
-  });
+      const timeResult = await graph.invoke(
+        { messages: [new HumanMessage("11")] } as never,
+        config,
+      );
+      expect(String(timeResult.messages.at(-1)?.content)).toBe(BOOKING_NOTE_QUESTION_UK);
+
+      const result = await graph.invoke(
+        { messages: [new HumanMessage(skipReply)] } as never,
+        config,
+      );
+
+      expect(modelInvoke).toHaveBeenCalledTimes(2);
+      expect(availabilityInvoke).toHaveBeenCalledOnce();
+      expect(availabilityInvoke).toHaveBeenCalledWith(expect.objectContaining({
+        direction: "exact",
+        date: "2026-10-27",
+        durationMinutes: 30,
+        forceRefresh: true,
+      }), expect.anything());
+      expect(createInvoke).toHaveBeenCalledOnce();
+      expect(result.__interrupt__).toHaveLength(1);
+      expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+    },
+  );
 });
