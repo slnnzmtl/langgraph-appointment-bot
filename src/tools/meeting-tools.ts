@@ -78,7 +78,10 @@ const finishMeetingMutation = (
         ...(meetingId ? { meeting_id: meetingId } : {}),
       });
     },
-    { skip: skipHitlPending },
+    {
+      skip: skipHitlPending,
+      requireEntityId: toolName !== "cancel_meeting",
+    },
   );
 
 const NOT_AUTHORIZED = "Not authorized";
