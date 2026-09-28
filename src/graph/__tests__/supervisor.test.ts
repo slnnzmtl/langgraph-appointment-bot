@@ -425,8 +425,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
+    expect(update.bookingDraft).toBeUndefined();
     expect(update.servicesContext).toBeUndefined();
     // Greeting starts a fresh booking session, so the durable cursor resets too.
     expect(update.availabilityCursor).toBeNull();
@@ -737,8 +736,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
+    expect(update.bookingDraft).toBeUndefined();
   });
 
   it("refetches when prefetchFetchedAt is missing", async () => {

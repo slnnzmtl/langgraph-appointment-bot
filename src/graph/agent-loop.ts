@@ -240,7 +240,10 @@ const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage | null 
     }
     const outcome = classifyMeetingMutationToolMessage(message);
     if (message.name !== "cancel_meeting") {
-      if (outcome === "committed" || outcome === "declined" || outcome === "blocked" || outcome === "failed") {
+      const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+      const isReplacementConflict = record?.error === "Already booked";
+      const isInvariantGuard = record?.error === CREATE_CONSULTATION_REQUIRED_ERROR;
+      if (!isReplacementConflict && (isInvariantGuard || outcome === "committed" || outcome === "declined" || outcome === "failed")) {
         return message;
       }
       continue;
@@ -1516,7 +1519,12 @@ export const createAgentPrepareNode = (agentId: string) =>
               : {}),
             source: "catalog" as const,
           }
-        : undefined;
+        : typeof state.availabilityContext?.serviceId === "string"
+          ? {
+              id: state.availabilityContext.serviceId,
+              source: "catalog" as const,
+            }
+          : undefined;
       const hasMalformedDraft = state.bookingDraft != null
         && state.bookingDraft.serviceAcceptance?.service.id == null;
       const hasLegacyProjection = state.bookingDraft == null
@@ -1545,6 +1553,27 @@ export const createAgentPrepareNode = (agentId: string) =>
             selectedAvailabilityDate: null,
           }
         : {};
+      if (migrated) {
+        const historyHasExplicitConsultationAcceptance = historyText.some(
+          (text, index) => /(?:консультац|consultation)/iu.test(text)
+            && /\?/u.test(text)
+            && historyText.slice(index + 1).some((later) => /^(?:так|yes)\b/iu.test(later.trim())),
+        );
+        const historyHasConsultationOffer = historyText.some(
+          (text) => /(?:консультац|consultation)/iu.test(text) && /\?/u.test(text),
+        );
+        trackEvent("booking_checkpoint_migrated", {
+          source: historyHasExplicitConsultationAcceptance
+            ? "explicit_consultation_acceptance"
+            : historyHasConsultationOffer
+              ? "pending_offer"
+              : recoveredService
+                ? "catalog"
+                : state.bookingDraft
+                  ? "existing_draft"
+                  : "unknown",
+        });
+      }
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
@@ -1694,7 +1723,13 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         tool_calls: [revalidationCall],
       });
       const messages = state.agentMessages ?? [];
-      return { agentMessages: new Overwrite([...messages, revalidationAi]) };
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: draftCommand,
+        }),
+        agentMessages: new Overwrite([...messages, revalidationAi]),
+      };
     }
     if (draftCommand && bookingDraftCanPrepareCommand(state)) {
       const lastAiIndex = [...(state.agentMessages ?? [])]
@@ -1927,6 +1962,7 @@ export const createAgentToolsNode = (
         if (
           agentId === BOOKING_AGENT_ID
           && call.name === "create_meeting"
+          && !blocksConsultationWithoutAgreement(agentId, call, state)
           && noteStepBlocksCreate(authoritativeNoteStatus(state))
         ) {
           noteStatusUpdate = state.bookingDraft
@@ -1957,6 +1993,10 @@ export const createAgentToolsNode = (
         if (
           blocksConsultationWithoutAgreement(agentId, call, state)
         ) {
+          trackEvent("booking_consultation_guard", {
+            phase: state.bookingDraft?.phase ?? "service",
+            outcome: "blocked",
+          });
           synthetic.push(
             new ToolMessage({
               content: JSON.stringify({
@@ -2429,7 +2469,7 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
     const address = `\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`;
     const replyText = mutationName === "create_meeting"
       ? committed
-        ? `Запис створено${when}.${address}`
+        ? `Готово! Запис створено${when}.${address}`
         : declined
           ? "Запис не було створено."
           : blocked
@@ -2437,7 +2477,7 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
             : "Не вдалося створити запис. Спробуйте ще раз."
       : mutationName === "reschedule_meeting"
         ? committed
-          ? `Запис перенесено${when}.${address}`
+          ? `Готово! Запис перенесено${when}.${address}`
           : declined
             ? "Запис не було перенесено."
             : "Не вдалося перенести запис. Спробуйте ще раз."
@@ -2458,6 +2498,15 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
             : defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext),
         )];
     const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
+    const committedEntity = asJsonRecord(extractMessageTextContent(result.content).trim());
+    trackEvent("meeting_mutation_outcome", {
+      mutation: mutationName,
+      outcome,
+      ...(typeof committedEntity?.id === "string" ? { meeting_id: committedEntity.id } : {}),
+    });
+    if (committed && (mutationName === "create_meeting" || mutationName === "reschedule_meeting")) {
+      trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+    }
     return {
       agentMessages: new Overwrite([] as BaseMessage[]),
       stepCount: 0,

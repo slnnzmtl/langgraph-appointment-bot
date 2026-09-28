@@ -508,6 +508,13 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     if (visitStatusIntent) {
       const replyText = attachPrefetchVisits("", bookingContext, "visit_ask");
       const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+      trackEvent("visit_status_response", {
+        source: bookingContext == null
+          ? "prefetch_unavailable"
+          : hasVisit
+            ? "crm_list"
+            : "crm_empty",
+      });
       const replyButtons = hasVisit ? [...VISIT_CHANGE_MENU] : [...defaultMenuLabels(false)];
       return {
         next: FINISH_ROUTE,
