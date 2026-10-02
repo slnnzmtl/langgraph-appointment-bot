@@ -8,6 +8,8 @@ import {
   extractReplyButtons,
   catalogChoiceButtonsFromText,
   isBookingOfferQuestion,
+  isConfirmationAffirmation,
+  isConfirmationDecline,
   isConsultationOfferQuestion,
   isYesReply,
   parseLeakedModelToolCalls,
@@ -128,6 +130,49 @@ describe("isYesReply / requestsConsultation", () => {
     expect(requestsConsultation("чи є у вас консультація?")).toBe(false);
     expect(requestsConsultation("не хочу консультацію")).toBe(false);
     expect(requestsConsultation("запиши на ботокс")).toBe(false);
+  });
+});
+
+describe("free-text mutation confirmation", () => {
+  it.each([
+    "Так",
+    "Так!",
+    "Так, підтверджую!",
+    "Yes please",
+    "I confirm",
+    "Подтверждаю",
+    "👍",
+  ])("accepts an explicit affirmation: %s", (reply) => {
+    expect(isConfirmationAffirmation(reply)).toBe(true);
+    expect(isConfirmationDecline(reply)).toBe(false);
+  });
+
+  it.each([
+    "Ні",
+    "Ні, дякую",
+    "Не підтверджую",
+    "Ні, не скасовуйте",
+    "No thanks",
+    "Don't confirm",
+  ])("accepts an explicit decline: %s", (reply) => {
+    expect(isConfirmationDecline(reply)).toBe(true);
+    expect(isConfirmationAffirmation(reply)).toBe(false);
+  });
+
+  it.each(["А можна інший час?", "Яка адреса?", "No problem"])(
+    "leaves another request unresolved: %s",
+    (reply) => {
+      expect(isConfirmationAffirmation(reply)).toBe(false);
+      expect(isConfirmationDecline(reply)).toBe(false);
+    },
+  );
+
+  it.each([
+    ["Запишіть", "create"],
+    ["Move it", "reschedule"],
+    ["Скасуйте", "cancel"],
+  ] as const)("accepts an action-specific affirmation: %s", (reply, action) => {
+    expect(isConfirmationAffirmation(reply, action)).toBe(true);
   });
 });
 

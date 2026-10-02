@@ -3635,7 +3635,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.pendingCommand).not.toHaveProperty("idempotencyKey");
   });
 
-  it("replays the frozen create command after an affirmative chat confirmation", async () => {
+  it("replays the frozen create command after a natural-language chat confirmation", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const originalPayload = {
       name: "Видалення бородавки 1 шт - Test Patient",
@@ -3648,7 +3648,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     };
     const update = await commandPrepare(
       clinicState({
-        messages: [new HumanMessage("Так")],
+        messages: [new HumanMessage("Так, підтверджую!")],
         bookingDraft: {
           ...canonicalBookingDraft({ contactId: "c-1" }),
           phase: "confirming",
@@ -3658,7 +3658,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new ToolMessage({
             content: JSON.stringify({
               awaitingConfirmation: true,
-              userReply: "Так",
+              userReply: "Так, підтверджую!",
               draft: {
                 command: {
                   action: "create",
@@ -3713,41 +3713,46 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.agentMessages).toBeUndefined();
   });
 
-  it("rejects an LLM confirmation flag after a non-affirmative chat reply", () => {
-    const state = clinicState({
-      bookingDraft: {
-        ...canonicalBookingDraft(),
-        phase: "confirming",
-        pendingCommand: {
-          action: "create",
-          payload: {
-            serviceId: "svc-1",
-            contactId: "contact-1",
-            dateStart: "2026-09-10T14:00:00",
-            dateEnd: "2026-09-10T14:30:00",
+  it.each([undefined, true])(
+    "rejects a mutation call after a non-affirmative chat reply (confirmationGiven=%s)",
+    (confirmationGiven) => {
+      const state = clinicState({
+        bookingDraft: {
+          ...canonicalBookingDraft(),
+          phase: "confirming",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "contact-1",
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+            },
           },
         },
-      },
-      agentMessages: [
-        new ToolMessage({
-          content: JSON.stringify({ awaitingConfirmation: true, userReply: "А можна інший час?" }),
-          name: "create_meeting",
-          tool_call_id: "create-1",
-        }),
-        new AIMessage({
-          content: "",
-          tool_calls: [{
-            id: "replay-1",
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ awaitingConfirmation: true, userReply: "А можна інший час?" }),
             name: "create_meeting",
-            args: { confirmationGiven: true },
-            type: "tool_call",
-          }],
-        }),
-      ],
-    });
+            tool_call_id: "create-1",
+          }),
+          new AIMessage({
+            content: "Не виконую дію без підтвердження.",
+            tool_calls: [{
+              id: "replay-1",
+              name: "create_meeting",
+              args: confirmationGiven === undefined ? {} : { confirmationGiven },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      });
 
-    expect(routeAfterAgentLlm(state, 8, "tools", "finalize", "prepare")).toBe("finalize");
-  });
+      expect(routeAfterAgentLlm(state, 8, "tools", "finalize", "prepare")).toBe("finalize");
+      const finalized = createAgentFinalizeNode(agent)(state);
+      expect((finalized.messages as AIMessage[])[0]?.tool_calls).toHaveLength(0);
+    },
+  );
 
   it("invalidates a create slot when chat confirmation remains unresolved", () => {
     const finalize = createAgentFinalizeNode(agent);
@@ -3772,6 +3777,36 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft).toMatchObject({
       phase: "time",
       selectedDate: "2026-09-10",
+      selectedSlot: null,
+      pendingCommand: null,
+    });
+  });
+
+  it("abandons a create draft after an explicit chat decline", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: {
+          ...canonicalBookingDraft(),
+          phase: "confirming",
+          pendingCommand: { action: "create", payload: { serviceId: "svc-1" } },
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ awaitingConfirmation: true, userReply: "Ні, дякую" }),
+            name: "create_meeting",
+            tool_call_id: "create-1",
+          }),
+          new AIMessage("Добре, запис не створено."),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      mode: "create",
+      phase: "service",
+      serviceAcceptance: null,
+      selectedDate: null,
       selectedSlot: null,
       pendingCommand: null,
     });
@@ -3818,6 +3853,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
+        pendingCancellationPurpose: "direct",
         bookingDraft: {
           ...canonicalBookingDraft({
             phase: "confirming",
@@ -3846,6 +3882,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       phase: "service",
       pendingCommand: null,
     });
+    expect(update.pendingCancellationPurpose).toBeNull();
   });
 
   it("terminates replacement cancellation when chat confirmation remains unresolved", () => {
@@ -3885,6 +3922,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       pendingCommand: null,
       replacement: null,
     });
+    expect(update.pendingCancellationPurpose).toBeNull();
   });
 
   it("dispatches cancel_meeting for replacement consent instead of replaying create_meeting", async () => {
