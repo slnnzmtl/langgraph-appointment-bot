@@ -711,6 +711,81 @@ const commandActionForTool = (name: string): "create" | "reschedule" | "replace"
   return null;
 };
 
+type PendingChatConfirmation = {
+  action: "create" | "reschedule" | "cancel";
+  userReply: string;
+};
+
+/** Read the latest chat-text confirmation pause without trusting model output. */
+const pendingChatConfirmationFromState = (
+  state: ClinicState,
+): PendingChatConfirmation | null => {
+  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = state.agentMessages?.[index];
+    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+      continue;
+    }
+    if (classifyMeetingMutationToolMessage(message) !== "pending_confirmation") {
+      return null;
+    }
+    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const userReply = record?.userReply;
+    const action = commandActionForTool(message.name ?? "");
+    return typeof userReply === "string"
+      && (action === "create" || action === "reschedule" || action === "cancel")
+      ? { action, userReply }
+      : null;
+  }
+  return null;
+};
+
+/** A chat affirmation may replay only the command that produced the pending card. */
+const pendingChatConfirmationReplay = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  const pending = pendingChatConfirmationFromState(state);
+  const command = state.bookingDraft?.pendingCommand;
+  const modelRequestedConfirmation = pending
+    ? (state.agentMessages ?? [])
+      .slice()
+      .reverse()
+      .find((message) => message instanceof AIMessage)
+      ?.tool_calls?.some((call) => {
+        const action = commandActionForTool(call.name);
+        const args = call.args;
+        return action === pending.action
+          && args != null
+          && typeof args === "object"
+          && !Array.isArray(args)
+          && (args as Record<string, unknown>).confirmationGiven === true;
+      }) === true
+    : false;
+  if (
+    !pending
+    || !command
+    || command.action !== pending.action
+    || (!isYesReply(pending.userReply) && !modelRequestedConfirmation)
+  ) {
+    return null;
+  }
+  return {
+    ...command,
+    payload: { ...command.payload, confirmationGiven: true },
+  };
+};
+
+const isPendingChatConfirmationReplay = (
+  state: ClinicState,
+  action: "create" | "reschedule" | "cancel",
+  args: unknown,
+): boolean => {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    return false;
+  }
+  return (args as Record<string, unknown>).confirmationGiven === true
+    && pendingChatConfirmationFromState(state)?.action === action;
+};
+
 const DIRECT_CANCEL_INTENT = /(?:скасу\w*|cancel(?:\s+(?:my\s+)?(?:appointment|visit))?)/iu;
 
 const DIRECT_RESCHEDULE_INTENT = /(?:перенес\w*|reschedul\w*|move\s+(?:my\s+)?(?:appointment|visit))/iu;
@@ -968,6 +1043,14 @@ const availabilityRequestFromBookingDraft = (
  * draft advances to revalidation/HITL.
  */
 const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
+  if (pendingChatConfirmationReplay(state) != null) {
+    return true;
+  }
+  // A non-affirmative chat reply must return to the model. It must not cause
+  // the frozen mutation to be replayed or trigger a new availability search.
+  if (pendingChatConfirmationFromState(state) != null) {
+    return false;
+  }
   if (
     replacementActionForTurn(state) != null
     || (
@@ -1947,6 +2030,33 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     if (agentId !== BOOKING_AGENT_ID) {
       return {};
     }
+    const replayCommand = pendingChatConfirmationReplay(state);
+    if (replayCommand) {
+      const toolName = replayCommand.action === "create"
+        ? "create_meeting"
+        : replayCommand.action === "reschedule"
+          ? "reschedule_meeting"
+          : "cancel_meeting";
+      const syntheticCall = {
+        id: `booking_chat_confirm_${state.bookingDraft?.version ?? 0}`,
+        name: toolName,
+        args: replayCommand.payload,
+        type: "tool_call" as const,
+      };
+      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: replayCommand,
+        }),
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], syntheticAi),
+        ),
+      };
+    }
+    if (pendingChatConfirmationFromState(state) != null) {
+      return {};
+    }
     // Replacement is a compound mutation. Once it has started, the original
     // patient message (often `Скасувати`) and the stale meeting snapshot must
     // not be interpreted as a new direct-cancellation request. The replacement
@@ -2488,6 +2598,11 @@ export const createAgentToolsNode = (
 
         if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
           call.args = normalizeMeetingMutationArgs(state, call);
+          const chatConfirmationReplay = isPendingChatConfirmationReplay(
+            state,
+            call.name === "create_meeting" ? "create" : "reschedule",
+            call.args,
+          );
           if (call.name === "reschedule_meeting") {
             const draft = state.bookingDraft;
             const normalizedArgs = call.args as { dateStart?: unknown; dateEnd?: unknown };
@@ -2501,7 +2616,7 @@ export const createAgentToolsNode = (
                 || draft.rescheduleTarget == null
                 || draft.selectedSlot == null
                 || draft.pendingCommand?.action !== "reschedule"
-                || !freshAvailabilityValidatesSelectedSlot(state)
+                || (!chatConfirmationReplay && !freshAvailabilityValidatesSelectedSlot(state))
               )
             ) {
               trackToolError(call.name, RESCHEDULE_STATE_REQUIRED_ERROR);
@@ -2526,7 +2641,8 @@ export const createAgentToolsNode = (
           };
           const selectedSlot = authoritativeSelectedSlot(state);
           const requiresFreshCreateValidation = call.name === "create_meeting"
-            && state.bookingDraft?.pendingCommand?.action === "create";
+            && state.bookingDraft?.pendingCommand?.action === "create"
+            && !chatConfirmationReplay;
           if (requiresFreshCreateValidation && !freshAvailabilityValidatesSelectedSlot(state)) {
             trackToolError(call.name, SELECTED_SLOT_NOT_AVAILABLE_ERROR);
             synthetic.push(
@@ -2752,10 +2868,15 @@ export const createAgentToolsNode = (
         } satisfies PendingBookingCommand;
       })
       .find((command): command is PendingBookingCommand => command != null);
-    if (pendingCommand && state.bookingDraft) {
+    const commandToPersist = pendingCommand
+      && state.bookingDraft?.pendingCommand
+      && state.bookingDraft.pendingCommand.action === pendingCommand.action
+      ? state.bookingDraft.pendingCommand
+      : pendingCommand;
+    if (commandToPersist && state.bookingDraft) {
       update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
         type: "command_prepared",
-        command: pendingCommand,
+        command: commandToPersist,
       });
     }
 
