@@ -40,6 +40,28 @@ const BLOCKED_BOOKING_ERRORS = new Set(["Contact incomplete", "Already booked", 
 const SLOT_REFETCH_HINT =
   "That time may already be booked. Call present_availability_slots with the same durationMinutes (and excludeMeetingIds when moving), then offer other times — do not retry the same dateStart/dateEnd.";
 
+const normalizeUpdateMeetingSuccess = (
+  toolName: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
+  raw: string,
+  expectedMeetingId: string | undefined,
+): string => {
+  if (
+    (toolName !== "cancel_meeting" && toolName !== "reschedule_meeting")
+    || expectedMeetingId == null
+  ) {
+    return raw;
+  }
+  const match = /^Successfully updated meeting with ID:\s*(\S+)$/.exec(raw.trim());
+  if (!match || match[1] !== expectedMeetingId) {
+    return raw;
+  }
+  return JSON.stringify({
+    success: true,
+    id: match[1],
+    meetingId: match[1],
+  });
+};
+
 const augmentBookingSlotError = (
   toolName: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
   raw: string,
@@ -68,7 +90,14 @@ const finishMeetingMutation = (
 ): string =>
   finishTrackedWrite(
     toolName,
-    augmentBookingSlotError(toolName, raw),
+    augmentBookingSlotError(
+      toolName,
+      normalizeUpdateMeetingSuccess(
+        toolName,
+        raw,
+        typeof successProps.meeting_id === "string" ? successProps.meeting_id : undefined,
+      ),
+    ),
     (entityId) => {
       const meetingId =
         typeof successProps.meeting_id === "string" ? successProps.meeting_id : entityId;
@@ -78,7 +107,10 @@ const finishMeetingMutation = (
         ...(meetingId ? { meeting_id: meetingId } : {}),
       });
     },
-    { skip: skipHitlPending },
+    {
+      skip: skipHitlPending,
+      requireEntityId: true,
+    },
   );
 
 const NOT_AUTHORIZED = "Not authorized";

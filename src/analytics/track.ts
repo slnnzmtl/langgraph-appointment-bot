@@ -18,6 +18,11 @@ export const TIER1_EVENTS = [
   "booking_awaiting_chat_confirm",
   "booking_note_step",
   "booking_create_blocked_note",
+  "booking_checkpoint_migrated",
+  "booking_transition_rejected",
+  "booking_consultation_guard",
+  "meeting_mutation_outcome",
+  "visit_status_response",
   "meeting_created",
   "meeting_cancelled",
   "meeting_rescheduled",
@@ -138,7 +143,10 @@ export const finishTrackedWrite = (
   tool: string,
   raw: string,
   onSuccess: (entityId?: string) => void,
-  options?: { skip?: (record: Record<string, unknown>) => boolean },
+  options?: {
+    skip?: (record: Record<string, unknown>) => boolean;
+    requireEntityId?: boolean;
+  },
 ): string => {
   const record = asJsonRecord(raw);
   if (record && options?.skip?.(record)) {
@@ -149,6 +157,11 @@ export const finishTrackedWrite = (
     trackToolError(tool, err);
     return raw;
   }
-  onSuccess(jsonEntityId(raw));
+  const entityId = jsonEntityId(raw);
+  if (options?.requireEntityId && !entityId) {
+    trackToolError(tool, "Mutation response did not include an entity id");
+    return raw;
+  }
+  onSuccess(entityId);
   return raw;
 };

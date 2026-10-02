@@ -28,6 +28,7 @@ import {
   prepareNodeName,
   commandPrepareNodeName,
   mutationFinalizeNodeName,
+  routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
   toolsNodeName,
@@ -141,7 +142,19 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       )
       .addNode(toolsNode, createAgentToolsNode(tools, agent.id))
       .addNode(finalize, createAgentFinalizeNode(agent))
-      .addEdge(prepare, llm)
+      .addConditionalEdges(
+        prepare,
+        (state: { agentMessages: unknown[] }) =>
+          routeAfterAgentPrepare(
+            state as never,
+            llm,
+            agent.id === "booking" ? commandPrepare : undefined,
+          ),
+        {
+          [llm]: llm,
+          [commandPrepare]: commandPrepare,
+        },
+      )
       .addConditionalEdges(
         llm,
         (state: { stepCount: number; agentMessages: unknown[] }) =>
@@ -167,11 +180,13 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             llm,
             toolsNode,
             agent.id === "booking" ? mutationFinalize : undefined,
+            agent.id === "booking" ? commandPrepare : undefined,
           ),
         {
           [llm]: llm,
           [toolsNode]: toolsNode,
           [mutationFinalize]: mutationFinalize,
+          [commandPrepare]: commandPrepare,
         },
       )
       .addEdge(finalize, END);

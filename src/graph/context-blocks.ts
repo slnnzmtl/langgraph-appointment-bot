@@ -70,8 +70,11 @@ export const attachPrefetchVisits = (
   intent: FinishVisitIntent,
 ): string => {
   if (intent === "visit_ask") {
-    if (!ctx || ctx.meetings.length === 0) {
-      return text;
+    if (!ctx) {
+      return "Наразі не можу перевірити ваш запис. Спробуйте, будь ласка, трохи пізніше.";
+    }
+    if (ctx.meetings.length === 0) {
+      return "Актуального запису на прийом не знайдено. Бажаєте записатися?";
     }
     return formatMyVisitReply(ctx);
   }
@@ -176,7 +179,11 @@ export const formatBookingDraftContext = (
     return "";
   }
   return block(CONTEXT_TAGS.bookingDraft, {
+    mode: draft.mode,
     phase: draft.phase,
+    rescheduleTarget: draft.rescheduleTarget
+      ? { id: draft.rescheduleTarget.id, name: draft.rescheduleTarget.name }
+      : null,
     service: draft.serviceAcceptance
       ? {
           status: draft.serviceAcceptance.status,
@@ -186,6 +193,7 @@ export const formatBookingDraftContext = (
         }
       : null,
     selectedDate: draft.selectedDate,
+    requestedTime: draft.requestedTime,
     slot: draft.selectedSlot
       ? {
           dateStart: draft.selectedSlot.dateStart,

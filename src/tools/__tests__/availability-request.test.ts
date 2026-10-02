@@ -12,6 +12,9 @@ describe("resolveAvailabilityRequest", () => {
     ["2026-10-20", "2026-10-20"],
     ["завтра о 12:30", "2026-09-25"],
     ["на завтра 12:30", "2026-09-25"],
+    ["на 16 число о 14:00", "2026-10-16"],
+    ["на 16", "2026-10-16"],
+    ["move it to the 16th at 14:00", "2026-10-16"],
   ])("resolves %s to %s", (text, date) => {
     expect(resolveAvailabilityRequest(text, today)).toMatchObject({
       kind: "exact",
@@ -24,6 +27,18 @@ describe("resolveAvailabilityRequest", () => {
       kind: "exact",
       date: "2026-09-25",
       preferredTime: "12:30",
+    });
+    expect(resolveAvailabilityRequest("на 16 число о 14:00", today)).toEqual({
+      kind: "exact",
+      date: "2026-10-16",
+      preferredTime: "14:00",
+    });
+  });
+
+  it("rolls a day-only request into the next month when needed", () => {
+    expect(resolveAvailabilityRequest("на 16 число", "2026-10-20")).toEqual({
+      kind: "exact",
+      date: "2026-11-16",
     });
   });
 

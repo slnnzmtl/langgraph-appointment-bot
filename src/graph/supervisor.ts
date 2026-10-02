@@ -54,10 +54,7 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import {
-  migrateLegacyBookingState,
-  reduceBookingDraft,
-} from "./booking-draft.js";
+import { reduceBookingDraft } from "./booking-draft.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -87,8 +84,6 @@ const VISIT_CHANGE_ROUTE_LABELS = new Set<string>([
   BOOKING_REPLACE_MENU_EN[0],
 ]);
 
-const isMyVisitLine = (line: string): boolean => /^(мій запис|my visit)$/i.test(line.trim());
-
 const isGreetingOrMainMenuLine = (line: string): boolean => {
   const trimmed = line.trim();
   return (
@@ -97,10 +92,23 @@ const isGreetingOrMainMenuLine = (line: string): boolean => {
   );
 };
 
-/** Patient asks what is booked — not greetings/thanks that never mention visits. */
-const humanAsksAboutVisits = (line: string): boolean =>
-  /(?:мій запис|my visit|які?\s+(?:в\s+мене\s+)?візит|мо[їи]\s+візит|запланован\w*\s+візит|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)/i
-    .test(line.trim());
+/** Explicit visit changes/bookings must outrank read-only appointment status. */
+const VISIT_CHANGE_INTENT = /(?:скасу\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*|move\s+(?:my\s+)?(?:appointment|visit))/iu;
+const VISIT_BOOKING_INTENT = /(?:записат\w*|хочу\s+(?:запис|book)|запис\s+на\s+\d|book\s+(?:my\s+)?(?:appointment|visit)|schedule\s+(?:my\s+)?(?:appointment|visit))/iu;
+
+const VISIT_ACTION_CONTEXT = /(?:мій\s+запис|my\s+visit|візит|visit|appointment|запис\s+на\s+\d|\b\d{1,2}(?:[./-]\d{1,2})?\b)/iu;
+
+export const isExplicitVisitAction = (line: string): boolean =>
+  VISIT_ACTION_CONTEXT.test(line)
+  && (VISIT_CHANGE_INTENT.test(line) || VISIT_BOOKING_INTENT.test(line));
+
+/** Patient asks what is booked — read-only status, never an action request. */
+export const humanAsksAboutVisits = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (isExplicitVisitAction(trimmed)) return false;
+  return /(?:^|\s)(?:мій\s+запис|my\s+visit|запланован[\p{L}]*\s+візит|мо[їи]\s+візит|у\s+мене\s+(?:вже\s+|уже\s+)?є\s+запис|(?:я\s+)?(?:вже|уже)\s+запис[\p{L}]*|запис\s+на\s+\d|які?\s+(?:в\s+мене\s+)?візит|already\s+booked|booked\s+(?:an?\s+)?appointment|do\s+i\s+have\s+(?:an?\s+)?(?:appointment|visit)|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)(?:\s|$|[?!.,])/iu
+    .test(trimmed);
+};
 
 export type CreateClinicSupervisorNodeOptions = {
   agents: ClinicAgentDefinition[];
@@ -233,13 +241,25 @@ const isOtherDateReply = (human: string): boolean =>
   OTHER_DATE_PATTERN.test(human) || RUSSIAN_OTHER_DATE_PATTERN.test(human.trim());
 
 /** Cancel / reschedule paraphrases (not only exact chip labels). */
-const VISIT_CHANGE_INTENT =
-  /(?:скасува\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*)/i;
-
 const isDayOrTimeReply = (human: string): boolean =>
   resolveAvailabilityRequest(human, kyivToday()) != null
   || /\b\d{1,2}:\d{2}\b/.test(human)
   || isOtherDateReply(human);
+
+/**
+ * «Мій запис» is a read-only message, but its visit-change menu also starts a
+ * short-lived action context. Preserve that context when the patient answers
+ * with a date/time instead of tapping «Перенести» first.
+ */
+const isPendingRescheduleSelection = (
+  state: ClinicState,
+  human: string,
+  bookingContext: ClinicState["bookingContext"],
+): boolean =>
+  state.lastHandoff?.agentId === FINISH_ROUTE
+  && state.lastHandoff.pendingAction === "reschedule"
+  && (bookingContext?.meetings.length ?? 0) === 1
+  && isDayOrTimeReply(human);
 
 const isVisitChangeIntent = (human: string): boolean =>
   VISIT_CHANGE_INTENT.test(human)
@@ -364,8 +384,7 @@ const resolveRoutingDecision = (
   if (decision.next === FINISH_ROUTE) {
     const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
-    const wantsVisitChange =
-      hasVisit && (isMyVisitLine(lastHumanLine) || humanAsksAboutVisits(lastHumanLine));
+    const wantsVisitChange = hasVisit && humanAsksAboutVisits(lastHumanLine);
 
     const normalizedReply = normalizeSupervisorReply(decision.reply);
     if (!normalizedReply) {
@@ -454,38 +473,6 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
   };
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
-    // Old checkpoints may contain only the deprecated booking projection. Recover it
-    // only when the service catalog has exactly one candidate; otherwise leave the
-    // projection untouched until the patient explicitly selects a service.
-    if (state.bookingDraft == null && state.servicesContext?.list.length === 1) {
-      const service = state.servicesContext.list[0];
-      const migrated = migrateLegacyBookingState({
-        bookingNoteStatus: state.bookingNoteStatus,
-        selectedSlot: state.selectedSlot,
-        selectedAvailabilityDate: state.selectedAvailabilityDate,
-        ...(service
-          ? {
-              recoveredService: {
-                id: service.id,
-                name: service.name,
-                ...(service.duration != null ? { durationMinutes: service.duration } : {}),
-                source: "catalog" as const,
-              },
-            }
-          : {}),
-      });
-      if (migrated) {
-        return {
-          bookingDraft: migrated,
-          bookingNoteStatus: "unasked",
-          selectedSlot: null,
-          selectedAvailabilityDate: null,
-          next: BOOKING_AGENT_ID,
-          lastHandoff: null,
-        };
-      }
-    }
-
     const staticPrompt = options.loadSupervisorPrompt().trim();
     const history = stripToolNoiseFromMessages(state.messages);
     const ttlMs = options.prefetchTtlMs ?? PREFETCH_TTL_MS;
@@ -495,10 +482,11 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     let prefetchUpdate: ClinicStateUpdate = {};
     // Match the last HumanMessage in state (not stripped history — consecutive humans are merged there).
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
+    const lastHumanText = lastHumanTextFromMessages(state.messages);
+    const visitStatusIntent = humanAsksAboutVisits(lastHumanText);
     // These labels must always refetch — reminder HITL does not set prefetchDirty.
-    const forcePrefetch = /^(мій запис|my visit|головне меню|main menu|скасувати|cancel)$/i.test(
-      lastHumanLine,
-    );
+    const forcePrefetch = visitStatusIntent
+      || /^(головне меню|main menu|скасувати|cancel)$/i.test(lastHumanLine);
     const reusePrefetch =
       state.contactContext != null
       && !state.prefetchDirty
@@ -513,10 +501,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         // Always drop availability so DATE/TIME rewrite stays owned by finalize.
         const resetBookingLadder =
           isGreetingOrMainMenuLine(lastHumanLine)
-          || isMyVisitLine(lastHumanLine)
+          || visitStatusIntent
           || (/^(скасувати|cancel)$/i.test(lastHumanLine)
-            && state.bookingDraft?.selectedSlot == null
-            && (state.bookingDraft == null ? state.selectedSlot == null : true));
+            && state.bookingDraft?.selectedSlot == null);
         prefetchUpdate = {
           ...prefetched,
           prefetchDirty: false,
@@ -525,28 +512,71 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           availabilityCursor: resetBookingLadder
             ? null
             : state.availabilityCursor ?? availabilityCursorFromContext(state.availabilityContext),
-          ...(resetBookingLadder
-            ? {
-              ...(state.bookingDraft == null
-                ? {
-                    bookingNoteStatus: "unasked" as const,
-                    selectedSlot: null,
-                    selectedAvailabilityDate: null,
-                  }
-                : {}),
-              ...(state.bookingDraft
-                ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
-                : {}),
-            }
-            : state.bookingDraft?.selectedSlot == null
-              && (state.bookingDraft == null ? state.selectedSlot == null : true)
-              ? { selectedAvailabilityDate: null }
-              : {}),
+          ...(resetBookingLadder && state.bookingDraft
+            ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
+            : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error("[clinic-supervisor] prefetch failed:", message);
+        if (visitStatusIntent) {
+          bookingContext = null;
+          prefetchUpdate = {
+            bookingContext: null,
+            contactContext: null,
+            prefetchDirty: true,
+          };
+        }
       }
+    }
+
+    if (isExplicitVisitAction(lastHumanText)) {
+      return {
+        next: BOOKING_AGENT_ID,
+        ...prefetchUpdate,
+        availabilityContext: null,
+        availabilityCursor: null,
+        lastHandoff: null,
+      };
+    }
+
+    if (isPendingRescheduleSelection(state, lastHumanText, bookingContext)) {
+      // Keep the handoff metadata until booking__prepare consumes it. Clearing
+      // it here would make the date look like a new create-booking request.
+      return {
+        next: BOOKING_AGENT_ID,
+        ...prefetchUpdate,
+        availabilityContext: null,
+        availabilityCursor: null,
+      };
+    }
+
+    if (visitStatusIntent) {
+      const replyText = attachPrefetchVisits("", bookingContext, "visit_ask");
+      const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+      trackEvent("visit_status_response", {
+        source: bookingContext == null
+          ? "prefetch_unavailable"
+          : hasVisit
+            ? "crm_list"
+            : "crm_empty",
+      });
+      const replyButtons = hasVisit ? [...VISIT_CHANGE_MENU] : [...defaultMenuLabels(false)];
+      return {
+        next: FINISH_ROUTE,
+        ...prefetchUpdate,
+        lastHandoff: {
+          agentId: FINISH_ROUTE,
+          agentName: "supervisor",
+          status: "ok",
+          replyText,
+          replyButtons,
+          ...(bookingContext?.meetings.length === 1
+            ? { pendingAction: "reschedule" as const }
+            : {}),
+        },
+        messages: [new AIMessage(replyText)],
+      };
     }
 
     const stickyNext = stickyContinueAgentId(state);
@@ -571,9 +601,6 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         availabilityCursor: null,
         ...(state.bookingDraft
           ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
-          : {}),
-        ...(state.bookingDraft == null && state.selectedAvailabilityDate != null
-          ? { selectedAvailabilityDate: null }
           : {}),
       };
     }
@@ -640,25 +667,11 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       ...((abandonDraft || chooseAnotherService) && state.bookingDraft
         ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
         : {}),
-      ...((abandonDraft || chooseAnotherService)
-        ? {
-            ...(state.bookingDraft == null
-              ? {
-                  bookingNoteStatus: "unasked" as const,
-                  selectedSlot: null,
-                  selectedAvailabilityDate: null,
-                }
-              : {}),
-          }
-        : {}),
       ...(keepAvailability
         ? {}
         : {
           availabilityContext: null,
           availabilityCursor: null,
-          ...(state.bookingDraft == null && state.selectedAvailabilityDate != null
-            ? { selectedAvailabilityDate: null }
-            : {}),
         }),
     };
   };

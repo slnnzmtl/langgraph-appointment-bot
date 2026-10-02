@@ -27,7 +27,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, shouldRouteProcedureBrowseToFaq, shouldStayInFaqCatalog, stickyContinueAgentId } =
+const { createClinicSupervisorNode, humanAsksAboutVisits, isExplicitVisitAction, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, shouldRouteProcedureBrowseToFaq, shouldStayInFaqCatalog, stickyContinueAgentId } =
   await import("../supervisor.js");
 
 const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
@@ -425,8 +425,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
+    expect(update.bookingDraft).toBeUndefined();
     expect(update.servicesContext).toBeUndefined();
     // Greeting starts a fresh booking session, so the durable cursor resets too.
     expect(update.availabilityCursor).toBeNull();
@@ -737,8 +736,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
+    expect(update.bookingDraft).toBeUndefined();
   });
 
   it("refetches when prefetchFetchedAt is missing", async () => {
@@ -1807,9 +1805,89 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
     });
   });
+
+  it("keeps reschedule intent when the patient answers the visit list with a date", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      bookingContext: {
+        meetings: [
+          {
+            id: "m-1",
+            name: "Консультація - Ada",
+            dateStart: "2026-08-21 11:00:00",
+            dateEnd: "2026-08-21 11:30:00",
+          },
+        ],
+        dateFrom: "2026-08-11",
+      },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "FINISH",
+          agentName: "supervisor",
+          status: "ok",
+          pendingAction: "reschedule",
+        },
+        messages: [
+          new AIMessage("Заплановані візити: консультація — 21 серпня о 11:00"),
+          new HumanMessage("23 жовтня"),
+        ],
+        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+        bookingContext: {
+          meetings: [
+            {
+              id: "m-1",
+              name: "Консультація - Ada",
+              dateStart: "2026-08-21 11:00:00",
+              dateEnd: "2026-08-21 11:30:00",
+            },
+          ],
+          dateFrom: "2026-08-11",
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update).toMatchObject({
+      next: "booking",
+      availabilityContext: null,
+      availabilityCursor: null,
+    });
+    // The handoff is intentionally preserved in the state reducer so
+    // booking__prepare can consume pendingAction before clearing it.
+    expect(update.lastHandoff).toBeUndefined();
+  });
 });
 
 describe("createClinicSupervisorNode code-owned FINISH menus", () => {
+  it.each([
+    "Перенеси мій запис на 16 число",
+    "Скасуй мій запис",
+    "Please reschedule my visit",
+    "Book my visit for Monday",
+  ])("does not classify explicit visit action as read-only status: %s", (text) => {
+    expect(isExplicitVisitAction(text)).toBe(true);
+    expect(humanAsksAboutVisits(text)).toBe(false);
+  });
+
+  it.each([
+    "Мій запис",
+    "Я вже записалася — перевірте",
+    "Do I have an appointment?",
+    "What visits do I have?",
+  ])("keeps read-only appointment status owned by the supervisor: %s", (text) => {
+    expect(isExplicitVisitAction(text)).toBe(false);
+    expect(humanAsksAboutVisits(text)).toBe(true);
+  });
+
   const invoke = vi.fn();
   const bindRoutingTools = vi.fn(() => ({ invoke }));
   const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
@@ -1828,6 +1906,53 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   const visitAsk =
     "Заплановані візити:\n🗓️ Консультація - 21 серпня (п'ятниця) о 11:00\n\nБажаєте перенести або скасувати цей візит?";
+
+  it.each([
+    "Я вже записалася на 16 число",
+    "Я же уже записалась на 16 число",
+    "У мене вже є запис?",
+    "I already booked an appointment",
+    "Do I have an appointment?",
+  ])("owns visit-status assertion %s even when the model routes to FAQ", async (text) => {
+    invoke.mockResolvedValue({ next: "faq", reply: "У вас точно є запис." });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: { contacts: [] },
+        bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+      }),
+    });
+
+    const update = await node(supervisorState({ messages: [new HumanMessage(text)] }));
+
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyText).toContain("не знайдено");
+    expect(update.lastHandoff?.replyText).not.toContain("точно є");
+    expect(update.lastHandoff?.replyButtons).toEqual(DEFAULT_MENU_NO_VISITS);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("reports unverifiable status when the fresh prefetch fails", async () => {
+    invoke.mockResolvedValue({ next: "faq", reply: "Так, ваш запис підтверджено." });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => { throw new Error("CRM down"); },
+    });
+
+    const update = await node(supervisorState({
+      messages: [new HumanMessage("I already booked an appointment")],
+    }));
+
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyText).toContain("перевірити");
+    expect(update.lastHandoff?.replyText).not.toContain("підтверджено");
+    expect(update.lastHandoff?.replyButtons).toEqual(DEFAULT_MENU_NO_VISITS);
+    expect(invoke).not.toHaveBeenCalled();
+  });
 
   beforeEach(() => {
     invoke.mockReset();
@@ -1861,6 +1986,14 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       replyText: visitAsk,
       replyButtons: [...VISIT_CHANGE_MENU],
     });
+  });
+
+  it("marks a single-visit status response for a direct date/time reschedule", async () => {
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.pendingAction).toBe("reschedule");
   });
 
   it("replaces a stale «Мій запис» list with prefetch labels", async () => {

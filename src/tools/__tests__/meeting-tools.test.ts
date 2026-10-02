@@ -570,9 +570,11 @@ describe("create_meeting HITL interrupt", () => {
 
 describe("cancel_meeting HITL interrupt", () => {
   const calls: CallRecord[] = [];
+  let updateMeetingResult: unknown;
 
   beforeEach(() => {
     calls.length = 0;
+    updateMeetingResult = "Successfully updated meeting with ID: mtg-1";
   });
 
   afterEach(() => {
@@ -599,6 +601,9 @@ describe("cancel_meeting HITL interrupt", () => {
     }
     if (name === "search_contacts") {
       return { contacts: [{ id: "contact-1", cTelegram: "tg-42" }] };
+    }
+    if (name === "update_meeting") {
+      return updateMeetingResult;
     }
     return { success: true };
   };
@@ -700,7 +705,11 @@ describe("cancel_meeting HITL interrupt", () => {
         meetingId: "mtg-1",
         status: "Not Held",
       });
-      expect(JSON.parse(second.result)).toMatchObject({ success: true });
+      expect(JSON.parse(second.result)).toMatchObject({
+        success: true,
+        id: "mtg-1",
+        meetingId: "mtg-1",
+      });
     });
   });
 
@@ -727,16 +736,38 @@ describe("cancel_meeting HITL interrupt", () => {
       );
 
       expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
-      expect(JSON.parse(String(raw))).toMatchObject({ success: true });
+      expect(JSON.parse(String(raw))).toMatchObject({
+        success: true,
+        id: "mtg-1",
+        meetingId: "mtg-1",
+      });
+    });
+  });
+
+  it.each([
+    "Successfully updated meeting",
+    "Successfully updated meeting with ID: other-meeting",
+    "",
+    JSON.stringify({ success: true }),
+  ])("fails closed for uncertain cancellation result %s", async (result) => {
+    await withTg(async () => {
+      updateMeetingResult = result;
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: `hitl-cancel-uncertain-${String(result)}` } };
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(new Command({ resume: { confirmed: true } }), config);
+      expect(second.result).toBe(result);
     });
   });
 });
 
 describe("reschedule_meeting HITL interrupt", () => {
   const calls: CallRecord[] = [];
+  let updateMeetingResult: unknown;
 
   beforeEach(() => {
     calls.length = 0;
+    updateMeetingResult = "Successfully updated meeting with ID: mtg-1";
   });
 
   afterEach(() => {
@@ -760,6 +791,9 @@ describe("reschedule_meeting HITL interrupt", () => {
     }
     if (name === "search_contacts") {
       return { contacts: [{ id: "contact-1", cTelegram: "tg-42" }] };
+    }
+    if (name === "update_meeting") {
+      return updateMeetingResult;
     }
     return { success: true };
   };
@@ -822,7 +856,11 @@ describe("reschedule_meeting HITL interrupt", () => {
         dateStart: "2026-08-14T11:00:00",
         dateEnd: "2026-08-14T11:30:00",
       });
-      expect(JSON.parse(second.result)).toMatchObject({ success: true });
+      expect(JSON.parse(second.result)).toMatchObject({
+        success: true,
+        id: "mtg-1",
+        meetingId: "mtg-1",
+      });
     });
   });
 
@@ -851,7 +889,40 @@ describe("reschedule_meeting HITL interrupt", () => {
       );
 
       expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
-      expect(JSON.parse(String(raw))).toMatchObject({ success: true });
+      expect(JSON.parse(String(raw))).toMatchObject({
+        success: true,
+        id: "mtg-1",
+        meetingId: "mtg-1",
+      });
+    });
+  });
+
+  it("fails closed for generic or mismatched CRM success text", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const genericConfig = {
+        configurable: { thread_id: "hitl-reschedule-generic-response" },
+      };
+
+      updateMeetingResult = "Successfully updated meeting";
+      await graph.invoke({ result: "" }, genericConfig);
+      const generic = await graph.invoke(
+        new Command({ resume: { confirmed: true } }),
+        genericConfig,
+      );
+      expect(generic.result).toBe("Successfully updated meeting");
+
+      updateMeetingResult = "Successfully updated meeting with ID: other-meeting";
+      const mismatchedConfig = {
+        configurable: { thread_id: "hitl-reschedule-mismatched-response" },
+      };
+      const mismatchedGraph = buildGraph();
+      await mismatchedGraph.invoke({ result: "" }, mismatchedConfig);
+      const mismatched = await mismatchedGraph.invoke(
+        new Command({ resume: { confirmed: true } }),
+        mismatchedConfig,
+      );
+      expect(mismatched.result).toBe("Successfully updated meeting with ID: other-meeting");
     });
   });
 });
