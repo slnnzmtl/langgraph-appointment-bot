@@ -193,6 +193,7 @@ export const formatBookingDraftContext = (
         }
       : null,
     selectedDate: draft.selectedDate,
+    requestedTime: draft.requestedTime,
     slot: draft.selectedSlot
       ? {
           dateStart: draft.selectedSlot.dateStart,

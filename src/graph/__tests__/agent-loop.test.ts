@@ -117,6 +117,7 @@ const canonicalBookingDraft = (overrides: Partial<BookingDraft> = {}): BookingDr
     dateEnd: "2026-09-10T14:30:00",
     label: "14:00",
   },
+  requestedTime: null,
   note: { status: "skipped" },
   contactId: "contact-1",
   pendingCommand: null,
@@ -3267,6 +3268,114 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
+  it("resolves date and time from one reschedule message and proceeds from the CRM slot", async () => {
+    const message = new HumanMessage("Перенеси мій запис на 2026-10-16 о 14:00");
+    const base = clinicState({
+      messages: [message],
+      bookingContext: listedMeetings,
+    });
+    const prepare = createAgentPrepareNode("booking");
+    const seeded = await prepare(base);
+    expect(seeded.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      rescheduleTarget: { id: "m-1" },
+      selectedDate: "2026-10-16",
+      requestedTime: { value: "14:00", status: "pending" },
+      selectedSlot: null,
+    });
+
+    const preparedState = clinicState({
+      ...base,
+      bookingDraft: seeded.bookingDraft,
+      agentMessages: (seeded.agentMessages as Overwrite<AIMessage[]>).value,
+    });
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const lookup = await commandPrepare(preparedState);
+    const lookupCall = ((lookup.agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
+      .tool_calls?.[0];
+    expect(lookupCall).toMatchObject({
+      name: "present_availability_slots",
+      args: {
+        direction: "exact",
+        date: "2026-10-16",
+        excludeMeetingIds: ["m-1"],
+        forceRefresh: true,
+      },
+    });
+
+    const invoked: Record<string, unknown>[] = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({
+          days: [{
+            date: "2026-10-16",
+            slots: [{
+              id: "slot-14",
+              label: "14:00",
+              dateStart: "2026-10-16T14:00:00",
+              dateEnd: "2026-10-16T14:30:00",
+            }],
+          }],
+          stepMinutes: 30,
+          excludeMeetingIds: ["m-1"],
+          query: { kind: "exact", date: "2026-10-16", coverageComplete: true },
+        });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.string().optional(),
+          date: z.string().optional(),
+          excludeMeetingIds: z.array(z.string()).optional(),
+          forceRefresh: z.boolean().optional(),
+        }),
+      },
+    );
+    const toolsUpdate = await createAgentToolsNode([slotsTool], "booking")(
+      clinicState({
+        ...preparedState,
+        bookingDraft: seeded.bookingDraft,
+        agentMessages: (lookup.agentMessages as Overwrite<AIMessage[]>).value,
+      }),
+      { configurable: {} },
+    );
+    expect(invoked[0]).toMatchObject({
+      direction: "exact",
+      date: "2026-10-16",
+      excludeMeetingIds: ["m-1"],
+      forceRefresh: true,
+    });
+    expect(toolsUpdate.bookingDraft).toMatchObject({
+      selectedDate: "2026-10-16",
+      selectedSlot: {
+        dateStart: "2026-10-16T14:00:00",
+        dateEnd: "2026-10-16T14:30:00",
+      },
+      requestedTime: null,
+      phase: "ready",
+    });
+
+    const mutation = await commandPrepare(
+      clinicState({
+        ...preparedState,
+        bookingDraft: toolsUpdate.bookingDraft as BookingDraft,
+        agentMessages: toolsUpdate.agentMessages as never,
+      }),
+    );
+    const mutationCall = ((mutation.agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
+      .tool_calls?.[0];
+    expect(mutationCall).toMatchObject({
+      name: "reschedule_meeting",
+      args: {
+        meetingId: "m-1",
+        dateStart: "2026-10-16T14:00:00",
+        dateEnd: "2026-10-16T14:30:00",
+      },
+    });
+  });
+
   it("records a reschedule time without entering the note step", () => {
     const draft = reduceBookingDraft(
       reduceBookingDraft(createEmptyBookingDraft(), {
@@ -3286,6 +3395,50 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.selectedSlot?.dateStart).toBe("2026-09-10T14:00:00");
     expect(update.bookingDraft?.phase).toBe("ready");
     expect(update.bookingDraft?.note.status).toBe("unasked");
+  });
+
+  it("reports an unavailable requested time and offers the remaining CRM slots", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "reschedule_started",
+        meeting: { id: "m-1" },
+      }),
+      { type: "schedule_requested", date: "2026-09-10", preferredTime: "14:00" },
+    );
+    const unavailable = reduceBookingDraft(draft, { type: "requested_time_unavailable" });
+    const remainingAvailability: AvailabilityContext = {
+      days: [{
+        ...snapshot.days[0]!,
+        slots: [snapshot.days[0]!.slots[1]!],
+      }],
+      stepMinutes: 30,
+      startIntervalMinutes: 30,
+    };
+    const update = finalize(
+      clinicState({
+        bookingDraft: unavailable,
+        availabilityContext: remainingAvailability,
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              days: remainingAvailability.days,
+              stepMinutes: 30,
+              excludeMeetingIds: ["m-1"],
+              query: { kind: "exact", date: "2026-09-10", coverageComplete: true },
+            }),
+            name: "present_availability_slots",
+            tool_call_id: "slots-1",
+          }),
+          new AIMessage("На жаль, цього часу немає."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("о 14:00");
+    expect(update.lastHandoff?.replyText).toContain("немає вільного часу");
+    expect(update.lastHandoff?.replyText).toContain("15:00");
+    expect(update.lastHandoff?.replyButtons).toContain("15:00");
   });
 
   it("keeps consultation consent and the selected slot through note skip", async () => {

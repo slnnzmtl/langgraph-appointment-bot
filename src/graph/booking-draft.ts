@@ -30,6 +30,11 @@ export type BookingNote = {
   value?: string;
 };
 
+export type RequestedBookingTime = {
+  value: string;
+  status: "pending" | "unavailable";
+};
+
 export type PendingBookingCommand = {
   action: BookingMode | "cancel";
   payload: Record<string, unknown>;
@@ -71,6 +76,7 @@ export type BookingDraft = {
   serviceAcceptance: ServiceAcceptance | null;
   selectedDate: string | null;
   selectedSlot: SelectedBookingSlot | null;
+  requestedTime: RequestedBookingTime | null;
   note: BookingNote;
   contactId: string | null;
   pendingCommand: PendingBookingCommand | null;
@@ -84,7 +90,9 @@ export type BookingEvent =
   | { type: "service_selected"; service: BookingService; accepted?: boolean; turn?: number }
   | { type: "service_accepted"; turn?: number }
   | { type: "date_selected"; date: string }
+  | { type: "schedule_requested"; date: string; preferredTime?: string }
   | { type: "slot_selected"; slot: SelectedBookingSlot }
+  | { type: "requested_time_unavailable" }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
   | { type: "contact_resolved"; contactId: string }
   | { type: "command_prepared"; command: PendingBookingCommand }
@@ -214,6 +222,7 @@ export const migrateLegacyBookingState = (
     // reducer would reject before accepted service evidence exists.
     selectedDate: accepted ? retainedDate : null,
     selectedSlot: accepted ? selectedSlot : null,
+    requestedTime: source.requestedTime ?? null,
     note: {
       ...source.note,
       status: accepted ? noteStatus : "unasked",
@@ -232,6 +241,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   serviceAcceptance: null,
   selectedDate: null,
   selectedSlot: null,
+  requestedTime: null,
   note: { status: "unasked" },
   contactId: null,
   pendingCommand: null,
@@ -249,6 +259,7 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   phase: "service",
   selectedDate: null,
   selectedSlot: null,
+  requestedTime: null,
   note: { status: "unasked" },
   pendingCommand: null,
   rescheduleTarget: draft.rescheduleTarget ?? null,
@@ -337,6 +348,25 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: event.date,
         selectedSlot: null,
+        requestedTime: null,
+        pendingCommand: null,
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
+    case "schedule_requested": {
+      if (
+        (draft.mode !== "reschedule" && draft.serviceAcceptance?.status !== "accepted")
+        || (draft.mode === "reschedule" && draft.rescheduleTarget == null)
+      ) {
+        return draft;
+      }
+      const next = {
+        ...draft,
+        selectedDate: event.date,
+        selectedSlot: null,
+        requestedTime: event.preferredTime
+          ? { value: event.preferredTime, status: "pending" as const }
+          : null,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
@@ -354,7 +384,21 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
+        requestedTime: null,
         note: draft.mode === "reschedule" ? draft.note : { status: "awaiting" },
+        pendingCommand: null,
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
+    case "requested_time_unavailable": {
+      if (draft.requestedTime?.status !== "pending") {
+        return draft;
+      }
+      const requestedTime = { ...draft.requestedTime, status: "unavailable" as const };
+      const next = {
+        ...draft,
+        requestedTime,
+        selectedSlot: null,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
@@ -383,6 +427,7 @@ export const reduceBookingDraft = (
         serviceAcceptance: null,
         selectedDate: null,
         selectedSlot: null,
+        requestedTime: null,
         note: { status: "unasked" },
         pendingCommand: null,
         rescheduleTarget: event.meeting,

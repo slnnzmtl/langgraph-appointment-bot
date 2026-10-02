@@ -103,6 +103,63 @@ describe("BookingDraft reducer", () => {
     expect(withDate.phase).toBe("time");
   });
 
+  it("persists a requested date and time without treating the time as CRM evidence", () => {
+    const started = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: { id: "meeting-1", name: "Візит" },
+    });
+    const requested = reduceBookingDraft(started, {
+      type: "schedule_requested",
+      date: "2026-10-16",
+      preferredTime: "14:00",
+    });
+
+    expect(requested.phase).toBe("time");
+    expect(requested.selectedDate).toBe("2026-10-16");
+    expect(requested.selectedSlot).toBeNull();
+    expect(requested.requestedTime).toEqual({ value: "14:00", status: "pending" });
+  });
+
+  it("clears requested time when a CRM slot is selected and never enters the note phase for reschedule", () => {
+    const started = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: { id: "meeting-1" },
+    });
+    const requested = reduceBookingDraft(started, {
+      type: "schedule_requested",
+      date: "2026-10-16",
+      preferredTime: "14:00",
+    });
+    const selected = reduceBookingDraft(requested, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-10-16T14:00:00",
+        dateEnd: "2026-10-16T14:30:00",
+        label: "14:00",
+      },
+    });
+
+    expect(selected.phase).toBe("ready");
+    expect(selected.requestedTime).toBeNull();
+    expect(selected.note.status).toBe("unasked");
+  });
+
+  it("marks a requested time unavailable without losing the selected date", () => {
+    const requested = reduceBookingDraft(
+      reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "reschedule_started",
+        meeting: { id: "meeting-1" },
+      }),
+      { type: "schedule_requested", date: "2026-10-16", preferredTime: "14:00" },
+    );
+    const unavailable = reduceBookingDraft(requested, { type: "requested_time_unavailable" });
+
+    expect(unavailable.selectedDate).toBe("2026-10-16");
+    expect(unavailable.selectedSlot).toBeNull();
+    expect(unavailable.requestedTime).toEqual({ value: "14:00", status: "unavailable" });
+    expect(unavailable.phase).toBe("time");
+  });
+
   it("supports direct reschedule date/time without create-booking prerequisites", () => {
     const target = { id: "meeting-1", name: "Консультація" };
     const started = reduceBookingDraft(createEmptyBookingDraft(), {
