@@ -1,7 +1,7 @@
 import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { tool } from "@langchain/core/tools";
-import { interrupt } from "@langchain/langgraph";
+import { Command, interrupt } from "@langchain/langgraph";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -430,4 +430,144 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
     },
   );
+
+  it("returns a non-affirmative HITL chat reply to the LLM without retrying the mutation", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Звісно, давайте підберемо інший час."));
+    const availabilityInvoke = vi.fn(async () => JSON.stringify({
+      date: "2026-10-27",
+      slots: [{
+        id: "slot-27-11",
+        label: "11:00",
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+      }],
+      stepMinutes: 30,
+      query: {
+        kind: "exact",
+        date: "2026-10-27",
+        rangeFrom: "2026-10-27",
+        rangeThrough: "2026-10-27",
+        coverageComplete: true,
+      },
+    }));
+    const writeInvoke = vi.fn(async () => JSON.stringify({ id: "meeting-1" }));
+    const createInvoke = vi.fn(async (input: Record<string, unknown>) => {
+      const decision = interrupt({ type: "confirm_booking", draft: input });
+      if (
+        typeof decision === "object"
+        && decision != null
+        && "userReply" in decision
+        && typeof decision.userReply === "string"
+      ) {
+        return JSON.stringify({
+          awaitingConfirmation: true,
+          userReply: decision.userReply,
+          draft: {
+            command: {
+              action: "create",
+              payload: { parentId: input.contactId, status: "Planned" },
+            },
+          },
+        });
+      }
+      return writeInvoke(input);
+    });
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "revalidate a selected slot",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const createMeeting = tool(createInvoke, {
+      name: "create_meeting",
+      description: "create a meeting after confirmation",
+      schema: z.object({
+        name: z.string(),
+        dateStart: z.string(),
+        dateEnd: z.string(),
+        contactId: z.string(),
+        serviceId: z.string(),
+        confirmMessage: z.string(),
+        description: z.string().optional(),
+        confirmationGiven: z.boolean().optional(),
+      }),
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability, createMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+    const config = {
+      configurable: { thread_id: "non-affirmative-hitl-reply" },
+    };
+
+    const first = await graph.invoke(
+      {
+        messages: [new HumanMessage("записатися")],
+        contactContext: {
+          contacts: [{
+            id: "c-1",
+            firstName: "Ada",
+            lastName: "Lovelace",
+            phoneNumber: "+380501112233",
+            missingFields: [],
+          }],
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-1",
+              name: "Процедура",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-27",
+          selectedSlot: {
+            dateStart: "2026-10-27T11:00:00",
+            dateEnd: "2026-10-27T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      config,
+    );
+    expect(first.__interrupt__).toHaveLength(1);
+
+    const reply = "А можна інший час?";
+    const second = await graph.invoke(
+      new Command({
+        resume: { userReply: reply },
+        update: { messages: [new HumanMessage(reply)] },
+      }) as never,
+      config,
+    );
+
+    expect(writeInvoke).not.toHaveBeenCalled();
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(second.__interrupt__).toBeUndefined();
+  });
 });

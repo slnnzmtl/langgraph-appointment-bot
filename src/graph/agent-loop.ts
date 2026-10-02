@@ -1088,6 +1088,10 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
  * results still return to the LLM unless they are terminal mutation outcomes.
  */
 const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
+  const pendingConfirmation = pendingChatConfirmationFromState(state);
+  if (pendingConfirmation != null) {
+    return pendingChatConfirmationReplay(state) != null;
+  }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
     return true;
   }
