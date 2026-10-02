@@ -3037,6 +3037,58 @@ describe("runtime-owned cancellation outcomes", () => {
       "booking__mutation_finalize",
     )).toBe("booking__mutation_finalize");
   });
+
+  it("routes a typed reschedule decline directly to deterministic finalization", () => {
+    const state = clinicState({
+      bookingContext: listedMeetings,
+      bookingDraft: canonicalBookingDraft({
+        mode: "reschedule",
+        phase: "confirming",
+        selectedDate: "2026-09-10",
+        pendingCommand: {
+          action: "reschedule",
+          payload: {
+            meetingId: "m-1",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+        },
+        rescheduleTarget: { id: "m-1", name: "Consult" },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "ні",
+            draft: { command: { action: "reschedule", payload: {} } },
+          }),
+          tool_call_id: "reschedule-1",
+          name: "reschedule_meeting",
+        }),
+      ],
+    });
+
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+    )).toBe("booking__mutation_finalize");
+
+    const update = createAgentMutationFinalizeNode(agent)(state);
+    expect(update.lastHandoff).toMatchObject({
+      status: "ok",
+      replyText: "Запис не було перенесено.",
+    });
+    expect(update.lastHandoff?.replyText).not.toContain("вільні");
+    expect(update.bookingDraft).toMatchObject({
+      mode: "create",
+      phase: "service",
+      pendingCommand: null,
+    });
+    expect(update.pendingCancellationPurpose).toBeNull();
+  });
 });
 
 describe("replacement offer menu precedence", () => {

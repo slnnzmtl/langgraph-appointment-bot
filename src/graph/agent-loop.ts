@@ -3098,7 +3098,47 @@ export const createAgentToolsNode = (
  * or ask for an action without supplying its keyboard.
  */
 export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState): ClinicStateUpdate => {
+  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
+    const chatConfirmation = pendingChatConfirmationDecision(state);
+    if (
+      chatConfirmation.kind === "unresolved"
+      && chatConfirmation.replyKind === "declined"
+      && chatConfirmation.action != null
+    ) {
+      const mutationName = toolNameForCommandAction(chatConfirmation.action);
+      const replacementCancellation = state.pendingCancellationPurpose === "replacement";
+      const replyText = chatConfirmation.action === "create"
+        ? "Запис не було створено."
+        : chatConfirmation.action === "reschedule"
+          ? "Запис не було перенесено."
+          : replacementCancellation
+            ? "Скасування поточного візиту скасовано. Новий запис не було створено."
+            : "Запис не було скасовано.";
+      const replyButtons = chatConfirmation.action === "cancel" && !replacementCancellation
+        ? [...VISIT_CHANGE_MENU]
+        : [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))];
+      clearPendingConfirmForRuntime(config);
+      const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
+      const cleanup = pendingChatConfirmationCleanup(state);
+      trackEvent("meeting_mutation_outcome", {
+        mutation: mutationName,
+        outcome: "declined",
+      });
+      return {
+        ...cleanup,
+        agentMessages: new Overwrite([] as BaseMessage[]),
+        stepCount: 0,
+        pendingCancellationPurpose: null,
+        messages: [message],
+        lastHandoff: {
+          agentId: agent.id,
+          agentName: agent.name,
+          status: "ok",
+          replyText,
+          replyButtons,
+        },
+      };
+    }
     const result = terminalMeetingMutationOutcome(state);
     if (!result) {
       return {};
@@ -3179,7 +3219,15 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
-      return createAgentMutationFinalizeNode(agent)(state);
+      return createAgentMutationFinalizeNode(agent)(state, config);
+    }
+    const chatConfirmation = pendingChatConfirmationDecision(state);
+    if (
+      chatConfirmation.kind === "unresolved"
+      && chatConfirmation.replyKind === "declined"
+      && chatConfirmation.action != null
+    ) {
+      return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;
     const lastMessage = agentMessages[agentMessages.length - 1];
@@ -3470,6 +3518,16 @@ export const routeAfterAgentTools = (
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  const chatConfirmation = pendingChatConfirmationDecision(state);
+  if (
+    mutationFinalizeName
+    && chatConfirmation.kind === "unresolved"
+    && chatConfirmation.replyKind === "declined"
+    && chatConfirmation.action != null
+  ) {
+    return mutationFinalizeName;
   }
 
   if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
