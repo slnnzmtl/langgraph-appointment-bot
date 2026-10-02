@@ -1805,6 +1805,66 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
     });
   });
+
+  it("keeps reschedule intent when the patient answers the visit list with a date", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      bookingContext: {
+        meetings: [
+          {
+            id: "m-1",
+            name: "Консультація - Ada",
+            dateStart: "2026-08-21 11:00:00",
+            dateEnd: "2026-08-21 11:30:00",
+          },
+        ],
+        dateFrom: "2026-08-11",
+      },
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "FINISH",
+          agentName: "supervisor",
+          status: "ok",
+          pendingAction: "reschedule",
+        },
+        messages: [
+          new AIMessage("Заплановані візити: консультація — 21 серпня о 11:00"),
+          new HumanMessage("23 жовтня"),
+        ],
+        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+        bookingContext: {
+          meetings: [
+            {
+              id: "m-1",
+              name: "Консультація - Ada",
+              dateStart: "2026-08-21 11:00:00",
+              dateEnd: "2026-08-21 11:30:00",
+            },
+          ],
+          dateFrom: "2026-08-11",
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update).toMatchObject({
+      next: "booking",
+      availabilityContext: null,
+      availabilityCursor: null,
+    });
+    // The handoff is intentionally preserved in the state reducer so
+    // booking__prepare can consume pendingAction before clearing it.
+    expect(update.lastHandoff).toBeUndefined();
+  });
 });
 
 describe("createClinicSupervisorNode code-owned FINISH menus", () => {
@@ -1926,6 +1986,14 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       replyText: visitAsk,
       replyButtons: [...VISIT_CHANGE_MENU],
     });
+  });
+
+  it("marks a single-visit status response for a direct date/time reschedule", async () => {
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+
+    expect(update.lastHandoff?.pendingAction).toBe("reschedule");
   });
 
   it("replaces a stale «Мій запис» list with prefetch labels", async () => {

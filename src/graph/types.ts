@@ -30,6 +30,8 @@ export type ClinicHandoff = {
   replyButtons?: string[];
   /** When true, the next patient message must go through the supervisor. */
   yieldToSupervisor?: boolean;
+  /** A code-owned action that the next free-text reply should continue. */
+  pendingAction?: "reschedule";
 };
 
 /**

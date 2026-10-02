@@ -1836,7 +1836,20 @@ export const createAgentPrepareNode = (agentId: string) =>
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
       const migratedState = migrated ? { ...state, bookingDraft: migrated } : state;
+      const pendingRescheduleRequested =
+        migratedState.lastHandoff?.pendingAction === "reschedule"
+        && migratedState.bookingContext?.meetings.length === 1
+        && resolveBookingScheduleRequest(
+          lastPatientText(migratedState),
+          kyivToday(),
+          {
+            availabilityContext: migratedState.availabilityContext,
+            availabilityCursor: migratedState.availabilityCursor,
+            selectedDate: migratedState.bookingDraft?.selectedDate,
+          },
+        )?.kind === "exact";
       const rescheduleRequested = isDirectRescheduleIntent(migratedState)
+        || pendingRescheduleRequested
         || migratedState.bookingDraft?.mode === "reschedule";
       const rescheduleTarget = rescheduleRequested
         ? rescheduleTargetFromBookingContext(migratedState)

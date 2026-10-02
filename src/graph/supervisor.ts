@@ -246,6 +246,21 @@ const isDayOrTimeReply = (human: string): boolean =>
   || /\b\d{1,2}:\d{2}\b/.test(human)
   || isOtherDateReply(human);
 
+/**
+ * «Мій запис» is a read-only message, but its visit-change menu also starts a
+ * short-lived action context. Preserve that context when the patient answers
+ * with a date/time instead of tapping «Перенести» first.
+ */
+const isPendingRescheduleSelection = (
+  state: ClinicState,
+  human: string,
+  bookingContext: ClinicState["bookingContext"],
+): boolean =>
+  state.lastHandoff?.agentId === FINISH_ROUTE
+  && state.lastHandoff.pendingAction === "reschedule"
+  && (bookingContext?.meetings.length ?? 0) === 1
+  && isDayOrTimeReply(human);
+
 const isVisitChangeIntent = (human: string): boolean =>
   VISIT_CHANGE_INTENT.test(human)
   || VISIT_CHANGE_ROUTE_LABELS.has(human.trim());
@@ -525,6 +540,17 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       };
     }
 
+    if (isPendingRescheduleSelection(state, lastHumanText, bookingContext)) {
+      // Keep the handoff metadata until booking__prepare consumes it. Clearing
+      // it here would make the date look like a new create-booking request.
+      return {
+        next: BOOKING_AGENT_ID,
+        ...prefetchUpdate,
+        availabilityContext: null,
+        availabilityCursor: null,
+      };
+    }
+
     if (visitStatusIntent) {
       const replyText = attachPrefetchVisits("", bookingContext, "visit_ask");
       const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
@@ -545,6 +571,9 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           status: "ok",
           replyText,
           replyButtons,
+          ...(bookingContext?.meetings.length === 1
+            ? { pendingAction: "reschedule" as const }
+            : {}),
         },
         messages: [new AIMessage(replyText)],
       };

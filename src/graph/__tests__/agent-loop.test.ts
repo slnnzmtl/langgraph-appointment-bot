@@ -508,6 +508,42 @@ describe("createAgentPrepareNode", () => {
     expect(update.bookingDraft?.selectedSlot).toBeNull();
     expect(update.bookingDraft?.phase).toBe("time");
   });
+
+  it("starts reschedule mode for a date answered from the visit-status handoff", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [
+          new AIMessage("Заплановані візити: консультація — 16 жовтня о 13:00"),
+          new HumanMessage("23 жовтня"),
+        ],
+        lastHandoff: {
+          agentId: "FINISH",
+          agentName: "supervisor",
+          status: "ok",
+          pendingAction: "reschedule",
+        },
+        bookingContext: {
+          meetings: [
+            {
+              id: "meeting-1",
+              name: "Консультація",
+              dateStart: "2026-10-16 13:00:00",
+              dateEnd: "2026-10-16 13:30:00",
+            },
+          ],
+          dateFrom: "2026-10-02",
+        },
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      phase: "time",
+      selectedDate: "2026-10-23",
+      rescheduleTarget: { id: "meeting-1" },
+    });
+  });
 });
 
 describe("crmWriteDirtiesPrefetch", () => {
