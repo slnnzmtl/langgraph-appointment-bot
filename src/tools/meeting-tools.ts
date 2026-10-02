@@ -109,7 +109,7 @@ const finishMeetingMutation = (
     },
     {
       skip: skipHitlPending,
-      requireEntityId: toolName !== "cancel_meeting",
+      requireEntityId: true,
     },
   );
 

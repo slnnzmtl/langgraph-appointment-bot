@@ -150,6 +150,7 @@ const MEETING_MUTATION_TOOLS = new Set([
 const CREATE_CONSULTATION_REQUIRED_ERROR = "Consultation agreement required";
 const SLOT_SELECTION_REQUIRED_ERROR = "Availability slot selection required";
 const SELECTED_SLOT_NOT_AVAILABLE_ERROR = "Selected slot is no longer available";
+const RESCHEDULE_STATE_REQUIRED_ERROR = "Reschedule state required";
 
 const CONSULTATION_AGREEMENT_TOOLS = new Set(["create_meeting", "reschedule_meeting"]);
 
@@ -183,6 +184,7 @@ const BLOCKED_MEETING_ERRORS = new Set([
   CREATE_CONSULTATION_REQUIRED_ERROR,
   SLOT_SELECTION_REQUIRED_ERROR,
   SELECTED_SLOT_NOT_AVAILABLE_ERROR,
+  RESCHEDULE_STATE_REQUIRED_ERROR,
 ]);
 
 export type MeetingMutationOutcome =
@@ -222,7 +224,7 @@ export const classifyMeetingMutationToolMessage = (
     : typeof record.meetingId === "string" && record.meetingId.length > 0
       ? record.meetingId
       : null;
-  if (entityId != null || (name === "cancel_meeting" && record.success === true)) {
+  if (entityId != null) {
     return "committed";
   }
   return "failed";
@@ -672,6 +674,18 @@ const normalizeMeetingMutationArgs = (
   if (call.name === "create_meeting" && typeof ownedContactId === "string") {
     args.contactId = ownedContactId;
   }
+  if (call.name === "reschedule_meeting") {
+    const target = state.bookingDraft?.mode === "reschedule"
+      ? state.bookingDraft.rescheduleTarget
+      : null;
+    if (target && selectedSlot) {
+      args.meetingId = target.id;
+      args.dateStart = selectedSlot.dateStart;
+      args.dateEnd = selectedSlot.dateEnd;
+      args.confirmMessage = `Підтвердити перенесення візиту на ${selectedSlot.label}?`;
+      if (target.name) args.name = target.name;
+    }
+  }
   if (selectedSlot) {
     args.dateStart = selectedSlot.dateStart;
     args.dateEnd = selectedSlot.dateEnd;
@@ -694,9 +708,9 @@ const commandActionForTool = (name: string): "create" | "reschedule" | "replace"
   return null;
 };
 
-const DIRECT_CANCEL_INTENT = /^(?:скасувати|скасування|cancel|cancel appointment|cancel visit)$/iu;
+const DIRECT_CANCEL_INTENT = /(?:скасу\w*|cancel(?:\s+(?:my\s+)?(?:appointment|visit))?)/iu;
 
-const DIRECT_RESCHEDULE_INTENT = /^(?:перенести|перенесення|reschedule|reschedule appointment|reschedule visit|move appointment|move visit)$/iu;
+const DIRECT_RESCHEDULE_INTENT = /(?:перенес\w*|reschedul\w*|move\s+(?:my\s+)?(?:appointment|visit))/iu;
 
 const isDirectCancelIntent = (state: ClinicState): boolean =>
   DIRECT_CANCEL_INTENT.test(lastPatientText(state).trim());
@@ -717,10 +731,11 @@ const rescheduleAvailabilityArgsFromBookingContext = (
   state: ClinicState,
   args: Record<string, unknown> = {},
 ): Record<string, unknown> | null => {
-  if (!isDirectRescheduleIntent(state) || state.bookingContext?.meetings.length !== 1) {
-    return null;
-  }
-  const meeting = state.bookingContext.meetings[0];
+  const meeting = state.bookingDraft?.mode === "reschedule"
+    ? state.bookingDraft.rescheduleTarget
+    : isDirectRescheduleIntent(state) && state.bookingContext?.meetings.length === 1
+      ? state.bookingContext.meetings[0]
+      : null;
   if (!meeting) {
     return null;
   }
@@ -731,6 +746,35 @@ const rescheduleAvailabilityArgsFromBookingContext = (
     excludeMeetingIds: [meeting.id],
     ...(durationMinutes != null ? { durationMinutes } : {}),
   };
+};
+
+const rescheduleTargetFromBookingContext = (
+  state: ClinicState,
+): ReplacementMeeting | null => {
+  const existing = state.bookingDraft?.mode === "reschedule"
+    ? state.bookingDraft.rescheduleTarget
+    : null;
+  if (existing) return existing;
+  const meetings = state.bookingContext?.meetings ?? [];
+  if (meetings.length === 1) return meetings[0] ?? null;
+  if (meetings.length === 0) return null;
+
+  const human = lastPatientText(state).trim().toLocaleLowerCase();
+  const ordinal = /^(\d+)$/.exec(human);
+  if (ordinal && Number(ordinal[1]) <= meetings.length) {
+    return meetings[Number(ordinal[1]) - 1] ?? null;
+  }
+  const requestedDate = resolveAvailabilityRequest(human, kyivToday());
+  const matches = meetings.filter((meeting) => {
+    const name = meeting.name.toLocaleLowerCase();
+    const day = meeting.dateStart.slice(0, 10);
+    const dayNumber = meeting.dateStart.slice(8, 10).replace(/^0/, "");
+    return human.includes(name)
+      || human.includes(day)
+      || (requestedDate?.kind === "exact" && requestedDate.date === day)
+      || human === dayNumber;
+  });
+  return matches.length === 1 ? matches[0]! : null;
 };
 
 /** Build a cancellation command from the supervisor's authoritative meeting list. */
@@ -814,12 +858,39 @@ const createCommandFromBookingDraft = (
   return { action: "create", payload };
 };
 
+/** Build a reschedule command exclusively from the CRM target and selected slot. */
+const rescheduleCommandFromBookingDraft = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  const draft = state.bookingDraft;
+  const target = draft?.mode === "reschedule" ? draft.rescheduleTarget : null;
+  const slot = draft?.selectedSlot;
+  if (!target || !slot) return null;
+  return {
+    action: "reschedule",
+    payload: {
+      meetingId: target.id,
+      dateStart: slot.dateStart,
+      dateEnd: slot.dateEnd,
+      confirmMessage: `Підтвердити перенесення візиту на ${slot.label}?`,
+      ...(target.name ? { name: target.name } : {}),
+    },
+  };
+};
+
 /** Fresh tool evidence that the canonical selected slot is still bookable. */
 const freshAvailabilityValidatesSelectedSlot = (state: ClinicState): boolean => {
   const draft = state.bookingDraft;
   const slot = draft?.selectedSlot;
   const availability = captureAvailabilityFromMessages(state.agentMessages ?? []);
   if (!draft || !slot || !availability) {
+    return false;
+  }
+  if (
+    draft.mode === "reschedule"
+    && (!draft.rescheduleTarget
+      || !availability.excludeMeetingIds?.includes(draft.rescheduleTarget.id))
+  ) {
     return false;
   }
   return availability.days
@@ -830,6 +901,25 @@ const freshAvailabilityValidatesSelectedSlot = (state: ClinicState): boolean => 
 };
 
 /** Runtime-owned exact-day lookup when DATE has no trusted snapshot day yet. */
+const nearestRescheduleAvailabilityRequest = (
+  state: ClinicState,
+): AvailabilitySlotsToolArgs | null => {
+  const draft = state.bookingDraft;
+  if (
+    draft?.mode !== "reschedule"
+    || draft.rescheduleTarget == null
+    || draft.selectedDate != null
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return null;
+  }
+  return {
+    direction: "nearest",
+    excludeMeetingIds: [draft.rescheduleTarget.id],
+    forceRefresh: true,
+  };
+};
+
 const availabilityRequestFromBookingDraft = (
   state: ClinicState,
 ): AvailabilitySlotsToolArgs | null => {
@@ -884,6 +974,17 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
   if (availabilityRequestFromBookingDraft(state) != null) {
     return true;
   }
+  if (nearestRescheduleAvailabilityRequest(state) != null) {
+    return true;
+  }
+  const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
+  if (rescheduleCommand != null) {
+    return !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      || (
+        freshAvailabilityValidatesSelectedSlot(state)
+        && !toolRanThisTurn(state.agentMessages ?? [], "reschedule_meeting")
+      );
+  }
   if (createCommandFromBookingDraft(state) == null) {
     return false;
   }
@@ -900,6 +1001,12 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
 const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
   if (state.bookingDraft?.replacement?.status === "create_pending") {
     return true;
+  }
+  const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
+  if (rescheduleCommand != null) {
+    return toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      && freshAvailabilityValidatesSelectedSlot(state)
+      && !toolRanThisTurn(state.agentMessages ?? [], "reschedule_meeting");
   }
   return toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
     && createCommandFromBookingDraft(state) != null
@@ -1392,6 +1499,16 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return reduceBookingDraft(draft, { type: "slot_selected", slot });
   };
 
+  // Rescheduling has no create-booking note/details ladder. Once the slot is
+  // selected, leave all later free text to the normal booking agent flow.
+  if (state.bookingDraft?.mode === "reschedule") {
+    if (matchedSlot && !sameSlot) {
+      trackEvent("booking_note_step", { phase: "reschedule_slot" });
+      return { bookingDraft: reduceSlotSelection(matchedSlot) };
+    }
+    return {};
+  }
+
   // A displayed note prompt and its typed reply must be one runtime-owned
   // transition. Accept the skip/value even if an older checkpoint still says
   // `unasked`.
@@ -1773,10 +1890,34 @@ export const createAgentPrepareNode = (agentId: string) =>
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
       const migratedState = migrated ? { ...state, bookingDraft: migrated } : state;
-      let bookingDraft = bookingDraftForTurn(migratedState) ?? migratedState.bookingDraft ?? undefined;
-      const workingState: ClinicState = bookingDraft
-        ? { ...migratedState, bookingDraft }
+      const rescheduleRequested = isDirectRescheduleIntent(migratedState)
+        || migratedState.bookingDraft?.mode === "reschedule";
+      const rescheduleTarget = rescheduleRequested
+        ? rescheduleTargetFromBookingContext(migratedState)
+        : null;
+      const startedReschedule = rescheduleRequested
+        && migratedState.bookingDraft?.mode !== "reschedule"
+        ? reduceBookingDraft(migratedState.bookingDraft, {
+            type: "reschedule_started",
+            meeting: rescheduleTarget,
+          })
+        : migratedState.bookingDraft?.mode === "reschedule"
+          && migratedState.bookingDraft.rescheduleTarget == null
+          && rescheduleTarget != null
+          ? reduceBookingDraft(migratedState.bookingDraft, {
+              type: "reschedule_started",
+              meeting: rescheduleTarget,
+            })
+          : undefined;
+      const rescheduleState = startedReschedule
+        ? { ...migratedState, bookingDraft: startedReschedule }
         : migratedState;
+      let bookingDraft = rescheduleState.bookingDraft?.mode === "reschedule"
+        ? rescheduleState.bookingDraft
+        : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
+      const workingState: ClinicState = bookingDraft
+        ? { ...rescheduleState, bookingDraft }
+        : rescheduleState;
       const noteUpdate = advanceBookingNoteStep(workingState);
       // Legacy projections are returned only for old checkpoints that have no
       // draft. New flows receive a single aggregate update.
@@ -1897,6 +2038,21 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     ) {
       return {};
     }
+    const nearestRescheduleRequest = nearestRescheduleAvailabilityRequest(state);
+    if (nearestRescheduleRequest) {
+      const availabilityCall = {
+        id: `booking_reschedule_nearest_${state.bookingDraft?.version ?? 0}`,
+        name: "present_availability_slots",
+        args: nearestRescheduleRequest,
+        type: "tool_call" as const,
+      };
+      const availabilityAi = new AIMessage({ content: "", tool_calls: [availabilityCall] });
+      return {
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
+        ),
+      };
+    }
     const availabilityRequest = availabilityRequestFromBookingDraft(state);
     if (availabilityRequest) {
       const availabilityCall = {
@@ -1909,6 +2065,55 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
       return {
         agentMessages: new Overwrite(
           appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
+        ),
+      };
+    }
+    const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
+    if (
+      rescheduleCommand
+      && !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+    ) {
+      const revalidationCall = {
+        id: `booking_reschedule_revalidate_${state.bookingDraft?.version ?? 0}`,
+        name: "present_availability_slots",
+        args: {
+          direction: "exact",
+          date: state.bookingDraft?.selectedDate,
+          excludeMeetingIds: [state.bookingDraft!.rescheduleTarget!.id],
+          forceRefresh: true,
+        },
+        type: "tool_call" as const,
+      };
+      const revalidationAi = new AIMessage({ content: "", tool_calls: [revalidationCall] });
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: rescheduleCommand,
+        }),
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], revalidationAi),
+        ),
+      };
+    }
+    if (
+      rescheduleCommand
+      && freshAvailabilityValidatesSelectedSlot(state)
+      && !toolRanThisTurn(state.agentMessages ?? [], "reschedule_meeting")
+    ) {
+      const syntheticCall = {
+        id: `booking_reschedule_${state.bookingDraft?.version ?? 0}`,
+        name: "reschedule_meeting",
+        args: rescheduleCommand.payload,
+        type: "tool_call" as const,
+      };
+      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: rescheduleCommand,
+        }),
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], syntheticAi),
         ),
       };
     }
@@ -2308,6 +2513,36 @@ export const createAgentToolsNode = (
 
         if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
           call.args = normalizeMeetingMutationArgs(state, call);
+          if (call.name === "reschedule_meeting") {
+            const draft = state.bookingDraft;
+            const normalizedArgs = call.args as { dateStart?: unknown; dateEnd?: unknown };
+            const datesAreValid =
+              KYIV_LOCAL_ISO_SCHEMA.safeParse(normalizedArgs.dateStart).success
+              && KYIV_LOCAL_ISO_SCHEMA.safeParse(normalizedArgs.dateEnd).success;
+            if (
+              datesAreValid
+              && (
+                draft?.mode !== "reschedule"
+                || draft.rescheduleTarget == null
+                || draft.selectedSlot == null
+                || draft.pendingCommand?.action !== "reschedule"
+                || !freshAvailabilityValidatesSelectedSlot(state)
+              )
+            ) {
+              trackToolError(call.name, RESCHEDULE_STATE_REQUIRED_ERROR);
+              synthetic.push(
+                new ToolMessage({
+                  content: JSON.stringify({
+                    error: RESCHEDULE_STATE_REQUIRED_ERROR,
+                    hint: "Select a slot from fresh availability before rescheduling.",
+                  }),
+                  tool_call_id: call.id ?? "",
+                  name: call.name,
+                }),
+              );
+              continue;
+            }
+          }
           const args = call.args as {
             dateStart?: string;
             dateEnd?: string;

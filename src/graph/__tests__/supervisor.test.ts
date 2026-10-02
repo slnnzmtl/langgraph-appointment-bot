@@ -27,7 +27,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createClinicSupervisorNode, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, shouldRouteProcedureBrowseToFaq, shouldStayInFaqCatalog, stickyContinueAgentId } =
+const { createClinicSupervisorNode, humanAsksAboutVisits, isExplicitVisitAction, isPrefetchExpired, PREFETCH_TTL_MS, shouldContinueInBooking, shouldContinueInFaq, shouldRouteProcedureBrowseToFaq, shouldStayInFaqCatalog, stickyContinueAgentId } =
   await import("../supervisor.js");
 
 const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
@@ -1808,6 +1808,26 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
 });
 
 describe("createClinicSupervisorNode code-owned FINISH menus", () => {
+  it.each([
+    "Перенеси мій запис на 16 число",
+    "Скасуй мій запис",
+    "Please reschedule my visit",
+    "Book my visit for Monday",
+  ])("does not classify explicit visit action as read-only status: %s", (text) => {
+    expect(isExplicitVisitAction(text)).toBe(true);
+    expect(humanAsksAboutVisits(text)).toBe(false);
+  });
+
+  it.each([
+    "Мій запис",
+    "Я вже записалася — перевірте",
+    "Do I have an appointment?",
+    "What visits do I have?",
+  ])("keeps read-only appointment status owned by the supervisor: %s", (text) => {
+    expect(isExplicitVisitAction(text)).toBe(false);
+    expect(humanAsksAboutVisits(text)).toBe(true);
+  });
+
   const invoke = vi.fn();
   const bindRoutingTools = vi.fn(() => ({ invoke }));
   const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;

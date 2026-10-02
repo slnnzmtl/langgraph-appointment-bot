@@ -74,6 +74,8 @@ export type BookingDraft = {
   note: BookingNote;
   contactId: string | null;
   pendingCommand: PendingBookingCommand | null;
+  /** CRM-owned meeting selected as the target of a direct reschedule. */
+  rescheduleTarget?: ReplacementMeeting | null;
   // Optional for checkpoints created before cancel-and-rebook was introduced.
   replacement?: ReplacementState | null;
 };
@@ -87,6 +89,7 @@ export type BookingEvent =
   | { type: "contact_resolved"; contactId: string }
   | { type: "command_prepared"; command: PendingBookingCommand }
   | { type: "command_cleared" }
+  | { type: "reschedule_started"; meeting: ReplacementMeeting | null }
   | { type: "existing_booking_detected"; meeting: ReplacementMeeting }
   | { type: "cancel_existing_requested"; command: PendingBookingCommand }
   | { type: "cancel_existing_completed" }
@@ -128,6 +131,12 @@ const draftHasValidServiceAcceptance = (draft: BookingDraft | null | undefined):
 export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
   if (draft.phase === "confirming" && draft.pendingCommand != null) {
     return "confirming";
+  }
+  if (draft.mode === "reschedule") {
+    if (draft.rescheduleTarget == null) return "service";
+    if (draft.selectedDate == null) return "date";
+    if (draft.selectedSlot == null) return "time";
+    return "ready";
   }
   if (draft.serviceAcceptance == null || draft.serviceAcceptance.status !== "accepted") {
     return "service";
@@ -226,6 +235,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   note: { status: "unasked" },
   contactId: null,
   pendingCommand: null,
+  rescheduleTarget: null,
   replacement: null,
 });
 
@@ -241,6 +251,7 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   selectedSlot: null,
   note: { status: "unasked" },
   pendingCommand: null,
+  rescheduleTarget: draft.rescheduleTarget ?? null,
   replacement: null,
 });
 
@@ -316,7 +327,10 @@ export const reduceBookingDraft = (
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
     }
     case "date_selected": {
-      if (draft.serviceAcceptance?.status !== "accepted") {
+      if (
+        (draft.mode !== "reschedule" && draft.serviceAcceptance?.status !== "accepted")
+        || (draft.mode === "reschedule" && draft.rescheduleTarget == null)
+      ) {
         return draft;
       }
       const next = {
@@ -329,7 +343,8 @@ export const reduceBookingDraft = (
     }
     case "slot_selected": {
       if (
-        draft.serviceAcceptance?.status !== "accepted"
+        (draft.mode !== "reschedule" && draft.serviceAcceptance?.status !== "accepted")
+        || (draft.mode === "reschedule" && draft.rescheduleTarget == null)
         || draft.selectedDate == null
         || draft.selectedDate !== slotDate(event.slot)
       ) {
@@ -339,13 +354,13 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
-        note: { status: "awaiting" },
+        note: draft.mode === "reschedule" ? draft.note : { status: "awaiting" },
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
     }
     case "note_status": {
-      if (draft.selectedSlot == null) {
+      if (draft.mode === "reschedule" || draft.selectedSlot == null) {
         return draft;
       }
       const next = {
@@ -360,6 +375,19 @@ export const reduceBookingDraft = (
     }
     case "contact_resolved":
       return withVersion(draft, { ...draft, contactId: event.contactId });
+    case "reschedule_started":
+      return withVersion(draft, {
+        ...draft,
+        mode: "reschedule",
+        phase: event.meeting == null ? "service" : "date",
+        serviceAcceptance: null,
+        selectedDate: null,
+        selectedSlot: null,
+        note: { status: "unasked" },
+        pendingCommand: null,
+        rescheduleTarget: event.meeting,
+        replacement: null,
+      });
     case "command_prepared": {
       const requiresBookingAggregate = event.command.action === "create";
       if (
@@ -369,6 +397,19 @@ export const reduceBookingDraft = (
           || draft.selectedSlot == null
           || !hasCompletedNote(draft)
           || draft.contactId == null
+        )
+      ) {
+        return draft;
+      }
+      if (
+        event.command.action === "reschedule"
+        && (
+          draft.mode !== "reschedule"
+          || draft.rescheduleTarget == null
+          || draft.selectedSlot == null
+          || event.command.payload.meetingId !== draft.rescheduleTarget.id
+          || event.command.payload.dateStart !== draft.selectedSlot.dateStart
+          || event.command.payload.dateEnd !== draft.selectedSlot.dateEnd
         )
       ) {
         return draft;

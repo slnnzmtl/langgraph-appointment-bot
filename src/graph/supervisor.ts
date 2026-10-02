@@ -92,10 +92,23 @@ const isGreetingOrMainMenuLine = (line: string): boolean => {
   );
 };
 
-/** Patient asks what is booked — not greetings/thanks that never mention visits. */
-export const humanAsksAboutVisits = (line: string): boolean =>
-  /(?:^|\s)(?:мій\s+запис|my\s+visit|запланован[\p{L}]*\s+візит|мо[їи]\s+візит|у\s+мене\s+(?:вже\s+|уже\s+)?є\s+запис|(?:я\s+)?(?:вже|уже)\s+запис[\p{L}]*|запис\s+на\s+\d|які?\s+(?:в\s+мене\s+)?візит|already\s+booked|booked\s+(?:an?\s+)?appointment|do\s+i\s+have\s+(?:an?\s+)?(?:appointment|visit)|(?:my|upcoming)\s+(?:visit|appointment)s?)(?:\s|$|[?!.,])/iu
-    .test(line.trim());
+/** Explicit visit changes/bookings must outrank read-only appointment status. */
+const VISIT_CHANGE_INTENT = /(?:скасу\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*|move\s+(?:my\s+)?(?:appointment|visit))/iu;
+const VISIT_BOOKING_INTENT = /(?:записат\w*|хочу\s+(?:запис|book)|запис\s+на\s+\d|book\s+(?:my\s+)?(?:appointment|visit)|schedule\s+(?:my\s+)?(?:appointment|visit))/iu;
+
+const VISIT_ACTION_CONTEXT = /(?:мій\s+запис|my\s+visit|візит|visit|appointment|запис\s+на\s+\d|\b\d{1,2}(?:[./-]\d{1,2})?\b)/iu;
+
+export const isExplicitVisitAction = (line: string): boolean =>
+  VISIT_ACTION_CONTEXT.test(line)
+  && (VISIT_CHANGE_INTENT.test(line) || VISIT_BOOKING_INTENT.test(line));
+
+/** Patient asks what is booked — read-only status, never an action request. */
+export const humanAsksAboutVisits = (line: string): boolean => {
+  const trimmed = line.trim();
+  if (isExplicitVisitAction(trimmed)) return false;
+  return /(?:^|\s)(?:мій\s+запис|my\s+visit|запланован[\p{L}]*\s+візит|мо[їи]\s+візит|у\s+мене\s+(?:вже\s+|уже\s+)?є\s+запис|(?:я\s+)?(?:вже|уже)\s+запис[\p{L}]*|запис\s+на\s+\d|які?\s+(?:в\s+мене\s+)?візит|already\s+booked|booked\s+(?:an?\s+)?appointment|do\s+i\s+have\s+(?:an?\s+)?(?:appointment|visit)|what\s+(?:visits?|appointments?)\s+(?:do\s+i\s+have|have\s+i)|(?:my|upcoming)\s+(?:visit|appointment)s?)(?:\s|$|[?!.,])/iu
+    .test(trimmed);
+};
 
 export type CreateClinicSupervisorNodeOptions = {
   agents: ClinicAgentDefinition[];
@@ -228,9 +241,6 @@ const isOtherDateReply = (human: string): boolean =>
   OTHER_DATE_PATTERN.test(human) || RUSSIAN_OTHER_DATE_PATTERN.test(human.trim());
 
 /** Cancel / reschedule paraphrases (not only exact chip labels). */
-const VISIT_CHANGE_INTENT =
-  /(?:скасува\w*|перенес\w*|cancel(?:l?ing|led|lation)?|reschedul\w*)/i;
-
 const isDayOrTimeReply = (human: string): boolean =>
   resolveAvailabilityRequest(human, kyivToday()) != null
   || /\b\d{1,2}:\d{2}\b/.test(human)
@@ -503,6 +513,16 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           };
         }
       }
+    }
+
+    if (isExplicitVisitAction(lastHumanText)) {
+      return {
+        next: BOOKING_AGENT_ID,
+        ...prefetchUpdate,
+        availabilityContext: null,
+        availabilityCursor: null,
+        lastHandoff: null,
+      };
     }
 
     if (visitStatusIntent) {

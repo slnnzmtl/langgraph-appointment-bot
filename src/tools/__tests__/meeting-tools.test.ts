@@ -743,6 +743,22 @@ describe("cancel_meeting HITL interrupt", () => {
       });
     });
   });
+
+  it.each([
+    "Successfully updated meeting",
+    "Successfully updated meeting with ID: other-meeting",
+    "",
+    JSON.stringify({ success: true }),
+  ])("fails closed for uncertain cancellation result %s", async (result) => {
+    await withTg(async () => {
+      updateMeetingResult = result;
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: `hitl-cancel-uncertain-${String(result)}` } };
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(new Command({ resume: { confirmed: true } }), config);
+      expect(second.result).toBe(result);
+    });
+  });
 });
 
 describe("reschedule_meeting HITL interrupt", () => {

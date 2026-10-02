@@ -58,6 +58,7 @@ import {
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
 import type { ClinicState } from "../state.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
 import type { BookingDraft } from "../booking-draft.js";
 import type { ClinicAgentDefinition } from "../types.js";
 
@@ -651,6 +652,15 @@ describe("availability context helpers", () => {
           content: JSON.stringify({ ok: true }),
           tool_call_id: "1",
           name: "create_meeting",
+        }),
+      ),
+    ).toBe("failed");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ success: true }),
+          tool_call_id: "1",
+          name: "cancel_meeting",
         }),
       ),
     ).toBe("failed");
@@ -3220,6 +3230,63 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     stepMinutes: 30,
     startIntervalMinutes: 30,
   };
+
+  it("starts a direct reschedule with a fresh nearest search", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const seeded = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Перенести")],
+        bookingContext: listedMeetings,
+      }),
+    );
+    expect(seeded.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      rescheduleTarget: { id: "m-1" },
+      selectedDate: null,
+      selectedSlot: null,
+    });
+
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      clinicState({
+        messages: [new HumanMessage("Перенести")],
+        bookingContext: listedMeetings,
+        bookingDraft: seeded.bookingDraft,
+        agentMessages: (seeded.agentMessages as Overwrite<AIMessage[]>).value,
+      }),
+    );
+    const call = ((update.agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
+      .tool_calls?.[0];
+    expect(call).toMatchObject({
+      name: "present_availability_slots",
+      args: {
+        direction: "nearest",
+        excludeMeetingIds: ["m-1"],
+        forceRefresh: true,
+      },
+    });
+  });
+
+  it("records a reschedule time without entering the note step", () => {
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "reschedule_started",
+        meeting: { id: "m-1" },
+      }),
+      { type: "date_selected", date: "2026-09-10" },
+    );
+    const update = advanceBookingNoteStep(
+      clinicState({
+        messages: [new HumanMessage("14:00")],
+        bookingDraft: draft,
+        availabilityContext: snapshot,
+      }),
+    );
+
+    expect(update.bookingDraft?.selectedSlot?.dateStart).toBe("2026-09-10T14:00:00");
+    expect(update.bookingDraft?.phase).toBe("ready");
+    expect(update.bookingDraft?.note.status).toBe("unasked");
+  });
 
   it("keeps consultation consent and the selected slot through note skip", async () => {
     const finalize = createAgentFinalizeNode(agent);

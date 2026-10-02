@@ -103,6 +103,48 @@ describe("BookingDraft reducer", () => {
     expect(withDate.phase).toBe("time");
   });
 
+  it("supports direct reschedule date/time without create-booking prerequisites", () => {
+    const target = { id: "meeting-1", name: "Консультація" };
+    const started = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: target,
+    });
+    const dated = reduceBookingDraft(started, { type: "date_selected", date: "2026-10-17" });
+    const slotted = reduceBookingDraft(dated, { type: "slot_selected", slot: selectedSlot });
+    const prepared = reduceBookingDraft(slotted, {
+      type: "command_prepared",
+      command: {
+        action: "reschedule",
+        payload: {
+          meetingId: "meeting-1",
+          dateStart: selectedSlot.dateStart,
+          dateEnd: selectedSlot.dateEnd,
+        },
+      },
+    });
+
+    expect(dated.phase).toBe("time");
+    expect(slotted.phase).toBe("ready");
+    expect(slotted.note.status).toBe("unasked");
+    expect(prepared.phase).toBe("confirming");
+    expect(prepared.pendingCommand?.action).toBe("reschedule");
+  });
+
+  it("keeps the reschedule target when its selected slot is invalidated", () => {
+    const started = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: { id: "meeting-1" },
+    });
+    const dated = reduceBookingDraft(started, { type: "date_selected", date: "2026-10-17" });
+    const slotted = reduceBookingDraft(dated, { type: "slot_selected", slot: selectedSlot });
+    const invalidated = reduceBookingDraft(slotted, { type: "slot_invalidated" });
+
+    expect(invalidated.mode).toBe("reschedule");
+    expect(invalidated.rescheduleTarget?.id).toBe("meeting-1");
+    expect(invalidated.selectedSlot).toBeNull();
+    expect(invalidated.phase).toBe("date");
+  });
+
   it("preserves downstream facts when the same service is reaffirmed", () => {
     const draft = reduceBookingDraft(
       reduceBookingDraft(

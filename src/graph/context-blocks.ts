@@ -179,7 +179,11 @@ export const formatBookingDraftContext = (
     return "";
   }
   return block(CONTEXT_TAGS.bookingDraft, {
+    mode: draft.mode,
     phase: draft.phase,
+    rescheduleTarget: draft.rescheduleTarget
+      ? { id: draft.rescheduleTarget.id, name: draft.rescheduleTarget.name }
+      : null,
     service: draft.serviceAcceptance
       ? {
           status: draft.serviceAcceptance.status,
