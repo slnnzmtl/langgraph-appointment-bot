@@ -2,7 +2,10 @@ import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langc
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
 import { setTrackEventForTests, type Tier1EventName } from "../../analytics/track.js";
-import { clearPendingConfirmsForTests } from "../meeting-confirm.js";
+import {
+  clearPendingConfirmForRuntime,
+  clearPendingConfirmsForTests,
+} from "../meeting-confirm.js";
 import { createMeetingTools } from "../meeting-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
 
@@ -416,6 +419,45 @@ describe("create_meeting HITL interrupt", () => {
 
       expect(calls.filter((call) => call.name === "create_meeting")).toHaveLength(1);
       expect(JSON.parse(String(raw))).toMatchObject({ success: true, id: "meeting-1" });
+    });
+  });
+
+  it("clearing a chat confirmation requires a fresh HITL card for identical args", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-chat-cleared" } };
+
+      await graph.invoke({ result: "" }, config);
+      await graph.invoke(
+        new Command({ resume: { userReply: "А можна інший час?" } }),
+        config,
+      );
+      clearPendingConfirmForRuntime(config);
+
+      const [createMeeting] = createMeetingTools({
+        callTool,
+        assignedUserId: "assigned-99",
+      }).filter((candidate) => candidate.name === "create_meeting");
+      const graph2 = new StateGraph(InterruptState)
+        .addNode("book", async () => {
+          const result = await createMeeting!.invoke({
+            name: "Consult",
+            dateStart: "2026-08-07T10:00:00",
+            dateEnd: "2026-08-07T10:30:00",
+            contactId: "contact-1",
+            serviceId: "svc-1",
+            confirmMessage: "Confirm this booking?",
+            confirmationGiven: true,
+          });
+          return { result: String(result) };
+        })
+        .addEdge(START, "book")
+        .addEdge("book", END)
+        .compile({ checkpointer: new MemorySaver() });
+
+      const result = await graph2.invoke({ result: "" }, config);
+      expect(result.__interrupt__).toBeDefined();
+      expect(calls.filter((call) => call.name === "create_meeting")).toHaveLength(0);
     });
   });
 

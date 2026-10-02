@@ -1,10 +1,12 @@
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { tool } from "@langchain/core/tools";
-import { interrupt } from "@langchain/langgraph";
-import { describe, expect, it, vi } from "vitest";
+import { Command, interrupt } from "@langchain/langgraph";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { clearPendingConfirmsForTests } from "../../tools/meeting-confirm.js";
+import { createMeetingTools } from "../../tools/meeting-tools.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
@@ -13,6 +15,10 @@ import {
   INTENT_SKIP_LABEL,
 } from "../../shared/clinic-constants.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+
+afterEach(() => {
+  clearPendingConfirmsForTests();
+});
 
 describe("prefetchBookingContext", () => {
   it("chains contact lookup, planned meetings, then latest Held", async () => {
@@ -430,4 +436,450 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
     },
   );
+
+  it("returns a non-affirmative HITL chat reply to the LLM without retrying the mutation", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Звісно, давайте підберемо інший час."));
+    const availabilityInvoke = vi.fn(async () => JSON.stringify({
+      date: "2026-10-27",
+      slots: [{
+        id: "slot-27-11",
+        label: "11:00",
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+      }],
+      stepMinutes: 30,
+      query: {
+        kind: "exact",
+        date: "2026-10-27",
+        rangeFrom: "2026-10-27",
+        rangeThrough: "2026-10-27",
+        coverageComplete: true,
+      },
+    }));
+    const writeInvoke = vi.fn(async () => JSON.stringify({ id: "meeting-1" }));
+    const createInvoke = vi.fn(async (input: Record<string, unknown>) => {
+      const decision = interrupt({ type: "confirm_booking", draft: input });
+      if (
+        typeof decision === "object"
+        && decision != null
+        && "userReply" in decision
+        && typeof decision.userReply === "string"
+      ) {
+        return JSON.stringify({
+          awaitingConfirmation: true,
+          userReply: decision.userReply,
+          draft: {
+            command: {
+              action: "create",
+              payload: { parentId: input.contactId, status: "Planned" },
+            },
+          },
+        });
+      }
+      return writeInvoke(input);
+    });
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "revalidate a selected slot",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const createMeeting = tool(createInvoke, {
+      name: "create_meeting",
+      description: "create a meeting after confirmation",
+      schema: z.object({
+        name: z.string(),
+        dateStart: z.string(),
+        dateEnd: z.string(),
+        contactId: z.string(),
+        serviceId: z.string(),
+        confirmMessage: z.string(),
+        description: z.string().optional(),
+        confirmationGiven: z.boolean().optional(),
+      }),
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability, createMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+    const config = {
+      configurable: { thread_id: "non-affirmative-hitl-reply" },
+    };
+
+    const first = await graph.invoke(
+      {
+        messages: [new HumanMessage("записатися")],
+        contactContext: {
+          contacts: [{
+            id: "c-1",
+            firstName: "Ada",
+            lastName: "Lovelace",
+            phoneNumber: "+380501112233",
+            missingFields: [],
+          }],
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-1",
+              name: "Процедура",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-27",
+          selectedSlot: {
+            dateStart: "2026-10-27T11:00:00",
+            dateEnd: "2026-10-27T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      config,
+    );
+    expect(first.__interrupt__).toHaveLength(1);
+
+    const reply = "А можна інший час?";
+    const second = await graph.invoke(
+      new Command({
+        resume: { userReply: reply },
+        update: { messages: [new HumanMessage(reply)] },
+      }) as never,
+      config,
+    );
+
+    expect(writeInvoke).not.toHaveBeenCalled();
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(second.__interrupt__).toBeUndefined();
+    expect(second.bookingDraft?.pendingCommand).toBeNull();
+    expect(second.bookingDraft?.selectedSlot).toBeNull();
+
+    const createCallsAfterReply = createInvoke.mock.calls.length;
+    const third = await graph.invoke(
+      { messages: [new HumanMessage("Дякую")] } as never,
+      config,
+    );
+
+    expect(createInvoke).toHaveBeenCalledTimes(createCallsAfterReply);
+    expect(writeInvoke).not.toHaveBeenCalled();
+    expect(third.__interrupt__).toBeUndefined();
+  });
+
+  it("requires a fresh card when a later model call reuses cleared confirmation args", async () => {
+    const availabilityInvoke = vi.fn(async () => JSON.stringify({
+      date: "2026-10-27",
+      slots: [{
+        id: "slot-27-11",
+        label: "11:00",
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+      }],
+      stepMinutes: 30,
+      query: {
+        kind: "exact",
+        date: "2026-10-27",
+        rangeFrom: "2026-10-27",
+        rangeThrough: "2026-10-27",
+        coverageComplete: true,
+      },
+    }));
+    const writeInvoke = vi.fn(async () => ({ success: true, id: "meeting-1" }));
+    const callTool = vi.fn(async (name: string, _args: Record<string, unknown>) => {
+      if (name === "get_entity") {
+        return {
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          cTelegram: "tg-1",
+        };
+      }
+      if (name === "search_entity") {
+        return { list: [] };
+      }
+      if (name === "create_meeting") {
+        return writeInvoke();
+      }
+      throw new Error(`Unexpected MCP tool: ${name}`);
+    });
+    const createMeeting = createMeetingTools({
+      callTool,
+      assignedUserId: "assigned-1",
+    }).find((candidate) => candidate.name === "create_meeting")!;
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "revalidate a selected slot",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const staleArgs = {
+      name: "Процедура - Ada Lovelace",
+      dateStart: "2026-10-27T11:00:00",
+      dateEnd: "2026-10-27T11:30:00",
+      contactId: "c-1",
+      serviceId: "svc-1",
+      confirmMessage: "Підтвердити запис?",
+      confirmationGiven: true,
+    };
+    const modelInvoke = vi.fn()
+      .mockResolvedValueOnce(new AIMessage("Звісно, підберемо інший час."))
+      .mockResolvedValueOnce(new AIMessage({
+        content: "",
+        tool_calls: [{
+          id: "stale-create",
+          name: "create_meeting",
+          args: staleArgs,
+          type: "tool_call",
+        }],
+      }));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability, createMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+    const config = { configurable: { thread_id: "cleared-chat-confirmation" } };
+    const invoke = (input: unknown) =>
+      runWithTelegramUserId("tg-1", () => graph.invoke(input as never, config));
+
+    const first = await invoke({
+      messages: [new HumanMessage("записатися")],
+      contactContext: {
+        contacts: [{
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          missingFields: [],
+        }],
+      },
+      bookingDraft: {
+        version: 1,
+        mode: "create",
+        phase: "details",
+        serviceAcceptance: {
+          status: "accepted",
+          service: {
+            id: "svc-1",
+            name: "Процедура",
+            durationMinutes: 30,
+            source: "catalog",
+          },
+        },
+        selectedDate: "2026-10-27",
+        selectedSlot: {
+          dateStart: "2026-10-27T11:00:00",
+          dateEnd: "2026-10-27T11:30:00",
+          label: "11:00",
+        },
+        requestedTime: null,
+        note: { status: "skipped" },
+        contactId: "c-1",
+        pendingCommand: null,
+        replacement: null,
+      },
+    });
+    expect(first.__interrupt__).toHaveLength(1);
+
+    const reply = "Яка адреса?";
+    const second = await invoke(new Command({
+      resume: { userReply: reply },
+      update: { messages: [new HumanMessage(reply)] },
+    }));
+    expect(second.__interrupt__).toBeUndefined();
+    expect(second.bookingDraft?.pendingCommand).toBeNull();
+
+    const third = await invoke({ messages: [new HumanMessage("Так")] });
+
+    expect(writeInvoke).not.toHaveBeenCalled();
+    expect(third.__interrupt__).toHaveLength(1);
+    expect(third.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+  });
+
+  it("ends a reschedule on typed no without another LLM or availability offer", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Модель не повинна викликатися."));
+    const updateInvoke = vi.fn(async () => ({ success: true, id: "m-1" }));
+    const callTool = vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name === "get_entity" && args.entityType === "Meeting") {
+        return {
+          id: "m-1",
+          name: "Консультація - Ada Lovelace",
+          parentType: "Contact",
+          parentId: "c-1",
+          dateStart: "2026-10-20 12:00:00",
+          dateEnd: "2026-10-20 12:30:00",
+        };
+      }
+      if (name === "get_entity" && args.entityType === "Contact") {
+        return { id: "c-1", cTelegram: "tg-reschedule" };
+      }
+      if (name === "update_meeting") {
+        return updateInvoke();
+      }
+      throw new Error(`Unexpected MCP tool: ${name}`);
+    });
+    const rescheduleMeeting = createMeetingTools({
+      callTool,
+      assignedUserId: "assigned-1",
+    }).find((candidate) => candidate.name === "reschedule_meeting");
+    if (!rescheduleMeeting) {
+      throw new Error("reschedule_meeting tool missing");
+    }
+    const availability = {
+      date: "2026-10-27",
+      slots: [{
+        id: "slot-27-11",
+        label: "11:00",
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+      }],
+      stepMinutes: 30,
+      excludeMeetingIds: ["m-1"],
+      query: {
+        kind: "exact",
+        date: "2026-10-27",
+        rangeFrom: "2026-10-27",
+        rangeThrough: "2026-10-27",
+        coverageComplete: true,
+      },
+    };
+    const presentAvailability = tool(async () => JSON.stringify(availability), {
+      name: "present_availability_slots",
+      description: "revalidate a selected slot",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        excludeMeetingIds: z.array(z.string()).optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability, rescheduleMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+    const config = { configurable: { thread_id: "typed-reschedule-no" } };
+    const invoke = (input: unknown) =>
+      runWithTelegramUserId("tg-reschedule", () => graph.invoke(input as never, config));
+
+    const first = await invoke({
+      messages: [new HumanMessage("Підтверджую")],
+      contactContext: {
+        contacts: [{
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          missingFields: [],
+        }],
+      },
+      availabilityContext: {
+        days: [{ date: "2026-10-27", slots: availability.slots }],
+        stepMinutes: 30,
+        excludeMeetingIds: ["m-1"],
+      },
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify(availability),
+        name: "present_availability_slots",
+        tool_call_id: "availability-1",
+      })],
+      bookingContext: {
+        meetings: [{
+          id: "m-1",
+          name: "Консультація - Ada Lovelace",
+          dateStart: "2026-10-20 12:00:00",
+          dateEnd: "2026-10-20 12:30:00",
+        }],
+        dateFrom: "2026-10-01",
+        latestHeld: null,
+      },
+      bookingDraft: {
+        version: 1,
+        mode: "reschedule",
+        phase: "ready",
+        serviceAcceptance: {
+          status: "accepted",
+          service: {
+            id: "svc-1",
+            name: "Консультація",
+            durationMinutes: 30,
+            source: "crm",
+          },
+        },
+        selectedDate: "2026-10-27",
+        selectedSlot: availability.slots[0],
+        requestedTime: null,
+        note: { status: "unasked" },
+        contactId: "c-1",
+        pendingCommand: null,
+        rescheduleTarget: {
+          id: "m-1",
+          name: "Консультація - Ada Lovelace",
+          dateStart: "2026-10-20 12:00:00",
+          dateEnd: "2026-10-20 12:30:00",
+        },
+        replacement: null,
+      },
+    });
+    expect(first.__interrupt__).toHaveLength(1);
+
+    const second = await invoke(new Command({ resume: { userReply: "ні" } }));
+
+    expect(modelInvoke).not.toHaveBeenCalled();
+    expect(updateInvoke).not.toHaveBeenCalled();
+    expect(second.__interrupt__).toBeUndefined();
+    expect(second.messages.at(-1)?.content).toBe("Запис не було перенесено.");
+    expect(second.bookingDraft?.pendingCommand).toBeNull();
+
+    const third = await invoke({ messages: [new HumanMessage("Дякую")] });
+    expect(updateInvoke).not.toHaveBeenCalled();
+    expect(third.__interrupt__).toBeUndefined();
+  });
 });

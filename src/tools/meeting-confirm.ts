@@ -214,6 +214,16 @@ const clearPendingConfirm = (threadId: string): void => {
   pendingConfirmStore.clear(threadId);
 };
 
+/** Invalidate a displayed confirmation after chat takes a non-affirmative path. */
+export const clearPendingConfirmForRuntime = (
+  config?: { configurable?: { thread_id?: unknown } },
+): void => {
+  const threadId = threadIdFromRuntime(config);
+  if (threadId) {
+    clearPendingConfirm(threadId);
+  }
+};
+
 /** True when this thread has a non-expired HITL card for these exact write arguments. Consumes it. */
 const consumeMatchingPendingConfirm = (threadId: string, fp: ConfirmFingerprint): boolean => {
   return pendingConfirmStore.consume(threadId, confirmFingerprintKey(fp), Date.now());

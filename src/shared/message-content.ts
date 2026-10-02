@@ -174,6 +174,23 @@ export const isBookingOfferQuestion = (text: string): boolean => {
 };
 
 const YES_REPLY = /^(так|yes|да)$/i;
+const CONFIRMATION_AFFIRMATION = [
+  /^(?:так|yes|да)(?:[\s,]+(?:будь\s+ласка|please|підтверджую|підтвердіть|confirm(?:ed)?|подтверждаю|подтвердите|звісно|sure|of\s+course|конечно))*[\s.!]*$/iu,
+  /^(?:підтверджую|підтвердіть|i\s+confirm|confirm(?:ed)?|подтверждаю|подтвердите|звісно|sure|of\s+course|конечно)[\s.!]*$/iu,
+  /^👍(?:🏻|🏼|🏽|🏾|🏿)?$/u,
+];
+const ACTION_CONFIRMATION_AFFIRMATION = {
+  create: /^(?:запишіть|записуйте|book(?:\s+(?:it|me))?|запишите)[\s.!]*$/iu,
+  reschedule: /^(?:перенесіть|переносьте|reschedule(?:\s+it)?|move\s+it|перенесите)[\s.!]*$/iu,
+  cancel: /^(?:скасуйте|скасовуйте|cancel(?:\s+it)?|отмените)[\s.!]*$/iu,
+} as const;
+const CONFIRMATION_DECLINE = [
+  /^(?:ні|no|нет)(?:[\s,]+(?:дякую|thanks|спасибо))?[\s.!]*$/iu,
+  /^(?:(?:ні|нет)[\s,]+)?(?:не\s+(?:підтверджую|записуйте|переносьте|скасовуйте|треба|потрібно)|не\s+подтверждаю)[\s.!]*$/iu,
+  /^(?:no[\s,]+)?(?:do\s+not|don['’]?t)\s+confirm[\s.!]*$/iu,
+  /^(?:do\s+not|don['’]?t)\s+(?:book|reschedule|move|cancel)(?:\s+it)?[\s.!]*$/iu,
+  /^не\s+(?:записывайте|переносите|отменяйте)[\s.!]*$/iu,
+];
 const MENTIONS_CONSULTATION = /консультац|consultation/i;
 /** Declines — avoid `\b` before Cyrillic (JS word chars are ASCII-only without `u`). */
 const CONSULTATION_NEGATION =
@@ -187,6 +204,20 @@ const OTHER_PROCEDURE_BOOK =
 
 /** Exact «Так» / Yes / Да (booking-offer keyboard). */
 export const isYesReply = (text: string): boolean => YES_REPLY.test(text.trim());
+
+/** Explicit free-text affirmation for an already displayed mutation confirmation. */
+export const isConfirmationAffirmation = (
+  text: string,
+  action?: "create" | "reschedule" | "cancel",
+): boolean => {
+  const trimmed = text.trim();
+  return CONFIRMATION_AFFIRMATION.some((pattern) => pattern.test(trimmed))
+    || (action != null && ACTION_CONFIRMATION_AFFIRMATION[action].test(trimmed));
+};
+
+/** Explicit free-text decline for an already displayed mutation confirmation. */
+export const isConfirmationDecline = (text: string): boolean =>
+  CONFIRMATION_DECLINE.some((pattern) => pattern.test(text.trim()));
 
 /**
  * True when the patient asks to book «Консультація» (not a topic question or decline).

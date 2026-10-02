@@ -86,6 +86,8 @@ import {
   extractRawMessageText,
   extractReplyButtons,
   isBookingOfferQuestion,
+  isConfirmationAffirmation,
+  isConfirmationDecline,
   isConsultationOfferQuestion,
   isYesReply,
   parseLeakedModelToolCalls,
@@ -93,6 +95,7 @@ import {
   stripLeakedModelToolCalls,
 } from "../shared/message-content.js";
 import { normalizeClinicPhone } from "../shared/phone.js";
+import { clearPendingConfirmForRuntime } from "../tools/meeting-confirm.js";
 import {
   formatBookingMeetingsContext,
   formatBookingDraftContext,
@@ -711,6 +714,142 @@ const commandActionForTool = (name: string): "create" | "reschedule" | "replace"
   return null;
 };
 
+type PendingChatConfirmationDecision =
+  | { kind: "none" }
+  | {
+      kind: "unresolved";
+      action: "create" | "reschedule" | "cancel" | null;
+      replyKind: "declined" | "other";
+    }
+  | {
+      kind: "affirmed";
+      action: "create" | "reschedule" | "cancel";
+      toolName: "create_meeting" | "reschedule_meeting" | "cancel_meeting";
+      command: PendingBookingCommand;
+    };
+
+const toolNameForCommandAction = (
+  action: "create" | "reschedule" | "cancel",
+): "create_meeting" | "reschedule_meeting" | "cancel_meeting" =>
+  action === "create"
+    ? "create_meeting"
+    : action === "reschedule"
+      ? "reschedule_meeting"
+      : "cancel_meeting";
+
+/** Read and classify the latest chat-text confirmation without trusting model output. */
+const pendingChatConfirmationDecision = (
+  state: ClinicState,
+): PendingChatConfirmationDecision => {
+  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = state.agentMessages?.[index];
+    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+      continue;
+    }
+    if (classifyMeetingMutationToolMessage(message) !== "pending_confirmation") {
+      return { kind: "none" };
+    }
+    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const userReply = record?.userReply;
+    const action = commandActionForTool(message.name ?? "");
+    if (action !== "create" && action !== "reschedule" && action !== "cancel") {
+      return { kind: "unresolved", action: null, replyKind: "other" };
+    }
+    const command = state.bookingDraft?.pendingCommand;
+    if (
+      typeof userReply !== "string"
+      || command == null
+      || command.action !== action
+      || !isConfirmationAffirmation(userReply, action)
+    ) {
+      return {
+        kind: "unresolved",
+        action,
+        replyKind: typeof userReply === "string" && isConfirmationDecline(userReply)
+          ? "declined"
+          : "other",
+      };
+    }
+    return {
+      kind: "affirmed",
+      action,
+      toolName: toolNameForCommandAction(action),
+      command: {
+        ...command,
+        payload: { ...command.payload, confirmationGiven: true },
+      },
+    };
+  }
+  return { kind: "none" };
+};
+
+const pendingChatConfirmationCleanup = (
+  state: ClinicState,
+): ClinicStateUpdate => {
+  const decision = pendingChatConfirmationDecision(state);
+  if (decision.kind !== "unresolved" || !state.bookingDraft) {
+    return {};
+  }
+  if (
+    decision.replyKind === "declined"
+    && (decision.action === "create" || decision.action === "reschedule")
+  ) {
+    return {
+      bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }),
+    };
+  }
+  if (decision.action === "create" || decision.action === "reschedule") {
+    return {
+      bookingDraft: reduceBookingDraft(state.bookingDraft, {
+        type: "slot_invalidated",
+        keepDate: true,
+      }),
+    };
+  }
+  if (
+    decision.action === "cancel"
+    && (
+      state.pendingCancellationPurpose === "replacement"
+      || state.bookingDraft.replacement?.status === "cancelling"
+    )
+  ) {
+    return {
+      bookingDraft: reduceBookingDraft(state.bookingDraft, {
+        type: "cancel_existing_declined",
+      }),
+      pendingCancellationPurpose: null,
+    };
+  }
+  return {
+    bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "command_cleared" }),
+    ...(decision.action === "cancel" ? { pendingCancellationPurpose: null } : {}),
+  };
+};
+
+const isPendingChatConfirmationReplay = (
+  state: ClinicState,
+  action: "create" | "reschedule" | "cancel",
+  args: unknown,
+): boolean => {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) {
+    return false;
+  }
+  const decision = pendingChatConfirmationDecision(state);
+  return decision.kind === "affirmed"
+    && decision.action === action
+    && (args as Record<string, unknown>).confirmationGiven === true;
+};
+
+const hasMutationCallDuringUnresolvedConfirmation = (state: ClinicState): boolean => {
+  if (pendingChatConfirmationDecision(state).kind !== "unresolved") {
+    return false;
+  }
+  const lastAi = [...(state.agentMessages ?? [])]
+    .reverse()
+    .find((message) => message instanceof AIMessage);
+  return lastAi?.tool_calls?.some((call) => commandActionForTool(call.name) != null) === true;
+};
+
 const DIRECT_CANCEL_INTENT = /(?:скасу\w*|cancel(?:\s+(?:my\s+)?(?:appointment|visit))?)/iu;
 
 const DIRECT_RESCHEDULE_INTENT = /(?:перенес\w*|reschedul\w*|move\s+(?:my\s+)?(?:appointment|visit))/iu;
@@ -968,6 +1107,15 @@ const availabilityRequestFromBookingDraft = (
  * draft advances to revalidation/HITL.
  */
 const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
+  const confirmation = pendingChatConfirmationDecision(state);
+  if (confirmation.kind === "affirmed") {
+    return true;
+  }
+  // A non-affirmative chat reply must return to the model. It must not cause
+  // the frozen mutation to be replayed or trigger a new availability search.
+  if (confirmation.kind === "unresolved") {
+    return false;
+  }
   if (
     replacementActionForTurn(state) != null
     || (
@@ -1005,6 +1153,10 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
  * results still return to the LLM unless they are terminal mutation outcomes.
  */
 const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
+  const confirmation = pendingChatConfirmationDecision(state);
+  if (confirmation.kind !== "none") {
+    return confirmation.kind === "affirmed";
+  }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
     return true;
   }
@@ -1947,6 +2099,28 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     if (agentId !== BOOKING_AGENT_ID) {
       return {};
     }
+    const confirmation = pendingChatConfirmationDecision(state);
+    if (confirmation.kind === "affirmed") {
+      const syntheticCall = {
+        id: `booking_chat_confirm_${state.bookingDraft?.version ?? 0}`,
+        name: confirmation.toolName,
+        args: confirmation.command.payload,
+        type: "tool_call" as const,
+      };
+      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      return {
+        bookingDraft: reduceBookingDraft(state.bookingDraft, {
+          type: "command_prepared",
+          command: confirmation.command,
+        }),
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], syntheticAi),
+        ),
+      };
+    }
+    if (confirmation.kind === "unresolved") {
+      return {};
+    }
     // Replacement is a compound mutation. Once it has started, the original
     // patient message (often `Скасувати`) and the stale meeting snapshot must
     // not be interpreted as a new direct-cancellation request. The replacement
@@ -2488,6 +2662,11 @@ export const createAgentToolsNode = (
 
         if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
           call.args = normalizeMeetingMutationArgs(state, call);
+          const chatConfirmationReplay = isPendingChatConfirmationReplay(
+            state,
+            call.name === "create_meeting" ? "create" : "reschedule",
+            call.args,
+          );
           if (call.name === "reschedule_meeting") {
             const draft = state.bookingDraft;
             const normalizedArgs = call.args as { dateStart?: unknown; dateEnd?: unknown };
@@ -2501,7 +2680,7 @@ export const createAgentToolsNode = (
                 || draft.rescheduleTarget == null
                 || draft.selectedSlot == null
                 || draft.pendingCommand?.action !== "reschedule"
-                || !freshAvailabilityValidatesSelectedSlot(state)
+                || (!chatConfirmationReplay && !freshAvailabilityValidatesSelectedSlot(state))
               )
             ) {
               trackToolError(call.name, RESCHEDULE_STATE_REQUIRED_ERROR);
@@ -2526,7 +2705,8 @@ export const createAgentToolsNode = (
           };
           const selectedSlot = authoritativeSelectedSlot(state);
           const requiresFreshCreateValidation = call.name === "create_meeting"
-            && state.bookingDraft?.pendingCommand?.action === "create";
+            && state.bookingDraft?.pendingCommand?.action === "create"
+            && !chatConfirmationReplay;
           if (requiresFreshCreateValidation && !freshAvailabilityValidatesSelectedSlot(state)) {
             trackToolError(call.name, SELECTED_SLOT_NOT_AVAILABLE_ERROR);
             synthetic.push(
@@ -2752,10 +2932,15 @@ export const createAgentToolsNode = (
         } satisfies PendingBookingCommand;
       })
       .find((command): command is PendingBookingCommand => command != null);
-    if (pendingCommand && state.bookingDraft) {
+    const commandToPersist = pendingCommand
+      && state.bookingDraft?.pendingCommand
+      && state.bookingDraft.pendingCommand.action === pendingCommand.action
+      ? state.bookingDraft.pendingCommand
+      : pendingCommand;
+    if (commandToPersist && state.bookingDraft) {
       update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
         type: "command_prepared",
-        command: pendingCommand,
+        command: commandToPersist,
       });
     }
 
@@ -2913,7 +3098,47 @@ export const createAgentToolsNode = (
  * or ask for an action without supplying its keyboard.
  */
 export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState): ClinicStateUpdate => {
+  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
+    const chatConfirmation = pendingChatConfirmationDecision(state);
+    if (
+      chatConfirmation.kind === "unresolved"
+      && chatConfirmation.replyKind === "declined"
+      && chatConfirmation.action != null
+    ) {
+      const mutationName = toolNameForCommandAction(chatConfirmation.action);
+      const replacementCancellation = state.pendingCancellationPurpose === "replacement";
+      const replyText = chatConfirmation.action === "create"
+        ? "Запис не було створено."
+        : chatConfirmation.action === "reschedule"
+          ? "Запис не було перенесено."
+          : replacementCancellation
+            ? "Скасування поточного візиту скасовано. Новий запис не було створено."
+            : "Запис не було скасовано.";
+      const replyButtons = chatConfirmation.action === "cancel" && !replacementCancellation
+        ? [...VISIT_CHANGE_MENU]
+        : [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))];
+      clearPendingConfirmForRuntime(config);
+      const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
+      const cleanup = pendingChatConfirmationCleanup(state);
+      trackEvent("meeting_mutation_outcome", {
+        mutation: mutationName,
+        outcome: "declined",
+      });
+      return {
+        ...cleanup,
+        agentMessages: new Overwrite([] as BaseMessage[]),
+        stepCount: 0,
+        pendingCancellationPurpose: null,
+        messages: [message],
+        lastHandoff: {
+          agentId: agent.id,
+          agentName: agent.name,
+          status: "ok",
+          replyText,
+          replyButtons,
+        },
+      };
+    }
     const result = terminalMeetingMutationOutcome(state);
     if (!result) {
       return {};
@@ -2991,10 +3216,18 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
   };
 
 export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState): ClinicStateUpdate => {
+  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
-      return createAgentMutationFinalizeNode(agent)(state);
+      return createAgentMutationFinalizeNode(agent)(state, config);
+    }
+    const chatConfirmation = pendingChatConfirmationDecision(state);
+    if (
+      chatConfirmation.kind === "unresolved"
+      && chatConfirmation.replyKind === "declined"
+      && chatConfirmation.action != null
+    ) {
+      return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;
     const lastMessage = agentMessages[agentMessages.length - 1];
@@ -3003,10 +3236,15 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       agentMessages: new Overwrite([] as BaseMessage[]),
       stepCount: 0,
     };
+    const confirmationCleanup = pendingChatConfirmationCleanup(state);
+    if (pendingChatConfirmationDecision(state).kind === "unresolved") {
+      clearPendingConfirmForRuntime(config);
+    }
 
     if (!(lastMessage instanceof AIMessage)) {
       return {
         ...cleared,
+        ...confirmationCleanup,
         lastHandoff: {
           agentId: agent.id,
           agentName: agent.name,
@@ -3029,6 +3267,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
       return {
         ...cleared,
+        ...confirmationCleanup,
         lastHandoff: {
           agentId: agent.id,
           agentName: agent.name,
@@ -3165,12 +3404,15 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const bookingDraftOfferUpdate = bookingDraftForHandoff
       ? { bookingDraft: bookingDraftForHandoff }
       : {};
+    const blockedConfirmationMutation =
+      hasMutationCallDuringUnresolvedConfirmation(state);
 
     const replyMessage =
       replyText !== extractMessageTextContent(tagged.content).trim()
         || accidentalButtons.length > 0
         || yieldTag
         || slotOffer != null
+        || blockedConfirmationMutation
         ? new AIMessage({
             content: replyText,
             additional_kwargs: tagged.additional_kwargs,
@@ -3187,7 +3429,13 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
     if (status === "empty") {
-      return { ...cleared, lastHandoff, ...noteStatusForHandoff, ...bookingDraftOfferUpdate };
+      return {
+        ...cleared,
+        lastHandoff,
+        ...noteStatusForHandoff,
+        ...bookingDraftOfferUpdate,
+        ...confirmationCleanup,
+      };
     }
 
     if (status === "max_steps") {
@@ -3201,6 +3449,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         lastHandoff,
         ...noteStatusForHandoff,
         ...bookingDraftOfferUpdate,
+        ...confirmationCleanup,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -3214,6 +3463,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       lastHandoff,
       ...noteStatusForHandoff,
       ...bookingDraftOfferUpdate,
+      ...confirmationCleanup,
       messages: [replyMessage],
     };
   };
@@ -3228,6 +3478,10 @@ export const routeAfterAgentLlm = (
   // Runtime-owned booking transitions outrank both model text and the model's
   // step budget. Once canonical state is ready, no LLM-authored terminal claim
   // is eligible for finalization.
+  if (commandPrepareName && hasMutationCallDuringUnresolvedConfirmation(state)) {
+    return finalizeName;
+  }
+
   if (commandPrepareName && bookingTurnNeedsCommandPreparation(state)) {
     return commandPrepareName;
   }
@@ -3264,6 +3518,16 @@ export const routeAfterAgentTools = (
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  const chatConfirmation = pendingChatConfirmationDecision(state);
+  if (
+    mutationFinalizeName
+    && chatConfirmation.kind === "unresolved"
+    && chatConfirmation.replyKind === "declined"
+    && chatConfirmation.action != null
+  ) {
+    return mutationFinalizeName;
   }
 
   if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
