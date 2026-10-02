@@ -3713,6 +3713,180 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.agentMessages).toBeUndefined();
   });
 
+  it("rejects an LLM confirmation flag after a non-affirmative chat reply", () => {
+    const state = clinicState({
+      bookingDraft: {
+        ...canonicalBookingDraft(),
+        phase: "confirming",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            contactId: "contact-1",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+        },
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ awaitingConfirmation: true, userReply: "А можна інший час?" }),
+          name: "create_meeting",
+          tool_call_id: "create-1",
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "replay-1",
+            name: "create_meeting",
+            args: { confirmationGiven: true },
+            type: "tool_call",
+          }],
+        }),
+      ],
+    });
+
+    expect(routeAfterAgentLlm(state, 8, "tools", "finalize", "prepare")).toBe("finalize");
+  });
+
+  it("invalidates a create slot when chat confirmation remains unresolved", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: {
+          ...canonicalBookingDraft(),
+          phase: "confirming",
+          pendingCommand: { action: "create", payload: { serviceId: "svc-1" } },
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ awaitingConfirmation: true, userReply: "А можна інший час?" }),
+            name: "create_meeting",
+            tool_call_id: "create-1",
+          }),
+          new AIMessage("Звісно, підберемо інший час."),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      phase: "time",
+      selectedDate: "2026-09-10",
+      selectedSlot: null,
+      pendingCommand: null,
+    });
+  });
+
+  it("invalidates a reschedule slot when chat confirmation remains unresolved", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: {
+          ...canonicalBookingDraft({
+            mode: "reschedule",
+            phase: "confirming",
+            selectedDate: "2026-09-10",
+            rescheduleTarget: { id: "meeting-1", name: "Процедура - Ada" },
+            pendingCommand: {
+              action: "reschedule",
+              payload: { meetingId: "meeting-1", dateStart: "2026-09-10T14:00:00" },
+            },
+          }),
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ awaitingConfirmation: true, userReply: "Покажіть інший час" }),
+            name: "reschedule_meeting",
+            tool_call_id: "reschedule-1",
+          }),
+          new AIMessage("Покажу інші вільні години."),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      phase: "time",
+      selectedDate: "2026-09-10",
+      selectedSlot: null,
+      pendingCommand: null,
+      rescheduleTarget: { id: "meeting-1" },
+    });
+  });
+
+  it("clears direct cancellation confirmation state when chat confirmation remains unresolved", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: {
+          ...canonicalBookingDraft({
+            phase: "confirming",
+            serviceAcceptance: null,
+            selectedDate: null,
+            selectedSlot: null,
+            note: { status: "unasked" },
+            pendingCommand: {
+              action: "cancel",
+              payload: { meetingId: "meeting-1" },
+            },
+          }),
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ awaitingConfirmation: true, userReply: "Ні, не скасовуйте" }),
+            name: "cancel_meeting",
+            tool_call_id: "cancel-1",
+          }),
+          new AIMessage("Добре, запис залишаю без змін."),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      phase: "service",
+      pendingCommand: null,
+    });
+  });
+
+  it("terminates replacement cancellation when chat confirmation remains unresolved", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        pendingCancellationPurpose: "replacement",
+        bookingDraft: {
+          ...canonicalBookingDraft({
+            mode: "replace",
+            phase: "confirming",
+            serviceAcceptance: null,
+            selectedDate: null,
+            selectedSlot: null,
+            note: { status: "unasked" },
+            pendingCommand: { action: "cancel", payload: { meetingId: "meeting-1" } },
+            replacement: {
+              meeting: { id: "meeting-1" },
+              status: "cancelling",
+            },
+          }),
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({ awaitingConfirmation: true, userReply: "Покажіть інший варіант" }),
+            name: "cancel_meeting",
+            tool_call_id: "cancel-1",
+          }),
+          new AIMessage("Не скасовую поточний запис."),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      mode: "create",
+      phase: "service",
+      pendingCommand: null,
+      replacement: null,
+    });
+  });
+
   it("dispatches cancel_meeting for replacement consent instead of replaying create_meeting", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(

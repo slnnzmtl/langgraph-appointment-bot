@@ -569,5 +569,17 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(writeInvoke).not.toHaveBeenCalled();
     expect(modelInvoke).toHaveBeenCalledOnce();
     expect(second.__interrupt__).toBeUndefined();
+    expect(second.bookingDraft?.pendingCommand).toBeNull();
+    expect(second.bookingDraft?.selectedSlot).toBeNull();
+
+    const createCallsAfterReply = createInvoke.mock.calls.length;
+    const third = await graph.invoke(
+      { messages: [new HumanMessage("Дякую")] } as never,
+      config,
+    );
+
+    expect(createInvoke).toHaveBeenCalledTimes(createCallsAfterReply);
+    expect(writeInvoke).not.toHaveBeenCalled();
+    expect(third.__interrupt__).toBeUndefined();
   });
 });
