@@ -993,6 +993,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     );
 
     expect(update.contactContext).toEqual({
+      ownership: "phone",
       contacts: [
         {
           id: "c-phone",
@@ -1005,6 +1006,213 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       ],
     });
     expect(update.prefetchDirty).toBeUndefined();
+  });
+
+  it("does not promote a phone match to Telegram ownership", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({ contactId: null }),
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            firstName: "Ada",
+            cTelegram: null,
+          }],
+        },
+      }),
+    );
+
+    expect(update.bookingDraft?.contactId).toBeNull();
+  });
+
+  it("does not prepare a runtime booking command from a phone candidate", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const availability = {
+      days: [{
+        date: "2026-09-10",
+        slots: [{
+          id: "slot-1",
+          label: "14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+        }],
+      }],
+      stepMinutes: 30,
+    };
+    const update = await commandPrepare(
+      clinicState({
+        contactContext: {
+          ownership: "phone",
+          contacts: [{ id: "c-phone", cTelegram: null }],
+        },
+        bookingDraft: canonicalBookingDraft({ contactId: null }),
+        availabilityContext: availability,
+        agentMessages: [new ToolMessage({
+          content: JSON.stringify(availability),
+          name: "present_availability_slots",
+          tool_call_id: "slots-1",
+        })],
+      }),
+    );
+
+    expect(update.bookingDraft).toBeUndefined();
+    expect(update.agentMessages).toBeUndefined();
+  });
+
+  it("marks a successfully linked phone match as Telegram-owned", async () => {
+    const linkTool = tool(async () => JSON.stringify({ success: true }), {
+      name: "link_telegram_to_contact",
+      description: "link",
+      schema: z.object({ contactId: z.string() }),
+    });
+    const update = await createAgentToolsNode([linkTool], "booking")(
+      clinicState({
+        contactContext: {
+          ownership: "phone",
+          contacts: [{ id: "c-phone", firstName: "Ada", cTelegram: null }],
+        },
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "link-1",
+            name: "link_telegram_to_contact",
+            args: { contactId: "c-phone" },
+            type: "tool_call",
+          }],
+        })],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.contactContext).toMatchObject({
+      ownership: "telegram",
+      contacts: [{ id: "c-phone" }],
+    });
+  });
+
+  it("clears a create command after CRM authorization failure", async () => {
+    const createTool = tool(async () => JSON.stringify({ error: "Not authorized" }), {
+      name: "create_meeting",
+      description: "create",
+      schema: z.object({}),
+    });
+    const update = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{ id: "c-phone", firstName: "Ada", cTelegram: "tg-1" }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          contactId: "c-phone",
+          phase: "confirming",
+          pendingCommand: { action: "create", payload: { contactId: "c-phone" } },
+        }),
+        availabilityContext: {
+          days: [{
+            date: "2026-09-10",
+            slots: [{
+              id: "slot-1",
+              label: "14:00",
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+            }],
+          }],
+          stepMinutes: 30,
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              days: [{
+                date: "2026-09-10",
+                slots: [{
+                  id: "slot-1",
+                  label: "14:00",
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                }],
+              }],
+              stepMinutes: 30,
+            }),
+            name: "present_availability_slots",
+            tool_call_id: "slots-1",
+          }),
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "create-1",
+              name: "create_meeting",
+              args: { contactId: "c-phone" },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      contactId: null,
+      pendingCommand: null,
+    });
+  });
+
+  it("does not call create_meeting for a phone candidate before linking", async () => {
+    const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
+    const createTool = tool(invoke, {
+      name: "create_meeting",
+      description: "create",
+      schema: z.object({}),
+    });
+    const availability = {
+      days: [{
+        date: "2026-09-10",
+        slots: [{
+          id: "slot-1",
+          label: "14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+        }],
+      }],
+      stepMinutes: 30,
+    };
+    const update = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        contactContext: {
+          ownership: "phone",
+          contacts: [{ id: "c-phone", firstName: "Ada", cTelegram: null }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          contactId: "c-phone",
+          phase: "confirming",
+          pendingCommand: { action: "create", payload: { contactId: "c-phone" } },
+        }),
+        availabilityContext: availability,
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify(availability),
+            name: "present_availability_slots",
+            tool_call_id: "slots-1",
+          }),
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "create-1",
+              name: "create_meeting",
+              args: { contactId: "c-phone" },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
+      error: "Contact link required",
+    });
   });
 
   it("does not set contactContext on empty or error find", async () => {

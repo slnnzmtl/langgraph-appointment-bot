@@ -157,6 +157,7 @@ const CREATE_CONSULTATION_REQUIRED_ERROR = "Consultation agreement required";
 const SLOT_SELECTION_REQUIRED_ERROR = "Availability slot selection required";
 const SELECTED_SLOT_NOT_AVAILABLE_ERROR = "Selected slot is no longer available";
 const RESCHEDULE_STATE_REQUIRED_ERROR = "Reschedule state required";
+const CONTACT_LINK_REQUIRED_ERROR = "Contact link required";
 
 const CONSULTATION_AGREEMENT_TOOLS = new Set(["create_meeting", "reschedule_meeting"]);
 
@@ -191,6 +192,7 @@ const BLOCKED_MEETING_ERRORS = new Set([
   SLOT_SELECTION_REQUIRED_ERROR,
   SELECTED_SLOT_NOT_AVAILABLE_ERROR,
   RESCHEDULE_STATE_REQUIRED_ERROR,
+  CONTACT_LINK_REQUIRED_ERROR,
 ]);
 
 export type MeetingMutationOutcome =
@@ -289,6 +291,65 @@ export const meetingMutationClearsAvailability = (messages: BaseMessage[]): bool
 const toolMessageName = (message: BaseMessage): string | undefined => {
   const name = (message as { name?: unknown }).name;
   return typeof name === "string" ? name : undefined;
+};
+
+const contactRowForId = (
+  context: ClinicState["contactContext"],
+  contactId: string,
+): Record<string, unknown> | null =>
+  context?.contacts.find((contact) => contact.id === contactId) ?? null;
+
+const ownedContactIdFromContext = (
+  context: ClinicState["contactContext"],
+): string | null => {
+  if (!context || context.contacts.length === 0 || context.ownership === "phone") {
+    return null;
+  }
+  const contact = context.ownership === "telegram"
+    ? context.contacts.find((row) => typeof row.id === "string" && row.id.length > 0)
+    : context.contacts.find((row) =>
+        typeof row.id === "string"
+        && row.id.length > 0
+        && typeof row.cTelegram === "string"
+        && row.cTelegram.trim() !== "",
+      )
+      ?? context.contacts.find((row) =>
+        typeof row.id === "string"
+        && row.id.length > 0
+        && !Object.prototype.hasOwnProperty.call(row, "cTelegram"),
+      );
+  return typeof contact?.id === "string" ? contact.id : null;
+};
+
+const contactIdIsUnowned = (state: ClinicState, contactId: string): boolean => {
+  const context = state.contactContext;
+  const row = contactRowForId(context, contactId);
+  if (!row) {
+    return false;
+  }
+  if (context?.ownership === "phone") {
+    return true;
+  }
+  if (context?.ownership === "telegram") {
+    return false;
+  }
+  return Object.prototype.hasOwnProperty.call(row, "cTelegram")
+    && !(typeof row.cTelegram === "string" && row.cTelegram.trim() !== "");
+};
+
+const contactContextHasUnownedCandidate = (
+  context: ClinicState["contactContext"],
+): boolean => {
+  if (!context || context.contacts.length === 0) {
+    return false;
+  }
+  if (context.ownership === "phone") {
+    return true;
+  }
+  return context.ownership == null && context.contacts.some((contact) =>
+    Object.prototype.hasOwnProperty.call(contact, "cTelegram")
+    && !(typeof contact.cTelegram === "string" && contact.cTelegram.trim() !== ""),
+  );
 };
 
 /** True when a ToolMessage for this tool is already in the current agent turn. */
@@ -673,10 +734,10 @@ const normalizeMeetingMutationArgs = (
   if (call.name === "create_meeting" && acceptedService?.status === "accepted") {
     args.serviceId = acceptedService.service.id;
   }
-  const ownedContactId = state.bookingDraft?.contactId
-    ?? state.contactContext?.contacts.find(
-      (contact) => typeof contact.id === "string" && contact.id.length > 0,
-    )?.id;
+  const draftContactId = state.bookingDraft?.contactId;
+  const ownedContactId = draftContactId != null && !contactIdIsUnowned(state, draftContactId)
+    ? draftContactId
+    : ownedContactIdFromContext(state.contactContext);
   if (call.name === "create_meeting" && typeof ownedContactId === "string") {
     args.contactId = ownedContactId;
   }
@@ -970,10 +1031,12 @@ const createCommandFromBookingDraft = (
   }
   const acceptance = draft?.serviceAcceptance;
   const slot = draft?.selectedSlot;
-  const contactId = draft?.contactId
-    ?? state.contactContext?.contacts.find(
-      (contact) => typeof contact.id === "string" && contact.id.length > 0,
-    )?.id;
+  const draftContactId = draft?.contactId;
+  const contactId = draftContactId != null && !contactIdIsUnowned(state, draftContactId)
+    ? draftContactId
+    : draftContactId == null
+      ? ownedContactIdFromContext(state.contactContext)
+      : null;
   if (
     !draft
     || acceptance?.status !== "accepted"
@@ -1910,9 +1973,7 @@ export const createAgentPrepareNode = (agentId: string) =>
       stepCount: 0,
     };
     if (agentId === BOOKING_AGENT_ID) {
-      const contactId = state.contactContext?.contacts.find(
-        (contact) => typeof contact.id === "string" && contact.id.length > 0,
-      )?.id;
+      const contactId = ownedContactIdFromContext(state.contactContext);
       const historyText = [
         ...(state.messages ?? []).map((message) => extractMessageTextContent(message.content)),
         ...(state.lastHandoff?.replyText ? [state.lastHandoff.replyText] : []),
@@ -2051,6 +2112,13 @@ export const createAgentPrepareNode = (agentId: string) =>
       Object.assign(update, noteUpdate);
       Object.assign(update, migrationUpdate);
       bookingDraft = (noteUpdate.bookingDraft as BookingDraft | undefined) ?? bookingDraft;
+      if (
+        bookingDraft
+        && bookingDraft.contactId != null
+        && contactIdIsUnowned(state, bookingDraft.contactId)
+      ) {
+        bookingDraft = reduceBookingDraft(bookingDraft, { type: "contact_unresolved" });
+      }
       if (bookingDraft && typeof contactId === "string" && contactId !== bookingDraft.contactId) {
         bookingDraft = reduceBookingDraft(bookingDraft, {
           type: "contact_resolved",
@@ -2662,6 +2730,24 @@ export const createAgentToolsNode = (
 
         if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
           call.args = normalizeMeetingMutationArgs(state, call);
+          if (
+            call.name === "create_meeting"
+            && contactContextHasUnownedCandidate(state.contactContext)
+          ) {
+            trackToolError(call.name, CONTACT_LINK_REQUIRED_ERROR);
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: CONTACT_LINK_REQUIRED_ERROR,
+                  hint:
+                    "Link the phone-matched Contact to the current Telegram user before creating the meeting.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
           const chatConfirmationReplay = isPendingChatConfirmationReplay(
             state,
             call.name === "create_meeting" ? "create" : "reschedule",
@@ -2908,6 +2994,21 @@ export const createAgentToolsNode = (
         : {}),
     };
 
+    const authorizationFailure = resultMessages.some((message) => {
+      if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+        return false;
+      }
+      return asJsonRecord(extractMessageTextContent(message.content).trim())?.error === "Not authorized";
+    });
+    if (authorizationFailure && state.bookingDraft) {
+      // The contact must be linked before this mutation can be retried. Clear
+      // both the frozen command and the contact projection so the next route
+      // returns to identity resolution instead of replaying the same command.
+      update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+        type: "contact_unresolved",
+      });
+    }
+
     const pendingCommand = resultMessages
       .map((message) => {
         if (!(message instanceof ToolMessage)) {
@@ -3081,7 +3182,49 @@ export const createAgentToolsNode = (
       normalizeContactLookupResult,
     );
     if (found && !found.error && found.contacts.length > 0) {
-      update.contactContext = found;
+      update.contactContext = { ...found, ownership: "phone" };
+    }
+
+    for (const message of resultMessages) {
+      if (!(message instanceof ToolMessage)) {
+        continue;
+      }
+      if (message.name !== "create_contact" && message.name !== "link_telegram_to_contact") {
+        continue;
+      }
+      const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+      if (!record || typeof record.error === "string") {
+        continue;
+      }
+      const call = agentMessages
+        .filter((candidate): candidate is AIMessage => candidate instanceof AIMessage)
+        .flatMap((candidate) => candidate.tool_calls ?? [])
+        .find((candidate) => candidate.id === message.tool_call_id);
+      const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args)
+        ? call.args as Record<string, unknown>
+        : {};
+      const contactId = message.name === "link_telegram_to_contact"
+        ? args.contactId
+        : record.id;
+      if (typeof contactId !== "string" || contactId.length === 0) {
+        continue;
+      }
+      const previous = (update.contactContext as ClinicState["contactContext"] | undefined)
+        ?? state.contactContext;
+      const previousRow = contactRowForId(previous, contactId) ?? {};
+      const createdRow = message.name === "create_contact"
+        ? {
+            ...previousRow,
+            id: contactId,
+            ...(typeof args.firstName === "string" ? { firstName: args.firstName } : {}),
+            ...(typeof args.lastName === "string" ? { lastName: args.lastName } : {}),
+            ...(typeof args.phoneNumber === "string" ? { phoneNumber: args.phoneNumber } : {}),
+          }
+        : { ...previousRow, id: contactId };
+      update.contactContext = {
+        ownership: "telegram",
+        contacts: [createdRow],
+      };
     }
 
     if (crmWriteDirtiesPrefetch(resultMessages)) {

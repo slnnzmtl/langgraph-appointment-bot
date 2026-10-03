@@ -77,6 +77,7 @@ describe("prefetchBookingContext", () => {
     expect(result.contactContext.contacts).toEqual([
       { id: "c-1", firstName: "Ada", missingFields: ["lastName", "phoneNumber"] },
     ]);
+    expect(result.contactContext.ownership).toBe("telegram");
     expect(result.bookingContext?.meetings).toEqual([
       {
         id: "m-1",

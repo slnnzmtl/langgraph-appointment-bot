@@ -95,6 +95,7 @@ export type BookingEvent =
   | { type: "requested_time_unavailable" }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
   | { type: "contact_resolved"; contactId: string }
+  | { type: "contact_unresolved" }
   | { type: "command_prepared"; command: PendingBookingCommand }
   | { type: "command_cleared" }
   | { type: "reschedule_started"; meeting: ReplacementMeeting | null }
@@ -419,6 +420,13 @@ export const reduceBookingDraft = (
     }
     case "contact_resolved":
       return withVersion(draft, { ...draft, contactId: event.contactId });
+    case "contact_unresolved": {
+      const next = { ...draft, contactId: null, pendingCommand: null };
+      return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
+      });
+    }
     case "reschedule_started":
       return withVersion(draft, {
         ...draft,

@@ -68,8 +68,11 @@ export type CompileClinicGraphOptions = {
 
 export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
   const contactJson = await lookupContactByTelegram(callTool);
-  const contactContext = normalizeContactLookupResult(contactJson);
+  const normalizedContactContext = normalizeContactLookupResult(contactJson);
   const contactId = extractContactIdFromSearchResult(contactJson);
+  const contactContext = contactId
+    ? { ...normalizedContactContext, ownership: "telegram" as const }
+    : normalizedContactContext;
   if (!contactId) {
     return { contactContext, bookingContext: null };
   }

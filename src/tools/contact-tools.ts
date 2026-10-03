@@ -80,6 +80,8 @@ export const annotateContactSearchResult = (raw: unknown): string => {
 export type ContactLookupContext = {
   contacts: Array<Record<string, unknown>>;
   error?: string;
+  /** Whether the rows were resolved for this Telegram user or only by phone. */
+  ownership?: "telegram" | "phone";
 };
 
 const CONTACT_CONTEXT_FIELDS = [
