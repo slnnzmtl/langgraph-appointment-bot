@@ -45,6 +45,12 @@ export const CLINIC_DOCTOR_REF_UK = fromEnv("CLINIC_DOCTOR_REF_UK", "лікар�
 /** Patient-facing copy for internal failures (routing, model, or step-limit errors). */
 export const PATIENT_FALLBACK_MESSAGE =
   "Вибачте, зараз не вдалося обробити запит 🙏 Спробуйте, будь ласка, ще раз за хвилинку.";
+/** Code-owned first identity question once the booking choices are complete. */
+export const BOOKING_PHONE_QUESTION_UK =
+  "Для завершення запису надішліть, будь ласка, ваш номер телефону.";
+/** Graph-owned reply when the typed phone matches a Contact linked to another Telegram user. */
+export const BOOKING_PHONE_OCCUPIED_UK =
+  "Цей номер уже прив’язаний до іншого акаунта. Надішліть, будь ласка, інший номер.";
 export const CLINIC_OPEN_HOUR = 9;
 export const CLINIC_CLOSE_HOUR = 18;
 export const CLINIC_SLOT_MINUTES = 30;

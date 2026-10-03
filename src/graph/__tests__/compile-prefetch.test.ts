@@ -7,10 +7,12 @@ import { z } from "zod";
 
 import { clearPendingConfirmsForTests } from "../../tools/meeting-confirm.js";
 import { createMeetingTools } from "../../tools/meeting-tools.js";
+import { createContactTools } from "../../tools/contact-tools.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_PHONE_QUESTION_UK,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
 } from "../../shared/clinic-constants.js";
@@ -77,6 +79,7 @@ describe("prefetchBookingContext", () => {
     expect(result.contactContext.contacts).toEqual([
       { id: "c-1", firstName: "Ada", missingFields: ["lastName", "phoneNumber"] },
     ]);
+    expect(result.contactContext.ownership).toBe("telegram");
     expect(result.bookingContext?.meetings).toEqual([
       {
         id: "m-1",
@@ -277,6 +280,253 @@ describe("compileClinicGraph prefetch once", () => {
 });
 
 describe("compileClinicGraph runtime-owned booking transition", () => {
+  it("does not confirm creation when DETAILS has no contact and no mutation ran", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+        bookingDraft: {
+          version: 5,
+          mode: "create",
+          phase: "note",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-1",
+              name: "Консультація",
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            slotId: "slot-17-1130",
+            label: "11:30",
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+          },
+          requestedTime: null,
+          note: { status: "awaiting" },
+          contactId: null,
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      { configurable: { thread_id: "no-contact-no-false-success" } },
+    );
+
+    const reply = String(result.messages.at(-1)?.content);
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(result.__interrupt__).toBeUndefined();
+    expect(reply).toBe(BOOKING_PHONE_QUESTION_UK);
+    expect(reply).not.toContain("Запис створено");
+  });
+
+  it("continues a successful contact link directly to the single meeting HITL", async () => {
+    const modelInvoke = vi.fn(async () => {
+      if (modelInvoke.mock.calls.length === 1) {
+        return new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "link-1",
+            name: "link_telegram_to_contact",
+            args: { contactId: "c-phone" },
+            type: "tool_call",
+          }],
+        });
+      }
+      return new AIMessage("Підтвердіть, будь ласка, запис.");
+    });
+    const crmCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const [linkContact] = createContactTools({
+      callTool: async (name, args) => {
+        crmCalls.push({ name, args: args ?? {} });
+        return `Successfully updated Contact record with ID: ${String(args?.entityId ?? "")}`;
+      },
+    }).filter((candidate) => candidate.name === "link_telegram_to_contact");
+    const availabilityInvoke = vi.fn(async () => JSON.stringify({
+      date: "2026-10-19",
+      slots: [{
+        id: "slot-19-1130",
+        label: "11:30",
+        dateStart: "2026-10-19T11:30:00",
+        dateEnd: "2026-10-19T12:30:00",
+      }],
+      stepMinutes: 30,
+      query: {
+        kind: "exact",
+        date: "2026-10-19",
+        rangeFrom: "2026-10-19",
+        rangeThrough: "2026-10-19",
+        coverageComplete: true,
+      },
+    }));
+    const createInvoke = vi.fn(async (input: Record<string, unknown>) => {
+      if (input.confirmationGiven === true) {
+        return JSON.stringify({ id: "meeting-1" });
+      }
+      const decision = interrupt({ type: "confirm_booking", draft: input });
+      if (
+        typeof decision === "object"
+        && decision != null
+        && "userReply" in decision
+        && typeof decision.userReply === "string"
+      ) {
+        return JSON.stringify({
+          awaitingConfirmation: true,
+          userReply: decision.userReply,
+          draft: { command: { action: "create", payload: input } },
+        });
+      }
+      return JSON.stringify({ id: "meeting-1" });
+    });
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "revalidate a selected slot",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const createMeeting = tool(createInvoke, {
+      name: "create_meeting",
+      description: "create a meeting after confirmation",
+      schema: z.object({
+        name: z.string(),
+        dateStart: z.string(),
+        dateEnd: z.string(),
+        contactId: z.string(),
+        serviceId: z.string(),
+        confirmMessage: z.string(),
+        description: z.string().optional(),
+        confirmationGiven: z.boolean().optional(),
+      }),
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [linkContact, presentAvailability, createMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+
+    const config = { configurable: { thread_id: "link-direct-to-hitl" } };
+    const result = await runWithTelegramUserId("tg-42", () => graph.invoke(
+      {
+        messages: [new HumanMessage("+380 63 212 3123")],
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            firstName: "Daniel",
+            lastName: "Test",
+            phoneNumber: "+380632123123",
+            cTelegram: null,
+            missingFields: [],
+          }],
+        },
+        availabilityContext: {
+          days: [{
+            date: "2026-10-19",
+            slots: [{
+              id: "slot-19-1130",
+              label: "11:30",
+              dateStart: "2026-10-19T11:30:00",
+              dateEnd: "2026-10-19T12:30:00",
+            }],
+          }],
+          stepMinutes: 30,
+          serviceId: "svc-neotiva",
+        },
+        bookingDraft: {
+          version: 4,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-neotiva",
+              name: "Збільшення губ Neotiva",
+              durationMinutes: 60,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-19",
+          selectedSlot: {
+            slotId: "slot-19-1130",
+            label: "11:30",
+            dateStart: "2026-10-19T11:30:00",
+            dateEnd: "2026-10-19T12:30:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: null,
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      config,
+    ));
+
+    expect(crmCalls).toEqual([{
+      name: "update_entity",
+      args: {
+        entityType: "Contact",
+        entityId: "c-phone",
+        data: { cTelegram: "tg-42" },
+      },
+    }]);
+    expect(availabilityInvoke).toHaveBeenCalledOnce();
+    expect(createInvoke).toHaveBeenCalledOnce();
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(result.bookingDraft).toMatchObject({
+      contactId: "c-phone",
+      pendingCommand: { action: "create" },
+    });
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+
+    const resumed = await runWithTelegramUserId("tg-42", () => graph.invoke(
+      new Command({
+        resume: { userReply: "Так, підтверджую" },
+        update: { messages: [new HumanMessage("Так, підтверджую")] },
+      }) as never,
+      config,
+    ));
+
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(createInvoke).toHaveBeenCalledTimes(3);
+    expect(createInvoke.mock.calls.at(-1)?.[0]).toMatchObject({
+      contactId: "c-phone",
+      confirmationGiven: true,
+    });
+    expect(resumed.__interrupt__).toBeUndefined();
+  });
+
   it.each(["без коментаря", INTENT_SKIP_LABEL])(
     "routes bare day → bare hour → %s through fresh validation into meeting HITL",
     async (skipReply) => {
@@ -346,6 +596,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         {
           messages: [new HumanMessage("27")],
           contactContext: {
+            ownership: "telegram",
             contacts: [{
               id: "c-1",
               firstName: "Ada",
@@ -525,6 +776,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       {
         messages: [new HumanMessage("записатися")],
         contactContext: {
+          ownership: "telegram",
           contacts: [{
             id: "c-1",
             firstName: "Ada",
@@ -682,6 +934,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const first = await invoke({
       messages: [new HumanMessage("записатися")],
       contactContext: {
+        ownership: "telegram",
         contacts: [{
           id: "c-1",
           firstName: "Ada",
@@ -812,6 +1065,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const first = await invoke({
       messages: [new HumanMessage("Підтверджую")],
       contactContext: {
+        ownership: "telegram",
         contacts: [{
           id: "c-1",
           firstName: "Ada",
