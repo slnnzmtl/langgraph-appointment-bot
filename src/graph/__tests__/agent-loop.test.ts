@@ -1095,6 +1095,115 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     expect(update.bookingDraft).toMatchObject({ contactId: "c-phone" });
   });
 
+  it.each([
+    {
+      label: "contact outside the phone search",
+      contactId: "c-other",
+      contacts: [{ id: "c-phone", cTelegram: null }],
+    },
+    {
+      label: "contact linked to another Telegram user",
+      contactId: "c-phone",
+      contacts: [{ id: "c-phone", cTelegram: "tg-other" }],
+    },
+  ])("does not link an unsafe phone candidate: $label", async ({ contactId, contacts }) => {
+    const invoke = vi.fn(async () => JSON.stringify({ id: contactId }));
+    const linkTool = tool(invoke, {
+      name: "link_telegram_to_contact",
+      description: "link",
+      schema: z.object({ contactId: z.string() }),
+    });
+    const update = await createAgentToolsNode([linkTool], "booking")(
+      clinicState({
+        contactContext: { ownership: "phone", contacts },
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "unsafe-link-1",
+            name: "link_telegram_to_contact",
+            args: { contactId },
+            type: "tool_call",
+          }],
+        })],
+      }),
+      { configurable: {} },
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
+      error: "Contact link candidate required",
+    });
+  });
+
+  it("keeps an incomplete linked contact in the model path until details are updated", () => {
+    const state = clinicState({
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{
+          id: "c-phone",
+          firstName: "Ada",
+          lastName: null,
+          phoneNumber: "+380501112233",
+          missingFields: ["lastName"],
+        }],
+      },
+      bookingDraft: canonicalBookingDraft({ contactId: "c-phone" }),
+      availabilityContext: {
+        days: [{
+          date: "2026-09-10",
+          slots: [{
+            id: "slot-1",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          }],
+        }],
+        stepMinutes: 30,
+      },
+    });
+
+    expect(routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"))
+      .toBe("booking__llm");
+  });
+
+  it("updates the checkpointed missing-field projection after update_contact", async () => {
+    const updateTool = tool(async () => JSON.stringify({ id: "c-phone" }), {
+      name: "update_contact",
+      description: "update",
+      schema: z.object({ contactId: z.string(), lastName: z.string().optional() }),
+    });
+    const update = await createAgentToolsNode([updateTool], "booking")(
+      clinicState({
+        messages: [new HumanMessage("Ada Lovelace")],
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{
+            id: "c-phone",
+            firstName: "Ada",
+            lastName: null,
+            phoneNumber: "+380501112233",
+            missingFields: ["lastName"],
+          }],
+        },
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "update-1",
+            name: "update_contact",
+            args: { contactId: "c-phone", lastName: "Lovelace" },
+            type: "tool_call",
+          }],
+        })],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.contactContext).toMatchObject({
+      ownership: "telegram",
+      contacts: [{ id: "c-phone", lastName: "Lovelace", missingFields: [] }],
+    });
+  });
+
   it("clears a create command after CRM authorization failure", async () => {
     const createTool = tool(async () => JSON.stringify({ error: "Not authorized" }), {
       name: "create_meeting",
@@ -2076,6 +2185,83 @@ describe("runtime-owned booking routing", () => {
       ),
     ).toBe("booking__llm");
   });
+
+  it("routes incomplete-contact booking errors to the model without retrying the mutation", () => {
+    const state = clinicState({
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{ id: "c-1", firstName: "Ada", missingFields: ["lastName"] }],
+      },
+      bookingDraft: canonicalBookingDraft({ contactId: "c-1" }),
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify({ error: "Contact incomplete", missingFields: ["lastName"] }),
+        name: "create_meeting",
+        tool_call_id: "create-incomplete-1",
+      })],
+    });
+
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+    )).toBe("booking__llm");
+    expect(routeAfterAgentLlm(
+      { ...state, agentMessages: [...state.agentMessages, new AIMessage("Назвіть, будь ласка, прізвище.")] },
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    )).toBe("booking__finalize");
+  });
+
+  it("does not rebuild a reschedule after authorization failure until identity is refreshed", () => {
+    const state = clinicState({
+      contactContext: null,
+      bookingContext: null,
+      bookingDraft: canonicalBookingDraft({
+        mode: "reschedule",
+        phase: "confirming",
+        contactId: null,
+        selectedDate: "2026-09-10",
+        selectedSlot: {
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+          label: "14:00",
+        },
+        pendingCommand: {
+          action: "reschedule",
+          payload: { meetingId: "m-1" },
+        },
+        rescheduleTarget: { id: "m-1" },
+      }),
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify({ error: "Not authorized" }),
+        name: "reschedule_meeting",
+        tool_call_id: "reschedule-auth-1",
+      })],
+    });
+    const invalidated = reduceBookingDraft(state.bookingDraft, { type: "contact_unresolved" });
+    const afterFailure = { ...state, bookingDraft: invalidated };
+
+    expect(invalidated).toMatchObject({
+      mode: "reschedule",
+      rescheduleTarget: null,
+      selectedDate: null,
+      selectedSlot: null,
+      pendingCommand: null,
+    });
+    expect(routeAfterAgentTools(
+      afterFailure,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+    )).toBe("booking__llm");
+    expect(routeAfterAgentPrepare(afterFailure, "booking__llm", "booking__command_prepare"))
+      .toBe("booking__llm");
+  });
 });
 
 describe("createAgentFinalizeNode", () => {
@@ -2083,6 +2269,9 @@ describe("createAgentFinalizeNode", () => {
     "Готово! Запис створено.",
     "Готово! Запис перенесено.",
     "Запис скасовано.",
+    "Вас записано на консультацію.",
+    "Ви записані на процедуру.",
+    "Бронювання підтверджено.",
   ])("blocks model-authored mutation success without committed tool evidence: %s", (claim) => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(

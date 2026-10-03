@@ -421,7 +421,19 @@ export const reduceBookingDraft = (
     case "contact_resolved":
       return withVersion(draft, { ...draft, contactId: event.contactId });
     case "contact_unresolved": {
-      const next = { ...draft, contactId: null, pendingCommand: null };
+      const next = {
+        ...draft,
+        contactId: null,
+        pendingCommand: null,
+        ...(draft.mode === "reschedule"
+          ? {
+              rescheduleTarget: null,
+              selectedDate: null,
+              selectedSlot: null,
+              requestedTime: null,
+            }
+          : {}),
+      };
       return withVersion(draft, {
         ...next,
         phase: bookingDraftPhase({ ...next, version: draft.version }),
