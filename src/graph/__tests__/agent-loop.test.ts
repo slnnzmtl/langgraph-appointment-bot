@@ -41,6 +41,7 @@ import {
   LATER_DATE_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
+  PATIENT_FALLBACK_MESSAGE,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   VISIT_CHANGE_MENU,
@@ -2078,6 +2079,28 @@ describe("runtime-owned booking routing", () => {
 });
 
 describe("createAgentFinalizeNode", () => {
+  it.each([
+    "Готово! Запис створено.",
+    "Готово! Запис перенесено.",
+    "Запис скасовано.",
+  ])("blocks model-authored mutation success without committed tool evidence: %s", (claim) => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        agentMessages: [new HumanMessage("Продовжити без коментаря"), new AIMessage(claim)],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(extractMessageTextContent((update.messages as AIMessage[])[0]!.content)).toBe(
+      PATIENT_FALLBACK_MESSAGE,
+    );
+  });
+
   const agent: ClinicAgentDefinition = {
     id: "booking",
     name: "Booking",

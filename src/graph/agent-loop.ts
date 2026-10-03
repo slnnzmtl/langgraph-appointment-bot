@@ -195,6 +195,16 @@ const BLOCKED_MEETING_ERRORS = new Set([
   CONTACT_LINK_REQUIRED_ERROR,
 ]);
 
+/** Mutation success is runtime-owned; model prose can never prove a CRM write. */
+const MODEL_MEETING_SUCCESS_CLAIMS = [
+  /(?:запис|візит)\s+(?:успішно\s+)?(?:створено|перенесено|скасовано|підтверджено)/iu,
+  /(?:запись|визит)\s+(?:успешно\s+)?(?:создана|создан|перенесена|перенесен|отменена|отменен|подтверждена|подтвержден)/iu,
+  /(?:appointment|visit)\s+(?:has\s+been\s+|was\s+)?(?:successfully\s+)?(?:created|booked|rescheduled|cancelled|canceled|confirmed)/iu,
+];
+
+const modelClaimsMeetingMutationSuccess = (text: string): boolean =>
+  MODEL_MEETING_SUCCESS_CLAIMS.some((pattern) => pattern.test(text));
+
 export type MeetingMutationOutcome =
   | "committed"
   | "pending_confirmation"
@@ -3440,6 +3450,20 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     let replyText = text.trim();
     let replyButtons: string[] = [];
     let yieldFlag = false;
+
+    if (
+      agent.id === BOOKING_AGENT_ID
+      && modelClaimsMeetingMutationSuccess(replyText)
+    ) {
+      // This path has no terminal mutation ToolMessage (handled above), so a
+      // success claim is necessarily ungrounded. Fail closed instead of
+      // telling the patient that an uncommitted mutation succeeded.
+      trackEvent("booking_transition_rejected", {
+        outcome: "error",
+        reason: "model_mutation_success_without_committed_tool",
+      });
+      replyText = PATIENT_FALLBACK_MESSAGE;
+    }
 
     // Model failure: deliver via handoff only — do not persist into conversation history.
     if (status === "error" && isModelFailureMessage(tagged)) {

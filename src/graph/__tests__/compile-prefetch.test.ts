@@ -279,6 +279,63 @@ describe("compileClinicGraph prefetch once", () => {
 });
 
 describe("compileClinicGraph runtime-owned booking transition", () => {
+  it("does not confirm creation when DETAILS has no contact and no mutation ran", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+        bookingDraft: {
+          version: 5,
+          mode: "create",
+          phase: "note",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-1",
+              name: "Консультація",
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            slotId: "slot-17-1130",
+            label: "11:30",
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+          },
+          requestedTime: null,
+          note: { status: "awaiting" },
+          contactId: null,
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      { configurable: { thread_id: "no-contact-no-false-success" } },
+    );
+
+    const reply = String(result.messages.at(-1)?.content);
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(result.__interrupt__).toBeUndefined();
+    expect(reply).toContain("не вдалося обробити запит");
+    expect(reply).not.toContain("Запис створено");
+  });
+
   it("continues a successful contact link directly to the single meeting HITL", async () => {
     const modelInvoke = vi.fn(async () => {
       if (modelInvoke.mock.calls.length === 1) {
