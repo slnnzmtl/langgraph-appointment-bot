@@ -48,6 +48,9 @@ export const PATIENT_FALLBACK_MESSAGE =
 /** Code-owned first identity question once the booking choices are complete. */
 export const BOOKING_PHONE_QUESTION_UK =
   "Для завершення запису надішліть, будь ласка, ваш номер телефону.";
+/** Graph-owned reply when the typed phone matches a Contact linked to another Telegram user. */
+export const BOOKING_PHONE_OCCUPIED_UK =
+  "Цей номер уже прив’язаний до іншого акаунта. Надішліть, будь ласка, інший номер.";
 export const CLINIC_OPEN_HOUR = 9;
 export const CLINIC_CLOSE_HOUR = 18;
 export const CLINIC_SLOT_MINUTES = 30;

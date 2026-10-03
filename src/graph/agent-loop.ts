@@ -58,6 +58,7 @@ import { trackEvent, trackToolError } from "../analytics/track.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
+  BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
   BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
@@ -353,6 +354,35 @@ const phoneCandidateCanBeLinked = (
   }
 };
 
+const phoneCandidateHasLinkableRow = (identity: ContactIdentityResolution): boolean =>
+  identity.kind === "phone_candidate"
+  && identity.contacts.some(
+    (contact) => typeof contact.id === "string" && phoneCandidateCanBeLinked(identity, contact.id),
+  );
+
+/** True when create_contact's phone matches a stored phone candidate that cannot be linked. */
+const createContactPhoneMatchesOccupiedCandidate = (
+  identity: ContactIdentityResolution,
+  rawPhone: unknown,
+): boolean => {
+  if (identity.kind !== "phone_candidate" || typeof rawPhone !== "string" || rawPhone.trim() === "") {
+    return false;
+  }
+  const wanted = normalizeClinicPhone(rawPhone);
+  if (wanted == null) {
+    return false;
+  }
+  return identity.contacts.some((contact) => {
+    if (typeof contact.id !== "string" || phoneCandidateCanBeLinked(identity, contact.id)) {
+      return false;
+    }
+    const candidatePhone = typeof contact.phoneNumber === "string"
+      ? normalizeClinicPhone(contact.phoneNumber)
+      : null;
+    return candidatePhone === wanted;
+  });
+};
+
 /** Runtime-owned contact ladder once service, slot, and note are complete. */
 const bookingDetailsReply = (state: ClinicState): string | null => {
   const draft = state.bookingDraft;
@@ -369,7 +399,9 @@ const bookingDetailsReply = (state: ClinicState): string | null => {
     return BOOKING_PHONE_QUESTION_UK;
   }
   if (identity.kind === "phone_candidate") {
-    return PATIENT_FALLBACK_MESSAGE;
+    return phoneCandidateHasLinkableRow(identity)
+      ? PATIENT_FALLBACK_MESSAGE
+      : BOOKING_PHONE_OCCUPIED_UK;
   }
   const missingField = contactMissingFields(identity.contact)[0];
   if (missingField === "firstName") {
@@ -2803,6 +2835,28 @@ export const createAgentToolsNode = (
               continue;
             }
           }
+
+          if (
+            call.name === "create_contact"
+            && createContactPhoneMatchesOccupiedCandidate(
+              resolveContactIdentity(state.contactContext),
+              (call.args ?? {}).phoneNumber,
+            )
+          ) {
+            trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+                  hint:
+                    "This phone belongs to another Telegram account. Ask for a different number; do not create a Contact with it.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
         }
 
         if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
@@ -3563,6 +3617,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       // contact tools, but prose cannot skip or redefine the missing-field step.
       replyText = detailsReply;
     }
+    const clearOccupiedPhoneCandidate = detailsReply === BOOKING_PHONE_OCCUPIED_UK
+      ? { contactContext: null }
+      : {};
 
     // Model failure: deliver via handoff only — do not persist into conversation history.
     if (status === "error" && isModelFailureMessage(tagged)) {
@@ -3737,6 +3794,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...noteStatusForHandoff,
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
+        ...clearOccupiedPhoneCandidate,
       };
     }
 
@@ -3752,6 +3810,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...noteStatusForHandoff,
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
+        ...clearOccupiedPhoneCandidate,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -3766,6 +3825,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...noteStatusForHandoff,
       ...bookingDraftOfferUpdate,
       ...confirmationCleanup,
+      ...clearOccupiedPhoneCandidate,
       messages: [replyMessage],
     };
   };

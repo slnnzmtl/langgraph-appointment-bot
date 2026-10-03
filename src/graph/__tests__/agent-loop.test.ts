@@ -33,6 +33,7 @@ import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
+  BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
   BOOKING_REPLACE_MENU,
   CLINIC_ADDRESS,
@@ -1210,6 +1211,113 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     });
   });
 
+  it("does not create_contact when phone matches a stored occupied candidate", async () => {
+    const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
+    const createTool = tool(invoke, {
+      name: "create_contact",
+      description: "create",
+      schema: z.object({
+        firstName: z.string(),
+        lastName: z.string().optional(),
+        phoneNumber: z.string().optional(),
+      }),
+    });
+    const update = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        messages: [
+          new HumanMessage("+380632123123"),
+          new HumanMessage("Артем"),
+          new HumanMessage("Тест"),
+        ],
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            phoneNumber: "+380632123123",
+            cTelegram: "tg-other",
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({ contactId: null }),
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "create-occupied-1",
+            name: "create_contact",
+            args: {
+              firstName: "Артем",
+              lastName: "Тест",
+              phoneNumber: "+380 63 212 3123",
+            },
+            type: "tool_call",
+          }],
+        })],
+      }),
+      { configurable: {} },
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
+      error: "Contact link candidate required",
+    });
+  });
+
+  it("still creates a contact when the phone differs from the occupied candidate", async () => {
+    const invoke = vi.fn(async () => JSON.stringify({
+      success: true,
+      id: "c-new",
+      firstName: "Артем",
+      phoneNumber: "+380502838425",
+    }));
+    const createTool = tool(invoke, {
+      name: "create_contact",
+      description: "create",
+      schema: z.object({
+        firstName: z.string(),
+        lastName: z.string().optional(),
+        phoneNumber: z.string().optional(),
+      }),
+    });
+    const update = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        messages: [
+          new HumanMessage("+380632123123"),
+          new HumanMessage("+380502838425"),
+          new HumanMessage("Артем"),
+          new HumanMessage("Тест"),
+        ],
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            phoneNumber: "+380632123123",
+            cTelegram: "tg-other",
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({ contactId: null }),
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "create-other-1",
+            name: "create_contact",
+            args: {
+              firstName: "Артем",
+              lastName: "Тест",
+              phoneNumber: "+380 50 283 8425",
+            },
+            type: "tool_call",
+          }],
+        })],
+      }),
+      { configurable: {} },
+    );
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.contactContext).toMatchObject({
+      ownership: "telegram",
+      contacts: [{ id: "c-new" }],
+    });
+  });
+
   it("keeps an incomplete linked contact in the model path until details are updated", () => {
     const state = clinicState({
       contactContext: {
@@ -2367,6 +2475,63 @@ describe("createAgentFinalizeNode", () => {
     expect(extractMessageTextContent((update.messages as AIMessage[])[0]!.content)).toBe(
       BOOKING_PHONE_QUESTION_UK,
     );
+  });
+
+  it("code-owns the occupied-phone reply and clears the phone candidate", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            phoneNumber: "+380632123123",
+            cTelegram: "tg-other",
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        agentMessages: [
+          new HumanMessage("+380 63 212 3123"),
+          new AIMessage("Готово! Запис створено."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_OCCUPIED_UK);
+    expect(extractMessageTextContent((update.messages as AIMessage[])[0]!.content)).toBe(
+      BOOKING_PHONE_OCCUPIED_UK,
+    );
+    expect(update.contactContext).toBeNull();
+  });
+
+  it("keeps the linkable phone-candidate fallback until link succeeds", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            phoneNumber: "+380632123123",
+            cTelegram: null,
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        agentMessages: [
+          new HumanMessage("+380 63 212 3123"),
+          new AIMessage("Готово! Запис створено."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.contactContext).toBeUndefined();
   });
 
   const agent: ClinicAgentDefinition = {
