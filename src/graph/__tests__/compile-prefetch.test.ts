@@ -278,6 +278,149 @@ describe("compileClinicGraph prefetch once", () => {
 });
 
 describe("compileClinicGraph runtime-owned booking transition", () => {
+  it("continues a successful contact link directly to the single meeting HITL", async () => {
+    const modelInvoke = vi.fn(async () => {
+      if (modelInvoke.mock.calls.length === 1) {
+        return new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "link-1",
+            name: "link_telegram_to_contact",
+            args: { contactId: "c-phone" },
+            type: "tool_call",
+          }],
+        });
+      }
+      return new AIMessage("Підтвердіть, будь ласка, запис.");
+    });
+    const linkInvoke = vi.fn(async () => JSON.stringify({ success: true }));
+    const availabilityInvoke = vi.fn(async () => JSON.stringify({
+      date: "2026-10-19",
+      slots: [{
+        id: "slot-19-1130",
+        label: "11:30",
+        dateStart: "2026-10-19T11:30:00",
+        dateEnd: "2026-10-19T12:30:00",
+      }],
+      stepMinutes: 30,
+      query: {
+        kind: "exact",
+        date: "2026-10-19",
+        rangeFrom: "2026-10-19",
+        rangeThrough: "2026-10-19",
+        coverageComplete: true,
+      },
+    }));
+    const createInvoke = vi.fn(async (input: Record<string, unknown>) =>
+      interrupt({ type: "confirm_booking", draft: input }));
+    const linkContact = tool(linkInvoke, {
+      name: "link_telegram_to_contact",
+      description: "link a phone-matched contact",
+      schema: z.object({ contactId: z.string() }),
+    });
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "revalidate a selected slot",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const createMeeting = tool(createInvoke, {
+      name: "create_meeting",
+      description: "create a meeting after confirmation",
+      schema: z.object({
+        name: z.string(),
+        dateStart: z.string(),
+        dateEnd: z.string(),
+        contactId: z.string(),
+        serviceId: z.string(),
+        confirmMessage: z.string(),
+        description: z.string().optional(),
+      }),
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [linkContact, presentAvailability, createMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage("+380 63 212 3123")],
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            firstName: "Daniel",
+            lastName: "Test",
+            phoneNumber: "+380632123123",
+            cTelegram: null,
+            missingFields: [],
+          }],
+        },
+        availabilityContext: {
+          days: [{
+            date: "2026-10-19",
+            slots: [{
+              id: "slot-19-1130",
+              label: "11:30",
+              dateStart: "2026-10-19T11:30:00",
+              dateEnd: "2026-10-19T12:30:00",
+            }],
+          }],
+          stepMinutes: 30,
+          serviceId: "svc-neotiva",
+        },
+        bookingDraft: {
+          version: 4,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-neotiva",
+              name: "Збільшення губ Neotiva",
+              durationMinutes: 60,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-19",
+          selectedSlot: {
+            slotId: "slot-19-1130",
+            label: "11:30",
+            dateStart: "2026-10-19T11:30:00",
+            dateEnd: "2026-10-19T12:30:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: null,
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      { configurable: { thread_id: "link-direct-to-hitl" } },
+    );
+
+    expect(linkInvoke).toHaveBeenCalledOnce();
+    expect(availabilityInvoke).toHaveBeenCalledOnce();
+    expect(createInvoke).toHaveBeenCalledOnce();
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+  });
+
   it.each(["без коментаря", INTENT_SKIP_LABEL])(
     "routes bare day → bare hour → %s through fresh validation into meeting HITL",
     async (skipReply) => {

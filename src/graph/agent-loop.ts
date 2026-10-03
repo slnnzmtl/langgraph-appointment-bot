@@ -1212,8 +1212,10 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
 /**
  * Continue a runtime-owned compound command after its prerequisite tool step.
  * A successful revalidation can advance to create_meeting; a successful
- * replacement cancellation can advance to revalidation/create. All other tool
- * results still return to the LLM unless they are terminal mutation outcomes.
+ * contact resolution can advance to revalidation/create without a second,
+ * model-authored confirmation; a successful replacement cancellation can
+ * advance to revalidation/create. All other tool results still return to the
+ * LLM unless they are terminal mutation outcomes.
  */
 const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
   const confirmation = pendingChatConfirmationDecision(state);
@@ -1221,6 +1223,14 @@ const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
     return confirmation.kind === "affirmed";
   }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
+    return true;
+  }
+  const contactResolvedThisTurn = state.contactContext?.ownership === "telegram"
+    && (
+      toolRanThisTurn(state.agentMessages ?? [], "create_contact")
+      || toolRanThisTurn(state.agentMessages ?? [], "link_telegram_to_contact")
+    );
+  if (contactResolvedThisTurn && createCommandFromBookingDraft(state) != null) {
     return true;
   }
   const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
