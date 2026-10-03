@@ -7,6 +7,7 @@ import { z } from "zod";
 
 import { clearPendingConfirmsForTests } from "../../tools/meeting-confirm.js";
 import { createMeetingTools } from "../../tools/meeting-tools.js";
+import { createContactTools } from "../../tools/contact-tools.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
@@ -293,7 +294,13 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       }
       return new AIMessage("Підтвердіть, будь ласка, запис.");
     });
-    const linkInvoke = vi.fn(async () => JSON.stringify({ success: true }));
+    const crmCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const [linkContact] = createContactTools({
+      callTool: async (name, args) => {
+        crmCalls.push({ name, args: args ?? {} });
+        return `Successfully updated Contact record with ID: ${String(args?.entityId ?? "")}`;
+      },
+    }).filter((candidate) => candidate.name === "link_telegram_to_contact");
     const availabilityInvoke = vi.fn(async () => JSON.stringify({
       date: "2026-10-19",
       slots: [{
@@ -311,12 +318,24 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         coverageComplete: true,
       },
     }));
-    const createInvoke = vi.fn(async (input: Record<string, unknown>) =>
-      interrupt({ type: "confirm_booking", draft: input }));
-    const linkContact = tool(linkInvoke, {
-      name: "link_telegram_to_contact",
-      description: "link a phone-matched contact",
-      schema: z.object({ contactId: z.string() }),
+    const createInvoke = vi.fn(async (input: Record<string, unknown>) => {
+      if (input.confirmationGiven === true) {
+        return JSON.stringify({ id: "meeting-1" });
+      }
+      const decision = interrupt({ type: "confirm_booking", draft: input });
+      if (
+        typeof decision === "object"
+        && decision != null
+        && "userReply" in decision
+        && typeof decision.userReply === "string"
+      ) {
+        return JSON.stringify({
+          awaitingConfirmation: true,
+          userReply: decision.userReply,
+          draft: { command: { action: "create", payload: input } },
+        });
+      }
+      return JSON.stringify({ id: "meeting-1" });
     });
     const presentAvailability = tool(availabilityInvoke, {
       name: "present_availability_slots",
@@ -339,6 +358,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         serviceId: z.string(),
         confirmMessage: z.string(),
         description: z.string().optional(),
+        confirmationGiven: z.boolean().optional(),
       }),
     });
     const { graph } = compileClinicGraph({
@@ -357,7 +377,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       messageHistoryMaxTokens: 6_000,
     });
 
-    const result = await graph.invoke(
+    const config = { configurable: { thread_id: "link-direct-to-hitl" } };
+    const result = await runWithTelegramUserId("tg-42", () => graph.invoke(
       {
         messages: [new HumanMessage("+380 63 212 3123")],
         contactContext: {
@@ -411,14 +432,41 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
           replacement: null,
         },
       } as never,
-      { configurable: { thread_id: "link-direct-to-hitl" } },
-    );
+      config,
+    ));
 
-    expect(linkInvoke).toHaveBeenCalledOnce();
+    expect(crmCalls).toEqual([{
+      name: "update_entity",
+      args: {
+        entityType: "Contact",
+        entityId: "c-phone",
+        data: { cTelegram: "tg-42" },
+      },
+    }]);
     expect(availabilityInvoke).toHaveBeenCalledOnce();
     expect(createInvoke).toHaveBeenCalledOnce();
     expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(result.bookingDraft).toMatchObject({
+      contactId: "c-phone",
+      pendingCommand: { action: "create" },
+    });
     expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+
+    const resumed = await runWithTelegramUserId("tg-42", () => graph.invoke(
+      new Command({
+        resume: { userReply: "Так, підтверджую" },
+        update: { messages: [new HumanMessage("Так, підтверджую")] },
+      }) as never,
+      config,
+    ));
+
+    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(createInvoke).toHaveBeenCalledTimes(3);
+    expect(createInvoke.mock.calls.at(-1)?.[0]).toMatchObject({
+      contactId: "c-phone",
+      confirmationGiven: true,
+    });
+    expect(resumed.__interrupt__).toBeUndefined();
   });
 
   it.each(["без коментаря", INTENT_SKIP_LABEL])(

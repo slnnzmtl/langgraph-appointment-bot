@@ -3010,13 +3010,18 @@ export const createAgentToolsNode = (
       }
       return asJsonRecord(extractMessageTextContent(message.content).trim())?.error === "Not authorized";
     });
-    if (authorizationFailure && state.bookingDraft) {
+    if (authorizationFailure) {
       // The contact must be linked before this mutation can be retried. Clear
-      // both the frozen command and the contact projection so the next route
-      // returns to identity resolution instead of replaying the same command.
-      update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-        type: "contact_unresolved",
-      });
+      // every projection that could reconstruct the rejected command so the
+      // next route returns to identity resolution instead of replaying it.
+      if (state.bookingDraft) {
+        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+          type: "contact_unresolved",
+        });
+      }
+      update.contactContext = null;
+      update.bookingContext = null;
+      update.prefetchDirty = true;
     }
 
     const pendingCommand = resultMessages
@@ -3195,11 +3200,18 @@ export const createAgentToolsNode = (
       update.contactContext = { ...found, ownership: "phone" };
     }
 
+    let projectedBookingDraft = Object.prototype.hasOwnProperty.call(update, "bookingDraft")
+      ? (update.bookingDraft as BookingDraft | null)
+      : state.bookingDraft;
+
     for (const message of resultMessages) {
       if (!(message instanceof ToolMessage)) {
         continue;
       }
       if (message.name !== "create_contact" && message.name !== "link_telegram_to_contact") {
+        continue;
+      }
+      if (authorizationFailure) {
         continue;
       }
       const record = asJsonRecord(extractMessageTextContent(message.content).trim());
@@ -3213,28 +3225,42 @@ export const createAgentToolsNode = (
       const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args)
         ? call.args as Record<string, unknown>
         : {};
-      const contactId = message.name === "link_telegram_to_contact"
+      const resolvedContactId = typeof record.id === "string" && record.id.length > 0
+        ? record.id
+        : null;
+      const requestedContactId = message.name === "link_telegram_to_contact"
         ? args.contactId
-        : record.id;
-      if (typeof contactId !== "string" || contactId.length === 0) {
+        : null;
+      if (
+        resolvedContactId == null
+        || (message.name === "link_telegram_to_contact"
+          && resolvedContactId !== requestedContactId)
+      ) {
         continue;
       }
       const previous = (update.contactContext as ClinicState["contactContext"] | undefined)
         ?? state.contactContext;
-      const previousRow = contactRowForId(previous, contactId) ?? {};
+      const previousRow = contactRowForId(previous, resolvedContactId) ?? {};
       const createdRow = message.name === "create_contact"
         ? {
             ...previousRow,
-            id: contactId,
+            id: resolvedContactId,
             ...(typeof args.firstName === "string" ? { firstName: args.firstName } : {}),
             ...(typeof args.lastName === "string" ? { lastName: args.lastName } : {}),
             ...(typeof args.phoneNumber === "string" ? { phoneNumber: args.phoneNumber } : {}),
           }
-        : { ...previousRow, id: contactId };
+        : { ...previousRow, id: resolvedContactId };
       update.contactContext = {
         ownership: "telegram",
         contacts: [createdRow],
       };
+      if (projectedBookingDraft) {
+        projectedBookingDraft = reduceBookingDraft(projectedBookingDraft, {
+          type: "contact_resolved",
+          contactId: resolvedContactId,
+        });
+        update.bookingDraft = projectedBookingDraft;
+      }
     }
 
     if (crmWriteDirtiesPrefetch(resultMessages)) {

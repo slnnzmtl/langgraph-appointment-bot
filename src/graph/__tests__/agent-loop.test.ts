@@ -1062,7 +1062,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
   });
 
   it("marks a successfully linked phone match as Telegram-owned", async () => {
-    const linkTool = tool(async () => JSON.stringify({ success: true }), {
+    const linkTool = tool(async () => JSON.stringify({ success: true, id: "c-phone" }), {
       name: "link_telegram_to_contact",
       description: "link",
       schema: z.object({ contactId: z.string() }),
@@ -1073,6 +1073,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
           ownership: "phone",
           contacts: [{ id: "c-phone", firstName: "Ada", cTelegram: null }],
         },
+        bookingDraft: canonicalBookingDraft({ contactId: null }),
         agentMessages: [new AIMessage({
           content: "",
           tool_calls: [{
@@ -1090,6 +1091,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       ownership: "telegram",
       contacts: [{ id: "c-phone" }],
     });
+    expect(update.bookingDraft).toMatchObject({ contactId: "c-phone" });
   });
 
   it("clears a create command after CRM authorization failure", async () => {
@@ -1156,6 +1158,16 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       contactId: null,
       pendingCommand: null,
     });
+    expect(update.contactContext).toBeNull();
+    expect(update.bookingContext).toBeNull();
+    expect(update.prefetchDirty).toBe(true);
+    expect(routeAfterAgentTools(
+      clinicState({ ...clinicState(), ...update }),
+      "llm",
+      "tools",
+      "mutation-finalize",
+      "command-prepare",
+    )).toBe("llm");
   });
 
   it("does not call create_meeting for a phone candidate before linking", async () => {

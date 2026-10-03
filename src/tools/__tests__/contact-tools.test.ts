@@ -7,6 +7,7 @@ import {
   createContactTools,
   extractContactIdFromSearchResult,
   lookupContactByTelegram,
+  normalizeContactLinkSuccess,
   normalizeContactLookupResult,
 } from "../contact-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
@@ -155,7 +156,7 @@ describe("contact-tools", () => {
       );
 
       expect(link).toBeDefined();
-      await link!.invoke({ contactId: "c-99" });
+      const result = await link!.invoke({ contactId: "c-99" });
 
       expect(calls).toHaveLength(1);
       expect(calls[0]).toEqual({
@@ -166,7 +167,21 @@ describe("contact-tools", () => {
           data: { cTelegram: "tg-42" },
         },
       });
+      expect(JSON.parse(result as string)).toEqual({
+        success: true,
+        id: "c-99",
+        contactId: "c-99",
+      });
     });
+  });
+
+  it.each([
+    ["generic success", "Successfully updated Contact record", "c-99"],
+    ["mismatched id", "Successfully updated Contact record with ID: c-other", "c-99"],
+    ["empty id", "Successfully updated Contact record with ID:   ", "c-99"],
+    ["malformed", "updated c-99", "c-99"],
+  ])("does not normalize %s", (_label, raw, expectedId) => {
+    expect(normalizeContactLinkSuccess(raw, expectedId)).toBe(raw);
   });
 
   it("lookupContactByTelegram uses holder id", async () => {

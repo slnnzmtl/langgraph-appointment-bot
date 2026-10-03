@@ -10,6 +10,15 @@ import { toToolResult } from "./tool-result.js";
 
 const PHONE_NUMBER_DESCRIBE = "Local UA or +international; normalized to E.164.";
 
+/** Normalize EspoCRM's exact Contact update success response for link ownership. */
+export const normalizeContactLinkSuccess = (raw: string, expectedContactId: string): string => {
+  const match = /^Successfully updated Contact record with ID:\s*(\S+)$/.exec(raw.trim());
+  if (!match || match[1] !== expectedContactId) {
+    return raw;
+  }
+  return JSON.stringify({ success: true, id: match[1], contactId: match[1] });
+};
+
 export type ContactToolsOptions = {
   callTool: McpCallTool;
 };
@@ -268,12 +277,17 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
             data: { cTelegram },
           }),
         );
-        return finishTrackedWrite("link_telegram_to_contact", result, () => {
-          trackEvent("contact_telegram_linked", {
-            outcome: "success",
-            contact_id: input.contactId,
-          });
-        });
+        return finishTrackedWrite(
+          "link_telegram_to_contact",
+          normalizeContactLinkSuccess(result, input.contactId),
+          () => {
+            trackEvent("contact_telegram_linked", {
+              outcome: "success",
+              contact_id: input.contactId,
+            });
+          },
+          { requireEntityId: true },
+        );
       } catch (error) {
         return toolErrorJson("link_telegram_to_contact", error);
       }
