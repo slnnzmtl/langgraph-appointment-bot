@@ -10,8 +10,8 @@ import { toToolResult } from "./tool-result.js";
 
 const PHONE_NUMBER_DESCRIBE = "Local UA or +international; normalized to E.164.";
 
-/** Normalize EspoCRM's exact Contact update success response for link ownership. */
-export const normalizeContactLinkSuccess = (raw: string, expectedContactId: string): string => {
+/** Normalize EspoCRM's exact Contact update response into ID-matched committed evidence. */
+export const normalizeContactUpdateSuccess = (raw: string, expectedContactId: string): string => {
   const match = /^Successfully updated Contact record with ID:\s*(\S+)$/.exec(raw.trim());
   if (!match || match[1] !== expectedContactId) {
     return raw;
@@ -279,7 +279,7 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
         );
         return finishTrackedWrite(
           "link_telegram_to_contact",
-          normalizeContactLinkSuccess(result, input.contactId),
+          normalizeContactUpdateSuccess(result, input.contactId),
           () => {
             trackEvent("contact_telegram_linked", {
               outcome: "success",
@@ -328,13 +328,18 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
             },
           }),
         );
-        return finishTrackedWrite("update_contact", result, () => {
-          trackEvent("contact_updated", {
-            outcome: "success",
-            contact_id: input.contactId,
-            fields_updated: fieldsUpdated,
-          });
-        });
+        return finishTrackedWrite(
+          "update_contact",
+          normalizeContactUpdateSuccess(result, input.contactId),
+          () => {
+            trackEvent("contact_updated", {
+              outcome: "success",
+              contact_id: input.contactId,
+              fields_updated: fieldsUpdated,
+            });
+          },
+          { requireEntityId: true },
+        );
       } catch (error) {
         return toolErrorJson("update_contact", error);
       }

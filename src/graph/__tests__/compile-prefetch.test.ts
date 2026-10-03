@@ -12,6 +12,7 @@ import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_PHONE_QUESTION_UK,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
 } from "../../shared/clinic-constants.js";
@@ -332,7 +333,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const reply = String(result.messages.at(-1)?.content);
     expect(modelInvoke).toHaveBeenCalledOnce();
     expect(result.__interrupt__).toBeUndefined();
-    expect(reply).toContain("не вдалося обробити запит");
+    expect(reply).toBe(BOOKING_PHONE_QUESTION_UK);
     expect(reply).not.toContain("Запис створено");
   });
 
@@ -595,6 +596,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         {
           messages: [new HumanMessage("27")],
           contactContext: {
+            ownership: "telegram",
             contacts: [{
               id: "c-1",
               firstName: "Ada",
@@ -774,6 +776,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       {
         messages: [new HumanMessage("записатися")],
         contactContext: {
+          ownership: "telegram",
           contacts: [{
             id: "c-1",
             firstName: "Ada",
@@ -931,6 +934,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const first = await invoke({
       messages: [new HumanMessage("записатися")],
       contactContext: {
+        ownership: "telegram",
         contacts: [{
           id: "c-1",
           firstName: "Ada",
@@ -1061,6 +1065,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const first = await invoke({
       messages: [new HumanMessage("Підтверджую")],
       contactContext: {
+        ownership: "telegram",
         contacts: [{
           id: "c-1",
           firstName: "Ada",

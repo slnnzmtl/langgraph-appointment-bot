@@ -19,7 +19,6 @@ export const TIER1_EVENTS = [
   "booking_note_step",
   "booking_create_blocked_note",
   "booking_checkpoint_migrated",
-  "booking_transition_rejected",
   "booking_consultation_guard",
   "meeting_mutation_outcome",
   "visit_status_response",

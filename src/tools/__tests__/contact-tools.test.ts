@@ -7,7 +7,7 @@ import {
   createContactTools,
   extractContactIdFromSearchResult,
   lookupContactByTelegram,
-  normalizeContactLinkSuccess,
+  normalizeContactUpdateSuccess,
   normalizeContactLookupResult,
 } from "../contact-tools.js";
 import { runWithTelegramUserId } from "../telegram-user-context.js";
@@ -127,7 +127,7 @@ describe("contact-tools", () => {
     const [update] = createContactTools({ callTool }).filter((tool) => tool.name === "update_contact");
 
     expect(update).toBeDefined();
-    await update!.invoke({
+    const result = await update!.invoke({
       contactId: "c-99",
       firstName: "Ada",
       lastName: "Lovelace",
@@ -146,6 +146,11 @@ describe("contact-tools", () => {
           phoneNumber: "+380501112233",
         },
       },
+    });
+    expect(JSON.parse(result as string)).toEqual({
+      success: true,
+      id: "c-99",
+      contactId: "c-99",
     });
   });
 
@@ -181,7 +186,7 @@ describe("contact-tools", () => {
     ["empty id", "Successfully updated Contact record with ID:   ", "c-99"],
     ["malformed", "updated c-99", "c-99"],
   ])("does not normalize %s", (_label, raw, expectedId) => {
-    expect(normalizeContactLinkSuccess(raw, expectedId)).toBe(raw);
+    expect(normalizeContactUpdateSuccess(raw, expectedId)).toBe(raw);
   });
 
   it("lookupContactByTelegram uses holder id", async () => {
