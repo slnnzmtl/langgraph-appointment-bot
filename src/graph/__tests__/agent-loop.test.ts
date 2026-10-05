@@ -110,6 +110,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   selectedSlot: null,
   selectedAvailabilityDate: null,
   bookingDraft: null,
+  bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,
   ...overrides,
 });
@@ -446,7 +447,7 @@ describe("createAgentPrepareNode", () => {
     expect((agentMessages[4] as HumanMessage).content).toBe("10:00");
   });
 
-  it("repairs a malformed legacy checkpoint from explicit consultation acceptance", async () => {
+  it("does not repair a malformed draft from consultation prose", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
       clinicState({
@@ -485,19 +486,13 @@ describe("createAgentPrepareNode", () => {
       }),
     );
 
-    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-      status: "accepted",
-      service: { id: CONSULTATION_SERVICE_ID },
-    });
-    expect(update.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-16T11:00:00");
-    expect(update.bookingDraft?.note).toMatchObject({ status: "answered", value: "біль" });
-    expect(update.bookingDraft?.contactId).toBe("contact-1");
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(update.bookingDraft?.serviceAcceptance).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.selectedAvailabilityDate).toBeUndefined();
   });
 
-  it("folds a date after a pending consultation offer into the migrated draft", async () => {
+  it("folds a date after a pending consultation offer into the draft", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
       clinicState({
@@ -563,24 +558,7 @@ describe("createAgentPrepareNode", () => {
     });
   });
 
-  it("does not revive an empty legacy draft from old consultation history", async () => {
-    const prepare = createAgentPrepareNode("booking");
-    const update = await prepare(
-      clinicState({
-        messages: [
-          new AIMessage("Бажаєте записатися на консультацію?"),
-          new HumanMessage("Головне меню"),
-          new AIMessage("Чим можу допомогти?"),
-          new HumanMessage("скільки коштує ботокс?"),
-        ],
-        bookingDraft: createEmptyBookingDraft(),
-      }),
-    );
-
-    expect(update.bookingDraft).toBeNull();
-  });
-
-  it("opens a fresh session from an empty legacy draft on the same turn", async () => {
+  it("opens a fresh session from an empty draft on the same turn", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
       clinicState({
@@ -611,7 +589,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.bookingDraft?.contactId).not.toBe("stale-contact");
   });
 
-  it("does not restore a malformed draft when migration finds no service", async () => {
+  it("leaves a malformed draft untouched when the turn does not open a session", async () => {
     const prepare = createAgentPrepareNode("booking");
     const malformed = {
       ...createEmptyBookingDraft(),
@@ -622,20 +600,28 @@ describe("createAgentPrepareNode", () => {
         dateEnd: "2026-10-16T11:30:00",
         label: "11:00",
       },
-      note: { status: "answered", value: "біль" },
+      note: { status: "answered" as const, value: "біль" },
       serviceAcceptance: null,
     };
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("скільки коштує ботокс?")],
         bookingDraft: malformed,
+        bookingNoteStatus: "answered",
+        selectedSlot: malformed.selectedSlot,
+        selectedAvailabilityDate: "2026-10-16",
       }),
     );
 
-    expect(update.bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(update.bookingDraft).toMatchObject({
+      version: 6,
+      serviceAcceptance: null,
+      selectedDate: "2026-10-16",
+      note: { status: "answered", value: "біль" },
+    });
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.selectedAvailabilityDate).toBeUndefined();
   });
 
   it("opens a fresh session after a malformed draft on the same turn", async () => {
@@ -668,33 +654,6 @@ describe("createAgentPrepareNode", () => {
       selectedSlot: null,
       note: { status: "unasked" },
     });
-  });
-
-  it("does not revive consultation from stale projections after an empty abandon", async () => {
-    const prepare = createAgentPrepareNode("booking");
-    const update = await prepare(
-      clinicState({
-        messages: [
-          new AIMessage("Бажаєте записатися на консультацію?"),
-          new HumanMessage("Так"),
-          new AIMessage("О котрій зручно?"),
-          new HumanMessage("скільки коштує ботокс?"),
-        ],
-        bookingDraft: createEmptyBookingDraft(),
-        bookingNoteStatus: "answered",
-        selectedAvailabilityDate: "2026-10-16",
-        selectedSlot: {
-          dateStart: "2026-10-16T11:00:00",
-          dateEnd: "2026-10-16T11:30:00",
-          label: "11:00",
-        },
-      }),
-    );
-
-    expect(update.bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
   });
 });
 

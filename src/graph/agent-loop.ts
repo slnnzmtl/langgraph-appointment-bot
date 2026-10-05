@@ -113,8 +113,6 @@ import {
 import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
   closedBookingSessionUpdate,
-  isEmptyLegacyBookingDraft,
-  migrateLegacyBookingState,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -2088,125 +2086,44 @@ export const createAgentPrepareNode = (agentId: string) =>
     if (agentId === BOOKING_AGENT_ID) {
       const contactIdentity = resolveContactIdentity(state.contactContext);
       const contactId = contactIdentity.kind === "owned" ? contactIdentity.contactId : null;
-      const historyText = [
-        ...(state.messages ?? []).map((message) => extractMessageTextContent(message.content)),
-        ...(state.lastHandoff?.replyText ? [state.lastHandoff.replyText] : []),
-      ];
-      const onlyCatalogService = state.servicesContext?.list.length === 1
-        ? state.servicesContext.list[0]
-        : undefined;
-      const recoveredService = onlyCatalogService
-        ? {
-            id: onlyCatalogService.id,
-            name: onlyCatalogService.name,
-            ...(onlyCatalogService.duration != null
-              ? { durationMinutes: onlyCatalogService.duration }
-              : {}),
-            source: "catalog" as const,
-          }
-        : typeof state.availabilityContext?.serviceId === "string"
-          ? {
-              id: state.availabilityContext.serviceId,
-              source: "catalog" as const,
-            }
-          : undefined;
-      // Empty objects left by older abandon paths are not sessions. Canonicalize
-      // before migration so old chat history cannot revive a closed draft.
-      const startedAsEmptyLegacy = isEmptyLegacyBookingDraft(state.bookingDraft);
-      const checkpointDraft = startedAsEmptyLegacy ? null : state.bookingDraft;
-      const hasMalformedDraft = checkpointDraft != null
-        && checkpointDraft.serviceAcceptance?.service.id == null;
-      const hasLegacyProjection = checkpointDraft == null
-        && !startedAsEmptyLegacy
-        && (
-          state.bookingNoteStatus !== "unasked"
-          || state.selectedSlot != null
-          || state.selectedAvailabilityDate != null
-        );
-      const migrationAttempted = hasMalformedDraft || hasLegacyProjection;
-      const migratedRaw = migrationAttempted
-        ? migrateLegacyBookingState(
-            {
-              bookingDraft: checkpointDraft,
-              bookingNoteStatus: state.bookingNoteStatus,
-              selectedSlot: state.selectedSlot,
-              selectedAvailabilityDate: state.selectedAvailabilityDate,
-              ...(recoveredService ? { recoveredService } : {}),
-            },
-            { historyText, contactId: typeof contactId === "string" ? contactId : null },
-          )
-        : null;
-      const migrated = isEmptyLegacyBookingDraft(migratedRaw) ? null : migratedRaw;
-      const migrationUpdate = startedAsEmptyLegacy || migrationAttempted
-        ? {
-            bookingNoteStatus: "unasked" as const,
-            selectedSlot: null,
-            selectedAvailabilityDate: null,
-          }
-        : {};
-      if (migrated) {
-        const historyHasExplicitConsultationAcceptance = historyText.some(
-          (text, index) => /(?:консультац|consultation)/iu.test(text)
-            && /\?/u.test(text)
-            && historyText.slice(index + 1).some((later) => /^(?:так|yes)\b/iu.test(later.trim())),
-        );
-        const historyHasConsultationOffer = historyText.some(
-          (text) => /(?:консультац|consultation)/iu.test(text) && /\?/u.test(text),
-        );
-        trackEvent("booking_checkpoint_migrated", {
-          source: historyHasExplicitConsultationAcceptance
-            ? "explicit_consultation_acceptance"
-            : historyHasConsultationOffer
-              ? "pending_offer"
-              : recoveredService
-                ? "catalog"
-                : checkpointDraft
-                  ? "existing_draft"
-                  : "unknown",
-        });
-      }
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
-      const migratedState = {
-        ...state,
-        bookingDraft: migrationAttempted ? migrated : checkpointDraft,
-      };
       const pendingRescheduleRequested =
-        migratedState.lastHandoff?.pendingAction === "reschedule"
-        && migratedState.bookingContext?.meetings.length === 1
+        state.lastHandoff?.pendingAction === "reschedule"
+        && state.bookingContext?.meetings.length === 1
         && resolveBookingScheduleRequest(
-          lastPatientText(migratedState),
+          lastPatientText(state),
           kyivToday(),
           {
-            availabilityContext: migratedState.availabilityContext,
-            availabilityCursor: migratedState.availabilityCursor,
-            selectedDate: migratedState.bookingDraft?.selectedDate,
+            availabilityContext: state.availabilityContext,
+            availabilityCursor: state.availabilityCursor,
+            selectedDate: state.bookingDraft?.selectedDate,
           },
         )?.kind === "exact";
-      const rescheduleRequested = isDirectRescheduleIntent(migratedState)
+      const rescheduleRequested = isDirectRescheduleIntent(state)
         || pendingRescheduleRequested
-        || migratedState.bookingDraft?.mode === "reschedule";
+        || state.bookingDraft?.mode === "reschedule";
       const rescheduleTarget = rescheduleRequested
-        ? rescheduleTargetFromBookingContext(migratedState)
+        ? rescheduleTargetFromBookingContext(state)
         : null;
       const startedReschedule = rescheduleRequested
-        && migratedState.bookingDraft?.mode !== "reschedule"
-        ? reduceBookingDraft(migratedState.bookingDraft, {
+        && state.bookingDraft?.mode !== "reschedule"
+        ? reduceBookingDraft(state.bookingDraft, {
             type: "reschedule_started",
             meeting: rescheduleTarget,
           })
-        : migratedState.bookingDraft?.mode === "reschedule"
-          && migratedState.bookingDraft.rescheduleTarget == null
+        : state.bookingDraft?.mode === "reschedule"
+          && state.bookingDraft.rescheduleTarget == null
           && rescheduleTarget != null
-          ? reduceBookingDraft(migratedState.bookingDraft, {
+          ? reduceBookingDraft(state.bookingDraft, {
               type: "reschedule_started",
               meeting: rescheduleTarget,
             })
           : undefined;
       const rescheduleState = startedReschedule
-        ? { ...migratedState, bookingDraft: startedReschedule }
-        : migratedState;
+        ? { ...state, bookingDraft: startedReschedule }
+        : state;
       let bookingDraft: BookingDraft | null | undefined =
         rescheduleState.bookingDraft?.mode === "reschedule"
           ? rescheduleState.bookingDraft
@@ -2231,10 +2148,7 @@ export const createAgentPrepareNode = (agentId: string) =>
         ? { ...rescheduleState, bookingDraft }
         : rescheduleState;
       const noteUpdate = advanceBookingNoteStep(workingState);
-      // Legacy projections are returned only for old checkpoints that have no
-      // draft. New flows receive a single aggregate update.
       Object.assign(update, noteUpdate);
-      Object.assign(update, migrationUpdate);
       bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
       if (
         bookingDraft
@@ -2249,12 +2163,8 @@ export const createAgentPrepareNode = (agentId: string) =>
           contactId,
         });
       }
-      // One write: persist the session opened this turn, or null when an empty
-      // legacy checkpoint must be cleared. Never wipe a same-turn open.
       if (bookingDraft) {
         update.bookingDraft = bookingDraft;
-      } else if (startedAsEmptyLegacy || migrationAttempted) {
-        Object.assign(update, closedBookingSessionUpdate());
       }
     }
     return update;

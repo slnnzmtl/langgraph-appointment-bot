@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOOKING_SCHEMA_VERSION,
   createEmptyBookingDraft,
   isEmptyLegacyBookingDraft,
-  migrateLegacyBookingState,
   reduceBookingDraft,
+  upgradeBookingCheckpoint,
   type BookingEvent,
 } from "../booking-draft.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
@@ -412,83 +413,186 @@ describe("BookingDraft reducer", () => {
     expect(declined).toBeNull();
   });
 
-  it("does not fabricate a service while normalizing legacy state", () => {
-    expect(migrateLegacyBookingState({
+  it("does not invent Consultation from projections alone", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
       selectedAvailabilityDate: "2026-10-17",
-    })).toMatchObject({ phase: "service", serviceAcceptance: null });
-
-    const migrated = migrateLegacyBookingState({
-      selectedAvailabilityDate: "2026-10-17",
-      recoveredService: {
-        id: "svc-1",
-        name: "Consultation",
-        source: "catalog",
-      },
+      selectedSlot,
+      bookingNoteStatus: "awaiting",
     });
-    expect(migrated).toMatchObject({
-      phase: "service",
-      serviceAcceptance: {
-        status: "pending",
-        service: { id: "svc-1" },
-      },
-      selectedDate: null,
+
+    expect(upgraded.update).toMatchObject({
+      bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
+      bookingDraft: null,
+      bookingNoteStatus: "unasked",
+      selectedSlot: null,
+      selectedAvailabilityDate: null,
+    });
+    expect(upgraded.telemetry).toMatchObject({
+      source: "legacy_projection",
+      schemaVersion: 0,
+      outcome: "fail_closed",
     });
   });
 
-  it("migrates an accepted consultation checkpoint idempotently", () => {
-    const malformed = {
+  it("keeps a valid accepted draft and clears legacy projections", () => {
+    const draft = {
       ...createEmptyBookingDraft(),
       version: 7,
       serviceAcceptance: {
-        status: "accepted",
-        service: undefined,
+        status: "accepted" as const,
+        service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "direct" as const },
       },
       selectedDate: "2026-10-17",
       selectedSlot,
-      note: { status: "answered", value: "потрібен час" },
+      note: { status: "answered" as const, value: "потрібен час" },
       contactId: "contact-1",
-    } as never;
-    const context = {
-      historyText: ["Бажаєте записатися на консультацію?", "Так"],
-      contactId: "contact-1",
+      phase: "ready" as const,
     };
-    const migrated = migrateLegacyBookingState({ bookingDraft: malformed }, context);
-    const repeated = migrateLegacyBookingState({ bookingDraft: migrated }, context);
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: draft,
+      bookingNoteStatus: "answered",
+      selectedSlot,
+      selectedAvailabilityDate: "2026-10-17",
+    });
+    const repeated = upgradeBookingCheckpoint({
+      ...upgraded.update,
+      bookingDraft: upgraded.update.bookingDraft,
+    });
 
-    expect(migrated).toMatchObject({
+    expect(upgraded.update.bookingDraft).toMatchObject({
       version: 7,
       phase: "ready",
       serviceAcceptance: {
         status: "accepted",
-        service: { id: CONSULTATION_SERVICE_ID, source: "direct" },
+        service: { id: CONSULTATION_SERVICE_ID },
       },
       selectedDate: "2026-10-17",
       selectedSlot,
       note: { status: "answered", value: "потрібен час" },
       contactId: "contact-1",
     });
-    expect(repeated).toEqual(migrated);
+    expect(upgraded.update.bookingSchemaVersion).toBe(BOOKING_SCHEMA_VERSION);
+    expect(repeated.update).toEqual({});
+    expect(repeated.telemetry).toBeNull();
   });
 
-  it("keeps an unaccepted offer at service phase without downstream facts", () => {
-    const migrated = migrateLegacyBookingState(
-      {
-        selectedAvailabilityDate: "2026-10-17",
-        selectedSlot,
-        bookingNoteStatus: "awaiting",
-      },
-      { historyText: ["Бажаєте записатися на консультацію?"] },
-    );
-
-    expect(migrated).toMatchObject({
-      phase: "service",
+  it("nulls a blank service id and clears projections", () => {
+    const malformed = {
+      ...createEmptyBookingDraft(),
+      version: 7,
       serviceAcceptance: {
-        status: "pending",
-        service: { id: CONSULTATION_SERVICE_ID },
+        status: "accepted" as const,
+        service: undefined,
       },
+      selectedDate: "2026-10-17",
+      selectedSlot,
+      note: { status: "answered" as const, value: "потрібен час" },
+      contactId: "contact-1",
+    } as never;
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: malformed,
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("keeps a valid service only when slot date and selectedDate disagree", () => {
+    const draft = {
+      ...createEmptyBookingDraft(),
+      version: 3,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: "svc-1", source: "catalog" as const },
+      },
+      selectedDate: "2026-10-16",
+      selectedSlot,
+      note: { status: "answered" as const, value: "біль" },
+      phase: "note" as const,
+    };
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: draft,
+    });
+
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      serviceAcceptance: { status: "accepted", service: { id: "svc-1" } },
+      phase: "service",
       selectedDate: null,
       selectedSlot: null,
       note: { status: "unasked" },
+      pendingCommand: null,
+    });
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("keeps a reschedule draft that has a target and no service id", () => {
+    const draft = {
+      ...createEmptyBookingDraft(),
+      mode: "reschedule" as const,
+      phase: "date" as const,
+      rescheduleTarget: { id: "meeting-1", name: "Консультація" },
+    };
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: draft,
+    });
+
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      rescheduleTarget: { id: "meeting-1" },
+      serviceAcceptance: null,
+    });
+    expect(upgraded.update.bookingDraft).not.toBeNull();
+  });
+
+  it("canonicalizes an empty legacy draft to null", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: createEmptyBookingDraft(),
+    });
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry).toMatchObject({
+      source: "empty_draft",
+      outcome: "canonical",
+    });
+  });
+
+  it("stamps schema version 1 on an already-empty new chat without telemetry", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: null,
+    });
+    expect(upgraded.update).toEqual({
+      bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
+      bookingNoteStatus: "unasked",
+      selectedSlot: null,
+      selectedAvailabilityDate: null,
+      bookingDraft: null,
+    });
+    expect(upgraded.telemetry).toBeNull();
+  });
+
+  it("refuses unsupported schema versions without rewriting", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 2,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+      },
+    });
+    expect(upgraded.update).toEqual({});
+    expect(upgraded.unsupported).toBe(true);
+    expect(upgraded.telemetry).toEqual({
+      source: "legacy_draft",
+      schemaVersion: 2,
+      outcome: "unsupported",
     });
   });
 });

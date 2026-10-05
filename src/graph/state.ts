@@ -96,6 +96,14 @@ export const createClinicStateAnnotation = ({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
+    /**
+     * Booking checkpoint schema. 0 = unversioned legacy row or brand-new thread;
+     * 1 = current. Missing channels read as 0 only when reducer + default are both set.
+     */
+    bookingSchemaVersion: Annotation<number>({
+      reducer: (_left, right) => right,
+      default: () => 0,
+    }),
     /** Purpose of the currently pending/just-completed cancellation command. */
     pendingCancellationPurpose: Annotation<CancellationPurpose | null>({
       reducer: (left, right) => (right === undefined ? left : right),

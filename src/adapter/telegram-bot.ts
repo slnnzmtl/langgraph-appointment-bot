@@ -9,6 +9,11 @@ import type { Context } from "telegraf";
 
 import { trackEvent } from "../analytics/track.js";
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
+import {
+  upgradeBookingCheckpoint,
+  type BookingCheckpointLegacyState,
+} from "../graph/booking-draft.js";
+import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
 import {
@@ -203,13 +208,22 @@ export const withCheckpointThreadRetry = async <T>(
 
 type InterruptItem = { value?: unknown };
 
+const isClinicBookingState = (values: unknown): values is BookingCheckpointLegacyState =>
+  values != null
+  && typeof values === "object"
+  && "bookingDraft" in values;
+
+/** A thread with no checkpoint yet: getState returns {}. Treat it as version 0. */
+const isEmptyCheckpointSnapshot = (values: unknown): values is Record<string, never> =>
+  values != null
+  && typeof values === "object"
+  && !Array.isArray(values)
+  && Object.keys(values).length === 0;
+
 /** True when the thread is paused on create/cancel/reschedule HITL Yes/No. */
-const hasPendingConfirmBooking = async (
-  graph: Graph,
-  threadId: string,
-): Promise<boolean> => {
-  const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
-  const tasks = snapshot.tasks;
+const hasPendingConfirmBooking = (
+  tasks: unknown,
+): boolean => {
   if (!Array.isArray(tasks)) {
     return false;
   }
@@ -258,6 +272,7 @@ const runGraphExclusive = async (
 /**
  * Text turn: when a confirm card is pending, resume HITL — ✅/❌ reply-keyboard taps map to
  * `{ confirmed }`, any other text goes through as `{ userReply }` so the specialist can re-call.
+ * Version-0 booking checkpoints are upgraded here once (invoke input or Command.update).
  */
 export const handleGraphTextTurn = async (
   graph: Graph,
@@ -268,23 +283,66 @@ export const handleGraphTextTurn = async (
 ): Promise<OutboundReply> =>
   runGraphExclusive(graph, threadId, telegramUserId, async (config) =>
     withCheckpointThreadRetry(checkpointer, threadId, async () => {
-      if (await hasPendingConfirmBooking(graph, threadId)) {
+      const snapshot = await graph.getState(config);
+      const values = snapshot.values;
+      const upgrade = isClinicBookingState(values) || isEmptyCheckpointSnapshot(values)
+        ? upgradeBookingCheckpoint(isClinicBookingState(values) ? values : {})
+        : null;
+      if (upgrade?.unsupported) {
+        if (upgrade.telemetry) {
+          trackEvent("booking_checkpoint_migrated", upgrade.telemetry);
+        }
+        return {
+          messages: [{
+            _getType: () => "ai",
+            content: PATIENT_FALLBACK_MESSAGE,
+          }],
+          lastHandoff: {
+            agentId: "FINISH",
+            agentName: "supervisor",
+            status: "error",
+            replyText: PATIENT_FALLBACK_MESSAGE,
+            replyButtons: [],
+          },
+        };
+      }
+      if (upgrade?.telemetry) {
+        trackEvent("booking_checkpoint_migrated", upgrade.telemetry);
+      }
+      const bookingUpdate = upgrade?.update ?? {};
+
+      if (hasPendingConfirmBooking(snapshot.tasks)) {
         const decision = classifyConfirmReply(text);
         if (decision.kind === "confirmed") {
-          return graph.invoke(new Command({ resume: { confirmed: true } }) as never, config);
+          return graph.invoke(
+            new Command({
+              resume: { confirmed: true },
+              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
+            }) as never,
+            config,
+          );
         }
         if (decision.kind === "declined") {
-          return graph.invoke(new Command({ resume: { confirmed: false } }) as never, config);
+          return graph.invoke(
+            new Command({
+              resume: { confirmed: false },
+              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
+            }) as never,
+            config,
+          );
         }
         return graph.invoke(
           new Command({
             resume: { userReply: text },
-            update: { messages: [new HumanMessage(text)] },
+            update: { messages: [new HumanMessage(text)], ...bookingUpdate },
           }) as never,
           config,
         );
       }
-      return graph.invoke({ messages: [new HumanMessage(text)] } as never, config);
+      return graph.invoke(
+        { messages: [new HumanMessage(text)], ...bookingUpdate } as never,
+        config,
+      );
     }),
   );
 
@@ -417,9 +475,10 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
       (confirmTap.kind === "declined" && text.replace(/\uFE0F|\uFE0E/g, "") !== MAIN_MENU_LABEL);
     if (
       isReminderConfirmTap
-      && !(await withCheckpointThreadRetry(checkpointer, threadId, () =>
-        hasPendingConfirmBooking(graph, threadId),
-      ))
+      && !(await withCheckpointThreadRetry(checkpointer, threadId, async () => {
+        const snapshot = await graph.getState({ configurable: { thread_id: threadId } });
+        return hasPendingConfirmBooking(snapshot.tasks);
+      }))
     ) {
       await ctx.reply(formatForTelegram(REMINDER_STALE_CONFIRM), {
         parse_mode: "HTML",
