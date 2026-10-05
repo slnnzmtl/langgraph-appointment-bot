@@ -10,6 +10,15 @@ import { toToolResult } from "./tool-result.js";
 
 const PHONE_NUMBER_DESCRIBE = "Local UA or +international; normalized to E.164.";
 
+/** Normalize EspoCRM's exact Contact update response into ID-matched committed evidence. */
+export const normalizeContactUpdateSuccess = (raw: string, expectedContactId: string): string => {
+  const match = /^Successfully updated Contact record with ID:\s*(\S+)$/.exec(raw.trim());
+  if (!match || match[1] !== expectedContactId) {
+    return raw;
+  }
+  return JSON.stringify({ success: true, id: match[1], contactId: match[1] });
+};
+
 export type ContactToolsOptions = {
   callTool: McpCallTool;
 };
@@ -80,6 +89,8 @@ export const annotateContactSearchResult = (raw: unknown): string => {
 export type ContactLookupContext = {
   contacts: Array<Record<string, unknown>>;
   error?: string;
+  /** Whether the rows were resolved for this Telegram user or only by phone. */
+  ownership?: "telegram" | "phone";
 };
 
 const CONTACT_CONTEXT_FIELDS = [
@@ -266,12 +277,17 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
             data: { cTelegram },
           }),
         );
-        return finishTrackedWrite("link_telegram_to_contact", result, () => {
-          trackEvent("contact_telegram_linked", {
-            outcome: "success",
-            contact_id: input.contactId,
-          });
-        });
+        return finishTrackedWrite(
+          "link_telegram_to_contact",
+          normalizeContactUpdateSuccess(result, input.contactId),
+          () => {
+            trackEvent("contact_telegram_linked", {
+              outcome: "success",
+              contact_id: input.contactId,
+            });
+          },
+          { requireEntityId: true },
+        );
       } catch (error) {
         return toolErrorJson("link_telegram_to_contact", error);
       }
@@ -312,13 +328,18 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
             },
           }),
         );
-        return finishTrackedWrite("update_contact", result, () => {
-          trackEvent("contact_updated", {
-            outcome: "success",
-            contact_id: input.contactId,
-            fields_updated: fieldsUpdated,
-          });
-        });
+        return finishTrackedWrite(
+          "update_contact",
+          normalizeContactUpdateSuccess(result, input.contactId),
+          () => {
+            trackEvent("contact_updated", {
+              outcome: "success",
+              contact_id: input.contactId,
+              fields_updated: fieldsUpdated,
+            });
+          },
+          { requireEntityId: true },
+        );
       } catch (error) {
         return toolErrorJson("update_contact", error);
       }

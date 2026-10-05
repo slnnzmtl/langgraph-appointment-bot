@@ -48,7 +48,7 @@ import {
   reconcileRequestedTime,
   resolveBookingScheduleRequest,
 } from "./booking-schedule.js";
-import { normalizeContactLookupResult } from "../tools/contact-tools.js";
+import { contactMissingFields, normalizeContactLookupResult } from "../tools/contact-tools.js";
 import {
   normalizeListServicesResult,
   type ServicesContext,
@@ -58,6 +58,8 @@ import { trackEvent, trackToolError } from "../analytics/track.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
+  BOOKING_PHONE_OCCUPIED_UK,
+  BOOKING_PHONE_QUESTION_UK,
   BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
@@ -96,6 +98,7 @@ import {
 } from "../shared/message-content.js";
 import { normalizeClinicPhone } from "../shared/phone.js";
 import { clearPendingConfirmForRuntime } from "../tools/meeting-confirm.js";
+import { getTelegramUserId } from "../tools/telegram-user-context.js";
 import {
   formatBookingMeetingsContext,
   formatBookingDraftContext,
@@ -157,6 +160,8 @@ const CREATE_CONSULTATION_REQUIRED_ERROR = "Consultation agreement required";
 const SLOT_SELECTION_REQUIRED_ERROR = "Availability slot selection required";
 const SELECTED_SLOT_NOT_AVAILABLE_ERROR = "Selected slot is no longer available";
 const RESCHEDULE_STATE_REQUIRED_ERROR = "Reschedule state required";
+const CONTACT_OWNERSHIP_REQUIRED_ERROR = "Contact ownership required";
+const CONTACT_LINK_CANDIDATE_REQUIRED_ERROR = "Contact link candidate required";
 
 const CONSULTATION_AGREEMENT_TOOLS = new Set(["create_meeting", "reschedule_meeting"]);
 
@@ -191,8 +196,11 @@ const BLOCKED_MEETING_ERRORS = new Set([
   SLOT_SELECTION_REQUIRED_ERROR,
   SELECTED_SLOT_NOT_AVAILABLE_ERROR,
   RESCHEDULE_STATE_REQUIRED_ERROR,
+  CONTACT_OWNERSHIP_REQUIRED_ERROR,
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
 ]);
 
+/** Mutation success is runtime-owned; model prose can never prove a CRM write. */
 export type MeetingMutationOutcome =
   | "committed"
   | "pending_confirmation"
@@ -289,6 +297,147 @@ export const meetingMutationClearsAvailability = (messages: BaseMessage[]): bool
 const toolMessageName = (message: BaseMessage): string | undefined => {
   const name = (message as { name?: unknown }).name;
   return typeof name === "string" ? name : undefined;
+};
+
+type ContactIdentityResolution =
+  | { kind: "owned"; contactId: string; contact: Record<string, unknown> }
+  | { kind: "phone_candidate"; contacts: Record<string, unknown>[] }
+  | { kind: "unresolved" };
+
+/** Resolve identity from explicit lookup provenance; ambiguous legacy context fails closed. */
+const resolveContactIdentity = (
+  context: ClinicState["contactContext"],
+  expectedContactId?: string | null,
+): ContactIdentityResolution => {
+  if (!context) {
+    return { kind: "unresolved" };
+  }
+  const contacts = context.contacts.filter(
+    (contact) => typeof contact.id === "string" && contact.id.length > 0,
+  );
+  if (context.ownership === "phone") {
+    return contacts.length > 0
+      ? { kind: "phone_candidate", contacts }
+      : { kind: "unresolved" };
+  }
+  if (context.ownership !== "telegram") {
+    return { kind: "unresolved" };
+  }
+  const contact = expectedContactId == null
+    ? contacts[0]
+    : contacts.find((candidate) => candidate.id === expectedContactId);
+  return contact && typeof contact.id === "string"
+    ? { kind: "owned", contactId: contact.id, contact }
+    : { kind: "unresolved" };
+};
+
+const phoneCandidateCanBeLinked = (
+  identity: ContactIdentityResolution,
+  contactId: string,
+): boolean => {
+  if (identity.kind !== "phone_candidate") {
+    return false;
+  }
+  const candidate = identity.contacts.find((contact) => contact.id === contactId);
+  if (!candidate) {
+    return false;
+  }
+  const linkedTelegram = candidate.cTelegram;
+  if (linkedTelegram == null || (typeof linkedTelegram === "string" && linkedTelegram.trim() === "")) {
+    return true;
+  }
+  try {
+    return linkedTelegram === getTelegramUserId();
+  } catch {
+    // Without the runtime identity, fail closed rather than overwrite a link.
+    return false;
+  }
+};
+
+const phoneCandidateHasLinkableRow = (identity: ContactIdentityResolution): boolean =>
+  identity.kind === "phone_candidate"
+  && identity.contacts.some(
+    (contact) => typeof contact.id === "string" && phoneCandidateCanBeLinked(identity, contact.id),
+  );
+
+/** True when create_contact's phone matches a stored phone candidate that cannot be linked. */
+const createContactPhoneMatchesOccupiedCandidate = (
+  identity: ContactIdentityResolution,
+  rawPhone: unknown,
+): boolean => {
+  if (identity.kind !== "phone_candidate" || typeof rawPhone !== "string" || rawPhone.trim() === "") {
+    return false;
+  }
+  const wanted = normalizeClinicPhone(rawPhone);
+  if (wanted == null) {
+    return false;
+  }
+  return identity.contacts.some((contact) => {
+    if (typeof contact.id !== "string" || phoneCandidateCanBeLinked(identity, contact.id)) {
+      return false;
+    }
+    const candidatePhone = typeof contact.phoneNumber === "string"
+      ? normalizeClinicPhone(contact.phoneNumber)
+      : null;
+    return candidatePhone === wanted;
+  });
+};
+
+/** Runtime-owned contact ladder once service, slot, and note are complete. */
+const bookingDetailsReply = (state: ClinicState): string | null => {
+  const draft = state.bookingDraft;
+  if (
+    draft?.mode !== "create"
+    || draft.serviceAcceptance?.status !== "accepted"
+    || draft.selectedSlot == null
+    || (draft.note.status !== "skipped" && draft.note.status !== "answered")
+  ) {
+    return null;
+  }
+  const identity = resolveContactIdentity(state.contactContext, draft.contactId);
+  if (identity.kind === "unresolved") {
+    return BOOKING_PHONE_QUESTION_UK;
+  }
+  if (identity.kind === "phone_candidate") {
+    return phoneCandidateHasLinkableRow(identity)
+      ? PATIENT_FALLBACK_MESSAGE
+      : BOOKING_PHONE_OCCUPIED_UK;
+  }
+  const missingField = contactMissingFields(identity.contact)[0];
+  if (missingField === "firstName") {
+    return "Підкажіть, будь ласка, ваше ім’я.";
+  }
+  if (missingField === "lastName") {
+    return "Підкажіть, будь ласка, ваше прізвище.";
+  }
+  if (missingField === "phoneNumber") {
+    return BOOKING_PHONE_QUESTION_UK;
+  }
+  return null;
+};
+
+const latestMeetingMutationError = (messages: BaseMessage[]): string | undefined => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      !(message instanceof ToolMessage)
+      || (!MEETING_MUTATION_TOOLS.has(message.name ?? "")
+        && message.name !== "link_telegram_to_contact")
+    ) {
+      continue;
+    }
+    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    return typeof record?.error === "string" ? record.error : undefined;
+  }
+  return undefined;
+};
+
+const bookingMutationNeedsModelRecovery = (state: ClinicState): boolean => {
+  const error = latestMeetingMutationError(state.agentMessages ?? []);
+  return error === "Contact incomplete"
+    || error === CONTACT_OWNERSHIP_REQUIRED_ERROR
+    || error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR
+    || error === "Not authorized";
 };
 
 /** True when a ToolMessage for this tool is already in the current agent turn. */
@@ -673,12 +822,14 @@ const normalizeMeetingMutationArgs = (
   if (call.name === "create_meeting" && acceptedService?.status === "accepted") {
     args.serviceId = acceptedService.service.id;
   }
-  const ownedContactId = state.bookingDraft?.contactId
-    ?? state.contactContext?.contacts.find(
-      (contact) => typeof contact.id === "string" && contact.id.length > 0,
-    )?.id;
-  if (call.name === "create_meeting" && typeof ownedContactId === "string") {
-    args.contactId = ownedContactId;
+  const draftContactId = state.bookingDraft?.contactId;
+  const contactIdentity = resolveContactIdentity(state.contactContext, draftContactId);
+  if (call.name === "create_meeting") {
+    if (contactIdentity.kind === "owned") {
+      args.contactId = contactIdentity.contactId;
+    } else {
+      delete args.contactId;
+    }
   }
   if (call.name === "reschedule_meeting") {
     const target = state.bookingDraft?.mode === "reschedule"
@@ -970,20 +1121,20 @@ const createCommandFromBookingDraft = (
   }
   const acceptance = draft?.serviceAcceptance;
   const slot = draft?.selectedSlot;
-  const contactId = draft?.contactId
-    ?? state.contactContext?.contacts.find(
-      (contact) => typeof contact.id === "string" && contact.id.length > 0,
-    )?.id;
+  const contactIdentity = resolveContactIdentity(state.contactContext, draft?.contactId);
   if (
     !draft
     || acceptance?.status !== "accepted"
     || slot == null
-    || !contactId
+    || contactIdentity.kind !== "owned"
     || (draft.note.status !== "skipped" && draft.note.status !== "answered")
   ) {
     return null;
   }
-  const contact = state.contactContext?.contacts.find((row) => row.id === contactId);
+  const { contactId, contact } = contactIdentity;
+  if (contactMissingFields(contact).length > 0) {
+    return null;
+  }
   const firstName = typeof contact?.firstName === "string" ? contact.firstName.trim() : "";
   const lastName = typeof contact?.lastName === "string" ? contact.lastName.trim() : "";
   const fullName = [firstName, lastName].filter(Boolean).join(" ");
@@ -1007,7 +1158,14 @@ const rescheduleCommandFromBookingDraft = (
   const draft = state.bookingDraft;
   const target = draft?.mode === "reschedule" ? draft.rescheduleTarget : null;
   const slot = draft?.selectedSlot;
-  if (!target || !slot) return null;
+  // A failed ownership check invalidates the local meeting projection. Do not
+  // rebuild a reschedule command until the supervisor has prefetched a fresh,
+  // Telegram-owned contact on a later turn.
+  if (
+    !target
+    || !slot
+    || (state.prefetchDirty && resolveContactIdentity(state.contactContext).kind !== "owned")
+  ) return null;
   return {
     action: "reschedule",
     payload: {
@@ -1107,6 +1265,9 @@ const availabilityRequestFromBookingDraft = (
  * draft advances to revalidation/HITL.
  */
 const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
+  if (bookingMutationNeedsModelRecovery(state)) {
+    return false;
+  }
   const confirmation = pendingChatConfirmationDecision(state);
   if (confirmation.kind === "affirmed") {
     return true;
@@ -1149,8 +1310,10 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
 /**
  * Continue a runtime-owned compound command after its prerequisite tool step.
  * A successful revalidation can advance to create_meeting; a successful
- * replacement cancellation can advance to revalidation/create. All other tool
- * results still return to the LLM unless they are terminal mutation outcomes.
+ * contact resolution can advance to revalidation/create without a second,
+ * model-authored confirmation; a successful replacement cancellation can
+ * advance to revalidation/create. All other tool results still return to the
+ * LLM unless they are terminal mutation outcomes.
  */
 const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
   const confirmation = pendingChatConfirmationDecision(state);
@@ -1158,6 +1321,14 @@ const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
     return confirmation.kind === "affirmed";
   }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
+    return true;
+  }
+  const contactResolvedThisTurn = resolveContactIdentity(state.contactContext).kind === "owned"
+    && (
+      toolRanThisTurn(state.agentMessages ?? [], "create_contact")
+      || toolRanThisTurn(state.agentMessages ?? [], "link_telegram_to_contact")
+    );
+  if (contactResolvedThisTurn && createCommandFromBookingDraft(state) != null) {
     return true;
   }
   const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
@@ -1910,9 +2081,8 @@ export const createAgentPrepareNode = (agentId: string) =>
       stepCount: 0,
     };
     if (agentId === BOOKING_AGENT_ID) {
-      const contactId = state.contactContext?.contacts.find(
-        (contact) => typeof contact.id === "string" && contact.id.length > 0,
-      )?.id;
+      const contactIdentity = resolveContactIdentity(state.contactContext);
+      const contactId = contactIdentity.kind === "owned" ? contactIdentity.contactId : null;
       const historyText = [
         ...(state.messages ?? []).map((message) => extractMessageTextContent(message.content)),
         ...(state.lastHandoff?.replyText ? [state.lastHandoff.replyText] : []),
@@ -2051,6 +2221,13 @@ export const createAgentPrepareNode = (agentId: string) =>
       Object.assign(update, noteUpdate);
       Object.assign(update, migrationUpdate);
       bookingDraft = (noteUpdate.bookingDraft as BookingDraft | undefined) ?? bookingDraft;
+      if (
+        bookingDraft
+        && bookingDraft.contactId != null
+        && resolveContactIdentity(state.contactContext, bookingDraft.contactId).kind !== "owned"
+      ) {
+        bookingDraft = reduceBookingDraft(bookingDraft, { type: "contact_unresolved" });
+      }
       if (bookingDraft && typeof contactId === "string" && contactId !== bookingDraft.contactId) {
         bookingDraft = reduceBookingDraft(bookingDraft, {
           type: "contact_resolved",
@@ -2658,10 +2835,53 @@ export const createAgentToolsNode = (
               continue;
             }
           }
+
+          if (
+            call.name === "create_contact"
+            && createContactPhoneMatchesOccupiedCandidate(
+              resolveContactIdentity(state.contactContext),
+              (call.args ?? {}).phoneNumber,
+            )
+          ) {
+            trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+                  hint:
+                    "This phone belongs to another Telegram account. Ask for a different number; do not create a Contact with it.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
         }
 
         if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
           call.args = normalizeMeetingMutationArgs(state, call);
+          if (
+            call.name === "create_meeting"
+            && resolveContactIdentity(
+              state.contactContext,
+              state.bookingDraft?.contactId,
+            ).kind !== "owned"
+          ) {
+            trackToolError(call.name, CONTACT_OWNERSHIP_REQUIRED_ERROR);
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: CONTACT_OWNERSHIP_REQUIRED_ERROR,
+                  hint:
+                    "Resolve a Telegram-owned Contact for the current patient before creating the meeting.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
           const chatConfirmationReplay = isPendingChatConfirmationReplay(
             state,
             call.name === "create_meeting" ? "create" : "reschedule",
@@ -2861,6 +3081,32 @@ export const createAgentToolsNode = (
           }
         }
 
+        if (call.name === "link_telegram_to_contact") {
+          const args = call.args;
+          const contactId = args && typeof args === "object" && !Array.isArray(args)
+            && typeof (args as { contactId?: unknown }).contactId === "string"
+            ? (args as { contactId: string }).contactId
+            : null;
+          if (
+            contactId == null
+            || !phoneCandidateCanBeLinked(resolveContactIdentity(state.contactContext), contactId)
+          ) {
+            trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+                  hint:
+                    "Link only the Contact returned by find_contact_by_phone for this patient.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: call.name,
+              }),
+            );
+            continue;
+          }
+        }
+
         remainingCalls.push(call);
       }
     }
@@ -2907,6 +3153,26 @@ export const createAgentToolsNode = (
         ? { pendingCancellationPurpose: "replacement" as const }
         : {}),
     };
+
+    const authorizationFailure = resultMessages.some((message) => {
+      if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+        return false;
+      }
+      return asJsonRecord(extractMessageTextContent(message.content).trim())?.error === "Not authorized";
+    });
+    if (authorizationFailure) {
+      // The contact must be linked before this mutation can be retried. Clear
+      // every projection that could reconstruct the rejected command so the
+      // next route returns to identity resolution instead of replaying it.
+      if (state.bookingDraft) {
+        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+          type: "contact_unresolved",
+        });
+      }
+      update.contactContext = null;
+      update.bookingContext = null;
+      update.prefetchDirty = true;
+    }
 
     const pendingCommand = resultMessages
       .map((message) => {
@@ -3081,7 +3347,90 @@ export const createAgentToolsNode = (
       normalizeContactLookupResult,
     );
     if (found && !found.error && found.contacts.length > 0) {
-      update.contactContext = found;
+      update.contactContext = { ...found, ownership: "phone" };
+    }
+
+    let projectedBookingDraft = Object.prototype.hasOwnProperty.call(update, "bookingDraft")
+      ? (update.bookingDraft as BookingDraft | null)
+      : state.bookingDraft;
+
+    for (const message of resultMessages) {
+      if (!(message instanceof ToolMessage)) {
+        continue;
+      }
+      if (
+        message.name !== "create_contact"
+        && message.name !== "link_telegram_to_contact"
+        && message.name !== "update_contact"
+      ) {
+        continue;
+      }
+      if (authorizationFailure) {
+        continue;
+      }
+      const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+      if (!record || typeof record.error === "string") {
+        continue;
+      }
+      const call = agentMessages
+        .filter((candidate): candidate is AIMessage => candidate instanceof AIMessage)
+        .flatMap((candidate) => candidate.tool_calls ?? [])
+        .find((candidate) => candidate.id === message.tool_call_id);
+      const args = call?.args && typeof call.args === "object" && !Array.isArray(call.args)
+        ? call.args as Record<string, unknown>
+        : {};
+      const resolvedContactId = typeof record.id === "string" && record.id.length > 0
+        ? record.id
+        : null;
+      const requestedContactId = message.name === "link_telegram_to_contact"
+        ? args.contactId
+        : message.name === "update_contact"
+          ? args.contactId
+          : null;
+      if (
+        resolvedContactId == null
+        || ((message.name === "link_telegram_to_contact" || message.name === "update_contact")
+          && resolvedContactId !== requestedContactId)
+      ) {
+        continue;
+      }
+      const previous = (update.contactContext as ClinicState["contactContext"] | undefined)
+        ?? state.contactContext;
+      const previousRow = previous?.contacts.find((contact) => contact.id === resolvedContactId) ?? {};
+      if (message.name === "update_contact" && Object.keys(previousRow).length === 0) {
+        continue;
+      }
+      const createdRow = message.name === "create_contact"
+        ? {
+            ...previousRow,
+            id: resolvedContactId,
+            ...(typeof args.firstName === "string" ? { firstName: args.firstName } : {}),
+            ...(typeof args.lastName === "string" ? { lastName: args.lastName } : {}),
+            ...(typeof args.phoneNumber === "string" ? { phoneNumber: args.phoneNumber } : {}),
+          }
+        : message.name === "link_telegram_to_contact"
+          ? { ...previousRow, id: resolvedContactId }
+          : {
+              ...previousRow,
+              id: resolvedContactId,
+              ...(typeof args.firstName === "string" ? { firstName: args.firstName } : {}),
+              ...(typeof args.lastName === "string" ? { lastName: args.lastName } : {}),
+              ...(typeof args.phoneNumber === "string" ? { phoneNumber: args.phoneNumber } : {}),
+            };
+      const ownership = message.name === "create_contact" || message.name === "link_telegram_to_contact"
+        ? "telegram" as const
+        : previous?.ownership;
+      update.contactContext = {
+        ...(ownership ? { ownership } : {}),
+        contacts: [{ ...createdRow, missingFields: contactMissingFields(createdRow) }],
+      };
+      if (projectedBookingDraft) {
+        projectedBookingDraft = reduceBookingDraft(projectedBookingDraft, {
+          type: "contact_resolved",
+          contactId: resolvedContactId,
+        });
+        update.bookingDraft = projectedBookingDraft;
+      }
     }
 
     if (crmWriteDirtiesPrefetch(resultMessages)) {
@@ -3262,6 +3611,16 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     let replyButtons: string[] = [];
     let yieldFlag = false;
 
+    const detailsReply = agent.id === BOOKING_AGENT_ID ? bookingDetailsReply(state) : null;
+    if (detailsReply != null) {
+      // Identity collection is a deterministic graph phase. The model may call
+      // contact tools, but prose cannot skip or redefine the missing-field step.
+      replyText = detailsReply;
+    }
+    const clearOccupiedPhoneCandidate = detailsReply === BOOKING_PHONE_OCCUPIED_UK
+      ? { contactContext: null }
+      : {};
+
     // Model failure: deliver via handoff only — do not persist into conversation history.
     if (status === "error" && isModelFailureMessage(tagged)) {
       const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
@@ -3435,6 +3794,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...noteStatusForHandoff,
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
+        ...clearOccupiedPhoneCandidate,
       };
     }
 
@@ -3450,6 +3810,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...noteStatusForHandoff,
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
+        ...clearOccupiedPhoneCandidate,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -3464,6 +3825,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...noteStatusForHandoff,
       ...bookingDraftOfferUpdate,
       ...confirmationCleanup,
+      ...clearOccupiedPhoneCandidate,
       messages: [replyMessage],
     };
   };
@@ -3518,6 +3880,10 @@ export const routeAfterAgentTools = (
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  if (bookingMutationNeedsModelRecovery(state)) {
+    return llmName;
   }
 
   const chatConfirmation = pendingChatConfirmationDecision(state);
