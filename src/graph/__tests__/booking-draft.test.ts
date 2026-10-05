@@ -833,6 +833,158 @@ describe("BookingDraft reducer", () => {
       pendingCommand: null,
     });
   });
+
+  it("fails closed when confirming create payload contactId mismatches the draft", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "owned-contact",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            contactId: "different-contact",
+            dateStart: selectedSlot.dateStart,
+            dateEnd: selectedSlot.dateEnd,
+          },
+        },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      serviceAcceptance: { service: { id: "svc-1" } },
+      phase: "service",
+      pendingCommand: null,
+      replacement: null,
+    });
+  });
+
+  it("fails closed when confirming create payload is missing contactId", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "owned-contact",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            dateStart: selectedSlot.dateStart,
+            dateEnd: selectedSlot.dateEnd,
+          },
+        },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft?.pendingCommand).toBeNull();
+  });
+
+  it("clears replacement.originalCommand on fail-closed service-only recovery", () => {
+    const originalCommand = {
+      action: "create" as const,
+      payload: {
+        serviceId: "svc-1",
+        contactId: "owned-contact",
+        dateStart: selectedSlot.dateStart,
+        dateEnd: selectedSlot.dateEnd,
+      },
+    };
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "owned-contact",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            contactId: "different-contact",
+            dateStart: selectedSlot.dateStart,
+            dateEnd: selectedSlot.dateEnd,
+          },
+        },
+        replacement: {
+          meeting: { id: "m-old", name: "Старий запис" },
+          status: "create_pending",
+          originalCommand,
+        },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      phase: "service",
+      pendingCommand: null,
+      replacement: null,
+    });
+    expect(upgraded.update.bookingDraft?.replacement?.originalCommand).toBeUndefined();
+  });
+
+  it("strips originalCommand when keeping a replacement meeting without service", () => {
+    const originalCommand = {
+      action: "create" as const,
+      payload: {
+        serviceId: "svc-1",
+        contactId: "c-1",
+        dateStart: selectedSlot.dateStart,
+        dateEnd: selectedSlot.dateEnd,
+      },
+    };
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        phase: "confirming",
+        serviceAcceptance: null,
+        replacement: {
+          meeting: { id: "m-1", name: "Консультація" },
+          status: "create_pending",
+          originalCommand,
+        },
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("canonical");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      replacement: {
+        meeting: { id: "m-1" },
+        status: "offered",
+      },
+      pendingCommand: null,
+      serviceAcceptance: null,
+    });
+    expect(upgraded.update.bookingDraft?.replacement?.originalCommand).toBeUndefined();
+    expect(upgraded.update.bookingDraft?.replacement?.status).not.toBe("create_pending");
+  });
 });
 
 describe("booking session lifecycle", () => {

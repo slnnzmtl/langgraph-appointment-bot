@@ -245,6 +245,7 @@ const hasConfirmingInvariantViolation = (draft: BookingDraft): boolean => {
       && slotOk
       && noteOk
       && contactId != null
+      && payload.contactId === contactId
       && payload.serviceId === serviceId
       && payload.dateStart === draft.selectedSlot!.dateStart
       && payload.dateEnd === draft.selectedSlot!.dateEnd
@@ -360,6 +361,8 @@ const failClosedServiceOnly = (
     requestedTime: null,
     note: { status: "unasked" },
     pendingCommand: null,
+    // Never retain a frozen replacement create — agent-loop would replay it.
+    replacement: null,
     phase: "service",
   };
   return {
@@ -512,11 +515,22 @@ export const upgradeBookingCheckpoint = (
       && !draftHasValidServiceAcceptance(draft)
       && hasRescheduleOrReplacementTarget(draft)
     ) {
-      const kept: BookingDraft = {
+      // Keep the meeting id for an offered replacement, but never a frozen
+      // create_pending originalCommand that agent-loop would resume.
+      const replacementMeeting = draft.replacement?.meeting;
+      const keptReplacement = replacementMeeting != null
+        && trimmedTargetId(replacementMeeting) != null
+        ? { meeting: replacementMeeting, status: "offered" as const }
+        : null;
+      const keptBase: BookingDraft = {
         ...draft,
         serviceAcceptance: null,
         pendingCommand: null,
-        phase: bookingDraftPhase({ ...draft, serviceAcceptance: null, pendingCommand: null }),
+        replacement: keptReplacement,
+      };
+      const kept: BookingDraft = {
+        ...keptBase,
+        phase: bookingDraftPhase(keptBase),
       };
       return {
         update: {

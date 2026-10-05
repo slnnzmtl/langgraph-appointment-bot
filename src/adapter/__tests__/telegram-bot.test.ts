@@ -352,6 +352,7 @@ describe("booking schema upgrade on text turn", () => {
             action: "create",
             payload: {
               serviceId: "svc-1",
+              contactId: "c-1",
               dateStart: "2026-10-17T11:00:00",
               dateEnd: "2026-10-17T11:30:00",
             },
@@ -376,6 +377,67 @@ describe("booking schema upgrade on text turn", () => {
     expect(snap.values.bookingSchemaVersion).toBe(1);
     expect(snap.values.bookingNoteStatus).toBe("unasked");
     expect(snap.values.selectedSlot).toBeNull();
+    expect(snap.next).toEqual([]);
+  });
+
+  it("declines confirm when create-command contactId mismatches the draft", async () => {
+    const graph = buildPendingConfirmBookingGraph();
+    const threadId = "booking-schema-contact-mismatch";
+    const first = await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 0,
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", source: "catalog" },
+          },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:00:00",
+            dateEnd: "2026-10-17T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "owned-contact",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "different-contact",
+              dateStart: "2026-10-17T11:00:00",
+              dateEnd: "2026-10-17T11:30:00",
+            },
+          },
+          rescheduleTarget: null,
+          replacement: null,
+        },
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
+    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingDraft).toMatchObject({
+      serviceAcceptance: { service: { id: "svc-1" } },
+      phase: "service",
+      pendingCommand: null,
+      replacement: null,
+    });
     expect(snap.next).toEqual([]);
   });
 
