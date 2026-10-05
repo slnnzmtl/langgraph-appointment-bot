@@ -126,18 +126,23 @@ const draftHasValidServiceAcceptance = (draft: BookingDraft): boolean => {
     && (draft.serviceAcceptance?.status === "accepted" || draft.serviceAcceptance?.status === "pending");
 };
 
-const trimmedServiceId = (draft: BookingDraft): string | null => {
-  const id = draft.serviceAcceptance?.service?.id;
-  if (typeof id !== "string") {
+const trimmedNonblank = (value: unknown): string | null => {
+  if (typeof value !== "string") {
     return null;
   }
-  const trimmed = id.trim();
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const trimmedServiceId = (draft: BookingDraft): string | null =>
+  trimmedNonblank(draft.serviceAcceptance?.service?.id);
+
+const trimmedTargetId = (target: { id?: unknown } | null | undefined): string | null =>
+  trimmedNonblank(target?.id);
+
 const hasRescheduleOrReplacementTarget = (draft: BookingDraft): boolean =>
-  (draft.mode === "reschedule" && draft.rescheduleTarget != null)
-  || draft.replacement != null;
+  (draft.mode === "reschedule" && trimmedTargetId(draft.rescheduleTarget) != null)
+  || trimmedTargetId(draft.replacement?.meeting) != null;
 
 const hasActiveLegacyProjection = (state: BookingCheckpointLegacyState): boolean =>
   (state.bookingNoteStatus != null && state.bookingNoteStatus !== "unasked")
@@ -155,8 +160,24 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   value != null && typeof value === "object" && !Array.isArray(value);
 
-const isValidSelectedDate = (value: unknown): value is string | null =>
-  value == null || (typeof value === "string" && ISO_DATE.test(value));
+/** null is allowed; a non-null string must be a real UTC calendar day. */
+const isValidSelectedDate = (value: unknown): value is string | null => {
+  if (value == null) {
+    return true;
+  }
+  if (typeof value !== "string" || !ISO_DATE.test(value)) {
+    return false;
+  }
+  const [yearText, monthText, dayText] = value.split("-");
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const utc = Date.UTC(year, month - 1, day);
+  const roundTrip = new Date(utc);
+  return roundTrip.getUTCFullYear() === year
+    && roundTrip.getUTCMonth() === month - 1
+    && roundTrip.getUTCDate() === day;
+};
 
 const isValidSlot = (value: unknown): boolean => {
   if (value == null) {
@@ -174,10 +195,86 @@ const isValidSlot = (value: unknown): boolean => {
   return Number.isFinite(start) && Number.isFinite(end) && end > start;
 };
 
-const slotDateMismatch = (draft: BookingDraft): boolean =>
-  draft.selectedSlot != null
-  && draft.selectedDate != null
-  && draft.selectedSlot.dateStart.slice(0, 10) !== draft.selectedDate;
+const slotRequiresMatchingDate = (draft: BookingDraft): boolean => {
+  if (draft.selectedSlot == null) {
+    return false;
+  }
+  if (draft.selectedDate == null) {
+    return true;
+  }
+  return draft.selectedSlot.dateStart.slice(0, 10) !== draft.selectedDate;
+};
+
+const hasBlankTargetId = (draft: BookingDraft): boolean => {
+  if (draft.rescheduleTarget != null && trimmedTargetId(draft.rescheduleTarget) == null) {
+    return true;
+  }
+  if (draft.replacement != null && trimmedTargetId(draft.replacement.meeting) == null) {
+    return true;
+  }
+  return false;
+};
+
+/**
+ * Confirming / pending-command facts required before a mutation can stay executable.
+ * Violations must fail closed so a pending HITL card cannot resume.
+ */
+const hasConfirmingInvariantViolation = (draft: BookingDraft): boolean => {
+  if (draft.phase !== "confirming" && draft.pendingCommand == null) {
+    return false;
+  }
+  const command = draft.pendingCommand;
+  if (command == null || !isPlainObject(command.payload)) {
+    return true;
+  }
+  const payload = command.payload;
+  const noteOk = draft.note.status === "skipped" || draft.note.status === "answered";
+  const contactId = trimmedNonblank(draft.contactId);
+  const serviceId = trimmedServiceId(draft);
+  const accepted = draft.serviceAcceptance?.status === "accepted" && serviceId != null;
+  const dateOk = draft.selectedDate != null && isValidSelectedDate(draft.selectedDate);
+  const slotOk = draft.selectedSlot != null
+    && isValidSlot(draft.selectedSlot)
+    && !slotRequiresMatchingDate(draft);
+
+  if (command.action === "create") {
+    return !(
+      (draft.mode === "create" || draft.mode === "replace")
+      && accepted
+      && dateOk
+      && slotOk
+      && noteOk
+      && contactId != null
+      && payload.serviceId === serviceId
+      && payload.dateStart === draft.selectedSlot!.dateStart
+      && payload.dateEnd === draft.selectedSlot!.dateEnd
+    );
+  }
+  if (command.action === "reschedule") {
+    const targetId = trimmedTargetId(draft.rescheduleTarget);
+    return !(
+      draft.mode === "reschedule"
+      && targetId != null
+      && dateOk
+      && slotOk
+      && payload.meetingId === targetId
+      && payload.dateStart === draft.selectedSlot!.dateStart
+      && payload.dateEnd === draft.selectedSlot!.dateEnd
+    );
+  }
+  if (command.action === "cancel") {
+    const meetingId = trimmedNonblank(payload.meetingId);
+    if (meetingId == null) {
+      return true;
+    }
+    const replacementId = trimmedTargetId(draft.replacement?.meeting);
+    if (draft.replacement != null && replacementId !== meetingId) {
+      return true;
+    }
+    return false;
+  }
+  return true;
+};
 
 /**
  * Readable legacy draft for migration. Missing note or non-object drafts are rejected
@@ -399,14 +496,19 @@ export const upgradeBookingCheckpoint = (
   const hasCorruptService = draft.serviceAcceptance != null && serviceId == null;
   const hasCorruptDateOrSlot = !isValidSelectedDate(draft.selectedDate)
     || !isValidSlot(draft.selectedSlot)
-    || slotDateMismatch(draft);
-  const hasCorruptFacts = hasCorruptDateOrSlot || hasCorruptService;
+    || slotRequiresMatchingDate(draft);
+  const hasCorruptFacts = hasCorruptDateOrSlot
+    || hasCorruptService
+    || hasBlankTargetId(draft)
+    || hasConfirmingInvariantViolation(draft);
 
   if (hasCorruptFacts || !draftHasValidServiceAcceptance(draft)) {
     // Reschedule/replacement with a target is kept only when the draft shape is
     // readable and date/slot/service facts are not contradictory.
     if (
-      !hasCorruptFacts
+      !hasCorruptDateOrSlot
+      && !hasCorruptService
+      && !hasBlankTargetId(draft)
       && !draftHasValidServiceAcceptance(draft)
       && hasRescheduleOrReplacementTarget(draft)
     ) {

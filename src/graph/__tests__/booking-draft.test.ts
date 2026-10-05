@@ -716,6 +716,123 @@ describe("BookingDraft reducer", () => {
       outcome: "canonical",
     });
   });
+
+  it("fails closed when confirming create has a slot but no selectedDate", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: null,
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "c-1",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            dateStart: selectedSlot.dateStart,
+            dateEnd: selectedSlot.dateEnd,
+          },
+        },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      serviceAcceptance: { service: { id: "svc-1" } },
+      phase: "service",
+      selectedDate: null,
+      selectedSlot: null,
+      pendingCommand: null,
+      note: { status: "unasked" },
+    });
+  });
+
+  it("fails closed on calendar-impossible selectedDate", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-99-99",
+        selectedSlot: {
+          dateStart: "2026-99-99T11:00:00",
+          dateEnd: "2026-99-99T11:30:00",
+          label: "11:00",
+        },
+        note: { status: "skipped" },
+        contactId: "c-1",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            dateStart: "2026-99-99T11:00:00",
+            dateEnd: "2026-99-99T11:30:00",
+          },
+        },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft?.pendingCommand).toBeNull();
+  });
+
+  it("fails closed on a blank reschedule target id", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "reschedule",
+        phase: "date",
+        rescheduleTarget: { id: "  ", name: "Консультація" },
+      },
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed when confirming create payload serviceId mismatches the draft", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "c-1",
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "other-svc",
+            dateStart: selectedSlot.dateStart,
+            dateEnd: selectedSlot.dateEnd,
+          },
+        },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      serviceAcceptance: { service: { id: "svc-1" } },
+      phase: "service",
+      pendingCommand: null,
+    });
+  });
 });
 
 describe("booking session lifecycle", () => {
