@@ -595,6 +595,127 @@ describe("BookingDraft reducer", () => {
       outcome: "unsupported",
     });
   });
+
+  it("rejects negative and non-integer schema versions without rewriting", () => {
+    for (const schemaVersion of [-1, 1.5]) {
+      const upgraded = upgradeBookingCheckpoint({
+        bookingSchemaVersion: schemaVersion,
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", source: "catalog" },
+          },
+        },
+      });
+      expect(upgraded.update).toEqual({});
+      expect(upgraded.unsupported).toBe(true);
+      expect(upgraded.telemetry).toMatchObject({
+        outcome: "unsupported",
+        schemaVersion,
+      });
+    }
+  });
+
+  it("fails closed on whitespace service id, inverted slot, and pending command", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        version: 4,
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "   ", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T12:00:00",
+          dateEnd: "2026-10-17T11:00:00",
+          label: "12:00",
+        },
+        note: { status: "answered", value: "біль" },
+        pendingCommand: { action: "create", payload: { serviceId: "   " } },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.update.bookingSchemaVersion).toBe(BOOKING_SCHEMA_VERSION);
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("keeps a trimmed service only when the slot interval is inverted", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T12:00:00",
+          dateEnd: "2026-10-17T11:00:00",
+          label: "12:00",
+        },
+        note: { status: "answered", value: "біль" },
+        pendingCommand: { action: "create", payload: {} },
+        phase: "confirming",
+      },
+    });
+
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      serviceAcceptance: { status: "accepted", service: { id: "svc-1" } },
+      phase: "service",
+      selectedDate: null,
+      selectedSlot: null,
+      note: { status: "unasked" },
+      pendingCommand: null,
+    });
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed without throwing when note is missing", () => {
+    const draft = {
+      ...createEmptyBookingDraft(),
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: "svc-1", source: "catalog" as const },
+      },
+    };
+    delete (draft as { note?: unknown }).note;
+    expect(() => upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: draft as never,
+    })).not.toThrow();
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: draft as never,
+    });
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("emits canonical telemetry when stamping a non-empty version-0 draft", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        phase: "date",
+      },
+    });
+    expect(upgraded.update.bookingSchemaVersion).toBe(BOOKING_SCHEMA_VERSION);
+    expect(upgraded.telemetry).toEqual({
+      source: "legacy_draft",
+      schemaVersion: 0,
+      outcome: "canonical",
+    });
+  });
 });
 
 describe("booking session lifecycle", () => {

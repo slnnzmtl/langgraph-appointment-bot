@@ -119,10 +119,21 @@ export type BookingCheckpointUpgradeResult = {
   telemetry: BookingCheckpointMigrationTelemetry | null;
 };
 
-const draftHasValidServiceAcceptance = (draft: BookingDraft | null | undefined): boolean =>
-  draft?.serviceAcceptance?.service?.id != null
-  && draft.serviceAcceptance.service.id.length > 0
-  && (draft.serviceAcceptance.status === "accepted" || draft.serviceAcceptance.status === "pending");
+const draftHasValidServiceAcceptance = (draft: BookingDraft): boolean => {
+  const id = draft.serviceAcceptance?.service?.id;
+  return typeof id === "string"
+    && id.trim().length > 0
+    && (draft.serviceAcceptance?.status === "accepted" || draft.serviceAcceptance?.status === "pending");
+};
+
+const trimmedServiceId = (draft: BookingDraft): string | null => {
+  const id = draft.serviceAcceptance?.service?.id;
+  if (typeof id !== "string") {
+    return null;
+  }
+  const trimmed = id.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
 
 const hasRescheduleOrReplacementTarget = (draft: BookingDraft): boolean =>
   (draft.mode === "reschedule" && draft.rescheduleTarget != null)
@@ -139,10 +150,134 @@ const clearedLegacyProjections = {
   selectedAvailabilityDate: null,
 };
 
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+  value != null && typeof value === "object" && !Array.isArray(value);
+
+const isValidSelectedDate = (value: unknown): value is string | null =>
+  value == null || (typeof value === "string" && ISO_DATE.test(value));
+
+const isValidSlot = (value: unknown): boolean => {
+  if (value == null) {
+    return true;
+  }
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  const { dateStart, dateEnd } = value;
+  if (typeof dateStart !== "string" || typeof dateEnd !== "string") {
+    return false;
+  }
+  const start = Date.parse(dateStart);
+  const end = Date.parse(dateEnd);
+  return Number.isFinite(start) && Number.isFinite(end) && end > start;
+};
+
 const slotDateMismatch = (draft: BookingDraft): boolean =>
   draft.selectedSlot != null
   && draft.selectedDate != null
   && draft.selectedSlot.dateStart.slice(0, 10) !== draft.selectedDate;
+
+/**
+ * Readable legacy draft for migration. Missing note or non-object drafts are rejected
+ * before empty-draft / phase helpers read nested fields.
+ */
+const isReadableLegacyDraft = (draft: unknown): draft is BookingDraft => {
+  if (!isPlainObject(draft)) {
+    return false;
+  }
+  if (!isPlainObject(draft.note) || typeof draft.note.status !== "string") {
+    return false;
+  }
+  return true;
+};
+
+type ResolvedSchemaVersion =
+  | { kind: "legacy" }
+  | { kind: "current" }
+  | { kind: "unsupported"; version: number };
+
+const resolveSchemaVersion = (raw: unknown): ResolvedSchemaVersion => {
+  if (raw == null) {
+    return { kind: "legacy" };
+  }
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+    return {
+      kind: "unsupported",
+      version: typeof raw === "number" && Number.isFinite(raw) ? raw : Number.NaN,
+    };
+  }
+  if (raw < 0 || raw > BOOKING_SCHEMA_VERSION) {
+    return { kind: "unsupported", version: raw };
+  }
+  if (raw === BOOKING_SCHEMA_VERSION) {
+    return { kind: "current" };
+  }
+  return { kind: "legacy" };
+};
+
+const failClosedNull = (stamp: {
+  bookingSchemaVersion: number;
+  bookingNoteStatus: "unasked";
+  selectedSlot: null;
+  selectedAvailabilityDate: null;
+}, source: BookingCheckpointMigrationTelemetry["source"]): BookingCheckpointUpgradeResult => ({
+  update: {
+    ...stamp,
+    bookingDraft: null,
+  },
+  unsupported: false,
+  telemetry: {
+    source,
+    schemaVersion: 0,
+    outcome: "fail_closed",
+  },
+});
+
+const failClosedServiceOnly = (
+  stamp: {
+    bookingSchemaVersion: number;
+    bookingNoteStatus: "unasked";
+    selectedSlot: null;
+    selectedAvailabilityDate: null;
+  },
+  draft: BookingDraft,
+  serviceId: string,
+): BookingCheckpointUpgradeResult => {
+  const service = {
+    ...draft.serviceAcceptance!.service,
+    id: serviceId,
+  };
+  const serviceOnly: BookingDraft = {
+    ...draft,
+    serviceAcceptance: {
+      status: draft.serviceAcceptance!.status,
+      service,
+      ...(draft.serviceAcceptance!.acceptedAtTurn != null
+        ? { acceptedAtTurn: draft.serviceAcceptance!.acceptedAtTurn }
+        : {}),
+    },
+    selectedDate: null,
+    selectedSlot: null,
+    requestedTime: null,
+    note: { status: "unasked" },
+    pendingCommand: null,
+    phase: "service",
+  };
+  return {
+    update: {
+      ...stamp,
+      bookingDraft: serviceOnly,
+    },
+    unsupported: false,
+    telemetry: {
+      source: "legacy_draft",
+      schemaVersion: 0,
+      outcome: "fail_closed",
+    },
+  };
+};
 
 /**
  * Checkpoint-read compatibility only. An empty object left by older abandon
@@ -158,8 +293,8 @@ export const isEmptyLegacyBookingDraft = (
   && draft.selectedDate == null
   && draft.selectedSlot == null
   && draft.requestedTime == null
-  && draft.note.status === "unasked"
-  && draft.note.value == null
+  && draft.note?.status === "unasked"
+  && draft.note?.value == null
   && draft.pendingCommand == null
   && draft.rescheduleTarget == null
   && draft.replacement == null;
@@ -199,48 +334,30 @@ export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
 export const upgradeBookingCheckpoint = (
   state: BookingCheckpointLegacyState,
 ): BookingCheckpointUpgradeResult => {
-  const schemaVersion = state.bookingSchemaVersion ?? 0;
-  if (schemaVersion === BOOKING_SCHEMA_VERSION) {
+  const resolved = resolveSchemaVersion(state.bookingSchemaVersion);
+  if (resolved.kind === "current") {
     return { update: {}, unsupported: false, telemetry: null };
   }
-  if (schemaVersion > BOOKING_SCHEMA_VERSION) {
+  if (resolved.kind === "unsupported") {
     return {
       update: {},
       unsupported: true,
       telemetry: {
         source: "legacy_draft",
-        schemaVersion,
+        schemaVersion: Number.isFinite(resolved.version) ? resolved.version : 0,
         outcome: "unsupported",
       },
     };
   }
 
-  const draft = state.bookingDraft;
+  const rawDraft = state.bookingDraft;
   const projectionsActive = hasActiveLegacyProjection(state);
   const stamp = {
     bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
     ...clearedLegacyProjections,
   };
 
-  if (isEmptyLegacyBookingDraft(draft)) {
-    const draftChanged = draft != null;
-    return {
-      update: {
-        ...stamp,
-        bookingDraft: null,
-      },
-      unsupported: false,
-      telemetry: draftChanged || projectionsActive
-        ? {
-            source: draftChanged ? "empty_draft" : "legacy_projection",
-            schemaVersion: 0,
-            outcome: "canonical",
-          }
-        : null,
-    };
-  }
-
-  if (draft == null) {
+  if (rawDraft == null) {
     return {
       update: {
         ...stamp,
@@ -257,12 +374,47 @@ export const upgradeBookingCheckpoint = (
     };
   }
 
-  if (!draftHasValidServiceAcceptance(draft)) {
-    if (hasRescheduleOrReplacementTarget(draft)) {
+  if (!isReadableLegacyDraft(rawDraft)) {
+    return failClosedNull(stamp, "legacy_draft");
+  }
+
+  const draft = rawDraft;
+
+  if (isEmptyLegacyBookingDraft(draft)) {
+    return {
+      update: {
+        ...stamp,
+        bookingDraft: null,
+      },
+      unsupported: false,
+      telemetry: {
+        source: "empty_draft",
+        schemaVersion: 0,
+        outcome: "canonical",
+      },
+    };
+  }
+
+  const serviceId = trimmedServiceId(draft);
+  const hasCorruptService = draft.serviceAcceptance != null && serviceId == null;
+  const hasCorruptDateOrSlot = !isValidSelectedDate(draft.selectedDate)
+    || !isValidSlot(draft.selectedSlot)
+    || slotDateMismatch(draft);
+  const hasCorruptFacts = hasCorruptDateOrSlot || hasCorruptService;
+
+  if (hasCorruptFacts || !draftHasValidServiceAcceptance(draft)) {
+    // Reschedule/replacement with a target is kept only when the draft shape is
+    // readable and date/slot/service facts are not contradictory.
+    if (
+      !hasCorruptFacts
+      && !draftHasValidServiceAcceptance(draft)
+      && hasRescheduleOrReplacementTarget(draft)
+    ) {
       const kept: BookingDraft = {
         ...draft,
         serviceAcceptance: null,
-        phase: bookingDraftPhase({ ...draft, serviceAcceptance: null }),
+        pendingCommand: null,
+        phase: bookingDraftPhase({ ...draft, serviceAcceptance: null, pendingCommand: null }),
       };
       return {
         update: {
@@ -277,64 +429,41 @@ export const upgradeBookingCheckpoint = (
         },
       };
     }
-    return {
-      update: {
-        ...stamp,
-        bookingDraft: null,
-      },
-      unsupported: false,
-      telemetry: {
-        source: projectionsActive && !draft.selectedDate && !draft.selectedSlot
-          ? "legacy_projection"
-          : "legacy_draft",
-        schemaVersion: 0,
-        outcome: "fail_closed",
-      },
-    };
-  }
-
-  if (slotDateMismatch(draft)) {
-    const serviceOnly: BookingDraft = {
-      ...draft,
-      selectedDate: null,
-      selectedSlot: null,
-      requestedTime: null,
-      note: { status: "unasked" },
-      pendingCommand: null,
-      phase: "service",
-    };
-    return {
-      update: {
-        ...stamp,
-        bookingDraft: serviceOnly,
-      },
-      unsupported: false,
-      telemetry: {
-        source: "legacy_draft",
-        schemaVersion: 0,
-        outcome: "fail_closed",
-      },
-    };
+    if (serviceId != null && draft.serviceAcceptance != null) {
+      return failClosedServiceOnly(stamp, draft, serviceId);
+    }
+    return failClosedNull(
+      stamp,
+      projectionsActive && draft.selectedDate == null && draft.selectedSlot == null
+        ? "legacy_projection"
+        : "legacy_draft",
+    );
   }
 
   const canonical: BookingDraft = {
     ...draft,
+    serviceAcceptance: draft.serviceAcceptance
+      ? {
+          ...draft.serviceAcceptance,
+          service: {
+            ...draft.serviceAcceptance.service,
+            id: serviceId!,
+          },
+        }
+      : null,
     phase: bookingDraftPhase(draft),
   };
-  const draftChanged = canonical.phase !== draft.phase;
   return {
     update: {
       ...stamp,
       bookingDraft: canonical,
     },
     unsupported: false,
-    telemetry: draftChanged || projectionsActive
-      ? {
-          source: "legacy_draft",
-          schemaVersion: 0,
-          outcome: "canonical",
-        }
-      : null,
+    telemetry: {
+      source: "legacy_draft",
+      schemaVersion: 0,
+      outcome: "canonical",
+    },
   };
 };
 

@@ -310,8 +310,20 @@ export const handleGraphTextTurn = async (
         trackEvent("booking_checkpoint_migrated", upgrade.telemetry);
       }
       const bookingUpdate = upgrade?.update ?? {};
+      const failClosed = upgrade?.telemetry?.outcome === "fail_closed";
 
       if (hasPendingConfirmBooking(snapshot.tasks)) {
+        // A fail-closed upgrade cleared the draft/command. Decline the interrupt so
+        // the already-paused mutation cannot run on the patient's confirmation.
+        if (failClosed) {
+          return graph.invoke(
+            new Command({
+              resume: { confirmed: false },
+              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
+            }) as never,
+            config,
+          );
+        }
         const decision = classifyConfirmReply(text);
         if (decision.kind === "confirmed") {
           return graph.invoke(
