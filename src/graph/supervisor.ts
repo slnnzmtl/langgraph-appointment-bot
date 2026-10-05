@@ -54,7 +54,7 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { reduceBookingDraft } from "./booking-draft.js";
+import { closedBookingSessionUpdate } from "./booking-draft.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -479,11 +479,21 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
 
     let contactContext = state.contactContext;
     let bookingContext = state.bookingContext;
-    let prefetchUpdate: ClinicStateUpdate = {};
     // Match the last HumanMessage in state (not stripped history — consecutive humans are merged there).
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
     const lastHumanText = lastHumanTextFromMessages(state.messages);
     const visitStatusIntent = humanAsksAboutVisits(lastHumanText);
+    // Intent-owned: leave booking even when CRM prefetch or routing fails (undefined would keep the draft).
+    const closeBookingSession =
+      isGreetingOrMainMenuLine(lastHumanLine)
+      || visitStatusIntent
+      || (/^(скасувати|cancel)$/i.test(lastHumanLine)
+        && state.bookingDraft?.selectedSlot == null
+        && state.selectedSlot == null);
+    // Seed close before fallible prefetch/routing so cancel and main menu do not keep a stale draft.
+    let prefetchUpdate: ClinicStateUpdate = closeBookingSession
+      ? closedBookingSessionUpdate()
+      : {};
     // These labels must always refetch — reminder HITL does not set prefetchDirty.
     const forcePrefetch = visitStatusIntent
       || /^(головне меню|main menu|скасувати|cancel)$/i.test(lastHumanLine);
@@ -512,9 +522,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
           availabilityCursor: resetBookingLadder
             ? null
             : state.availabilityCursor ?? availabilityCursorFromContext(state.availabilityContext),
-          ...(resetBookingLadder && state.bookingDraft
-            ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
-            : {}),
+          ...(closeBookingSession ? closedBookingSessionUpdate() : {}),
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -525,6 +533,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
             bookingContext: null,
             contactContext: null,
             prefetchDirty: true,
+            ...(closeBookingSession ? closedBookingSessionUpdate() : {}),
           };
         }
       }
@@ -599,9 +608,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         ...prefetchUpdate,
         availabilityContext: null,
         availabilityCursor: null,
-        ...(state.bookingDraft
-          ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
-          : {}),
+        ...closedBookingSessionUpdate(),
       };
     }
 
@@ -664,9 +671,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     return {
       ...routed,
       ...prefetchUpdate,
-      ...((abandonDraft || chooseAnotherService) && state.bookingDraft
-        ? { bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }) }
-        : {}),
+      ...((abandonDraft || chooseAnotherService) ? closedBookingSessionUpdate() : {}),
       ...(keepAvailability
         ? {}
         : {

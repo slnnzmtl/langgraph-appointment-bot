@@ -41,6 +41,7 @@ import {
   EARLIER_DATE_LABEL,
   INTENT_SKIP_LABEL,
   LATER_DATE_LABEL,
+  MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
   PATIENT_FALLBACK_MESSAGE,
@@ -560,6 +561,343 @@ describe("createAgentPrepareNode", () => {
       selectedDate: "2026-10-23",
       rescheduleTarget: { id: "meeting-1" },
     });
+  });
+
+  it("does not revive an empty legacy draft from old consultation history", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [
+          new AIMessage("Бажаєте записатися на консультацію?"),
+          new HumanMessage("Головне меню"),
+          new AIMessage("Чим можу допомогти?"),
+          new HumanMessage("скільки коштує ботокс?"),
+        ],
+        bookingDraft: createEmptyBookingDraft(),
+      }),
+    );
+
+    expect(update.bookingDraft).toBeNull();
+  });
+
+  it("opens a fresh session from an empty legacy draft on the same turn", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [
+          new AIMessage("Бажаєте записатися на консультацію?"),
+          new HumanMessage("хочу консультацію"),
+        ],
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          version: 4,
+          contactId: "stale-contact",
+        },
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      mode: "create",
+      serviceAcceptance: {
+        status: "accepted",
+        service: { id: CONSULTATION_SERVICE_ID },
+      },
+      selectedDate: null,
+      selectedSlot: null,
+      note: { status: "unasked" },
+      pendingCommand: null,
+      replacement: null,
+    });
+    expect(update.bookingDraft?.contactId).not.toBe("stale-contact");
+  });
+
+  it("does not restore a malformed draft when migration finds no service", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const malformed = {
+      ...createEmptyBookingDraft(),
+      version: 6,
+      selectedDate: "2026-10-16",
+      selectedSlot: {
+        dateStart: "2026-10-16T11:00:00",
+        dateEnd: "2026-10-16T11:30:00",
+        label: "11:00",
+      },
+      note: { status: "answered", value: "біль" },
+      serviceAcceptance: null,
+    };
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("скільки коштує ботокс?")],
+        bookingDraft: malformed,
+      }),
+    );
+
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
+  });
+
+  it("opens a fresh session after a malformed draft on the same turn", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("хочу консультацію")],
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          version: 6,
+          selectedDate: "2026-10-16",
+          selectedSlot: {
+            dateStart: "2026-10-16T11:00:00",
+            dateEnd: "2026-10-16T11:30:00",
+            label: "11:00",
+          },
+          note: { status: "answered", value: "біль" },
+          serviceAcceptance: null,
+        },
+      }),
+    );
+
+    expect(update.bookingDraft).toMatchObject({
+      mode: "create",
+      serviceAcceptance: {
+        status: "accepted",
+        service: { id: CONSULTATION_SERVICE_ID },
+      },
+      selectedDate: null,
+      selectedSlot: null,
+      note: { status: "unasked" },
+    });
+  });
+
+  it("does not revive consultation from stale projections after an empty abandon", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [
+          new AIMessage("Бажаєте записатися на консультацію?"),
+          new HumanMessage("Так"),
+          new AIMessage("О котрій зручно?"),
+          new HumanMessage("скільки коштує ботокс?"),
+        ],
+        bookingDraft: createEmptyBookingDraft(),
+        bookingNoteStatus: "answered",
+        selectedAvailabilityDate: "2026-10-16",
+        selectedSlot: {
+          dateStart: "2026-10-16T11:00:00",
+          dateEnd: "2026-10-16T11:30:00",
+          label: "11:00",
+        },
+      }),
+    );
+
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
+  });
+});
+
+describe("booking session mutation lifecycle", () => {
+  const agent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Books visits",
+    systemPrompt: "book",
+    maxSteps: 8,
+  };
+
+  const mutationMessages = (
+    name: "create_meeting" | "reschedule_meeting" | "cancel_meeting",
+    content: unknown,
+  ): [AIMessage, ToolMessage] => [
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id: "mut-1", name, args: {}, type: "tool_call" }],
+    }),
+    new ToolMessage({
+      content: JSON.stringify(content),
+      tool_call_id: "mut-1",
+      name,
+    }),
+  ];
+
+  it("closes create and reschedule sessions on committed or declined outcomes", () => {
+    const finalize = createAgentMutationFinalizeNode(agent);
+    for (const [name, content] of [
+      ["create_meeting", { id: "m-1", success: true }],
+      ["create_meeting", { cancelled: true }],
+      ["reschedule_meeting", { id: "m-1", success: true }],
+      ["reschedule_meeting", { cancelled: true }],
+    ] as const) {
+      const update = finalize(clinicState({
+        bookingDraft: canonicalBookingDraft(),
+        agentMessages: mutationMessages(name, content),
+      }));
+      expect(update.bookingDraft).toBeNull();
+    }
+  });
+
+  it("keeps recoverable create progress after a failed mutation", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ error: "CRM unavailable" }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const availability = {
+      days: [{
+        date: "2026-09-10",
+        slots: [{
+          id: "s1",
+          label: "14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+        }],
+      }],
+      stepMinutes: 30,
+      serviceId: "svc-1",
+    };
+    const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        contactContext: ownedContactContext(),
+        bookingDraft: canonicalBookingDraft(),
+        availabilityContext: availability,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(toolsUpdate.bookingDraft).toMatchObject({
+      serviceAcceptance: { status: "accepted", service: { id: "svc-1" } },
+      note: { status: "skipped" },
+      contactId: "contact-1",
+      selectedSlot: null,
+      pendingCommand: null,
+    });
+  });
+
+  it("closes direct cancel on failed or blocked outcomes", () => {
+    const finalize = createAgentMutationFinalizeNode(agent);
+    for (const content of [
+      { error: "CRM unavailable" },
+      { error: "Contact incomplete" },
+    ]) {
+      const update = finalize(clinicState({
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          phase: "confirming",
+          pendingCommand: {
+            action: "cancel",
+            payload: { meetingId: "m-1" },
+          },
+        },
+        pendingCancellationPurpose: "direct",
+        agentMessages: mutationMessages("cancel_meeting", content),
+      }));
+      expect(update.bookingDraft).toBeNull();
+    }
+  });
+
+  it("closes replacement cancel failures without replaying originalCommand", () => {
+    const finalize = createAgentMutationFinalizeNode(agent);
+    const originalCommand = {
+      action: "create" as const,
+      payload: {
+        serviceId: "svc-1",
+        contactId: "contact-1",
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+      },
+    };
+    const update = finalize(clinicState({
+      bookingDraft: canonicalBookingDraft({
+        mode: "replace",
+        phase: "confirming",
+        pendingCommand: {
+          action: "cancel",
+          payload: { meetingId: "existing-1" },
+        },
+        replacement: {
+          meeting: { id: "existing-1" },
+          status: "cancelling",
+          originalCommand,
+        },
+      }),
+      pendingCancellationPurpose: "replacement",
+      agentMessages: mutationMessages("cancel_meeting", { error: "CRM unavailable" }),
+    }));
+
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingCancellationPurpose).toBeNull();
+  });
+
+  it("ends HITL create decline at null even when tools invalidated the slot first", async () => {
+    const createTool = tool(
+      async () => JSON.stringify({ cancelled: true }),
+      {
+        name: "create_meeting",
+        description: "create",
+        schema: z.object({}),
+      },
+    );
+    const availability = {
+      days: [{
+        date: "2026-09-10",
+        slots: [{
+          id: "s1",
+          label: "14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+        }],
+      }],
+      stepMinutes: 30,
+      serviceId: "svc-1",
+    };
+    const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
+      clinicState({
+        contactContext: ownedContactContext(),
+        bookingDraft: canonicalBookingDraft(),
+        availabilityContext: availability,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(toolsUpdate.bookingDraft?.selectedSlot).toBeNull();
+    expect(toolsUpdate.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+
+    const finalUpdate = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingDraft: toolsUpdate.bookingDraft as BookingDraft,
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{ id: "c1", name: "create_meeting", args: {}, type: "tool_call" }],
+        }),
+        (toolsUpdate.agentMessages as ToolMessage[])[0]!,
+      ],
+    }));
+    expect(finalUpdate.bookingDraft).toBeNull();
+  });
+
+  it("ignores main-menu text while advancing the note step", () => {
+    expect(advanceBookingNoteStep(clinicState({
+      messages: [new HumanMessage(MAIN_MENU_LABEL)],
+      bookingDraft: canonicalBookingDraft({
+        note: { status: "awaiting" },
+      }),
+    }))).toEqual({});
   });
 });
 
@@ -3758,11 +4096,7 @@ describe("runtime-owned cancellation outcomes", () => {
       replyText: "Запис не було перенесено.",
     });
     expect(update.lastHandoff?.replyText).not.toContain("вільні");
-    expect(update.bookingDraft).toMatchObject({
-      mode: "create",
-      phase: "service",
-      pendingCommand: null,
-    });
+    expect(update.bookingDraft).toBeNull();
     expect(update.pendingCancellationPurpose).toBeNull();
   });
 });
@@ -4537,14 +4871,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
 
-    expect(update.bookingDraft).toMatchObject({
-      mode: "create",
-      phase: "service",
-      serviceAcceptance: null,
-      selectedDate: null,
-      selectedSlot: null,
-      pendingCommand: null,
-    });
+    expect(update.bookingDraft).toBeNull();
   });
 
   it("invalidates a reschedule slot when chat confirmation remains unresolved", () => {
@@ -4651,12 +4978,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
 
-    expect(update.bookingDraft).toMatchObject({
-      mode: "create",
-      phase: "service",
-      pendingCommand: null,
-      replacement: null,
-    });
+    expect(update.bookingDraft).toBeNull();
     expect(update.pendingCancellationPurpose).toBeNull();
   });
 

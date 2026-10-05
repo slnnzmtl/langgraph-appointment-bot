@@ -425,9 +425,54 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingDraft).toBeUndefined();
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
     expect(update.servicesContext).toBeUndefined();
     // Greeting starts a fresh booking session, so the durable cursor resets too.
+    expect(update.availabilityCursor).toBeNull();
+  });
+
+  it("closes an active booking draft on Головне меню", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+      prefetchTtlMs: 1_000,
+    });
+    const activeDraft = createEmptyBookingDraft();
+    activeDraft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    };
+    activeDraft.selectedDate = "2026-10-17";
+    activeDraft.phase = "time";
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Головне меню")],
+        bookingDraft: activeDraft,
+        bookingNoteStatus: "answered",
+        selectedAvailabilityDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
     expect(update.availabilityCursor).toBeNull();
   });
 
@@ -736,7 +781,10 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingDraft).toBeUndefined();
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
   });
 
   it("refetches when prefetchFetchedAt is missing", async () => {
@@ -843,6 +891,134 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(system).toContain('"visits":"none"');
     expect(update.next).toBe("FINISH");
     expect(update.contactContext).toBeUndefined();
+  });
+
+  it("closes an active booking on Мій запис even when prefetch throws", async () => {
+    const activeDraft = createEmptyBookingDraft();
+    activeDraft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    };
+    activeDraft.selectedDate = "2026-10-17";
+    activeDraft.selectedSlot = {
+      dateStart: "2026-10-17T11:00:00",
+      dateEnd: "2026-10-17T11:30:00",
+      label: "11:00",
+    };
+    activeDraft.phase = "note";
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => {
+        throw new Error("CRM down");
+      },
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Мій запис")],
+        bookingDraft: activeDraft,
+        bookingNoteStatus: "answered",
+        selectedAvailabilityDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(update.next).toBe("FINISH");
+    expect(update.prefetchDirty).toBe(true);
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("closes a slotless booking on Скасувати even when prefetch throws", async () => {
+    const activeDraft = createEmptyBookingDraft();
+    activeDraft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    };
+    activeDraft.selectedDate = "2026-10-17";
+    activeDraft.phase = "time";
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => {
+        throw new Error("CRM down");
+      },
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Скасувати")],
+        bookingDraft: activeDraft,
+        bookingNoteStatus: "awaiting",
+        selectedAvailabilityDate: "2026-10-17",
+        selectedSlot: null,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(update.next).toBe("booking");
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("closes an active booking on Головне меню when prefetch and routing both fail", async () => {
+    const activeDraft = createEmptyBookingDraft();
+    activeDraft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    };
+    activeDraft.selectedDate = "2026-10-17";
+    activeDraft.selectedSlot = {
+      dateStart: "2026-10-17T11:00:00",
+      dateEnd: "2026-10-17T11:30:00",
+      label: "11:00",
+    };
+    activeDraft.phase = "note";
+    invoke.mockRejectedValue(new Error("LLM down"));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => {
+        throw new Error("CRM down");
+      },
+    });
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Головне меню")],
+        bookingDraft: activeDraft,
+        bookingNoteStatus: "answered",
+        selectedAvailabilityDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.status).toBe("error");
+    expect(update.bookingDraft).toBeNull();
+    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.selectedSlot).toBeNull();
+    expect(update.selectedAvailabilityDate).toBeNull();
   });
 });
 

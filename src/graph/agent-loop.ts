@@ -112,6 +112,8 @@ import {
 } from "./gemini-cache-messages.js";
 import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
+  closedBookingSessionUpdate,
+  isEmptyLegacyBookingDraft,
   migrateLegacyBookingState,
   reduceBookingDraft,
   type PendingBookingCommand,
@@ -269,7 +271,11 @@ const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage | null 
     // Declined/failed replacement cancellation outcomes are terminal, but must
     // retain their replacement origin for the correct response/menu.
     if (state.pendingCancellationPurpose === "replacement") {
-      return outcome === "declined" || outcome === "failed" ? message : null;
+      // Failed/blocked replacement cancel must close the session — leaving
+      // cancelling + originalCommand would replay a stale create later.
+      return outcome === "declined" || outcome === "failed" || outcome === "blocked"
+        ? message
+        : null;
     }
     // Keep the legacy state guard for checkpoints created before the explicit
     // cancellation-purpose field existed.
@@ -708,7 +714,7 @@ const catalogServiceForText = (
 };
 
 /** Resolve explicit service acceptance into a durable draft event for this turn. */
-const bookingDraftForTurn = (state: ClinicState): BookingDraft | undefined => {
+const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefined => {
   const humanMessages = (state.messages ?? []).filter(
     (message): message is HumanMessage => message instanceof HumanMessage,
   );
@@ -945,9 +951,7 @@ const pendingChatConfirmationCleanup = (
     decision.replyKind === "declined"
     && (decision.action === "create" || decision.action === "reschedule")
   ) {
-    return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }),
-    };
+    return closedBookingSessionUpdate();
   }
   if (decision.action === "create" || decision.action === "reschedule") {
     return {
@@ -965,9 +969,7 @@ const pendingChatConfirmationCleanup = (
     )
   ) {
     return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "cancel_existing_declined",
-      }),
+      ...closedBookingSessionUpdate(),
       pendingCancellationPurpose: null,
     };
   }
@@ -1754,16 +1756,19 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
 
-  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft => {
+  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft | null => {
     let draft = state.bookingDraft;
     if (draft == null) {
-      return reduceBookingDraft(null, { type: "slot_selected", slot });
+      return null;
     }
     if (draft.selectedDate == null) {
       draft = reduceBookingDraft(draft, {
         type: "date_selected",
         date: slot.dateStart.slice(0, 10),
       });
+    }
+    if (draft == null) {
+      return null;
     }
     return reduceBookingDraft(draft, { type: "slot_selected", slot });
   };
@@ -2105,18 +2110,24 @@ export const createAgentPrepareNode = (agentId: string) =>
               source: "catalog" as const,
             }
           : undefined;
-      const hasMalformedDraft = state.bookingDraft != null
-        && state.bookingDraft.serviceAcceptance?.service.id == null;
-      const hasLegacyProjection = state.bookingDraft == null
+      // Empty objects left by older abandon paths are not sessions. Canonicalize
+      // before migration so old chat history cannot revive a closed draft.
+      const startedAsEmptyLegacy = isEmptyLegacyBookingDraft(state.bookingDraft);
+      const checkpointDraft = startedAsEmptyLegacy ? null : state.bookingDraft;
+      const hasMalformedDraft = checkpointDraft != null
+        && checkpointDraft.serviceAcceptance?.service.id == null;
+      const hasLegacyProjection = checkpointDraft == null
+        && !startedAsEmptyLegacy
         && (
           state.bookingNoteStatus !== "unasked"
           || state.selectedSlot != null
           || state.selectedAvailabilityDate != null
         );
-      const migrated = hasMalformedDraft || hasLegacyProjection
+      const migrationAttempted = hasMalformedDraft || hasLegacyProjection;
+      const migratedRaw = migrationAttempted
         ? migrateLegacyBookingState(
             {
-              bookingDraft: state.bookingDraft,
+              bookingDraft: checkpointDraft,
               bookingNoteStatus: state.bookingNoteStatus,
               selectedSlot: state.selectedSlot,
               selectedAvailabilityDate: state.selectedAvailabilityDate,
@@ -2125,9 +2136,9 @@ export const createAgentPrepareNode = (agentId: string) =>
             { historyText, contactId: typeof contactId === "string" ? contactId : null },
           )
         : null;
-      const migrationUpdate = migrated
+      const migrated = isEmptyLegacyBookingDraft(migratedRaw) ? null : migratedRaw;
+      const migrationUpdate = startedAsEmptyLegacy || migrationAttempted
         ? {
-            bookingDraft: migrated,
             bookingNoteStatus: "unasked" as const,
             selectedSlot: null,
             selectedAvailabilityDate: null,
@@ -2149,7 +2160,7 @@ export const createAgentPrepareNode = (agentId: string) =>
               ? "pending_offer"
               : recoveredService
                 ? "catalog"
-                : state.bookingDraft
+                : checkpointDraft
                   ? "existing_draft"
                   : "unknown",
         });
@@ -2157,7 +2168,10 @@ export const createAgentPrepareNode = (agentId: string) =>
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
-      const migratedState = migrated ? { ...state, bookingDraft: migrated } : state;
+      const migratedState = {
+        ...state,
+        bookingDraft: migrationAttempted ? migrated : checkpointDraft,
+      };
       const pendingRescheduleRequested =
         migratedState.lastHandoff?.pendingAction === "reschedule"
         && migratedState.bookingContext?.meetings.length === 1
@@ -2193,9 +2207,10 @@ export const createAgentPrepareNode = (agentId: string) =>
       const rescheduleState = startedReschedule
         ? { ...migratedState, bookingDraft: startedReschedule }
         : migratedState;
-      let bookingDraft = rescheduleState.bookingDraft?.mode === "reschedule"
-        ? rescheduleState.bookingDraft
-        : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
+      let bookingDraft: BookingDraft | null | undefined =
+        rescheduleState.bookingDraft?.mode === "reschedule"
+          ? rescheduleState.bookingDraft
+          : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
       const scheduleRequest = resolveBookingScheduleRequest(
         lastPatientText(rescheduleState),
         kyivToday(),
@@ -2220,7 +2235,7 @@ export const createAgentPrepareNode = (agentId: string) =>
       // draft. New flows receive a single aggregate update.
       Object.assign(update, noteUpdate);
       Object.assign(update, migrationUpdate);
-      bookingDraft = (noteUpdate.bookingDraft as BookingDraft | undefined) ?? bookingDraft;
+      bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
       if (
         bookingDraft
         && bookingDraft.contactId != null
@@ -2234,8 +2249,12 @@ export const createAgentPrepareNode = (agentId: string) =>
           contactId,
         });
       }
+      // One write: persist the session opened this turn, or null when an empty
+      // legacy checkpoint must be cleared. Never wipe a same-turn open.
       if (bookingDraft) {
         update.bookingDraft = bookingDraft;
+      } else if (startedAsEmptyLegacy || migrationAttempted) {
+        Object.assign(update, closedBookingSessionUpdate());
       }
     }
     return update;
@@ -2333,7 +2352,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     const replacementAction = replacementActionForTurn(state);
     if (replacementAction === "decline") {
       return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "cancel_existing_declined" }),
+        ...closedBookingSessionUpdate(),
         agentMessages: new Overwrite([]),
       };
     }
@@ -3248,9 +3267,7 @@ export const createAgentToolsNode = (
           type: "cancel_existing_completed",
         });
       } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
-        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-          type: "cancel_existing_declined",
-        });
+        Object.assign(update, closedBookingSessionUpdate());
       } else if (!cancelOnlyCommitted) {
         Object.assign(update, resetBookingNoteState(state));
         const mutationFailed = resultMessages.some(
@@ -3273,7 +3290,7 @@ export const createAgentToolsNode = (
             type: "slot_invalidated",
           });
         } else if (state.bookingDraft) {
-          update.bookingDraft = null;
+          Object.assign(update, closedBookingSessionUpdate());
         }
       }
       if (
@@ -3547,11 +3564,13 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
       stepCount: 0,
       // A direct cancellation is complete; do not leave its frozen command in
       // the draft for a later turn to replay.
-      bookingDraft: committed || declined || mutationName === "cancel_meeting"
-        ? null
-        : state.bookingDraft
-          ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
-          : null,
+      ...(committed || declined || mutationName === "cancel_meeting"
+        ? closedBookingSessionUpdate()
+        : {
+            bookingDraft: state.bookingDraft
+              ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
+              : null,
+          }),
       pendingCancellationPurpose: null,
       messages: [message],
       lastHandoff: {

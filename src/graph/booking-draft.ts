@@ -250,6 +250,39 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   replacement: null,
 });
 
+/**
+ * Checkpoint-read compatibility only. An empty object left by older abandon
+ * paths is not an active session — canonicalize it to null before the turn.
+ * Runtime code must never persist another empty draft.
+ */
+export const isEmptyLegacyBookingDraft = (
+  draft: BookingDraft | null | undefined,
+): boolean =>
+  draft != null
+  && draft.mode === "create"
+  && draft.serviceAcceptance == null
+  && draft.selectedDate == null
+  && draft.selectedSlot == null
+  && draft.requestedTime == null
+  && draft.note.status === "unasked"
+  && draft.note.value == null
+  && draft.pendingCommand == null
+  && draft.rescheduleTarget == null
+  && draft.replacement == null;
+
+/** Atomically close a booking session, including deprecated checkpoint projections. */
+export const closedBookingSessionUpdate = (): {
+  bookingDraft: null;
+  bookingNoteStatus: "unasked";
+  selectedSlot: null;
+  selectedAvailabilityDate: null;
+} => ({
+  bookingDraft: null,
+  bookingNoteStatus: "unasked",
+  selectedSlot: null,
+  selectedAvailabilityDate: null,
+});
+
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
   ...update,
   version: draft.version + 1,
@@ -272,15 +305,58 @@ const slotDate = (slot: SelectedBookingSlot): string => slot.dateStart.slice(0, 
 const hasCompletedNote = (draft: BookingDraft): boolean =>
   draft.note.status === "skipped" || draft.note.status === "answered";
 
+const openFromNull = (event: BookingEvent): BookingDraft | null => {
+  switch (event.type) {
+    case "service_selected": {
+      const acceptance: ServiceAcceptance = {
+        status: event.accepted ? "accepted" : "pending",
+        service: event.service,
+        ...(event.accepted && event.turn != null ? { acceptedAtTurn: event.turn } : {}),
+      };
+      const opened: BookingDraft = {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: acceptance,
+      };
+      return { ...opened, phase: bookingDraftPhase(opened), version: 1 };
+    }
+    case "reschedule_started": {
+      const opened: BookingDraft = {
+        ...createEmptyBookingDraft(),
+        mode: "reschedule",
+        phase: event.meeting == null ? "service" : "date",
+        rescheduleTarget: event.meeting,
+      };
+      return { ...opened, version: 1 };
+    }
+    case "command_prepared": {
+      if (event.command.action !== "cancel") {
+        return null;
+      }
+      return {
+        ...createEmptyBookingDraft(),
+        phase: "confirming",
+        pendingCommand: event.command,
+        version: 1,
+      };
+    }
+    default:
+      return null;
+  }
+};
+
 /**
  * The only place where booking-draft transitions are defined. UI/LLM layers emit
  * events; they do not mutate individual booking facts independently.
+ * `null` means no active booking session.
  */
 export const reduceBookingDraft = (
   current: BookingDraft | null | undefined,
   event: BookingEvent,
-): BookingDraft => {
-  const draft = current ?? createEmptyBookingDraft();
+): BookingDraft | null => {
+  if (current == null) {
+    return openFromNull(event);
+  }
+  const draft = current;
 
   switch (event.type) {
     case "service_selected": {
@@ -539,7 +615,7 @@ export const reduceBookingDraft = (
     case "cancel_existing_declined":
       // The existing appointment is still active; never leave a ready create
       // draft behind or the graph will immediately replay Already booked.
-      return createEmptyBookingDraft();
+      return null;
     case "slot_invalidated":
       return withVersion(draft, {
         ...draft,
@@ -561,6 +637,6 @@ export const reduceBookingDraft = (
     case "draft_resumed":
       return withVersion(draft, { ...draft, phase: bookingDraftPhase(draft) });
     case "draft_abandoned":
-      return createEmptyBookingDraft();
+      return null;
   }
 };
