@@ -985,7 +985,141 @@ describe("BookingDraft reducer", () => {
     expect(upgraded.update.bookingDraft?.replacement?.originalCommand).toBeUndefined();
     expect(upgraded.update.bookingDraft?.replacement?.status).not.toBe("create_pending");
   });
+
+  it("fails closed when create_pending originalCommand contactId mismatches despite ready phase", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        phase: "ready",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "owned-contact",
+        pendingCommand: null,
+        replacement: {
+          meeting: { id: "m-old", name: "Старий запис" },
+          status: "create_pending",
+          originalCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "different-contact",
+              dateStart: selectedSlot.dateStart,
+              dateEnd: selectedSlot.dateEnd,
+            },
+          },
+        },
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      phase: "service",
+      pendingCommand: null,
+      replacement: null,
+    });
+    expect(upgraded.update.bookingDraft?.replacement?.originalCommand).toBeUndefined();
+    expect(upgraded.update.bookingDraft?.replacement?.status).not.toBe("create_pending");
+  });
+
+  it("keeps a matching create_pending originalCommand when facts agree", () => {
+    const originalCommand = {
+      action: "create" as const,
+      payload: {
+        serviceId: "svc-1",
+        contactId: "owned-contact",
+        dateStart: selectedSlot.dateStart,
+        dateEnd: selectedSlot.dateEnd,
+      },
+    };
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        phase: "ready",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "owned-contact",
+        pendingCommand: null,
+        replacement: {
+          meeting: { id: "m-old", name: "Старий запис" },
+          status: "create_pending",
+          originalCommand,
+        },
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("canonical");
+    expect(upgraded.update.bookingDraft).toMatchObject({
+      mode: "replace",
+      replacement: {
+        meeting: { id: "m-old" },
+        status: "create_pending",
+        originalCommand,
+      },
+      pendingCommand: null,
+      contactId: "owned-contact",
+    });
+    assertCreatePendingMatchesCanonical(upgraded.update.bookingDraft);
+  });
+
+  it("fails closed when create_pending is missing a nested create command", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        phase: "ready",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot,
+        note: { status: "skipped" },
+        contactId: "owned-contact",
+        pendingCommand: null,
+        replacement: {
+          meeting: { id: "m-old", name: "Старий запис" },
+          status: "create_pending",
+        },
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft?.replacement).toBeNull();
+    expect(upgraded.update.bookingDraft?.replacement?.status).not.toBe("create_pending");
+  });
 });
+
+/** Field-level invariant: resume-shaped create_pending must match canonical facts. */
+const assertCreatePendingMatchesCanonical = (
+  draft: ReturnType<typeof upgradeBookingCheckpoint>["update"]["bookingDraft"],
+): void => {
+  if (draft?.replacement?.status !== "create_pending") {
+    return;
+  }
+  const command = draft.replacement.originalCommand;
+  expect(command?.action).toBe("create");
+  expect(command?.payload).toMatchObject({
+    contactId: draft.contactId,
+    serviceId: draft.serviceAcceptance?.service.id,
+    dateStart: draft.selectedSlot?.dateStart,
+    dateEnd: draft.selectedSlot?.dateEnd,
+  });
+};
 
 describe("booking session lifecycle", () => {
   const selectedSlot = {

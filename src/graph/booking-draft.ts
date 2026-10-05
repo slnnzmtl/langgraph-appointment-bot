@@ -215,19 +215,11 @@ const hasBlankTargetId = (draft: BookingDraft): boolean => {
   return false;
 };
 
-/**
- * Confirming / pending-command facts required before a mutation can stay executable.
- * Violations must fail closed so a pending HITL card cannot resume.
- */
-const hasConfirmingInvariantViolation = (draft: BookingDraft): boolean => {
-  if (draft.phase !== "confirming" && draft.pendingCommand == null) {
-    return false;
-  }
-  const command = draft.pendingCommand;
-  if (command == null || !isPlainObject(command.payload)) {
-    return true;
-  }
-  const payload = command.payload;
+/** Create payload must match canonical service, contact, date, and slot. */
+const createPayloadMatchesDraft = (
+  draft: BookingDraft,
+  payload: Record<string, unknown>,
+): boolean => {
   const noteOk = draft.note.status === "skipped" || draft.note.status === "answered";
   const contactId = trimmedNonblank(draft.contactId);
   const serviceId = trimmedServiceId(draft);
@@ -236,23 +228,40 @@ const hasConfirmingInvariantViolation = (draft: BookingDraft): boolean => {
   const slotOk = draft.selectedSlot != null
     && isValidSlot(draft.selectedSlot)
     && !slotRequiresMatchingDate(draft);
+  return (draft.mode === "create" || draft.mode === "replace")
+    && accepted
+    && dateOk
+    && slotOk
+    && noteOk
+    && contactId != null
+    && payload.contactId === contactId
+    && payload.serviceId === serviceId
+    && payload.dateStart === draft.selectedSlot!.dateStart
+    && payload.dateEnd === draft.selectedSlot!.dateEnd;
+};
 
+/**
+ * Pending-command facts required before a mutation can stay executable.
+ * Confirming without a command is also a violation.
+ */
+const hasPendingCommandViolation = (draft: BookingDraft): boolean => {
+  if (draft.pendingCommand == null && draft.phase !== "confirming") {
+    return false;
+  }
+  const command = draft.pendingCommand;
+  if (command == null || !isPlainObject(command.payload)) {
+    return true;
+  }
+  const payload = command.payload;
   if (command.action === "create") {
-    return !(
-      (draft.mode === "create" || draft.mode === "replace")
-      && accepted
-      && dateOk
-      && slotOk
-      && noteOk
-      && contactId != null
-      && payload.contactId === contactId
-      && payload.serviceId === serviceId
-      && payload.dateStart === draft.selectedSlot!.dateStart
-      && payload.dateEnd === draft.selectedSlot!.dateEnd
-    );
+    return !createPayloadMatchesDraft(draft, payload);
   }
   if (command.action === "reschedule") {
     const targetId = trimmedTargetId(draft.rescheduleTarget);
+    const dateOk = draft.selectedDate != null && isValidSelectedDate(draft.selectedDate);
+    const slotOk = draft.selectedSlot != null
+      && isValidSlot(draft.selectedSlot)
+      && !slotRequiresMatchingDate(draft);
     return !(
       draft.mode === "reschedule"
       && targetId != null
@@ -276,6 +285,87 @@ const hasConfirmingInvariantViolation = (draft: BookingDraft): boolean => {
   }
   return true;
 };
+
+/**
+ * create_pending is resumed by agent-loop via originalCommand, independent of
+ * phase / pendingCommand. Missing or mismatched nested create must fail closed.
+ */
+const hasCreatePendingCommandViolation = (draft: BookingDraft): boolean => {
+  if (draft.replacement?.status !== "create_pending") {
+    return false;
+  }
+  const command = draft.replacement.originalCommand;
+  if (command == null || command.action !== "create" || !isPlainObject(command.payload)) {
+    return true;
+  }
+  return !createPayloadMatchesDraft(draft, command.payload);
+};
+
+const hasExecutableCommandViolation = (draft: BookingDraft): boolean =>
+  hasPendingCommandViolation(draft) || hasCreatePendingCommandViolation(draft);
+
+/** Copy only known BookingDraft keys so unknown legacy fields cannot leak. */
+const constructBookingDraft = (fields: {
+  version: number;
+  mode: BookingMode;
+  phase: BookingPhase;
+  serviceAcceptance: ServiceAcceptance | null;
+  selectedDate: string | null;
+  selectedSlot: SelectedBookingSlot | null;
+  requestedTime: RequestedBookingTime | null;
+  note: BookingNote;
+  contactId: string | null;
+  pendingCommand: PendingBookingCommand | null;
+  rescheduleTarget?: ReplacementMeeting | null;
+  replacement?: ReplacementState | null;
+}): BookingDraft => ({
+  version: fields.version,
+  mode: fields.mode,
+  phase: fields.phase,
+  serviceAcceptance: fields.serviceAcceptance,
+  selectedDate: fields.selectedDate,
+  selectedSlot: fields.selectedSlot,
+  requestedTime: fields.requestedTime,
+  note: fields.note,
+  contactId: fields.contactId,
+  pendingCommand: fields.pendingCommand,
+  rescheduleTarget: fields.rescheduleTarget ?? null,
+  replacement: fields.replacement ?? null,
+});
+
+const copyMeeting = (meeting: ReplacementMeeting): ReplacementMeeting => {
+  const id = trimmedTargetId(meeting)!;
+  return {
+    id,
+    ...(typeof meeting.name === "string" ? { name: meeting.name } : {}),
+    ...(typeof meeting.dateStart === "string" ? { dateStart: meeting.dateStart } : {}),
+    ...(typeof meeting.dateEnd === "string" ? { dateEnd: meeting.dateEnd } : {}),
+  };
+};
+
+const copyPendingCommand = (command: PendingBookingCommand): PendingBookingCommand => ({
+  action: command.action,
+  payload: { ...command.payload },
+});
+
+const copyServiceAcceptance = (
+  acceptance: ServiceAcceptance,
+  serviceId: string,
+): ServiceAcceptance => ({
+  status: acceptance.status,
+  service: {
+    id: serviceId,
+    ...(typeof acceptance.service.name === "string" ? { name: acceptance.service.name } : {}),
+    ...(typeof acceptance.service.durationMinutes === "number"
+      ? { durationMinutes: acceptance.service.durationMinutes }
+      : {}),
+    source: acceptance.service.source,
+  },
+  ...(acceptance.acceptedAtTurn != null ? { acceptedAtTurn: acceptance.acceptedAtTurn } : {}),
+});
+
+const draftVersion = (draft: BookingDraft): number =>
+  typeof draft.version === "number" && Number.isFinite(draft.version) ? draft.version : 0;
 
 /**
  * Readable legacy draft for migration. Missing note or non-object drafts are rejected
@@ -343,28 +433,21 @@ const failClosedServiceOnly = (
   draft: BookingDraft,
   serviceId: string,
 ): BookingCheckpointUpgradeResult => {
-  const service = {
-    ...draft.serviceAcceptance!.service,
-    id: serviceId,
-  };
-  const serviceOnly: BookingDraft = {
-    ...draft,
-    serviceAcceptance: {
-      status: draft.serviceAcceptance!.status,
-      service,
-      ...(draft.serviceAcceptance!.acceptedAtTurn != null
-        ? { acceptedAtTurn: draft.serviceAcceptance!.acceptedAtTurn }
-        : {}),
-    },
+  const serviceOnly = constructBookingDraft({
+    version: draftVersion(draft),
+    mode: draft.mode,
+    phase: "service",
+    serviceAcceptance: copyServiceAcceptance(draft.serviceAcceptance!, serviceId),
     selectedDate: null,
     selectedSlot: null,
     requestedTime: null,
     note: { status: "unasked" },
+    contactId: trimmedNonblank(draft.contactId),
     pendingCommand: null,
+    rescheduleTarget: null,
     // Never retain a frozen replacement create — agent-loop would replay it.
     replacement: null,
-    phase: "service",
-  };
+  });
   return {
     update: {
       ...stamp,
@@ -503,7 +586,7 @@ export const upgradeBookingCheckpoint = (
   const hasCorruptFacts = hasCorruptDateOrSlot
     || hasCorruptService
     || hasBlankTargetId(draft)
-    || hasConfirmingInvariantViolation(draft);
+    || hasExecutableCommandViolation(draft);
 
   if (hasCorruptFacts || !draftHasValidServiceAcceptance(draft)) {
     // Reschedule/replacement with a target is kept only when the draft shape is
@@ -520,18 +603,30 @@ export const upgradeBookingCheckpoint = (
       const replacementMeeting = draft.replacement?.meeting;
       const keptReplacement = replacementMeeting != null
         && trimmedTargetId(replacementMeeting) != null
-        ? { meeting: replacementMeeting, status: "offered" as const }
+        ? { meeting: copyMeeting(replacementMeeting), status: "offered" as const }
         : null;
-      const keptBase: BookingDraft = {
-        ...draft,
+      const keptReschedule = draft.mode === "reschedule" && draft.rescheduleTarget != null
+        && trimmedTargetId(draft.rescheduleTarget) != null
+        ? copyMeeting(draft.rescheduleTarget)
+        : null;
+      const keptBase = constructBookingDraft({
+        version: draftVersion(draft),
+        mode: draft.mode,
+        phase: "service",
         serviceAcceptance: null,
+        selectedDate: isValidSelectedDate(draft.selectedDate) ? draft.selectedDate : null,
+        selectedSlot: isValidSlot(draft.selectedSlot) ? draft.selectedSlot : null,
+        requestedTime: draft.requestedTime ?? null,
+        note: draft.note,
+        contactId: trimmedNonblank(draft.contactId),
         pendingCommand: null,
+        rescheduleTarget: keptReschedule,
         replacement: keptReplacement,
-      };
-      const kept: BookingDraft = {
+      });
+      const kept = constructBookingDraft({
         ...keptBase,
         phase: bookingDraftPhase(keptBase),
-      };
+      });
       return {
         update: {
           ...stamp,
@@ -556,19 +651,46 @@ export const upgradeBookingCheckpoint = (
     );
   }
 
-  const canonical: BookingDraft = {
-    ...draft,
-    serviceAcceptance: draft.serviceAcceptance
-      ? {
-          ...draft.serviceAcceptance,
-          service: {
-            ...draft.serviceAcceptance.service,
-            id: serviceId!,
-          },
-        }
+  const pendingCommand = draft.pendingCommand != null
+    ? copyPendingCommand(draft.pendingCommand)
+    : null;
+  let replacement: ReplacementState | null = null;
+  if (draft.replacement != null && trimmedTargetId(draft.replacement.meeting) != null) {
+    const status = draft.replacement.status;
+    replacement = {
+      meeting: copyMeeting(draft.replacement.meeting),
+      status,
+      ...(
+        status === "create_pending" && draft.replacement.originalCommand != null
+          ? { originalCommand: copyPendingCommand(draft.replacement.originalCommand) }
+          : {}
+      ),
+    };
+  }
+  const rescheduleTarget = draft.rescheduleTarget != null
+    && trimmedTargetId(draft.rescheduleTarget) != null
+    ? copyMeeting(draft.rescheduleTarget)
+    : null;
+  const withCommands = constructBookingDraft({
+    version: draftVersion(draft),
+    mode: draft.mode,
+    phase: pendingCommand != null ? "confirming" : draft.phase,
+    serviceAcceptance: draft.serviceAcceptance != null && serviceId != null
+      ? copyServiceAcceptance(draft.serviceAcceptance, serviceId)
       : null,
-    phase: bookingDraftPhase(draft),
-  };
+    selectedDate: draft.selectedDate,
+    selectedSlot: draft.selectedSlot,
+    requestedTime: draft.requestedTime ?? null,
+    note: draft.note,
+    contactId: trimmedNonblank(draft.contactId),
+    pendingCommand,
+    rescheduleTarget,
+    replacement,
+  });
+  const canonical = constructBookingDraft({
+    ...withCommands,
+    phase: bookingDraftPhase(withCommands),
+  });
   return {
     update: {
       ...stamp,
