@@ -522,6 +522,52 @@ describe("createAgentPrepareNode", () => {
     expect(update.bookingDraft?.phase).toBe("time");
   });
 
+  it.each([
+    "потрібна консультація щодо ювідерм",
+    "потрібна консультація щодо збільшення губ",
+  ])(
+    "does not rewrite Juvederm to Consultation when note orch owns: %s",
+    async (patientText) => {
+      const prepare = createAgentPrepareNode("booking");
+      const juvedermDraft = canonicalBookingDraft({
+        phase: "note",
+        serviceAcceptance: {
+          status: "accepted",
+          service: {
+            id: "svc-juvederm",
+            name: "Juvederm",
+            source: "catalog",
+          },
+        },
+        selectedDate: "2026-10-19",
+        selectedSlot: {
+          dateStart: "2026-10-19T12:00:00",
+          dateEnd: "2026-10-19T12:30:00",
+          label: "12:00",
+        },
+        note: { status: "awaiting" },
+        contactId: null,
+      });
+      const update = await prepare(
+        clinicState({
+          messages: [new HumanMessage(patientText)],
+          bookingDraft: juvedermDraft,
+          pendingInteraction: {
+            kind: "visit_note",
+            choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+          },
+        }),
+      );
+
+      expect(update.noteOrchQueued).toBe(true);
+      expect(update.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-juvederm");
+      expect(update.bookingDraft?.serviceAcceptance?.service.name).toBe("Juvederm");
+      expect(update.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-19T12:00:00");
+      expect(update.bookingDraft?.note.status).toBe("awaiting");
+      expect(update.pendingInteraction).toBeUndefined();
+    },
+  );
+
   it("starts reschedule mode for a date answered from the visit-status handoff", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
@@ -5411,7 +5457,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(skipped.note.status).toBe("skipped");
   });
 
-  it("advanceBookingNoteStep skips on INTENT shortcut and answers on free text", () => {
+  it("advanceBookingNoteStep skips on INTENT shortcut; free text stays for the note orch", () => {
     expect(
       advanceBookingNoteStep(
         clinicState({
@@ -5424,18 +5470,18 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         }),
       ).bookingDraft?.note.status,
     ).toBe("skipped");
-    expect(
-      advanceBookingNoteStep(
-        clinicState({
-          messages: [new HumanMessage("хочу ботокс губ")],
-          bookingDraft: canonicalBookingDraft({
-            phase: "note",
-            note: { status: "awaiting" },
-          }),
-          availabilityContext: snapshot,
+    const freeText = advanceBookingNoteStep(
+      clinicState({
+        messages: [new HumanMessage("хочу ботокс губ")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "note",
+          note: { status: "awaiting" },
         }),
-      ).bookingDraft?.note.status,
-    ).toBe("answered");
+        availabilityContext: snapshot,
+      }),
+    );
+    expect(freeText.bookingDraft).toBeUndefined();
+    expect(freeText.pendingInteraction).toBeUndefined();
   });
 
   it("treats a new explicit date as a date change while the note prompt is visible", () => {

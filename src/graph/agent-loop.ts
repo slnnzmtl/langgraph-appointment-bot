@@ -1787,11 +1787,13 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return {};
   }
 
-  // A displayed note prompt and its typed reply must be one runtime-owned
-  // transition. Accept the skip/value even if an older checkpoint still says
-  // `unasked`.
-  if (authoritativeSelectedSlot(state) != null && status === "unasked") {
-    if (isNoteSkipReply(human)) {
+  // Skip / same-slot reaffirm while a note is open. Free-text note answers are
+  // owned by the note orchestrator (classify → reduce), not this ladder.
+  if (
+    (authoritativeSelectedSlot(state) != null && status === "unasked")
+    || status === "awaiting"
+  ) {
+    if (isNoteSkipReply(human) || (status === "awaiting" && sameSlot)) {
       trackEvent("booking_note_step", { phase: "skipped" });
       const session = reduceBookingSession(
         {
@@ -1805,38 +1807,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
         pendingInteraction: session.pendingInteraction,
       };
     }
-    if (!matchedSlot && human.length > 0) {
-      trackEvent("booking_note_step", { phase: "answered" });
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        { type: "note_provided", value: human },
-      );
-      return {
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      };
-    }
-  }
-
-  if (status === "awaiting") {
-    if (isNoteSkipReply(human) || sameSlot) {
-      trackEvent("booking_note_step", { phase: "skipped" });
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        { type: "note_skipped" },
-      );
-      return {
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      };
-    }
-    if (matchedSlot) {
+    if (status === "awaiting" && matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });
       const selected = reduceSlotSelection(matchedSlot);
       return selected == null ? {} : {
@@ -1844,18 +1815,6 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
         pendingInteraction: selected.pendingInteraction,
       };
     }
-    trackEvent("booking_note_step", { phase: "answered" });
-    const session = reduceBookingSession(
-      {
-        bookingDraft: state.bookingDraft ?? null,
-        pendingInteraction: state.pendingInteraction ?? null,
-      },
-      { type: "note_provided", value: human },
-    );
-    return {
-      bookingDraft: session.bookingDraft,
-      pendingInteraction: session.pendingInteraction,
-    };
   }
 
   if (matchedSlot && (status === "unasked" || !sameSlot)) {
@@ -2156,34 +2115,36 @@ export const createAgentPrepareNode = (agentId: string) =>
       const rescheduleState = startedReschedule
         ? { ...state, bookingDraft: startedReschedule }
         : state;
-      let bookingDraft: BookingDraft | null | undefined =
-        rescheduleState.bookingDraft?.mode === "reschedule"
-          ? rescheduleState.bookingDraft
-          : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
-      const scheduleRequest = resolveBookingScheduleRequest(
-        lastPatientText(rescheduleState),
-        kyivToday(),
-        {
-          availabilityContext: rescheduleState.availabilityContext,
-          availabilityCursor: rescheduleState.availabilityCursor,
-          selectedDate: bookingDraft?.selectedDate,
-        },
-      );
-      if (bookingDraft && scheduleRequest?.kind === "exact") {
-        bookingDraft = reduceBookingDraft(bookingDraft, {
-          type: "schedule_requested",
-          date: scheduleRequest.date,
-          ...(scheduleRequest.preferredTime ? { preferredTime: scheduleRequest.preferredTime } : {}),
-        });
-      }
-      const workingState: ClinicState = bookingDraft
-        ? { ...rescheduleState, bookingDraft }
-        : rescheduleState;
-      // Queue the note orchestrator from the inbound state only. A slot pick that
-      // opens visit_note in this prepare must still continue to the booking LLM.
+      // Orch ownership is inbound-only so a slot pick that opens visit_note
+      // this turn still reaches the booking LLM. Skip utterance-driven draft
+      // mutations when the orch already owns the turn.
       const queueNoteOrch = bookingTurnNeedsNoteOrchestrator(state);
       update.noteOrchQueued = queueNoteOrch;
+      let bookingDraft: BookingDraft | null | undefined =
+        rescheduleState.bookingDraft ?? undefined;
       if (!queueNoteOrch) {
+        if (bookingDraft?.mode !== "reschedule") {
+          bookingDraft = bookingDraftForTurn(rescheduleState) ?? bookingDraft;
+        }
+        const scheduleRequest = resolveBookingScheduleRequest(
+          lastPatientText(rescheduleState),
+          kyivToday(),
+          {
+            availabilityContext: rescheduleState.availabilityContext,
+            availabilityCursor: rescheduleState.availabilityCursor,
+            selectedDate: bookingDraft?.selectedDate,
+          },
+        );
+        if (bookingDraft && scheduleRequest?.kind === "exact") {
+          bookingDraft = reduceBookingDraft(bookingDraft, {
+            type: "schedule_requested",
+            date: scheduleRequest.date,
+            ...(scheduleRequest.preferredTime ? { preferredTime: scheduleRequest.preferredTime } : {}),
+          });
+        }
+        const workingState: ClinicState = bookingDraft
+          ? { ...rescheduleState, bookingDraft }
+          : rescheduleState;
         const noteUpdate = advanceBookingNoteStep(workingState);
         Object.assign(update, noteUpdate);
         bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;

@@ -40,6 +40,24 @@ const FIXTURES: Array<{
     expectKind: "service_or_note_clarification_required",
   },
   {
+    id: "ua-mixed-clarification-juvederm",
+    patientText: "потрібна консультація щодо ювідерм",
+    currentServiceName: "Juvederm",
+    expectKind: "service_or_note_clarification_required",
+  },
+  {
+    id: "ua-mixed-clarification-lips",
+    patientText: "потрібна консультація щодо збільшення губ",
+    currentServiceName: "Juvederm",
+    expectKind: "service_or_note_clarification_required",
+  },
+  {
+    id: "ua-consultation-procedure-wish",
+    patientText: "хочу зробити збільшення губ",
+    currentServiceName: "Консультація",
+    expectKind: "service_or_note_clarification_required",
+  },
+  {
     id: "ua-genuine-note",
     patientText: "хочу ботокс у зоні лоба",
     currentServiceName: "Консультація",

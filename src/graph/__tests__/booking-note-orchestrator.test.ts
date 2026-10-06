@@ -85,6 +85,106 @@ describe("orchestrateBookingNoteTurn", () => {
     expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-botox");
   });
 
+  it.each([
+    "потрібна консультація щодо ювідерм",
+    "потрібна консультація щодо збільшення губ",
+  ])(
+    "UA consultation-about-procedure opens service_or_note, not visit_note re-ask: %s",
+    async (patientText) => {
+      const juvedermDraft = (() => {
+        const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: "svc-juvederm", name: "Juvederm", source: "catalog" },
+          accepted: true,
+        });
+        const dated = reduceBookingDraft(accepted, {
+          type: "date_selected",
+          date: "2026-10-19",
+        });
+        return reduceBookingDraft(dated, {
+          type: "slot_selected",
+          slot: {
+            dateStart: "2026-10-19T12:00:00",
+            dateEnd: "2026-10-19T12:30:00",
+            label: "12:00",
+          },
+        })!;
+      })();
+      const classify = vi.fn<ClassifyNoteTurn>(async () => ({
+        kind: "service_or_note_clarification_required",
+        query: "консультація",
+      }));
+      const result = await orchestrateBookingNoteTurn({
+        patientText,
+        bookingDraft: juvedermDraft,
+        pendingInteraction: openVisitNoteInteraction(),
+        currentServiceName: "Juvederm",
+        classify,
+        resolveServiceChange: vi.fn(),
+      });
+
+      expect(result.goto).toBe("interaction_render");
+      expect(result.pendingInteraction?.kind).toBe("service_or_note");
+      expect(result.pendingInteraction).toMatchObject({
+        noteCandidate: patientText,
+        currentService: { id: "svc-juvederm", name: "Juvederm" },
+      });
+      expect(result.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-19T12:00:00");
+      expect(result.bookingDraft?.note.status).toBe("awaiting");
+      expect(String(renderBookingInteractionMessage(result.pendingInteraction!).content))
+        .not.toContain("деталями");
+    },
+  );
+
+  it("Consultation + procedure wish opens keep/switch, not catalog candidate list", async () => {
+    const patientText = "хочу зробити збільшення губ";
+    const consultationDraft = (() => {
+      const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "service_selected",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+        accepted: true,
+      });
+      const dated = reduceBookingDraft(accepted, {
+        type: "date_selected",
+        date: "2026-10-20",
+      });
+      return reduceBookingDraft(dated, {
+        type: "slot_selected",
+        slot: {
+          dateStart: "2026-10-20T12:00:00",
+          dateEnd: "2026-10-20T12:30:00",
+          label: "12:00",
+        },
+      })!;
+    })();
+    const resolve = vi.fn<ResolveServiceChange>();
+    const result = await orchestrateBookingNoteTurn({
+      patientText,
+      bookingDraft: consultationDraft,
+      pendingInteraction: openVisitNoteInteraction(),
+      currentServiceName: "Консультація",
+      classify: async () => ({
+        kind: "service_or_note_clarification_required",
+        query: "збільшення губ",
+      }),
+      resolveServiceChange: resolve,
+    });
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(result.goto).toBe("interaction_render");
+    expect(result.pendingInteraction?.kind).toBe("service_or_note");
+    expect(result.pendingInteraction).toMatchObject({
+      noteCandidate: patientText,
+      currentService: { id: "svc-consult", name: "Консультація" },
+    });
+    expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-consult");
+    expect(result.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-20T12:00:00");
+    const body = String(renderBookingInteractionMessage(result.pendingInteraction!).content);
+    expect(body).toContain("Консультація");
+    expect(body).not.toContain("послугу зі списку");
+    expect(body).not.toContain("деталями");
+  });
+
   it("switch_service runs resolve then a second reduction", async () => {
     const classify = vi.fn<ClassifyNoteTurn>();
     const resolve = vi.fn<ResolveServiceChange>(async (effect) => ({
