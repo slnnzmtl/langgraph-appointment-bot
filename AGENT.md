@@ -68,7 +68,7 @@ Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<
 
 ### Booking (read/write, `maxSteps` 10)
 
-One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. Booking reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK).
+One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. At the open-note step, one typed turn interpreter emits events; the booking session reducer alone updates state. Service-change requests resolve only against a complete CRM catalog (no hardcoded service-name dictionaries). Booking reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK).
 
 | Tool | Role |
 | --- | --- |
@@ -105,7 +105,7 @@ The graph writes reply keyboards on `lastHandoff.replyButtons`. Models emit pati
 - **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` (never «Перенести» here). After «Скасувати», cancel then book the new slot.
 - **DATE / TIME** (code-owned): short day labels + «Інша дата», then HH:mm — booking finalize from `present_availability_slots` / `availabilityContext`.
 - **BOOKING OFFER** (code-owned): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no (FAQ also sets `yieldToSupervisor` so «Так» routes to booking).
-- **INTENT skip** (code-owned): «Продовжити без коментаря» while `bookingNoteStatus` is awaiting.
+- **INTENT skip** (code-owned): «Продовжити без коментаря» while a `visit_note` pending interaction is open (snapshotted choice id `skip`). Free-text skip synonyms classify through the note-turn boundary.
 - **Catalog drill-down** (code-owned): direction / family / zone / brand labels recovered from the visible bullet list.
 
 ## Code map

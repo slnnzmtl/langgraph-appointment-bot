@@ -13,6 +13,7 @@
     "smoke": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/smoke.ts",
     "test": "vitest run",
     "test:all": "pnpm -r test",
+    "eval:booking-note": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/scripts/eval-booking-note.ts",
     "start": "node dist/index.js",
     "depcruise": "depcruise src packages --include-only '^(src|packages)'",
     "depcruise:graph": "depcruise src packages --include-only '^(src|packages)' --output-type mermaid --output-to dependency-graph.mmd",
