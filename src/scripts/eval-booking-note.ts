@@ -66,7 +66,7 @@ const main = async (): Promise<void> => {
     process.exit(1);
   }
   const model = process.env.SUPERVISOR_MODEL?.trim() || process.env.GEMINI_MODEL?.trim()
-    || "gemini-2.5-flash-lite";
+    || "gemini-3.1-flash-lite";
   const classify = createNoteTurnClassifier(new GeminiConnector(apiKey, model));
   const rows: Array<{
     id: string;

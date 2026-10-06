@@ -23,7 +23,7 @@ const sampleTool = tool(async () => "ok", {
 });
 
 const sampleSpec = {
-  modelName: "gemini-2.5-flash-lite",
+  modelName: "gemini-3.1-flash-lite",
   staticSystemInstruction: "static prompt",
   tools: [sampleTool],
   displayName: "configuration-agent",
@@ -117,8 +117,8 @@ describe("gemini context cache helpers", () => {
   });
 
   it("resolveCacheMinTokens matches Gemini's per-model minimums", () => {
-    expect(resolveCacheMinTokens("gemini-2.5-flash-lite")).toBe(1024);
-    expect(resolveCacheMinTokens("models/gemini-2.5-flash-lite")).toBe(1024);
+    expect(resolveCacheMinTokens("gemini-3.1-flash-lite")).toBe(1024);
+    expect(resolveCacheMinTokens("models/gemini-3.1-flash-lite")).toBe(1024);
     expect(resolveCacheMinTokens("gemini-2.5-flash")).toBe(2048);
     expect(resolveCacheMinTokens("models/gemini-2.5-flash")).toBe(2048);
     expect(resolveCacheMinTokens("gemini-3-pro")).toBe(4096);
@@ -159,7 +159,7 @@ describe("gemini context cache helpers", () => {
 
   it("buildCacheSeedContents pads a short instruction to reach the model minimum", () => {
     const spec = {
-      modelName: "gemini-2.5-flash-lite",
+      modelName: "gemini-3.1-flash-lite",
       staticSystemInstruction: "short prompt",
       tools: [],
       displayName: "agent",
@@ -179,7 +179,7 @@ describe("gemini context cache helpers", () => {
 
   it("buildCacheSeedContents grows monotonically with extraDeficitTokens", () => {
     const spec = {
-      modelName: "gemini-2.5-flash-lite",
+      modelName: "gemini-3.1-flash-lite",
       staticSystemInstruction: "short prompt",
       tools: [],
       displayName: "agent",
@@ -199,7 +199,7 @@ describe("gemini context cache helpers", () => {
     };
 
     const liteContents = buildCacheSeedContents(
-      { ...baseSpec, modelName: "gemini-2.5-flash-lite" },
+      { ...baseSpec, modelName: "gemini-3.1-flash-lite" },
       "",
     );
     const flashContents = buildCacheSeedContents(
@@ -229,7 +229,7 @@ describe("gemini context cache helpers", () => {
 
         return {
           name: "cachedContents/retry-success",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
           systemInstruction: request.systemInstruction,
         } as never;
       });
@@ -245,7 +245,7 @@ describe("gemini context cache helpers", () => {
         );
       expect(handle).toEqual({
         cacheName: "cachedContents/retry-success",
-        model: "models/gemini-2.5-flash-lite",
+        model: "models/gemini-3.1-flash-lite",
       });
     } finally {
       createSpy.mockRestore();
@@ -326,7 +326,7 @@ describe("gemini context cache helpers", () => {
         callCount += 1;
         return {
           name: "cachedContents/reused",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
           expireTime: new Date(Date.now() + 3_600_000).toISOString(),
         } as never;
       });
@@ -351,7 +351,7 @@ describe("gemini context cache helpers", () => {
         callCount += 1;
         return {
           name: `cachedContents/expired-${callCount}`,
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
           // Already inside the 60s refresh skew window.
           expireTime: new Date(Date.now() + 30_000).toISOString(),
         } as never;
@@ -378,7 +378,7 @@ describe("gemini context cache helpers", () => {
         callCount += 1;
         return {
           name: `cachedContents/inv-${callCount}`,
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
           expireTime: new Date(Date.now() + 3_600_000).toISOString(),
         } as never;
       });
@@ -413,7 +413,7 @@ describe("gemini context cache helpers", () => {
         }
         return {
           name: `cachedContents/race-${callCount}`,
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
           expireTime: new Date(Date.now() + 3_600_000).toISOString(),
         } as never;
       });
@@ -457,7 +457,7 @@ describe("gemini context cache helpers", () => {
         await createGate;
         return {
           name: "cachedContents/concurrent",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
           expireTime: new Date(Date.now() + 3_600_000).toISOString(),
         } as never;
       });

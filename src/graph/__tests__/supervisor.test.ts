@@ -112,7 +112,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
@@ -132,7 +132,7 @@ describe("createClinicSupervisorNode context cache", () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
-        model: "models/gemini-2.5-flash-lite",
+        model: "models/gemini-3.1-flash-lite",
       })),
       invalidate: vi.fn(),
     };
@@ -145,7 +145,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
@@ -170,11 +170,11 @@ describe("createClinicSupervisorNode context cache", () => {
         .fn()
         .mockResolvedValueOnce({
           cacheName: "caches/stale",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
         })
         .mockResolvedValueOnce({
           cacheName: "caches/fresh",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
         }),
       invalidate: vi.fn(),
     };
@@ -191,7 +191,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
@@ -210,7 +210,7 @@ describe("createClinicSupervisorNode context cache", () => {
         .fn()
         .mockResolvedValueOnce({
           cacheName: "caches/stale",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
         })
         .mockResolvedValueOnce(null),
       invalidate: vi.fn(),
@@ -228,7 +228,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
