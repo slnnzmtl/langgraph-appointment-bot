@@ -43,6 +43,7 @@ import {
   noteOrchestratorNodeName,
   type ResolveServiceChange,
 } from "./booking-note-orchestrator.js";
+import { createResolveServiceChange } from "./service-resolution.js";
 import type { AgentPrefetchResult } from "./types.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
@@ -60,7 +61,7 @@ import {
 
 export { PREFETCH_TTL_MS };
 
-/** Phase-4 replaces this with CRM catalog resolution. */
+/** Fallback when no MCP callTool is wired (unit graphs without CRM). */
 const unresolvedServiceChange: ResolveServiceChange = async () => ({
   type: "service_unresolved",
 });
@@ -173,7 +174,10 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     if (isBooking) {
       const classify = options.classifyNoteTurn
         ?? createNoteTurnClassifier(options.supervisorLlm);
-      const resolve = options.resolveServiceChange ?? unresolvedServiceChange;
+      const resolve = options.resolveServiceChange
+        ?? (callTool != null
+          ? createResolveServiceChange(callTool, options.supervisorLlm)
+          : unresolvedServiceChange);
       const faqPrepare = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
         ? prepareNodeName(FAQ_AGENT_ID)
         : null;
