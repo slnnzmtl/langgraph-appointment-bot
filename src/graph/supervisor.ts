@@ -220,6 +220,13 @@ export const stickyContinueAgentId = (
   if (isVisitChangeRouteLabel(state)) {
     return BOOKING_AGENT_ID;
   }
+  const human = lastHumanTextFromMessages(state.messages);
+  const returnLabel = state.pendingInteraction?.choices.find(
+    (choice) => choice.id === "return_to_booking",
+  )?.label;
+  if (returnLabel != null && human === returnLabel) {
+    return BOOKING_AGENT_ID;
+  }
   const agentId = state.lastHandoff?.agentId;
   if (agentId === FAQ_AGENT_ID || agentId === BOOKING_AGENT_ID) {
     return shouldContinueInSpecialist(state, agentId) ? agentId : null;
@@ -315,6 +322,16 @@ export const shouldRouteCatalogMentionToFaq = (state: ClinicState): boolean => {
   if (handoff?.agentId !== BOOKING_AGENT_ID || handoff.status !== "ok") {
     return false;
   }
+  // An open booking-owned interaction or note phase owns the message.
+  if (
+    state.pendingInteraction?.kind === "visit_note"
+    || state.pendingInteraction?.kind === "service_or_note"
+    || state.pendingInteraction?.kind === "service_candidate"
+    || state.bookingDraft?.phase === "note"
+    || state.bookingDraft?.note.status === "awaiting"
+  ) {
+    return false;
+  }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
   if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
@@ -349,6 +366,13 @@ export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
   if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+    return false;
+  }
+  // Snapshotted return-to-booking is owned by the preserved booking interaction.
+  const returnLabel = state.pendingInteraction?.choices.find(
+    (choice) => choice.id === "return_to_booking",
+  )?.label;
+  if (returnLabel != null && (human === returnLabel || humanLine === returnLabel)) {
     return false;
   }
   if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {

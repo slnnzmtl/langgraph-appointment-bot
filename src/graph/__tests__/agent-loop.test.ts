@@ -5400,9 +5400,13 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(timed.note.status).toBe("awaiting");
 
     const skipped = advanceBookingNoteStep(clinicState({
-      messages: [new HumanMessage("без коментаря")],
+      messages: [new HumanMessage(INTENT_SKIP_LABEL)],
       availabilityContext: availability,
       bookingDraft: timed,
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+      },
     })).bookingDraft!;
     expect(skipped.note.status).toBe("skipped");
   });

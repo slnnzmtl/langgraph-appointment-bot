@@ -728,7 +728,6 @@ const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefine
     return undefined;
   }
   const currentText = extractMessageTextContent(current.content).trim();
-  const directCatalogService = catalogServiceForText(currentText, state);
   const directRequest = requestsConsultation(currentText);
   const pendingService = state.bookingDraft?.serviceAcceptance;
   const isAvailabilityContinuation =
@@ -743,17 +742,8 @@ const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefine
       turn: state.stepCount,
     });
   }
-  if (
-    directCatalogService
-    && /(?:запиш\w*|записат\w*|хочу|бажаю|потрібн\w*|треба|book|want|need)/i.test(currentText)
-  ) {
-    return reduceBookingDraft(state.bookingDraft, {
-      type: "service_selected",
-      service: directCatalogService,
-      accepted: true,
-      turn: state.stepCount,
-    });
-  }
+  // Named-procedure acceptance belongs to catalog resolution (note orch / FAQ),
+  // not substring matching against checkpointed service names.
   // A dated request immediately after the consultation offer is an affirmative
   // booking action, even when the patient did not tap «Так».
   if (pendingService?.status === "pending" && isAvailabilityContinuation) {
@@ -1624,14 +1614,6 @@ const NOTE_SKIP_REPLIES = new Set(
   [
     INTENT_SKIP_LABEL,
     INTENT_SKIP_LABEL_EN,
-    "no",
-    "ні",
-    "нет",
-    "без коментаря",
-    "без коментарів",
-    "не треба",
-    "не потрібно",
-    "skip",
   ].map((label) => label.toLowerCase()),
 );
 
