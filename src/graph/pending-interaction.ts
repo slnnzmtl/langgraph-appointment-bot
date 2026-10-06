@@ -99,6 +99,7 @@ export type BookingSessionReduction = BookingSessionState & {
 
 export type BookingSessionEvent =
   | { type: "slot_selected"; slot: NonNullable<BookingDraft["selectedSlot"]> }
+  | { type: "date_selected"; date: string }
   | { type: "note_provided"; value: string }
   | { type: "note_skipped" }
   | {
@@ -129,6 +130,7 @@ export type BookingSessionEvent =
       choices: InteractionChoice[];
     }
   | { type: "service_unresolved"; returnLabel: string }
+  | { type: "leave_booking"; destination: "main_menu" }
   | { type: "draft_event"; event: Parameters<typeof reduceBookingDraft>[1] };
 
 const noEffect = (
@@ -198,6 +200,21 @@ export const reduceBookingSession = (
       }
       return noEffect({
         bookingDraft: nextDraft,
+        pendingInteraction: clearBookingOwnedInteraction(interaction),
+      });
+    }
+    case "date_selected": {
+      return noEffect({
+        bookingDraft: reduceBookingDraft(draft, {
+          type: "date_selected",
+          date: event.date,
+        }),
+        pendingInteraction: interaction,
+      });
+    }
+    case "leave_booking": {
+      return noEffect({
+        bookingDraft: null,
         pendingInteraction: clearBookingOwnedInteraction(interaction),
       });
     }
