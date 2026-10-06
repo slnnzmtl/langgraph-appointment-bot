@@ -109,6 +109,11 @@ export const INTENT_SKIP_LABEL_EN = "Continue with no comments";
 export const BOOKING_NOTE_QUESTION_UK =
   "Чи можете поділитися деталями перед записом — що вас турбує або яку процедуру маєте на увазі? Якщо ні — запишу без коментаря.";
 
+/** Code-owned service-or-note clarification choices (ids are stable; labels are snapshotted). */
+export const SERVICE_OR_NOTE_KEEP_LABEL_UK = "Продовжити з обраною послугою";
+export const SERVICE_OR_NOTE_SWITCH_LABEL_UK = "Змінити послугу";
+export const RETURN_TO_BOOKING_LABEL_UK = "Повернутися до запису";
+
 /**
  * Labels the supervisor must route itself — never sticky-continue into booking.
  * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,

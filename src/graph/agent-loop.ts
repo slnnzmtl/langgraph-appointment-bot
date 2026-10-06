@@ -119,6 +119,13 @@ import {
   type BookingService,
   type ReplacementMeeting,
 } from "./booking-draft.js";
+import { reduceBookingSession } from "./pending-interaction.js";
+import {
+  bookingTurnNeedsNoteOrchestrator,
+  replyButtonsForInteraction,
+  renderBookingInteractionMessage,
+} from "./booking-note-orchestrator.js";
+import { isBookingOwnedInteraction } from "./pending-interaction.js";
 import {
   isModelFailureMessage,
   tagModelFailureMessage,
@@ -1754,7 +1761,10 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
 
-  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft | null => {
+  const reduceSlotSelection = (slot: SelectedBookingSlot): {
+    bookingDraft: BookingDraft | null;
+    pendingInteraction: ReturnType<typeof reduceBookingSession>["pendingInteraction"];
+  } | null => {
     let draft = state.bookingDraft;
     if (draft == null) {
       return null;
@@ -1768,7 +1778,17 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     if (draft == null) {
       return null;
     }
-    return reduceBookingDraft(draft, { type: "slot_selected", slot });
+    const session = reduceBookingSession(
+      {
+        bookingDraft: draft,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "slot_selected", slot },
+    );
+    return {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    };
   };
 
   // Rescheduling has no create-booking note/details ladder. Once the slot is
@@ -1776,7 +1796,11 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   if (state.bookingDraft?.mode === "reschedule") {
     if (matchedSlot && !sameSlot) {
       trackEvent("booking_note_step", { phase: "reschedule_slot" });
-      return { bookingDraft: reduceSlotSelection(matchedSlot) };
+      const selected = reduceSlotSelection(matchedSlot);
+      return selected == null ? {} : {
+        bookingDraft: selected.bookingDraft,
+        pendingInteraction: selected.pendingInteraction,
+      };
     }
     return {};
   }
@@ -1787,21 +1811,30 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   if (authoritativeSelectedSlot(state) != null && status === "unasked") {
     if (isNoteSkipReply(human)) {
       trackEvent("booking_note_step", { phase: "skipped" });
+      const session = reduceBookingSession(
+        {
+          bookingDraft: state.bookingDraft ?? null,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        { type: "note_skipped" },
+      );
       return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "skipped",
-        }),
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
       };
     }
     if (!matchedSlot && human.length > 0) {
       trackEvent("booking_note_step", { phase: "answered" });
+      const session = reduceBookingSession(
+        {
+          bookingDraft: state.bookingDraft ?? null,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        { type: "note_provided", value: human },
+      );
       return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "answered",
-          value: human,
-        }),
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
       };
     }
   }
@@ -1809,30 +1842,47 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   if (status === "awaiting") {
     if (isNoteSkipReply(human) || sameSlot) {
       trackEvent("booking_note_step", { phase: "skipped" });
+      const session = reduceBookingSession(
+        {
+          bookingDraft: state.bookingDraft ?? null,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        { type: "note_skipped" },
+      );
       return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "skipped",
-        }),
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
       };
     }
     if (matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });
-      return { bookingDraft: reduceSlotSelection(matchedSlot) };
+      const selected = reduceSlotSelection(matchedSlot);
+      return selected == null ? {} : {
+        bookingDraft: selected.bookingDraft,
+        pendingInteraction: selected.pendingInteraction,
+      };
     }
     trackEvent("booking_note_step", { phase: "answered" });
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "note_provided", value: human },
+    );
     return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "note_status",
-        status: "answered",
-        value: human,
-      }),
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
     };
   }
 
   if (matchedSlot && (status === "unasked" || !sameSlot)) {
     trackEvent("booking_note_step", { phase: "awaiting" });
-    return { bookingDraft: reduceSlotSelection(matchedSlot) };
+    const selected = reduceSlotSelection(matchedSlot);
+    return selected == null ? {} : {
+      bookingDraft: selected.bookingDraft,
+      pendingInteraction: selected.pendingInteraction,
+    };
   }
 
   return {};
@@ -2147,9 +2197,15 @@ export const createAgentPrepareNode = (agentId: string) =>
       const workingState: ClinicState = bookingDraft
         ? { ...rescheduleState, bookingDraft }
         : rescheduleState;
-      const noteUpdate = advanceBookingNoteStep(workingState);
-      Object.assign(update, noteUpdate);
-      bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
+      // Queue the note orchestrator from the inbound state only. A slot pick that
+      // opens visit_note in this prepare must still continue to the booking LLM.
+      const queueNoteOrch = bookingTurnNeedsNoteOrchestrator(state);
+      update.noteOrchQueued = queueNoteOrch;
+      if (!queueNoteOrch) {
+        const noteUpdate = advanceBookingNoteStep(workingState);
+        Object.assign(update, noteUpdate);
+        bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
+      }
       if (
         bookingDraft
         && bookingDraft.contactId != null
@@ -3222,10 +3278,15 @@ export const createAgentToolsNode = (
         update.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
         const reconciliation = reconcileRequestedTime(state.bookingDraft, bookingAvailability);
         if (reconciliation.kind === "matched" && state.bookingDraft) {
-          update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-            type: "slot_selected",
-            slot: reconciliation.slot,
-          });
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            { type: "slot_selected", slot: reconciliation.slot },
+          );
+          update.bookingDraft = session.bookingDraft;
+          update.pendingInteraction = session.pendingInteraction;
         } else if (reconciliation.kind === "unavailable" && state.bookingDraft) {
           update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
             type: "requested_time_unavailable",
@@ -3620,6 +3681,23 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
             : slotOffer.replyText
         );
       replyButtons = slotOffer.replyButtons;
+    } else if (
+      agent.id === BOOKING_AGENT_ID
+      && state.pendingInteraction != null
+      && isBookingOwnedInteraction(state.pendingInteraction)
+      && (state.pendingInteraction.kind === "service_or_note"
+        || state.pendingInteraction.kind === "service_candidate"
+        || state.pendingInteraction.kind === "visit_note")
+      && !slotOffer
+      && !alreadyBooked
+    ) {
+      const rendered = renderBookingInteractionMessage(state.pendingInteraction);
+      replyText = String(rendered.content);
+      replyButtons = replyButtonsForInteraction(state.pendingInteraction);
+      trackEvent("reply_menu_filled", {
+        menu: state.pendingInteraction.kind,
+        reason: "pending_interaction",
+      });
     } else if (awaitingNote) {
       // The visible note prompt is a projection of canonical note phase, never
       // model prose. Seeing it therefore guarantees a checkpointed slot.
@@ -3665,17 +3743,17 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     }
 
     const noteStatusForHandoff: ClinicStateUpdate =
-      awaitingNote && !slotOffer
-        ? state.bookingDraft
-          ? {
-              bookingDraft: state.bookingDraft.note.status === "awaiting"
-                ? state.bookingDraft
-                : reduceBookingDraft(state.bookingDraft, {
-                    type: "note_status",
-                    status: "awaiting",
-                  }),
-            }
-          : {}
+      awaitingNote
+      && !slotOffer
+      && state.bookingDraft != null
+      && state.bookingDraft.note.status !== "awaiting"
+      && state.pendingInteraction == null
+        ? {
+            bookingDraft: reduceBookingDraft(state.bookingDraft, {
+              type: "note_status",
+              status: "awaiting",
+            }),
+          }
         : {};
     const offeredService =
       (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
@@ -3795,10 +3873,15 @@ export const routeAfterAgentPrepare = (
   state: ClinicState,
   llmName: string,
   commandPrepareName?: string,
-): string =>
-  commandPrepareName && bookingTurnNeedsCommandPreparation(state)
+  noteOrchestratorName?: string,
+): string => {
+  if (noteOrchestratorName && state.noteOrchQueued) {
+    return noteOrchestratorName;
+  }
+  return commandPrepareName && bookingTurnNeedsCommandPreparation(state)
     ? commandPrepareName
     : llmName;
+};
 
 export const routeAfterAgentTools = (
   state: ClinicState,

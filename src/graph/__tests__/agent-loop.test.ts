@@ -4523,19 +4523,15 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(picked.bookingDraft?.selectedSlot?.dateStart).toBe("2026-09-10T14:00:00");
     expect(picked.bookingDraft?.note.status).toBe("awaiting");
 
-    const skipped = await prepare(
-      clinicState({
-        messages: [
-          new HumanMessage("Записатись"),
-          new AIMessage("Підібрати вільний час на консультацію?"),
-          new HumanMessage("14:00"),
-          new AIMessage("Додати коментар?"),
-          new HumanMessage("Продовжити без коментаря"),
-        ],
-        bookingDraft: picked.bookingDraft,
-        availabilityContext: snapshot,
-      }),
-    );
+    const { orchestrateBookingNoteTurn } = await import("../booking-note-orchestrator.js");
+    const { openVisitNoteInteraction } = await import("../pending-interaction.js");
+    const skipped = await orchestrateBookingNoteTurn({
+      patientText: "Продовжити без коментаря",
+      bookingDraft: picked.bookingDraft ?? null,
+      pendingInteraction: openVisitNoteInteraction(),
+      classify: async () => ({ kind: "note_skipped" }),
+      resolveServiceChange: async () => ({ type: "service_unresolved" }),
+    });
 
     expect(skipped.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
     expect(skipped.bookingDraft?.selectedSlot?.dateStart).toBe("2026-09-10T14:00:00");
@@ -5529,7 +5525,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
     expect(update.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
-    expect(update.bookingDraft?.note.status).toBe("awaiting");
+    // Already awaiting: finalize does not rewrite the note aggregate.
+    expect(update.bookingDraft).toBeUndefined();
   });
 
   it("DDD-49/51: blocks create_meeting before HITL and forces note ask + skip keyboard", async () => {

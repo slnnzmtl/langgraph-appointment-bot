@@ -25,6 +25,8 @@ import {
   createAgentToolsNode,
   finalizeNodeName,
   llmNodeName,
+  matchAvailabilityDay,
+  matchAvailabilitySlot,
   prepareNodeName,
   commandPrepareNodeName,
   mutationFinalizeNodeName,
@@ -33,6 +35,14 @@ import {
   routeAfterAgentTools,
   toolsNodeName,
 } from "./agent-loop.js";
+import { createNoteTurnClassifier } from "./booking-note-classifier.js";
+import {
+  createBookingInteractionRenderNode,
+  createBookingNoteOrchestratorNode,
+  interactionRenderNodeName,
+  noteOrchestratorNodeName,
+  type ResolveServiceChange,
+} from "./booking-note-orchestrator.js";
 import type { AgentPrefetchResult } from "./types.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
@@ -41,12 +51,19 @@ import {
   type SupervisorContextCacheOptions,
 } from "./supervisor.js";
 import {
+  BOOKING_AGENT_ID,
+  FAQ_AGENT_ID,
   FINISH_ROUTE,
   type ClinicAgentDefinition,
   type ILLMConnector,
 } from "./types.js";
 
 export { PREFETCH_TTL_MS };
+
+/** Phase-4 replaces this with CRM catalog resolution. */
+const unresolvedServiceChange: ResolveServiceChange = async () => ({
+  type: "service_unresolved",
+});
 
 export type CompileClinicGraphOptions = {
   agents: ClinicAgentDefinition[];
@@ -64,6 +81,10 @@ export type CompileClinicGraphOptions = {
   bookingPrefetchCallTool?: McpCallTool;
   /** Override checkpoint prefetch TTL (default PREFETCH_TTL_MS). */
   prefetchTtlMs?: number;
+  /** Injected note-turn classifier (tests). Defaults to Gemini structured output. */
+  classifyNoteTurn?: ReturnType<typeof createNoteTurnClassifier>;
+  /** Injected service resolver (tests). Defaults to unresolved until phase 4. */
+  resolveServiceChange?: ResolveServiceChange;
 };
 
 export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
@@ -120,6 +141,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const toolsNode = toolsNodeName(agent.id);
     const finalize = finalizeNodeName(agent.id);
     const mutationFinalize = mutationFinalizeNodeName(agent.id);
+    const noteOrch = noteOrchestratorNodeName(agent.id);
+    const interactionRender = interactionRenderNodeName(agent.id);
+    const isBooking = agent.id === BOOKING_AGENT_ID;
 
     graph = graph
       .addNode(prepare, createAgentPrepareNode(agent.id))
@@ -144,18 +168,70 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         }),
       )
       .addNode(toolsNode, createAgentToolsNode(tools, agent.id))
-      .addNode(finalize, createAgentFinalizeNode(agent))
+      .addNode(finalize, createAgentFinalizeNode(agent));
+
+    if (isBooking) {
+      const classify = options.classifyNoteTurn
+        ?? createNoteTurnClassifier(options.supervisorLlm);
+      const resolve = options.resolveServiceChange ?? unresolvedServiceChange;
+      const faqPrepare = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
+        ? prepareNodeName(FAQ_AGENT_ID)
+        : null;
+      const orchEnds = [
+        llm,
+        commandPrepare,
+        interactionRender,
+        ...(faqPrepare != null ? [faqPrepare] : []),
+      ];
+      graph = graph
+        .addNode(
+          noteOrch,
+          createBookingNoteOrchestratorNode({
+            classify,
+            resolveServiceChange: resolve,
+            matchScheduleFromState: (text, state) => {
+              const days = state.availabilityContext?.days ?? [];
+              const day = matchAvailabilityDay(text, days);
+              if (day) {
+                return { type: "date_selected", date: day.date };
+              }
+              const slot = matchAvailabilitySlot(
+                text,
+                state.availabilityContext,
+                state.bookingDraft?.selectedDate,
+              );
+              return slot != null ? { type: "slot_selected", slot } : null;
+            },
+            nodes: {
+              bookingLlm: llm,
+              commandPrepare,
+              interactionRender,
+              // When FAQ is not compiled into this graph (unit tests), re-ask in booking.
+              faqPrepare: faqPrepare ?? interactionRender,
+            },
+          }),
+          {
+            ends: orchEnds,
+          },
+        )
+        .addNode(interactionRender, createBookingInteractionRenderNode(agent))
+        .addEdge(interactionRender, finalize);
+    }
+
+    graph = graph
       .addConditionalEdges(
         prepare,
         (state: { agentMessages: unknown[] }) =>
           routeAfterAgentPrepare(
             state as never,
             llm,
-            agent.id === "booking" ? commandPrepare : undefined,
+            isBooking ? commandPrepare : undefined,
+            isBooking ? noteOrch : undefined,
           ),
         {
           [llm]: llm,
           [commandPrepare]: commandPrepare,
+          ...(isBooking ? { [noteOrch]: noteOrch } : {}),
         },
       )
       .addConditionalEdges(
@@ -166,7 +242,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             agent.maxSteps,
             toolsNode,
             finalize,
-            agent.id === "booking" ? commandPrepare : undefined,
+            isBooking ? commandPrepare : undefined,
           ),
         {
           [toolsNode]: toolsNode,
@@ -182,8 +258,8 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             state as never,
             llm,
             toolsNode,
-            agent.id === "booking" ? mutationFinalize : undefined,
-            agent.id === "booking" ? commandPrepare : undefined,
+            isBooking ? mutationFinalize : undefined,
+            isBooking ? commandPrepare : undefined,
           ),
         {
           [llm]: llm,

@@ -182,7 +182,9 @@ const bookingAgent: ClinicAgentDefinition = {
 describe("compileClinicGraph prefetch once", () => {
   const compileWithCallTool = (
     callTool: (name: string) => Promise<unknown>,
-    extra?: { prefetchTtlMs?: number },
+    extra?: {
+      prefetchTtlMs?: number;
+    },
   ) =>
     compileClinicGraph({
       agents: [bookingAgent],
@@ -201,6 +203,18 @@ describe("compileClinicGraph prefetch once", () => {
       formatSystemMetadata: () => "META",
       messageHistoryMaxTokens: 6_000,
       bookingPrefetchCallTool: callTool,
+      classifyNoteTurn: async ({ patientText }) => {
+        const normalized = patientText.trim().toLowerCase();
+        if (
+          normalized === "продовжити без коментаря"
+          || normalized === "без коментаря"
+          || normalized === "skip"
+          || normalized === "ні"
+        ) {
+          return { kind: "note_skipped" as const };
+        }
+        return { kind: "note_provided" as const };
+      },
       ...(extra?.prefetchTtlMs != null ? { prefetchTtlMs: extra.prefetchTtlMs } : {}),
     });
 
@@ -296,11 +310,26 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       loadSupervisorPrompt: () => "STATIC",
       formatSystemMetadata: () => "META",
       messageHistoryMaxTokens: 6_000,
+      classifyNoteTurn: async ({ patientText }) => {
+        const normalized = patientText.trim().toLowerCase();
+        if (
+          normalized === "продовжити без коментаря"
+          || normalized === "без коментаря"
+          || normalized === "continue with no comments"
+        ) {
+          return { kind: "note_skipped" as const };
+        }
+        return { kind: "note_provided" as const };
+      },
     });
 
     const result = await graph.invoke(
       {
         messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+        pendingInteraction: {
+          kind: "visit_note",
+          choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+        },
         bookingDraft: {
           version: 5,
           mode: "create",
@@ -587,6 +616,17 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         loadSupervisorPrompt: () => "STATIC",
         formatSystemMetadata: () => "META",
         messageHistoryMaxTokens: 6_000,
+        classifyNoteTurn: async ({ patientText }) => {
+          const normalized = patientText.trim().toLowerCase();
+          if (
+            normalized === "продовжити без коментаря"
+            || normalized === "без коментаря"
+            || normalized === "continue with no comments"
+          ) {
+            return { kind: "note_skipped" as const };
+          }
+          return { kind: "note_provided" as const };
+        },
       });
       const config = {
         configurable: { thread_id: `bare-date-note-skip-${skipReply}` },

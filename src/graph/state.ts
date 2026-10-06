@@ -107,6 +107,15 @@ export const createClinicStateAnnotation = ({
       default: () => null,
     }),
     /**
+     * Set by booking prepare from the inbound state when the note orchestrator
+     * owns this message. Cleared by the orchestrator. Prevents same-turn slot
+     * picks that open visit_note from immediately re-entering the orchestrator.
+     */
+    noteOrchQueued: Annotation<boolean>({
+      reducer: (_left, right) => right,
+      default: () => false,
+    }),
+    /**
      * Booking checkpoint schema. 0 = unversioned legacy row or brand-new thread;
      * 1 = current. Missing channels read as 0 only when reducer + default are both set.
      */
