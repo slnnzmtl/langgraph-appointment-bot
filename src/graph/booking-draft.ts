@@ -1,4 +1,19 @@
 import type { SelectedBookingSlot } from "./types.js";
+import {
+  clearBookingOwnedInteraction,
+  openVisitNoteInteraction,
+  type PendingInteraction,
+} from "./pending-interaction.js";
+
+/** Open visit_note once when a checkpoint already awaits a note after a slot pick. */
+const pendingInteractionForUpgradedDraft = (
+  draft: BookingDraft | null,
+): PendingInteraction | null => {
+  if (draft == null || draft.selectedSlot == null || draft.note.status !== "awaiting") {
+    return null;
+  }
+  return openVisitNoteInteraction();
+};
 
 export const BOOKING_SCHEMA_VERSION = 1;
 
@@ -114,6 +129,7 @@ export type BookingCheckpointUpgradeResult = {
     bookingNoteStatus?: "unasked";
     selectedSlot?: null;
     selectedAvailabilityDate?: null;
+    pendingInteraction?: PendingInteraction | null;
   };
   unsupported: boolean;
   telemetry: BookingCheckpointMigrationTelemetry | null;
@@ -631,6 +647,7 @@ export const upgradeBookingCheckpoint = (
         update: {
           ...stamp,
           bookingDraft: kept,
+          pendingInteraction: pendingInteractionForUpgradedDraft(kept),
         },
         unsupported: false,
         telemetry: {
@@ -695,6 +712,7 @@ export const upgradeBookingCheckpoint = (
     update: {
       ...stamp,
       bookingDraft: canonical,
+      pendingInteraction: pendingInteractionForUpgradedDraft(canonical),
     },
     unsupported: false,
     telemetry: {
@@ -721,16 +739,20 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
 });
 
 /** Atomically close a booking session, including deprecated checkpoint projections. */
-export const closedBookingSessionUpdate = (): {
+export const closedBookingSessionUpdate = (
+  pendingInteraction?: PendingInteraction | null,
+): {
   bookingDraft: null;
   bookingNoteStatus: "unasked";
   selectedSlot: null;
   selectedAvailabilityDate: null;
+  pendingInteraction: PendingInteraction | null;
 } => ({
   bookingDraft: null,
   bookingNoteStatus: "unasked",
   selectedSlot: null,
   selectedAvailabilityDate: null,
+  pendingInteraction: clearBookingOwnedInteraction(pendingInteraction),
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
@@ -907,12 +929,15 @@ export const reduceBookingDraft = (
       ) {
         return draft;
       }
+      const note = draft.mode === "reschedule" || hasCompletedNote(draft)
+        ? draft.note
+        : { status: "awaiting" as const };
       const next = {
         ...draft,
         selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
         requestedTime: null,
-        note: draft.mode === "reschedule" ? draft.note : { status: "awaiting" },
+        note,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
