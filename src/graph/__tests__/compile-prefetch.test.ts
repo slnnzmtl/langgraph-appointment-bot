@@ -1130,7 +1130,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(updateInvoke).not.toHaveBeenCalled();
     expect(second.__interrupt__).toBeUndefined();
     expect(second.messages.at(-1)?.content).toBe("Запис не було перенесено.");
-    expect(second.bookingDraft?.pendingCommand).toBeNull();
+    expect(second.bookingDraft).toBeNull();
 
     const third = await invoke({ messages: [new HumanMessage("Дякую")] });
     expect(updateInvoke).not.toHaveBeenCalled();

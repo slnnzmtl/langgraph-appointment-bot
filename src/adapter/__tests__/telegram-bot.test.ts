@@ -183,6 +183,374 @@ describe("text while HITL pending", () => {
   });
 });
 
+describe("booking schema upgrade on text turn", () => {
+  const BookingState = Annotation.Root({
+    result: Annotation<string>({
+      reducer: (_left, right) => right,
+      default: () => "",
+    }),
+    messages: Annotation<unknown[]>({
+      reducer: (left: unknown[], right: unknown | unknown[]) =>
+        left.concat(Array.isArray(right) ? right : [right]),
+      default: () => [],
+    }),
+    bookingDraft: Annotation<unknown>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    bookingSchemaVersion: Annotation<number>({
+      reducer: (_left, right) => right,
+      default: () => 0,
+    }),
+    bookingNoteStatus: Annotation<string>({
+      reducer: (_left, right) => right,
+      default: () => "unasked",
+    }),
+    selectedSlot: Annotation<unknown>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    selectedAvailabilityDate: Annotation<string | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+  });
+
+  const buildEchoGraph = () =>
+    new StateGraph(BookingState)
+      .addNode("echo", async (state) => ({
+        result: `ok:${state.bookingSchemaVersion}`,
+      }))
+      .addEdge(START, "echo")
+      .addEdge("echo", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+  const buildPendingConfirmBookingGraph = () =>
+    new StateGraph(BookingState)
+      .addNode("ask", async (state) => {
+        const decision = interrupt({
+          type: "confirm_booking",
+          draft: { confirmMessage: "Confirm?" },
+        });
+        return {
+          result: JSON.stringify(decision),
+          bookingSchemaVersion: state.bookingSchemaVersion,
+        };
+      })
+      .addEdge(START, "ask")
+      .addEdge("ask", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+  it("upgrades a version-0 checkpoint once and leaves the second turn unchanged", async () => {
+    const { setTrackEventForTests } = await import("../../analytics/track.js");
+    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props: props as Record<string, unknown> });
+    });
+    try {
+      const graph = buildEchoGraph();
+      const threadId = "booking-schema-v0";
+      await graph.updateState(
+        { configurable: { thread_id: threadId } },
+        {
+          bookingSchemaVersion: 0,
+          bookingDraft: {
+            version: 2,
+            mode: "create",
+            phase: "date",
+            serviceAcceptance: {
+              status: "accepted",
+              service: { id: "svc-1", source: "catalog" },
+            },
+            selectedDate: null,
+            selectedSlot: null,
+            requestedTime: null,
+            note: { status: "unasked" },
+            contactId: null,
+            pendingCommand: null,
+            rescheduleTarget: null,
+            replacement: null,
+          },
+          bookingNoteStatus: "awaiting",
+          selectedAvailabilityDate: "2026-10-17",
+        },
+        "echo",
+      );
+
+      await handleGraphTextTurn(graph, threadId, "tg-1", "Привіт");
+      const first = await graph.getState({ configurable: { thread_id: threadId } });
+      expect(first.values.bookingSchemaVersion).toBe(1);
+      expect(first.values.bookingNoteStatus).toBe("unasked");
+      expect(first.values.selectedAvailabilityDate).toBeNull();
+      expect(first.values.bookingDraft).toMatchObject({
+        serviceAcceptance: { service: { id: "svc-1" } },
+      });
+      expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(1);
+
+      events.length = 0;
+      await handleGraphTextTurn(graph, threadId, "tg-1", "Ще раз");
+      const second = await graph.getState({ configurable: { thread_id: threadId } });
+      expect(second.values.bookingSchemaVersion).toBe(1);
+      expect(second.values.bookingDraft).toEqual(first.values.bookingDraft);
+      expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
+    } finally {
+      setTrackEventForTests(null);
+    }
+  });
+
+  it("stamps schema version 1 on the first turn of a thread with no checkpoint", async () => {
+    const { setTrackEventForTests } = await import("../../analytics/track.js");
+    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props: props as Record<string, unknown> });
+    });
+    try {
+      const graph = buildEchoGraph();
+      const threadId = "booking-schema-fresh";
+
+      await handleGraphTextTurn(graph, threadId, "tg-1", "Привіт");
+      const first = await graph.getState({ configurable: { thread_id: threadId } });
+      expect(first.values.bookingSchemaVersion).toBe(1);
+      expect(first.values.bookingDraft).toBeNull();
+      expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
+
+      await handleGraphTextTurn(graph, threadId, "tg-1", "Ще раз");
+      const second = await graph.getState({ configurable: { thread_id: threadId } });
+      expect(second.values.bookingSchemaVersion).toBe(1);
+      expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
+    } finally {
+      setTrackEventForTests(null);
+    }
+  });
+
+  it("upgrades a version-0 interrupt via Command.update and still resumes confirm", async () => {
+    const graph = buildPendingConfirmBookingGraph();
+    const threadId = "booking-schema-v0-resume";
+    const first = await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 0,
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", source: "catalog" },
+          },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:00:00",
+            dateEnd: "2026-10-17T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "c-1",
+              dateStart: "2026-10-17T11:00:00",
+              dateEnd: "2026-10-17T11:30:00",
+            },
+          },
+          rescheduleTarget: null,
+          replacement: null,
+        },
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
+    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingNoteStatus).toBe("unasked");
+    expect(snap.values.selectedSlot).toBeNull();
+    expect(snap.next).toEqual([]);
+  });
+
+  it("declines confirm when create-command contactId mismatches the draft", async () => {
+    const graph = buildPendingConfirmBookingGraph();
+    const threadId = "booking-schema-contact-mismatch";
+    const first = await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 0,
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", source: "catalog" },
+          },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:00:00",
+            dateEnd: "2026-10-17T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "owned-contact",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "different-contact",
+              dateStart: "2026-10-17T11:00:00",
+              dateEnd: "2026-10-17T11:30:00",
+            },
+          },
+          rescheduleTarget: null,
+          replacement: null,
+        },
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
+    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingDraft).toMatchObject({
+      serviceAcceptance: { service: { id: "svc-1" } },
+      phase: "service",
+      pendingCommand: null,
+      replacement: null,
+    });
+    expect(snap.next).toEqual([]);
+  });
+
+  it("declines a pending confirm when migration fails closed", async () => {
+    const graph = buildPendingConfirmBookingGraph();
+    const threadId = "booking-schema-fail-closed-resume";
+    const first = await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 0,
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "  ", source: "catalog" },
+          },
+          selectedDate: "2026-10-17",
+          selectedSlot: {
+            dateStart: "2026-10-17T11:00:00",
+            dateEnd: "2026-10-17T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: { action: "create", payload: {} },
+          rescheduleTarget: null,
+          replacement: null,
+        },
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
+    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingDraft).toBeNull();
+    expect(snap.next).toEqual([]);
+  });
+
+  it("declines confirm when a confirming create has no selectedDate", async () => {
+    const graph = buildPendingConfirmBookingGraph();
+    const threadId = "booking-schema-confirming-null-date";
+    const first = await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 0,
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", source: "catalog" },
+          },
+          selectedDate: null,
+          selectedSlot: {
+            dateStart: "2026-10-17T11:00:00",
+            dateEnd: "2026-10-17T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              dateStart: "2026-10-17T11:00:00",
+              dateEnd: "2026-10-17T11:30:00",
+            },
+          },
+          rescheduleTarget: null,
+          replacement: null,
+        },
+        bookingNoteStatus: "skipped",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+          label: "11:00",
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
+    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingDraft).toMatchObject({
+      serviceAcceptance: { service: { id: "svc-1" } },
+      phase: "service",
+      pendingCommand: null,
+      selectedSlot: null,
+      selectedDate: null,
+    });
+    expect(snap.next).toEqual([]);
+  });
+});
+
 describe("checkpoint corruption retry", () => {
   it("matches serde/checkpoint errors only", () => {
     expect(isCheckpointCorruptionError(new Error("Failed to deserialize checkpoint"))).toBe(true);

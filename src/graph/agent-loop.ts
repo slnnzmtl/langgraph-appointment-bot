@@ -112,7 +112,7 @@ import {
 } from "./gemini-cache-messages.js";
 import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
-  migrateLegacyBookingState,
+  closedBookingSessionUpdate,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -269,7 +269,11 @@ const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage | null 
     // Declined/failed replacement cancellation outcomes are terminal, but must
     // retain their replacement origin for the correct response/menu.
     if (state.pendingCancellationPurpose === "replacement") {
-      return outcome === "declined" || outcome === "failed" ? message : null;
+      // Failed/blocked replacement cancel must close the session — leaving
+      // cancelling + originalCommand would replay a stale create later.
+      return outcome === "declined" || outcome === "failed" || outcome === "blocked"
+        ? message
+        : null;
     }
     // Keep the legacy state guard for checkpoints created before the explicit
     // cancellation-purpose field existed.
@@ -708,7 +712,7 @@ const catalogServiceForText = (
 };
 
 /** Resolve explicit service acceptance into a durable draft event for this turn. */
-const bookingDraftForTurn = (state: ClinicState): BookingDraft | undefined => {
+const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefined => {
   const humanMessages = (state.messages ?? []).filter(
     (message): message is HumanMessage => message instanceof HumanMessage,
   );
@@ -945,9 +949,7 @@ const pendingChatConfirmationCleanup = (
     decision.replyKind === "declined"
     && (decision.action === "create" || decision.action === "reschedule")
   ) {
-    return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "draft_abandoned" }),
-    };
+    return closedBookingSessionUpdate();
   }
   if (decision.action === "create" || decision.action === "reschedule") {
     return {
@@ -965,9 +967,7 @@ const pendingChatConfirmationCleanup = (
     )
   ) {
     return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "cancel_existing_declined",
-      }),
+      ...closedBookingSessionUpdate(),
       pendingCancellationPurpose: null,
     };
   }
@@ -1754,16 +1754,19 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
 
-  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft => {
+  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft | null => {
     let draft = state.bookingDraft;
     if (draft == null) {
-      return reduceBookingDraft(null, { type: "slot_selected", slot });
+      return null;
     }
     if (draft.selectedDate == null) {
       draft = reduceBookingDraft(draft, {
         type: "date_selected",
         date: slot.dateStart.slice(0, 10),
       });
+    }
+    if (draft == null) {
+      return null;
     }
     return reduceBookingDraft(draft, { type: "slot_selected", slot });
   };
@@ -2083,119 +2086,48 @@ export const createAgentPrepareNode = (agentId: string) =>
     if (agentId === BOOKING_AGENT_ID) {
       const contactIdentity = resolveContactIdentity(state.contactContext);
       const contactId = contactIdentity.kind === "owned" ? contactIdentity.contactId : null;
-      const historyText = [
-        ...(state.messages ?? []).map((message) => extractMessageTextContent(message.content)),
-        ...(state.lastHandoff?.replyText ? [state.lastHandoff.replyText] : []),
-      ];
-      const onlyCatalogService = state.servicesContext?.list.length === 1
-        ? state.servicesContext.list[0]
-        : undefined;
-      const recoveredService = onlyCatalogService
-        ? {
-            id: onlyCatalogService.id,
-            name: onlyCatalogService.name,
-            ...(onlyCatalogService.duration != null
-              ? { durationMinutes: onlyCatalogService.duration }
-              : {}),
-            source: "catalog" as const,
-          }
-        : typeof state.availabilityContext?.serviceId === "string"
-          ? {
-              id: state.availabilityContext.serviceId,
-              source: "catalog" as const,
-            }
-          : undefined;
-      const hasMalformedDraft = state.bookingDraft != null
-        && state.bookingDraft.serviceAcceptance?.service.id == null;
-      const hasLegacyProjection = state.bookingDraft == null
-        && (
-          state.bookingNoteStatus !== "unasked"
-          || state.selectedSlot != null
-          || state.selectedAvailabilityDate != null
-        );
-      const migrated = hasMalformedDraft || hasLegacyProjection
-        ? migrateLegacyBookingState(
-            {
-              bookingDraft: state.bookingDraft,
-              bookingNoteStatus: state.bookingNoteStatus,
-              selectedSlot: state.selectedSlot,
-              selectedAvailabilityDate: state.selectedAvailabilityDate,
-              ...(recoveredService ? { recoveredService } : {}),
-            },
-            { historyText, contactId: typeof contactId === "string" ? contactId : null },
-          )
-        : null;
-      const migrationUpdate = migrated
-        ? {
-            bookingDraft: migrated,
-            bookingNoteStatus: "unasked" as const,
-            selectedSlot: null,
-            selectedAvailabilityDate: null,
-          }
-        : {};
-      if (migrated) {
-        const historyHasExplicitConsultationAcceptance = historyText.some(
-          (text, index) => /(?:консультац|consultation)/iu.test(text)
-            && /\?/u.test(text)
-            && historyText.slice(index + 1).some((later) => /^(?:так|yes)\b/iu.test(later.trim())),
-        );
-        const historyHasConsultationOffer = historyText.some(
-          (text) => /(?:консультац|consultation)/iu.test(text) && /\?/u.test(text),
-        );
-        trackEvent("booking_checkpoint_migrated", {
-          source: historyHasExplicitConsultationAcceptance
-            ? "explicit_consultation_acceptance"
-            : historyHasConsultationOffer
-              ? "pending_offer"
-              : recoveredService
-                ? "catalog"
-                : state.bookingDraft
-                  ? "existing_draft"
-                  : "unknown",
-        });
-      }
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
-      const migratedState = migrated ? { ...state, bookingDraft: migrated } : state;
       const pendingRescheduleRequested =
-        migratedState.lastHandoff?.pendingAction === "reschedule"
-        && migratedState.bookingContext?.meetings.length === 1
+        state.lastHandoff?.pendingAction === "reschedule"
+        && state.bookingContext?.meetings.length === 1
         && resolveBookingScheduleRequest(
-          lastPatientText(migratedState),
+          lastPatientText(state),
           kyivToday(),
           {
-            availabilityContext: migratedState.availabilityContext,
-            availabilityCursor: migratedState.availabilityCursor,
-            selectedDate: migratedState.bookingDraft?.selectedDate,
+            availabilityContext: state.availabilityContext,
+            availabilityCursor: state.availabilityCursor,
+            selectedDate: state.bookingDraft?.selectedDate,
           },
         )?.kind === "exact";
-      const rescheduleRequested = isDirectRescheduleIntent(migratedState)
+      const rescheduleRequested = isDirectRescheduleIntent(state)
         || pendingRescheduleRequested
-        || migratedState.bookingDraft?.mode === "reschedule";
+        || state.bookingDraft?.mode === "reschedule";
       const rescheduleTarget = rescheduleRequested
-        ? rescheduleTargetFromBookingContext(migratedState)
+        ? rescheduleTargetFromBookingContext(state)
         : null;
       const startedReschedule = rescheduleRequested
-        && migratedState.bookingDraft?.mode !== "reschedule"
-        ? reduceBookingDraft(migratedState.bookingDraft, {
+        && state.bookingDraft?.mode !== "reschedule"
+        ? reduceBookingDraft(state.bookingDraft, {
             type: "reschedule_started",
             meeting: rescheduleTarget,
           })
-        : migratedState.bookingDraft?.mode === "reschedule"
-          && migratedState.bookingDraft.rescheduleTarget == null
+        : state.bookingDraft?.mode === "reschedule"
+          && state.bookingDraft.rescheduleTarget == null
           && rescheduleTarget != null
-          ? reduceBookingDraft(migratedState.bookingDraft, {
+          ? reduceBookingDraft(state.bookingDraft, {
               type: "reschedule_started",
               meeting: rescheduleTarget,
             })
           : undefined;
       const rescheduleState = startedReschedule
-        ? { ...migratedState, bookingDraft: startedReschedule }
-        : migratedState;
-      let bookingDraft = rescheduleState.bookingDraft?.mode === "reschedule"
-        ? rescheduleState.bookingDraft
-        : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
+        ? { ...state, bookingDraft: startedReschedule }
+        : state;
+      let bookingDraft: BookingDraft | null | undefined =
+        rescheduleState.bookingDraft?.mode === "reschedule"
+          ? rescheduleState.bookingDraft
+          : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
       const scheduleRequest = resolveBookingScheduleRequest(
         lastPatientText(rescheduleState),
         kyivToday(),
@@ -2216,11 +2148,8 @@ export const createAgentPrepareNode = (agentId: string) =>
         ? { ...rescheduleState, bookingDraft }
         : rescheduleState;
       const noteUpdate = advanceBookingNoteStep(workingState);
-      // Legacy projections are returned only for old checkpoints that have no
-      // draft. New flows receive a single aggregate update.
       Object.assign(update, noteUpdate);
-      Object.assign(update, migrationUpdate);
-      bookingDraft = (noteUpdate.bookingDraft as BookingDraft | undefined) ?? bookingDraft;
+      bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
       if (
         bookingDraft
         && bookingDraft.contactId != null
@@ -2333,7 +2262,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     const replacementAction = replacementActionForTurn(state);
     if (replacementAction === "decline") {
       return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "cancel_existing_declined" }),
+        ...closedBookingSessionUpdate(),
         agentMessages: new Overwrite([]),
       };
     }
@@ -3248,9 +3177,7 @@ export const createAgentToolsNode = (
           type: "cancel_existing_completed",
         });
       } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
-        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-          type: "cancel_existing_declined",
-        });
+        Object.assign(update, closedBookingSessionUpdate());
       } else if (!cancelOnlyCommitted) {
         Object.assign(update, resetBookingNoteState(state));
         const mutationFailed = resultMessages.some(
@@ -3273,7 +3200,7 @@ export const createAgentToolsNode = (
             type: "slot_invalidated",
           });
         } else if (state.bookingDraft) {
-          update.bookingDraft = null;
+          Object.assign(update, closedBookingSessionUpdate());
         }
       }
       if (
@@ -3547,11 +3474,13 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
       stepCount: 0,
       // A direct cancellation is complete; do not leave its frozen command in
       // the draft for a later turn to replay.
-      bookingDraft: committed || declined || mutationName === "cancel_meeting"
-        ? null
-        : state.bookingDraft
-          ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
-          : null,
+      ...(committed || declined || mutationName === "cancel_meeting"
+        ? closedBookingSessionUpdate()
+        : {
+            bookingDraft: state.bookingDraft
+              ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
+              : null,
+          }),
       pendingCancellationPurpose: null,
       messages: [message],
       lastHandoff: {
