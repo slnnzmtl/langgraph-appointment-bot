@@ -16,6 +16,7 @@ import {
   classifyMeetingMutationToolMessage,
   createAgentToolsNode,
   crmWriteDirtiesPrefetch,
+  availabilityOfferFromToolTurn,
   formatAvailabilityDateOffer,
   formatAvailabilityHeading,
   formatAvailabilityTimeOffer,
@@ -4849,6 +4850,201 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       selectedDate: "2026-09-10",
       selectedSlot: null,
       pendingCommand: null,
+    });
+  });
+
+  const oct20SlotsTool = () =>
+    new ToolMessage({
+      content: JSON.stringify({
+        date: "2026-10-20",
+        dayLabel: "20 жовтня (вівторок)",
+        slots: [{
+          id: "slot-20-12",
+          label: "12:00",
+          dateStart: "2026-10-20T12:00:00",
+          dateEnd: "2026-10-20T12:30:00",
+        }],
+        stepMinutes: 30,
+        query: {
+          kind: "exact",
+          date: "2026-10-20",
+          rangeFrom: "2026-10-20",
+          rangeThrough: "2026-10-20",
+          coverageComplete: true,
+        },
+      }),
+      name: "present_availability_slots",
+      tool_call_id: "slots-20",
+    });
+
+  const oct22SlotsTool = () =>
+    new ToolMessage({
+      content: JSON.stringify({
+        date: "2026-10-22",
+        dayLabel: "22 жовтня (четвер)",
+        slots: [{
+          id: "slot-22-11",
+          label: "11:00",
+          dateStart: "2026-10-22T11:00:00",
+          dateEnd: "2026-10-22T11:30:00",
+        }],
+        stepMinutes: 30,
+        query: {
+          kind: "exact",
+          date: "2026-10-22",
+          rangeFrom: "2026-10-22",
+          rangeThrough: "2026-10-22",
+          coverageComplete: true,
+        },
+      }),
+      name: "present_availability_slots",
+      tool_call_id: "slots-22",
+    });
+
+  it("ignores pre-HITL leftover slots for TIME overlay after unresolved confirmation", () => {
+    const leftover = [
+      oct20SlotsTool(),
+      new ToolMessage({
+        content: JSON.stringify({
+          awaitingConfirmation: true,
+          userReply: "запиши на 22 жовтня",
+        }),
+        name: "create_meeting",
+        tool_call_id: "create-1",
+      }),
+      new AIMessage("Підберу вільні години на 22 жовтня."),
+    ];
+    expect(availabilityOfferFromToolTurn(leftover)).toBeNull();
+    expect(resolveAvailabilityOffer(leftover, null, false)).toBeNull();
+  });
+
+  it("TIME-overlays only slots that ran after pending confirmation", () => {
+    const offer = availabilityOfferFromToolTurn([
+      oct20SlotsTool(),
+      new ToolMessage({
+        content: JSON.stringify({
+          awaitingConfirmation: true,
+          userReply: "запиши на 22 жовтня",
+        }),
+        name: "create_meeting",
+        tool_call_id: "create-1",
+      }),
+      oct22SlotsTool(),
+      new AIMessage("invented"),
+    ]);
+    expect(offer?.replyText).toContain("Вільні години на 22 жовтня");
+    expect(offer?.replyText).not.toContain("20 жовтня");
+  });
+
+  it("does not rewrite HITL other-reply prose with leftover pre-confirm TIME", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("запиши на 22 жовтня")],
+        contactContext: ownedContactContext(),
+        bookingDraft: {
+          ...canonicalBookingDraft({
+            selectedDate: "2026-10-20",
+            selectedSlot: {
+              dateStart: "2026-10-20T12:00:00",
+              dateEnd: "2026-10-20T12:30:00",
+              label: "12:00",
+            },
+            phase: "confirming",
+            note: { status: "answered", text: "акне" },
+            pendingCommand: {
+              action: "create",
+              payload: {
+                serviceId: "svc-1",
+                dateStart: "2026-10-20T12:00:00",
+                dateEnd: "2026-10-20T12:30:00",
+              },
+            },
+          }),
+        },
+        agentMessages: [
+          oct20SlotsTool(),
+          new ToolMessage({
+            content: JSON.stringify({
+              awaitingConfirmation: true,
+              userReply: "запиши на 22 жовтня",
+            }),
+            name: "create_meeting",
+            tool_call_id: "create-1",
+          }),
+          new AIMessage("Підберу вільні години на 22 жовтня."),
+        ],
+      }),
+    );
+
+    const reply = (update.lastHandoff as { replyText?: string } | null)?.replyText ?? "";
+    expect(reply).toContain("Підберу вільні години на 22 жовтня");
+    expect(reply).not.toContain("Вільні години на 20 жовтня");
+  });
+
+  it("coerces a post-HITL exact-date slots call despite leftover pre-confirm slots", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-07T12:00:00+03:00"));
+    const invoke = vi.fn(async () => new AIMessage("Підберу вільні години."));
+    const slotsTool = tool(
+      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+          date: z.string().optional(),
+        }),
+      },
+    );
+    const llm = createAgentLlmNode({
+      agent,
+      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
+      tools: [slotsTool],
+      formatSystemMetadata: () => "DYN",
+    });
+    const update = await llm(
+      clinicState({
+        messages: [new HumanMessage("запиши на 22 жовтня")],
+        contactContext: ownedContactContext(),
+        bookingDraft: {
+          ...canonicalBookingDraft({
+            selectedDate: "2026-10-20",
+            selectedSlot: {
+              dateStart: "2026-10-20T12:00:00",
+              dateEnd: "2026-10-20T12:30:00",
+              label: "12:00",
+            },
+            phase: "confirming",
+            note: { status: "answered", text: "акне" },
+            pendingCommand: {
+              action: "create",
+              payload: {
+                serviceId: "svc-1",
+                dateStart: "2026-10-20T12:00:00",
+              },
+            },
+          }),
+        },
+        agentMessages: [
+          oct20SlotsTool(),
+          new ToolMessage({
+            content: JSON.stringify({
+              awaitingConfirmation: true,
+              userReply: "запиши на 22 жовтня",
+            }),
+            name: "create_meeting",
+            tool_call_id: "create-1",
+          }),
+        ],
+      }),
+    );
+    vi.useRealTimers();
+
+    const messages = update.agentMessages as AIMessage[];
+    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
+      name: "present_availability_slots",
+      args: { direction: "exact", date: "2026-10-22" },
     });
   });
 

@@ -457,6 +457,39 @@ const toolRanThisTurn = (messages: BaseMessage[], toolName: string): boolean =>
     (message) => message instanceof ToolMessage && toolMessageName(message) === toolName,
   );
 
+/** Index of the latest pending_confirmation mutation ToolMessage, or -1. */
+const latestPendingConfirmationIndex = (messages: BaseMessage[]): number => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message instanceof ToolMessage
+      && classifyMeetingMutationToolMessage(message) === "pending_confirmation"
+    ) {
+      return index;
+    }
+  }
+  return -1;
+};
+
+/**
+ * True when present_availability_slots ran after the latest awaitingConfirmation
+ * mutation (or anywhere on the tape when there is no pending confirmation).
+ * Pre-HITL leftover slots must not block coerce or TIME overlay.
+ */
+const availabilitySlotsRanThisTurn = (messages: BaseMessage[]): boolean => {
+  const start = latestPendingConfirmationIndex(messages) + 1;
+  for (let index = start; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (
+      message instanceof ToolMessage
+      && toolMessageName(message) === "present_availability_slots"
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export const captureLatestToolContext = <T>(
   messages: BaseMessage[],
   toolName: string,
@@ -1430,8 +1463,9 @@ const coerceAvailabilityToolCalls = (
         : isYesReply(human) ? "nearest" : undefined;
     // Recovery is allowed only for a structured patient action. Never turn arbitrary
     // availability-looking prose into an argument-less call that can replay a cache.
+    // Pre-HITL leftover slots on the tape do not count as this turn.
     if (
-      !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      !availabilitySlotsRanThisTurn(state.agentMessages ?? [])
       && dayPick == null
       && (request != null || semanticDirection != null)
     ) {
@@ -1459,7 +1493,7 @@ const coerceAvailabilityToolCalls = (
     && !toolCalls.some((call) => call.name === "present_availability_slots")
   ) {
     const args = rescheduleAvailabilityArgsFromBookingContext(state);
-    if (args && !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")) {
+    if (args && !availabilitySlotsRanThisTurn(state.agentMessages ?? [])) {
       toolCalls = [
         ...toolCalls,
         {
@@ -1838,7 +1872,7 @@ const resetBookingNoteState = (_state?: ClinicState): ClinicStateUpdate => ({});
 export const availabilityOfferFromToolTurn = (
   messages: BaseMessage[],
 ): { replyText: string; replyButtons: string[] } | null => {
-  if (!toolRanThisTurn(messages, "present_availability_slots")) {
+  if (!availabilitySlotsRanThisTurn(messages)) {
     return null;
   }
   const captured = captureAvailabilityFromMessages(messages);
@@ -2631,10 +2665,7 @@ export const createAgentToolsNode = (
     const synthetic: ToolMessage[] = [];
     const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
     let noteStatusUpdate: ClinicStateUpdate = {};
-    let availabilityPagedThisTurn = toolRanThisTurn(
-      agentMessages,
-      "present_availability_slots",
-    );
+    let availabilityPagedThisTurn = availabilitySlotsRanThisTurn(agentMessages);
 
     if (lastAiIndex >= 0) {
       const lastAi = agentMessages[lastAiIndex] as AIMessage;
