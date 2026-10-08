@@ -55,6 +55,8 @@ import {
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import { closedBookingSessionUpdate } from "./booking-draft.js";
+import { bookingTurnNeedsNoteOrchestrator } from "./booking-note-orchestrator.js";
+import { isBookingOwnedInteraction } from "./pending-interaction.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -221,10 +223,19 @@ export const stickyContinueAgentId = (
     return BOOKING_AGENT_ID;
   }
   const human = lastHumanTextFromMessages(state.messages);
+  const humanLine = lastHumanLineFromMessages(state.messages);
   const returnLabel = state.pendingInteraction?.choices.find(
     (choice) => choice.id === "return_to_booking",
   )?.label;
   if (returnLabel != null && human === returnLabel) {
+    return BOOKING_AGENT_ID;
+  }
+  if (
+    bookingTurnNeedsNoteOrchestrator(state)
+    && human.length > 0
+    && !SUPERVISOR_OWNED_REPLY_LABELS.has(human)
+    && !SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)
+  ) {
     return BOOKING_AGENT_ID;
   }
   const agentId = state.lastHandoff?.agentId;
@@ -324,9 +335,7 @@ export const shouldRouteCatalogMentionToFaq = (state: ClinicState): boolean => {
   }
   // An open booking-owned interaction or note phase owns the message.
   if (
-    state.pendingInteraction?.kind === "visit_note"
-    || state.pendingInteraction?.kind === "service_or_note"
-    || state.pendingInteraction?.kind === "service_candidate"
+    isBookingOwnedInteraction(state.pendingInteraction)
     || state.bookingDraft?.phase === "note"
     || state.bookingDraft?.note.status === "awaiting"
   ) {

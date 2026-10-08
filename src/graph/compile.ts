@@ -264,12 +264,14 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             toolsNode,
             isBooking ? mutationFinalize : undefined,
             isBooking ? commandPrepare : undefined,
+            isBooking ? noteOrch : undefined,
           ),
         {
           [llm]: llm,
           [toolsNode]: toolsNode,
           [mutationFinalize]: mutationFinalize,
           [commandPrepare]: commandPrepare,
+          ...(isBooking ? { [noteOrch]: noteOrch } : {}),
         },
       )
       .addEdge(finalize, END);

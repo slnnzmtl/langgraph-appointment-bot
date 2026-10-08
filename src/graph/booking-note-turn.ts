@@ -35,6 +35,8 @@ export const noteTurnClassificationSchema = z.object({
 export type ClassifyNoteTurn = (input: {
   patientText: string;
   currentServiceName?: string;
+  /** Draft phase so date/time free text is not framed as the visit-note question. */
+  draftPhase?: string;
 }) => Promise<NoteTurnClassification>;
 
 export type NoteTurnScheduleMatch =
@@ -48,6 +50,7 @@ export type InterpretNoteTurnInput = {
   /** Snapshot-grounded date/slot matcher supplied by the orchestrator. */
   matchSchedule?: (text: string) => NoteTurnScheduleMatch;
   currentServiceName?: string;
+  draftPhase?: string;
   classify: ClassifyNoteTurn;
 };
 
@@ -115,6 +118,7 @@ export const interpretNoteTurn = async (
       ...(input.currentServiceName != null
         ? { currentServiceName: input.currentServiceName }
         : {}),
+      ...(input.draftPhase != null ? { draftPhase: input.draftPhase } : {}),
     });
   } catch {
     return { source: "classified", classification: { kind: "unresolved" } };
@@ -138,11 +142,17 @@ export const interpretNoteTurn = async (
   return { source: "classified", classification };
 };
 
+/** Non-session outcomes: orch routes without reduceBookingSession. */
+export type NoteTurnMappedOutcome =
+  | BookingSessionEvent
+  | { type: "unresolved" }
+  | { type: "schedule_change_requested" };
+
 /** Map a validated classification onto session events using the original patient text. */
 export const sessionEventFromClassification = (
   classification: NoteTurnClassification,
   originalPatientText: string,
-): BookingSessionEvent | { type: "unresolved" } => {
+): NoteTurnMappedOutcome => {
   switch (classification.kind) {
     case "note_provided":
       return { type: "note_provided", value: originalPatientText };
@@ -162,7 +172,7 @@ export const sessionEventFromClassification = (
         choices: [],
       };
     case "schedule_change_requested":
-      return { type: "unresolved" };
+      return { type: "schedule_change_requested" };
     case "leave_booking":
       return { type: "leave_booking", destination: "main_menu" };
     case "unresolved":

@@ -116,6 +116,14 @@ export const createClinicStateAnnotation = ({
       default: () => false,
     }),
     /**
+     * One-turn notice after a mid-booking service change. Prefixed onto the next
+     * code-owned DATE card, then cleared. Missing on old checkpoints reads as null.
+     */
+    serviceChangeNotice: Annotation<string | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /**
      * Booking checkpoint schema. 0 = unversioned legacy row or brand-new thread;
      * 1 = current. Missing channels read as 0 only when reducer + default are both set.
      */

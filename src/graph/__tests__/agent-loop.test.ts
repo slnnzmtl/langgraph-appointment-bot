@@ -48,7 +48,11 @@ import {
   PATIENT_FALLBACK_MESSAGE,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
+  BOOKING_SCHEDULE_RESELECT_UK,
+  SERVICE_OR_NOTE_KEEP_LABEL_UK,
+  SERVICE_OR_NOTE_SWITCH_LABEL_UK,
   VISIT_CHANGE_MENU,
+  serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
@@ -111,6 +115,9 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   selectedSlot: null,
   selectedAvailabilityDate: null,
   bookingDraft: null,
+  pendingInteraction: null,
+  noteOrchQueued: false,
+  serviceChangeNotice: null,
   bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,
   ...overrides,
@@ -2644,6 +2651,46 @@ describe("runtime-owned booking routing", () => {
     });
   });
 
+  it("requests nearest availability for a service-change notice with the new duration", async () => {
+    const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
+    const state = clinicState({
+      messages: [new HumanMessage("Neotiva")],
+      agentMessages: [new HumanMessage("Neotiva")],
+      serviceChangeNotice: notice,
+      bookingDraft: canonicalBookingDraft({
+        phase: "date",
+        selectedDate: null,
+        selectedSlot: null,
+        note: { status: "answered", value: "запиши на збільшення губ" },
+        serviceAcceptance: {
+          status: "accepted",
+          service: {
+            id: "svc-neotiva",
+            name: "Збільшення губ Neotiva",
+            durationMinutes: 60,
+            source: "catalog",
+          },
+        },
+      }),
+      availabilityContext: null,
+    });
+    expect(
+      routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"),
+    ).toBe("booking__command_prepare");
+
+    const update = await createAgentCommandPrepareNode("booking")(state);
+    const prepared = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const call = prepared.at(-1)?.tool_calls?.[0];
+    expect(call).toMatchObject({
+      name: "present_availability_slots",
+      args: {
+        direction: "nearest",
+        forceRefresh: true,
+        durationMinutes: 60,
+      },
+    });
+  });
+
   it("continues successful slot revalidation directly to command preparation", () => {
     expect(
       routeAfterAgentTools(
@@ -2796,6 +2843,333 @@ describe("runtime-owned booking routing", () => {
 });
 
 describe("createAgentFinalizeNode", () => {
+  it("replaces model prose with the service-change notice while DATE reselection is open", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
+    const update = finalize(
+      clinicState({
+        serviceChangeNotice: notice,
+        bookingDraft: canonicalBookingDraft({
+          phase: "date",
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "answered", value: "запиши на збільшення губ" },
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-neotiva",
+              name: "Збільшення губ Neotiva",
+              durationMinutes: 60,
+              source: "catalog",
+            },
+          },
+        }),
+        agentMessages: [new AIMessage("You're all booked!")],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(notice);
+    expect(update.lastHandoff?.replyText).not.toContain("booked");
+    expect(update.serviceChangeNotice).toBeNull();
+  });
+
+  it("replaces any-language model prose with the code-owned DATE prompt", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "date",
+          selectedDate: null,
+          selectedSlot: null,
+        }),
+        agentMessages: [new AIMessage("Done — your appointment is confirmed.")],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect(update.lastHandoff?.replyButtons ?? []).toEqual([]);
+  });
+
+  it("recovers the TIME card from checkpoint when selectedDate is still open", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const days: AvailabilityContext["days"] = [
+      {
+        date: "2026-10-19",
+        dayLabel: "19 жовтня (понеділок)",
+        slots: [
+          { id: "s1", label: "11:30", dateStart: "2026-10-19T11:30:00", dateEnd: "2026-10-19T12:00:00" },
+          { id: "s2", label: "12:30", dateStart: "2026-10-19T12:30:00", dateEnd: "2026-10-19T13:00:00" },
+        ],
+      },
+      {
+        date: "2026-10-20",
+        dayLabel: "20 жовтня (вівторок)",
+        slots: [
+          { id: "s3", label: "12:00", dateStart: "2026-10-20T12:00:00", dateEnd: "2026-10-20T12:30:00" },
+        ],
+      },
+      {
+        date: "2026-10-22",
+        dayLabel: "22 жовтня (четвер)",
+        slots: [
+          { id: "s4", label: "11:00", dateStart: "2026-10-22T11:00:00", dateEnd: "2026-10-22T11:30:00" },
+          { id: "s5", label: "11:30", dateStart: "2026-10-22T11:30:00", dateEnd: "2026-10-22T12:00:00" },
+          { id: "s6", label: "12:00", dateStart: "2026-10-22T12:00:00", dateEnd: "2026-10-22T12:30:00" },
+          { id: "s7", label: "14:30", dateStart: "2026-10-22T14:30:00", dateEnd: "2026-10-22T15:00:00" },
+        ],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("все ж таки запиши на консультацію")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "time",
+          selectedDate: "2026-10-22",
+          selectedSlot: null,
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "6a884971a722ecdf2",
+              name: "Ботулінотерапія Botox, Disport 2 зони",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+        }),
+        availabilityContext: {
+          serviceId: "6a884971a722ecdf2",
+          days,
+          stepMinutes: 30,
+          query: {
+            kind: "nearest",
+            anchor: "2026-10-07",
+            rangeFrom: "2026-10-07",
+            rangeThrough: "2026-10-22",
+            coverageComplete: true,
+          },
+        },
+        agentMessages: [new AIMessage("You're all booked!")],
+      }),
+    );
+
+    const expected = formatAvailabilityTimeOffer(days[2]!);
+    expect(update.lastHandoff?.replyText).toBe(expected.replyText);
+    expect(update.lastHandoff?.replyButtons).toEqual(expected.replyButtons);
+    expect(update.lastHandoff?.replyText).not.toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect(update.lastHandoff?.replyText).not.toContain("booked");
+  });
+
+  it("recovers the DATE card from checkpoint when selectedDate is cleared", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const days: AvailabilityContext["days"] = [
+      {
+        date: "2026-10-20",
+        dayLabel: "20 жовтня (вівторок)",
+        slots: [
+          { id: "s1", label: "12:00", dateStart: "2026-10-20T12:00:00", dateEnd: "2026-10-20T12:30:00" },
+        ],
+      },
+      {
+        date: "2026-10-22",
+        dayLabel: "22 жовтня (четвер)",
+        slots: [
+          { id: "s2", label: "11:00", dateStart: "2026-10-22T11:00:00", dateEnd: "2026-10-22T11:30:00" },
+        ],
+      },
+    ];
+    const availability: AvailabilityContext = {
+      serviceId: "svc-1",
+      days,
+      stepMinutes: 30,
+      query: {
+        kind: "nearest",
+        rangeFrom: "2026-10-08",
+        rangeThrough: "2026-10-22",
+        coverageComplete: true,
+      },
+    };
+    const update = finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "date",
+          selectedDate: null,
+          selectedSlot: null,
+        }),
+        availabilityContext: availability,
+        agentMessages: [new AIMessage("Done — your appointment is confirmed.")],
+      }),
+    );
+
+    const expected = formatAvailabilityDateOffer(availability);
+    expect(update.lastHandoff?.replyText).toBe(expected.replyText);
+    expect(update.lastHandoff?.replyButtons).toEqual(expected.replyButtons);
+  });
+
+  it("does not reuse a checkpoint snapshot for a different accepted service", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "date",
+          selectedDate: null,
+          selectedSlot: null,
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-consult",
+              name: "Консультація",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+        }),
+        availabilityContext: {
+          serviceId: "svc-botox",
+          days: [
+            {
+              date: "2026-10-22",
+              dayLabel: "22 жовтня (четвер)",
+              slots: [
+                {
+                  id: "s1",
+                  label: "11:00",
+                  dateStart: "2026-10-22T11:00:00",
+                  dateEnd: "2026-10-22T11:30:00",
+                },
+              ],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        agentMessages: [new AIMessage("You're all booked!")],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect(update.lastHandoff?.replyButtons ?? []).toEqual([]);
+  });
+
+  it("prefixes a recovered TIME card with the service-change notice", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const notice = serviceChangedNoticeUk("Консультація");
+    const day: AvailabilityContext["days"][number] = {
+      date: "2026-10-22",
+      dayLabel: "22 жовтня (четвер)",
+      slots: [
+        { id: "s1", label: "11:00", dateStart: "2026-10-22T11:00:00", dateEnd: "2026-10-22T11:30:00" },
+        { id: "s2", label: "12:00", dateStart: "2026-10-22T12:00:00", dateEnd: "2026-10-22T12:30:00" },
+      ],
+    };
+    const update = finalize(
+      clinicState({
+        serviceChangeNotice: notice,
+        bookingDraft: canonicalBookingDraft({
+          phase: "time",
+          selectedDate: "2026-10-22",
+          selectedSlot: null,
+        }),
+        availabilityContext: {
+          serviceId: "svc-1",
+          days: [day],
+          stepMinutes: 30,
+        },
+        agentMessages: [new AIMessage("Готово!")],
+      }),
+    );
+
+    const expected = formatAvailabilityTimeOffer(day);
+    expect(update.lastHandoff?.replyText).toBe(`${notice}\n\n${expected.replyText}`);
+    expect(update.lastHandoff?.replyButtons).toEqual(expected.replyButtons);
+    expect(update.serviceChangeNotice).toBeNull();
+  });
+
+  it("prefixes the DATE card with the service-change notice and then clears it", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
+    const days: AvailabilityContext["days"] = [
+      {
+        date: "2026-10-20",
+        dayLabel: "20 жовтня (вівторок)",
+        slots: [
+          {
+            id: "s1",
+            label: "12:00",
+            dateStart: "2026-10-20T12:00:00",
+            dateEnd: "2026-10-20T13:00:00",
+          },
+        ],
+      },
+      {
+        date: "2026-10-22",
+        dayLabel: "22 жовтня (четвер)",
+        slots: [
+          {
+            id: "s2",
+            label: "11:00",
+            dateStart: "2026-10-22T11:00:00",
+            dateEnd: "2026-10-22T12:00:00",
+          },
+        ],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        serviceChangeNotice: notice,
+        bookingDraft: canonicalBookingDraft({
+          phase: "date",
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "answered", value: "запиши на збільшення губ" },
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-neotiva",
+              name: "Збільшення губ Neotiva",
+              durationMinutes: 60,
+              source: "catalog",
+            },
+          },
+        }),
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "slots-1",
+              name: "present_availability_slots",
+              args: { direction: "nearest", durationMinutes: 60 },
+              type: "tool_call",
+            }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              days,
+              stepMinutes: 60,
+              query: {
+                kind: "nearest",
+                rangeFrom: "2026-10-08",
+                rangeThrough: "2026-10-22",
+                coverageComplete: true,
+              },
+            }),
+            tool_call_id: "slots-1",
+            name: "present_availability_slots",
+          }),
+          new AIMessage("Готово! Запис створено."),
+        ],
+      }),
+    );
+
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply.startsWith(notice)).toBe(true);
+    expect(reply).toContain("20 жовтня");
+    expect(reply).toContain("22 жовтня");
+    expect(reply).not.toContain("Запис створено");
+    expect(update.serviceChangeNotice).toBeNull();
+    expect(update.lastHandoff?.replyButtons).toEqual(
+      expect.arrayContaining(["20 жовтня", "22 жовтня"]),
+    );
+  });
+
   it.each([
     "Готово! Запис створено.",
     "Готово! Запис перенесено.",
@@ -4096,14 +4470,129 @@ describe("runtime-owned cancellation outcomes", () => {
       "booking__command_prepare",
     )).toBe("booking__mutation_finalize");
 
-    const update = createAgentMutationFinalizeNode(agent)(state);
-    expect(update.lastHandoff).toMatchObject({
+    const declined = createAgentMutationFinalizeNode(agent)(state);
+    expect(declined.lastHandoff).toMatchObject({
       status: "ok",
       replyText: "Запис не було перенесено.",
     });
-    expect(update.lastHandoff?.replyText).not.toContain("вільні");
-    expect(update.bookingDraft).toBeNull();
-    expect(update.pendingCancellationPurpose).toBeNull();
+    expect(declined.lastHandoff?.replyText).not.toContain("вільні");
+    expect(declined.bookingDraft).toBeNull();
+    expect(declined.pendingCancellationPurpose).toBeNull();
+  });
+
+  it("routes HITL other-reply after skip to the booking LLM, not the note orchestrator", () => {
+    const state = clinicState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      contactContext: ownedContactContext(),
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        note: { status: "skipped" },
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "запиши на ботокс",
+            draft: { command: { action: "create", payload: {} } },
+          }),
+          name: "create_meeting",
+          tool_call_id: "create-1",
+        }),
+      ],
+    });
+
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      "booking__note_orch",
+    )).toBe("booking__llm");
+  });
+
+  it("still routes HITL other-reply to note orch while keep/switch is open", () => {
+    const state = clinicState({
+      messages: [new HumanMessage("Змінити послугу")],
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        note: { status: "skipped" },
+        pendingCommand: {
+          action: "create",
+          payload: { serviceId: "svc-1", dateStart: "2026-09-10T14:00:00" },
+        },
+      }),
+      pendingInteraction: {
+        kind: "service_or_note",
+        currentService: { id: "svc-1", name: "Процедура" },
+        noteCandidate: "запиши на ботокс",
+        choices: [
+          { id: "keep_service", label: "Продовжити з обраною послугою" },
+          { id: "switch_service", label: "Змінити послугу" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "Змінити послугу",
+            draft: { command: { action: "create", payload: {} } },
+          }),
+          name: "create_meeting",
+          tool_call_id: "create-1",
+        }),
+      ],
+    });
+
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      "booking__note_orch",
+    )).toBe("booking__note_orch");
+  });
+
+  it("still sends declined HITL chat to mutation finalize, not the note orch", () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        note: { status: "skipped" },
+        pendingCommand: {
+          action: "create",
+          payload: { serviceId: "svc-1", dateStart: "2026-09-10T14:00:00" },
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "Ні, дякую",
+            draft: { command: { action: "create", payload: {} } },
+          }),
+          name: "create_meeting",
+          tool_call_id: "create-1",
+        }),
+      ],
+    });
+
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      "booking__note_orch",
+    )).toBe("booking__mutation_finalize");
   });
 });
 
@@ -4851,6 +5340,77 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       selectedSlot: null,
       pendingCommand: null,
     });
+  });
+
+  it("does not drop the slot when keep/switch already cleared the confirm command", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          note: { status: "skipped" },
+          pendingCommand: null,
+        }),
+        pendingInteraction: {
+          kind: "service_or_note",
+          currentService: { id: CONSULTATION_SERVICE_ID, name: "Консультація" },
+          noteCandidate: "запиши на ботокс",
+          choices: [
+            { id: "keep_service", label: SERVICE_OR_NOTE_KEEP_LABEL_UK },
+            { id: "switch_service", label: SERVICE_OR_NOTE_SWITCH_LABEL_UK },
+          ],
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              awaitingConfirmation: true,
+              userReply: "запиши на ботокс",
+            }),
+            name: "create_meeting",
+            tool_call_id: "create-1",
+          }),
+          new AIMessage("Ви обрали «Консультація»."),
+        ],
+      }),
+    );
+
+    expect(update.bookingDraft).toBeUndefined();
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      SERVICE_OR_NOTE_KEEP_LABEL_UK,
+      SERVICE_OR_NOTE_SWITCH_LABEL_UK,
+    ]);
+  });
+
+  it("finalize keeps keep/switch labels in text and on the keyboard", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        contactContext: ownedContactContext(),
+        bookingDraft: canonicalBookingDraft({
+          phase: "confirming",
+          note: { status: "skipped" },
+        }),
+        pendingInteraction: {
+          kind: "service_or_note",
+          currentService: { id: CONSULTATION_SERVICE_ID, name: "Консультація" },
+          noteCandidate: "запиши на ботокс",
+          choices: [
+            { id: "keep_service", label: SERVICE_OR_NOTE_KEEP_LABEL_UK },
+            { id: "switch_service", label: SERVICE_OR_NOTE_SWITCH_LABEL_UK },
+          ],
+        },
+        agentMessages: [
+          new AIMessage("Ви обрали «Консультація». Ваше повідомлення також може означати зміну послуги."),
+        ],
+      }),
+    );
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text).toContain(`• ${SERVICE_OR_NOTE_KEEP_LABEL_UK}`);
+    expect(text).toContain(`• ${SERVICE_OR_NOTE_SWITCH_LABEL_UK}`);
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      SERVICE_OR_NOTE_KEEP_LABEL_UK,
+      SERVICE_OR_NOTE_SWITCH_LABEL_UK,
+    ]);
   });
 
   const oct20SlotsTool = () =>
@@ -7856,22 +8416,32 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
   });
 
-  it("prepare advances note step from the latest human clock pick", async () => {
+  it("prepare defers TIME clock picks to note orch; advanceBookingNoteStep still resolves the slot", async () => {
+    const draft = canonicalBookingDraft({
+      phase: "time",
+      selectedDate: "2026-09-10",
+      selectedSlot: null,
+      note: { status: "unasked" },
+    });
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("14:00")],
         availabilityContext: snapshot,
-        bookingDraft: canonicalBookingDraft({
-          phase: "time",
-          selectedDate: null,
-          selectedSlot: null,
-          note: { status: "unasked" },
-        }),
+        bookingDraft: draft,
       }),
     );
-    expect(update.bookingDraft?.note.status).toBe("awaiting");
-    expect(update.bookingDraft?.selectedSlot?.label).toBe("14:00");
+    expect(update.noteOrchQueued).toBe(true);
+    expect(update.bookingDraft?.note.status).toBe("unasked");
+    expect(update.bookingDraft?.selectedSlot).toBeNull();
+
+    const advanced = advanceBookingNoteStep(clinicState({
+      messages: [new HumanMessage("14:00")],
+      availabilityContext: snapshot,
+      bookingDraft: draft,
+    }));
+    expect(advanced.bookingDraft?.note.status).toBe("awaiting");
+    expect(advanced.bookingDraft?.selectedSlot?.label).toBe("14:00");
   });
 });
 

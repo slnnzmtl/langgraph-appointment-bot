@@ -5,6 +5,11 @@ import { Command, interrupt } from "@langchain/langgraph";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+import { interpretInvokeResult } from "../../adapter/telegram-outbound.js";
+import {
+  MAIN_MENU_LABEL,
+  type ReplyKeyboardMarkup,
+} from "../../adapter/telegram-ui.js";
 import { clearPendingConfirmsForTests } from "../../tools/meeting-confirm.js";
 import { createMeetingTools } from "../../tools/meeting-tools.js";
 import { createContactTools } from "../../tools/contact-tools.js";
@@ -13,10 +18,17 @@ import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_PHONE_QUESTION_UK,
+  BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
+  SERVICE_CHANGE_ACK_UK,
+  SERVICE_OR_NOTE_KEEP_LABEL_UK,
+  SERVICE_OR_NOTE_SWITCH_LABEL_UK,
+  serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../service-resolution.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+import type { ResolveServiceChange } from "../booking-note-orchestrator.js";
 
 afterEach(() => {
   clearPendingConfirmsForTests();
@@ -294,6 +306,693 @@ describe("compileClinicGraph prefetch once", () => {
 });
 
 describe("compileClinicGraph runtime-owned booking transition", () => {
+  it("opens service_candidate replyButtons for explicit service change from note free-text", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("LLM must not author catalog chips."));
+    const supervisorInvoke = vi.fn(async () => ({ next: "faq" }));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: supervisorInvoke,
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+      // Classifier/eval treat «запиши на ботокс» as an explicit service change.
+      classifyNoteTurn: async () => ({
+        kind: "service_change_requested" as const,
+        query: "ботокс",
+      }),
+      resolveServiceChange: async () => ({
+        type: "service_candidates_opened" as const,
+        utterance: "запиши на ботокс",
+        query: "ботокс",
+        choices: [
+          {
+            id: "g0",
+            label: "Botox/Disport",
+            serviceIds: ["svc-botox-face", "svc-botox-neck"],
+          },
+          { id: "svc-nabota", label: "Nabota", serviceIds: ["svc-nabota"] },
+          {
+            id: "g2",
+            label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+            serviceIds: ["svc-correction", "svc-meso"],
+          },
+        ],
+      }),
+    });
+
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage("запиши на ботокс")],
+        pendingInteraction: {
+          kind: "visit_note",
+          choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+        },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: BOOKING_NOTE_QUESTION_UK,
+          replyButtons: [INTENT_SKIP_LABEL],
+        },
+        bookingDraft: {
+          version: 5,
+          mode: "create",
+          phase: "note",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: CONSULTATION_SERVICE_ID,
+              name: "Консультація",
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-19",
+          selectedSlot: {
+            dateStart: "2026-10-19T11:30:00",
+            dateEnd: "2026-10-19T12:00:00",
+            label: "11:30",
+          },
+          requestedTime: null,
+          note: { status: "awaiting" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      { configurable: { thread_id: "note-free-text-service-candidate" } },
+    );
+
+    expect(supervisorInvoke).not.toHaveBeenCalled();
+    expect(modelInvoke).not.toHaveBeenCalled();
+    expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    expect(result.lastHandoff?.replyButtons).toEqual([
+      "Botox/Disport",
+      "Nabota",
+      SERVICE_CANDIDATE_OTHER_LABEL_UK,
+    ]);
+    const reply = String(result.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("• Botox/Disport");
+    expect(reply).toContain("• Nabota");
+    expect(reply).toContain(`• ${SERVICE_CANDIDATE_OTHER_LABEL_UK}`);
+    expect(reply).not.toContain("Обрати іншу процедуру");
+    expect(reply).not.toContain("(Консультація)");
+    expect(reply).not.toContain(SERVICE_OR_NOTE_KEEP_LABEL_UK);
+
+    const outbound = interpretInvokeResult(result);
+    const keyboard = (outbound.reply_markup as ReplyKeyboardMarkup).keyboard;
+    const labels = keyboard.flat().map((button) => button.text);
+    expect(labels).toEqual([
+      "Botox/Disport",
+      "Nabota",
+      SERVICE_CANDIDATE_OTHER_LABEL_UK,
+      MAIN_MENU_LABEL,
+    ]);
+    expect(labels).not.toContain("Обрати іншу процедуру");
+    expect(labels).not.toContain(SERVICE_OR_NOTE_KEEP_LABEL_UK);
+    expect(labels).not.toContain(SERVICE_OR_NOTE_SWITCH_LABEL_UK);
+  });
+
+  it("service change → narrowing → Neotiva forces fresh DATE then note then HITL", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
+    const availabilityInvoke = vi.fn(async (input: Record<string, unknown>) => {
+      if (input.direction === "nearest") {
+        return JSON.stringify({
+          days: [
+            {
+              date: "2026-10-20",
+              dayLabel: "20 жовтня (вівторок)",
+              slots: [{
+                id: "slot-20-12",
+                label: "12:00",
+                dateStart: "2026-10-20T12:00:00",
+                dateEnd: "2026-10-20T13:00:00",
+              }],
+            },
+            {
+              date: "2026-10-22",
+              dayLabel: "22 жовтня (четвер)",
+              slots: [{
+                id: "slot-22-11",
+                label: "11:00",
+                dateStart: "2026-10-22T11:00:00",
+                dateEnd: "2026-10-22T12:00:00",
+              }],
+            },
+          ],
+          stepMinutes: 60,
+          query: {
+            kind: "nearest",
+            rangeFrom: "2026-10-08",
+            rangeThrough: "2026-10-22",
+            coverageComplete: true,
+          },
+        });
+      }
+      return JSON.stringify({
+        date: "2026-10-20",
+        slots: [{
+          id: "slot-20-12",
+          label: "12:00",
+          dateStart: "2026-10-20T12:00:00",
+          dateEnd: "2026-10-20T13:00:00",
+        }],
+        stepMinutes: 60,
+        query: {
+          kind: "exact",
+          date: "2026-10-20",
+          rangeFrom: "2026-10-20",
+          rangeThrough: "2026-10-20",
+          coverageComplete: true,
+        },
+      });
+    });
+    const createInvoke = vi.fn(async (input: Record<string, unknown>) =>
+      interrupt({ type: "confirm_booking", draft: input }));
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "availability",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const createMeeting = tool(createInvoke, {
+      name: "create_meeting",
+      description: "create",
+      schema: z.object({
+        name: z.string(),
+        dateStart: z.string(),
+        dateEnd: z.string(),
+        contactId: z.string(),
+        serviceId: z.string(),
+        confirmMessage: z.string(),
+        description: z.string().optional(),
+      }),
+    });
+    const resolveServiceChange = vi.fn<ResolveServiceChange>(async (effect) => {
+      // Group tap leaves three brand ids; brand tap is a singleton CRM id.
+      if (effect.remainingIds != null && effect.remainingIds.length > 1) {
+        return {
+          type: "service_candidates_opened",
+          utterance: effect.utterance,
+          choices: [
+            { id: "svc-neotiva", label: "Neotiva", serviceIds: ["svc-neotiva"] },
+            { id: "svc-juvederm", label: "Juvederm", serviceIds: ["svc-juvederm"] },
+            { id: "svc-stylage", label: "Stylage", serviceIds: ["svc-stylage"] },
+          ],
+        };
+      }
+      if (
+        effect.query === "svc-neotiva"
+        || effect.utterance === "Neotiva"
+        || effect.remainingIds?.[0] === "svc-neotiva"
+      ) {
+        return {
+          type: "service_changed",
+          service: {
+            id: "svc-neotiva",
+            name: "Збільшення губ Neotiva",
+            durationMinutes: 60,
+            source: "catalog",
+          },
+          accepted: true,
+        };
+      }
+      return {
+        type: "service_candidates_opened",
+        utterance: effect.utterance,
+        query: effect.query,
+        choices: [
+          {
+            id: "g0",
+            label: "Збільшення губ",
+            serviceIds: ["svc-neotiva", "svc-juvederm", "svc-stylage"],
+          },
+          {
+            id: "g1",
+            label: "Корекція та видалення",
+            serviceIds: ["svc-correction"],
+          },
+        ],
+      };
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability, createMeeting] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+      classifyNoteTurn: async ({ patientText }) => {
+        const normalized = patientText.trim().toLowerCase();
+        if (
+          normalized === "продовжити без коментаря"
+          || normalized === "без коментаря"
+          || normalized === "continue with no comments"
+        ) {
+          return { kind: "note_skipped" as const };
+        }
+        if (normalized.includes("збільшення губ") || normalized.includes("neotiva")) {
+          return {
+            kind: "service_change_requested" as const,
+            query: "збільшення губ",
+          };
+        }
+        return { kind: "unresolved" as const };
+      },
+      resolveServiceChange,
+    });
+    const config = { configurable: { thread_id: "service-change-neotiva-hitl" } };
+    const contactContext = {
+      ownership: "telegram" as const,
+      contacts: [{
+        id: "c-1",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        phoneNumber: "+380501112233",
+        missingFields: [] as string[],
+      }],
+    };
+    const consultationDraft = {
+      version: 5,
+      mode: "create" as const,
+      phase: "note" as const,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: "Консультація",
+          durationMinutes: 30,
+          source: "catalog" as const,
+        },
+      },
+      selectedDate: "2026-10-20",
+      selectedSlot: {
+        dateStart: "2026-10-20T12:00:00",
+        dateEnd: "2026-10-20T12:30:00",
+        label: "12:00",
+      },
+      requestedTime: null,
+      note: { status: "awaiting" as const },
+      contactId: "c-1",
+      pendingCommand: null,
+      replacement: null,
+    };
+
+    const groups = await graph.invoke(
+      {
+        messages: [new HumanMessage("запиши на збільшення губ")],
+        contactContext,
+        pendingInteraction: {
+          kind: "visit_note",
+          choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+        },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: BOOKING_NOTE_QUESTION_UK,
+          replyButtons: [INTENT_SKIP_LABEL],
+        },
+        bookingDraft: consultationDraft,
+      } as never,
+      config,
+    );
+    const groupsReply = String(groups.lastHandoff?.replyText ?? "");
+    expect(groupsReply).toContain(SERVICE_CHANGE_ACK_UK);
+    expect(groupsReply).toContain("• Збільшення губ");
+    expect(groups.pendingInteraction?.kind).toBe("service_candidate");
+    expect(createInvoke).not.toHaveBeenCalled();
+    expect(groups.__interrupt__).toBeUndefined();
+
+    const brands = await graph.invoke(
+      { messages: [new HumanMessage("Збільшення губ")] } as never,
+      config,
+    );
+    expect(String(brands.lastHandoff?.replyText ?? "")).toContain("• Neotiva");
+    expect(brands.lastHandoff?.replyButtons).toEqual(
+      expect.arrayContaining(["Neotiva", "Juvederm", "Stylage"]),
+    );
+    expect(createInvoke).not.toHaveBeenCalled();
+
+    const afterService = await graph.invoke(
+      { messages: [new HumanMessage("Neotiva")] } as never,
+      config,
+    );
+    const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
+    const dateReply = String(afterService.lastHandoff?.replyText ?? "");
+    expect(dateReply.startsWith(notice)).toBe(true);
+    expect(dateReply).toContain("20 жовтня");
+    expect(dateReply).not.toContain("Запис створено");
+    expect(afterService.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-neotiva");
+    expect(afterService.bookingDraft?.selectedSlot).toBeNull();
+    expect(afterService.bookingDraft?.phase).toBe("date");
+    expect(availabilityInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: "nearest",
+        forceRefresh: true,
+        durationMinutes: 60,
+      }),
+      expect.anything(),
+    );
+    expect(createInvoke).not.toHaveBeenCalled();
+    expect(afterService.__interrupt__).toBeUndefined();
+
+    const timeResult = await graph.invoke(
+      { messages: [new HumanMessage("20 жовтня")] } as never,
+      config,
+    );
+    expect(String(timeResult.messages.at(-1)?.content)).toContain("Вільні години");
+    expect(createInvoke).not.toHaveBeenCalled();
+
+    const noteResult = await graph.invoke(
+      { messages: [new HumanMessage("12:00")] } as never,
+      config,
+    );
+    const notePrompt = String(noteResult.messages.at(-1)?.content);
+    expect(notePrompt).toContain(BOOKING_NOTE_QUESTION_UK);
+    expect(noteResult.bookingDraft?.note.status).toBe("awaiting");
+    expect(createInvoke).not.toHaveBeenCalled();
+
+    const hitl = await graph.invoke(
+      { messages: [new HumanMessage(INTENT_SKIP_LABEL)] } as never,
+      config,
+    );
+    expect(createInvoke).toHaveBeenCalled();
+    expect(hitl.__interrupt__).toHaveLength(1);
+    expect(hitl.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+    expect(createInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serviceId: "svc-neotiva",
+        dateStart: "2026-10-20T12:00:00",
+        dateEnd: "2026-10-20T13:00:00",
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("TIME free-text consultation switch searches nearest and shows a DATE card", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
+    const availabilityInvoke = vi.fn(async () =>
+      JSON.stringify({
+        days: [
+          {
+            date: "2026-10-19",
+            dayLabel: "19 жовтня (понеділок)",
+            slots: [
+              {
+                id: "slot-19-11",
+                label: "11:30",
+                dateStart: "2026-10-19T11:30:00",
+                dateEnd: "2026-10-19T12:00:00",
+              },
+            ],
+          },
+          {
+            date: "2026-10-20",
+            dayLabel: "20 жовтня (вівторок)",
+            slots: [
+              {
+                id: "slot-20-12",
+                label: "12:00",
+                dateStart: "2026-10-20T12:00:00",
+                dateEnd: "2026-10-20T12:30:00",
+              },
+            ],
+          },
+        ],
+        stepMinutes: 30,
+        query: {
+          kind: "nearest",
+          rangeFrom: "2026-10-08",
+          rangeThrough: "2026-10-20",
+          coverageComplete: true,
+        },
+      }),
+    );
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "availability",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const resolveServiceChange = vi.fn<ResolveServiceChange>(async () => ({
+      type: "service_changed",
+      service: {
+        id: CONSULTATION_SERVICE_ID,
+        name: "Консультація",
+        durationMinutes: 30,
+        source: "catalog",
+      },
+      accepted: true,
+    }));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+      classifyNoteTurn: async ({ patientText, draftPhase }) => {
+        expect(draftPhase).toBe("time");
+        if (patientText.toLowerCase().includes("консультац")) {
+          return {
+            kind: "service_change_requested" as const,
+            query: "консультацію",
+          };
+        }
+        return { kind: "unresolved" as const };
+      },
+      resolveServiceChange,
+    });
+    const config = { configurable: { thread_id: "time-consult-switch" } };
+    const botoxTimeDraft = {
+      version: 5,
+      mode: "create" as const,
+      phase: "time" as const,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: {
+          id: "svc-botox-1zone",
+          name: "Ботулінотерапія Botox, Disport 1 зона",
+          durationMinutes: 30,
+          source: "catalog" as const,
+        },
+      },
+      selectedDate: "2026-10-19",
+      selectedSlot: null,
+      requestedTime: null,
+      note: { status: "unasked" as const },
+      contactId: "c-1",
+      pendingCommand: null,
+      replacement: null,
+    };
+    const timeAvailability = {
+      serviceId: "svc-botox-1zone",
+      days: [
+        {
+          date: "2026-10-19",
+          dayLabel: "19 жовтня (понеділок)",
+          slots: [
+            {
+              id: "slot-19-11",
+              label: "11:30",
+              dateStart: "2026-10-19T11:30:00",
+              dateEnd: "2026-10-19T12:00:00",
+            },
+            {
+              id: "slot-19-12",
+              label: "12:30",
+              dateStart: "2026-10-19T12:30:00",
+              dateEnd: "2026-10-19T13:00:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      query: {
+        kind: "exact" as const,
+        date: "2026-10-19",
+        rangeFrom: "2026-10-19",
+        rangeThrough: "2026-10-19",
+        coverageComplete: true,
+      },
+    };
+
+    const switched = await graph.invoke(
+      {
+        messages: [new HumanMessage("давай все ж на консультацію")],
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{
+            id: "c-1",
+            firstName: "Ada",
+            lastName: "Lovelace",
+            phoneNumber: "+380501112233",
+            missingFields: [] as string[],
+          }],
+        },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Вільні години на 19 жовтня (понеділок)",
+          replyButtons: ["11:30", "12:30", "13:30"],
+        },
+        bookingDraft: botoxTimeDraft,
+        availabilityContext: timeAvailability,
+      } as never,
+      config,
+    );
+
+    const notice = serviceChangedNoticeUk("Консультація");
+    const reply = String(switched.lastHandoff?.replyText ?? "");
+    expect(reply.startsWith(notice)).toBe(true);
+    expect(reply).toContain("19 жовтня");
+    expect(reply).toContain("20 жовтня");
+    expect(reply).not.toContain("Вільні години на 19 жовтня");
+    expect(reply).not.toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect(switched.lastHandoff?.replyButtons).toEqual(
+      expect.arrayContaining(["19 жовтня", "20 жовтня"]),
+    );
+    expect(switched.bookingDraft?.serviceAcceptance?.service.id).toBe(
+      CONSULTATION_SERVICE_ID,
+    );
+    expect(switched.bookingDraft?.selectedDate).toBeNull();
+    expect(switched.bookingDraft?.phase).toBe("date");
+    expect(availabilityInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: "nearest",
+        forceRefresh: true,
+        durationMinutes: 30,
+      }),
+      expect.anything(),
+    );
+  });
+
+  it("TIME free-text unresolved keeps the TIME card, not the note question", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+      classifyNoteTurn: async () => ({ kind: "unresolved" as const }),
+      resolveServiceChange: async () => ({ type: "service_unresolved" }),
+    });
+    const day = {
+      date: "2026-10-19",
+      dayLabel: "19 жовтня (понеділок)",
+      slots: [
+        {
+          id: "slot-19-11",
+          label: "11:30",
+          dateStart: "2026-10-19T11:30:00",
+          dateEnd: "2026-10-19T12:00:00",
+        },
+        {
+          id: "slot-19-12",
+          label: "12:30",
+          dateStart: "2026-10-19T12:30:00",
+          dateEnd: "2026-10-19T13:00:00",
+        },
+        {
+          id: "slot-19-13",
+          label: "13:30",
+          dateStart: "2026-10-19T13:30:00",
+          dateEnd: "2026-10-19T14:00:00",
+        },
+      ],
+    };
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage("хм")],
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Вільні години на 19 жовтня (понеділок)",
+          replyButtons: ["11:30", "12:30", "13:30"],
+        },
+        bookingDraft: {
+          version: 5,
+          mode: "create",
+          phase: "time",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-botox-1zone",
+              name: "Ботулінотерапія Botox, Disport 1 зона",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-19",
+          selectedSlot: null,
+          requestedTime: null,
+          note: { status: "unasked" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: null,
+        },
+        availabilityContext: {
+          serviceId: "svc-botox-1zone",
+          days: [day],
+          stepMinutes: 30,
+        },
+      } as never,
+      { configurable: { thread_id: "time-unresolved-keeps-card" } },
+    );
+
+    const reply = String(result.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Вільні години");
+    expect(reply).toContain("11:30");
+    expect(reply).not.toContain(BOOKING_NOTE_QUESTION_UK);
+    expect(reply).not.toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect(result.lastHandoff?.replyButtons).toEqual(
+      expect.arrayContaining(["11:30", "12:30", "13:30"]),
+    );
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.bookingDraft?.selectedDate).toBe("2026-10-19");
+  });
+
   it("does not confirm creation when DETAILS has no contact and no mutation ran", async () => {
     const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
     const { graph } = compileClinicGraph({
@@ -707,14 +1406,17 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         { messages: [new HumanMessage("11")] } as never,
         config,
       );
-      expect(String(timeResult.messages.at(-1)?.content)).toBe(BOOKING_NOTE_QUESTION_UK);
+      const notePrompt = String(timeResult.messages.at(-1)?.content);
+      expect(notePrompt).toBe(BOOKING_NOTE_QUESTION_UK);
+      expect(notePrompt).not.toContain(`• ${INTENT_SKIP_LABEL}`);
+      expect(timeResult.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
 
       const result = await graph.invoke(
         { messages: [new HumanMessage(skipReply)] } as never,
         config,
       );
 
-      expect(modelInvoke).toHaveBeenCalledTimes(2);
+      expect(modelInvoke).toHaveBeenCalledOnce();
       expect(availabilityInvoke).toHaveBeenCalledOnce();
       expect(availabilityInvoke).toHaveBeenCalledWith(expect.objectContaining({
         direction: "exact",

@@ -747,12 +747,14 @@ export const closedBookingSessionUpdate = (
   selectedSlot: null;
   selectedAvailabilityDate: null;
   pendingInteraction: PendingInteraction | null;
+  serviceChangeNotice: null;
 } => ({
   bookingDraft: null,
   bookingNoteStatus: "unasked",
   selectedSlot: null,
   selectedAvailabilityDate: null,
   pendingInteraction: clearBookingOwnedInteraction(pendingInteraction),
+  serviceChangeNotice: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({

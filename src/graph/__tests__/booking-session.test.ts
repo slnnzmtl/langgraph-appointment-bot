@@ -310,7 +310,7 @@ describe("reduceBookingSession", () => {
     expect(result.pendingInteraction).toBeNull();
   });
 
-  it("opens service_candidate choices from CRM ids only", () => {
+  it("opens service_candidate choices with optional serviceIds on each group", () => {
     const awaiting = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
       { type: "slot_selected", slot: selectedSlot },
@@ -320,8 +320,8 @@ describe("reduceBookingSession", () => {
       utterance: "ботокс",
       noteCandidate: "I need a consultation regarding Botox",
       choices: [
-        { id: "svc-a", label: "Botox Face" },
-        { id: "svc-b", label: "Botox Neck" },
+        { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
+        { id: "g1", label: "шия", serviceIds: ["svc-b", "svc-c"] },
       ],
     });
 
@@ -330,8 +330,8 @@ describe("reduceBookingSession", () => {
       utterance: "ботокс",
       noteCandidate: "I need a consultation regarding Botox",
       choices: [
-        { id: "svc-a", label: "Botox Face" },
-        { id: "svc-b", label: "Botox Neck" },
+        { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
+        { id: "g1", label: "шия", serviceIds: ["svc-b", "svc-c"] },
       ],
     });
     expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-botox");
@@ -425,7 +425,7 @@ describe("reduceBookingSession", () => {
     expect(result.pendingInteraction).toBeNull();
   });
 
-  it("candidate choice returns apply_service_choice for the orchestrator", () => {
+  it("candidate singleton choice returns apply_service_choice for the orchestrator", () => {
     const awaiting = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
       { type: "slot_selected", slot: selectedSlot },
@@ -435,8 +435,8 @@ describe("reduceBookingSession", () => {
       utterance: "ботокс",
       noteCandidate: "note text",
       choices: [
-        { id: "svc-a", label: "Botox Face" },
-        { id: "svc-b", label: "Botox Neck" },
+        { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
+        { id: "svc-b", label: "шия", serviceIds: ["svc-b"] },
       ],
     });
     const chosen = reduceBookingSession(candidates, {
@@ -447,7 +447,7 @@ describe("reduceBookingSession", () => {
     expect(chosen.effect).toEqual({
       type: "apply_service_choice",
       serviceId: "svc-a",
-      label: "Botox Face",
+      label: "обличчя",
       noteCandidate: "note text",
     });
     expect(chosen.pendingInteraction).toEqual(candidates.pendingInteraction);
@@ -459,6 +459,37 @@ describe("reduceBookingSession", () => {
     });
     expect(applied.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-a");
     expect(applied.bookingDraft?.note.value).toBe("note text");
+  });
+
+  it("candidate multi-id group returns resolve_service with remainingIds", () => {
+    const awaiting = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const candidates = reduceBookingSession(awaiting, {
+      type: "service_candidates_opened",
+      utterance: "ботокс",
+      noteCandidate: "note text",
+      choices: [
+        {
+          id: "g0",
+          label: "ботулінотерапія",
+          serviceIds: ["svc-a", "svc-b"],
+        },
+      ],
+    });
+    const chosen = reduceBookingSession(candidates, {
+      type: "interaction_choice",
+      choiceId: "g0",
+    });
+
+    expect(chosen.effect).toEqual({
+      type: "resolve_service",
+      utterance: "ботокс",
+      noteCandidate: "note text",
+      remainingIds: ["svc-a", "svc-b"],
+    });
+    expect(chosen.pendingInteraction).toEqual(candidates.pendingInteraction);
   });
 });
 

@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  SERVICE_CANDIDATE_OTHER_LABEL_UK,
+  SERVICE_CANDIDATE_PARTITION_INSTRUCTION,
+  SERVICE_CANDIDATE_SELECTOR_INSTRUCTION,
+  createServiceCandidatePartitioner,
+  createServiceCandidateSelector,
   fetchCompleteServiceCatalog,
   resolveServiceChange,
   type ServiceCatalogRow,
 } from "../service-resolution.js";
+import type { ILLMConnector } from "../types.js";
 
 const rows: ServiceCatalogRow[] = [
   { id: "svc-consult", name: "Консультація", duration: 30, description: "Primary visit" },
@@ -48,6 +54,76 @@ describe("fetchCompleteServiceCatalog", () => {
   });
 });
 
+describe("createServiceCandidateSelector instruction", () => {
+  it("teaches one-level catalog groups without patient-voice FAQ copy", () => {
+    expect(SERVICE_CANDIDATE_SELECTOR_INSTRUCTION).toContain(
+      "Every selected id must appear in exactly one group",
+    );
+    expect(SERVICE_CANDIDATE_SELECTOR_INSTRUCTION).not.toContain("CATALOG SHORTCUTS");
+    expect(SERVICE_CANDIDATE_SELECTOR_INSTRUCTION).not.toContain("the graph attaches");
+    expect(SERVICE_CANDIDATE_SELECTOR_INSTRUCTION).not.toContain("Записати вас на консультацію");
+    expect(SERVICE_CANDIDATE_PARTITION_INSTRUCTION).toContain("Partition the given clinic service ids");
+    expect(SERVICE_CANDIDATE_PARTITION_INSTRUCTION).not.toContain("Prefer fewer ids");
+  });
+
+  it("binds the groups schema through the LLM connector", async () => {
+    const invoke = vi.fn(async () => ({
+      serviceIds: ["svc-botox-face", "svc-botox-neck"],
+      groups: [
+        { label: "обличчя", serviceIds: ["svc-botox-face"] },
+        { label: "шия", serviceIds: ["svc-botox-neck"] },
+      ],
+    }));
+    const bindRoutingTools = vi.fn(() => ({ invoke }));
+    const select = createServiceCandidateSelector({
+      bindRoutingTools,
+    } as unknown as ILLMConnector);
+    const result = await select({
+      utterance: "ботокс",
+      candidates: rows.map((row) => ({ id: row.id, name: row.name })),
+    });
+    expect(bindRoutingTools).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: "select_service_candidates" }),
+    );
+    expect(result).toEqual({
+      serviceIds: ["svc-botox-face", "svc-botox-neck"],
+      groups: [
+        { label: "обличчя", serviceIds: ["svc-botox-face"] },
+        { label: "шия", serviceIds: ["svc-botox-neck"] },
+      ],
+    });
+  });
+
+  it("binds a partition-only schema for remaining-id drill-down", async () => {
+    const invoke = vi.fn(async () => ({
+      groups: [
+        { label: "обличчя", serviceIds: ["svc-botox-face"] },
+        { label: "шия", serviceIds: ["svc-botox-neck"] },
+      ],
+    }));
+    const bindRoutingTools = vi.fn(() => ({ invoke }));
+    const partition = createServiceCandidatePartitioner({
+      bindRoutingTools,
+    } as unknown as ILLMConnector);
+    const result = await partition({
+      utterance: "ботокс",
+      candidates: [
+        { id: "svc-botox-face", name: "Botox Face" },
+        { id: "svc-botox-neck", name: "Botox Neck" },
+      ],
+    });
+    expect(bindRoutingTools).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: "partition_service_candidates" }),
+    );
+    expect(result).toEqual([
+      { label: "обличчя", serviceIds: ["svc-botox-face"] },
+      { label: "шия", serviceIds: ["svc-botox-neck"] },
+    ]);
+  });
+});
+
 describe("resolveServiceChange", () => {
   const listServices = async () => ({ ok: true as const, rows });
 
@@ -68,7 +144,7 @@ describe("resolveServiceChange", () => {
     });
   });
 
-  it("opens candidates when the model returns multiple allowlisted ids", async () => {
+  it("opens short-label groups when the model returns multiple allowlisted ids", async () => {
     const result = await resolveServiceChange(
       {
         type: "resolve_service",
@@ -77,7 +153,13 @@ describe("resolveServiceChange", () => {
       },
       {
         fetchCatalog: listServices,
-        selectCandidates: async () => ["svc-botox-face", "svc-botox-neck"],
+        selectCandidates: async () => ({
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+          groups: [
+            { label: "обличчя", serviceIds: ["svc-botox-face"] },
+            { label: "шия", serviceIds: ["svc-botox-neck"] },
+          ],
+        }),
       },
     );
     expect(result).toEqual({
@@ -85,8 +167,37 @@ describe("resolveServiceChange", () => {
       utterance: "ботокс",
       noteCandidate: "I need a consultation regarding Botox",
       choices: [
-        { id: "svc-botox-face", label: "Botox Face" },
-        { id: "svc-botox-neck", label: "Botox Neck" },
+        { id: "svc-botox-face", label: "обличчя", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "шия", serviceIds: ["svc-botox-neck"] },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("Botox Face");
+    expect(JSON.stringify(result)).not.toContain("Botox Neck");
+  });
+
+  it("falls back to per-id CRM chips when one group covers the whole set", async () => {
+    const result = await resolveServiceChange(
+      { type: "resolve_service", utterance: "ботокс" },
+      {
+        fetchCatalog: listServices,
+        selectCandidates: async () => ({
+          serviceIds: ["svc-botox-face", "svc-botox-neck", "svc-botox"],
+          groups: [
+            {
+              label: "ботулінотерапія",
+              serviceIds: ["svc-botox-face", "svc-botox-neck", "svc-botox"],
+            },
+          ],
+        }),
+      },
+    );
+    expect(result).toEqual({
+      type: "service_candidates_opened",
+      utterance: "ботокс",
+      choices: [
+        { id: "svc-botox-face", label: "Botox Face", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "Botox Neck", serviceIds: ["svc-botox-neck"] },
+        { id: "svc-botox", label: "Botox", serviceIds: ["svc-botox"] },
       ],
     });
   });
@@ -96,10 +207,112 @@ describe("resolveServiceChange", () => {
       { type: "resolve_service", utterance: "ботокс" },
       {
         fetchCatalog: listServices,
-        selectCandidates: async () => ["svc-invented"],
+        selectCandidates: async () => ({ serviceIds: ["svc-invented"] }),
       },
     );
     expect(result).toEqual({ type: "service_unresolved" });
+  });
+
+  it("falls back to per-id CRM chips when groups are missing for multiple ids", async () => {
+    const result = await resolveServiceChange(
+      { type: "resolve_service", utterance: "ботокс" },
+      {
+        fetchCatalog: listServices,
+        selectCandidates: async () => ({
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+        }),
+      },
+    );
+    expect(result).toEqual({
+      type: "service_candidates_opened",
+      utterance: "ботокс",
+      choices: [
+        { id: "svc-botox-face", label: "Botox Face", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "Botox Neck", serviceIds: ["svc-botox-neck"] },
+      ],
+    });
+  });
+
+  it("preserves partial valid groups and parks uncovered ids under Інші варіанти", async () => {
+    const catalogRows: ServiceCatalogRow[] = [
+      ...rows,
+      { id: "svc-nabota", name: "Nabota Face", duration: 45 },
+      { id: "svc-correction", name: "Корекція ботокс", duration: 30 },
+      { id: "svc-meso", name: "Мезоботокс", duration: 30 },
+    ];
+    const result = await resolveServiceChange(
+      {
+        type: "resolve_service",
+        utterance: "запиши на ботокс",
+        query: "ботокс",
+      },
+      {
+        fetchCatalog: async () => ({ ok: true as const, rows: catalogRows }),
+        selectCandidates: async () => ({
+          // Trace-shaped: 16 selected in prod; here 5 allowlisted + 1 invented.
+          serviceIds: [
+            "svc-botox-face",
+            "svc-botox-neck",
+            "svc-nabota",
+            "svc-correction",
+            "svc-meso",
+            "svc-invented",
+          ],
+          groups: [
+            {
+              label: "Botox/Disport",
+              serviceIds: ["svc-botox-face", "svc-botox-neck"],
+            },
+            { label: "Nabota", serviceIds: ["svc-nabota"] },
+            // Корекція ботокс + Мезоботокс left uncovered by the model.
+          ],
+        }),
+      },
+    );
+    expect(result).toEqual({
+      type: "service_candidates_opened",
+      utterance: "запиши на ботокс",
+      query: "ботокс",
+      choices: [
+        {
+          id: "g0",
+          label: "Botox/Disport",
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+        },
+        { id: "svc-nabota", label: "Nabota", serviceIds: ["svc-nabota"] },
+        {
+          id: "g2",
+          label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+          serviceIds: ["svc-correction", "svc-meso"],
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("Корекція ботокс");
+    expect(JSON.stringify(result)).not.toContain("Мезоботокс");
+    expect(JSON.stringify(result)).not.toContain("svc-invented");
+  });
+
+  it("falls back to per-id CRM chips when every group id is invented", async () => {
+    const result = await resolveServiceChange(
+      { type: "resolve_service", utterance: "ботокс" },
+      {
+        fetchCatalog: listServices,
+        selectCandidates: async () => ({
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+          groups: [
+            { label: "fake", serviceIds: ["svc-invented-a", "svc-invented-b"] },
+          ],
+        }),
+      },
+    );
+    expect(result).toEqual({
+      type: "service_candidates_opened",
+      utterance: "ботокс",
+      choices: [
+        { id: "svc-botox-face", label: "Botox Face", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "Botox Neck", serviceIds: ["svc-botox-neck"] },
+      ],
+    });
   });
 
   it("returns unresolved for an incomplete catalog", async () => {
@@ -107,25 +320,30 @@ describe("resolveServiceChange", () => {
       { type: "resolve_service", utterance: "Botox" },
       {
         fetchCatalog: async () => ({ ok: false, reason: "incomplete" }),
-        selectCandidates: async () => ["svc-botox"],
+        selectCandidates: async () => ({ serviceIds: ["svc-botox"] }),
       },
     );
     expect(result).toEqual({ type: "service_unresolved" });
   });
 
-  it("returns one semantic candidate when the model picks a single allowlisted id", async () => {
+  it("exact-matches a Ukrainian consultation query without calling the selector", async () => {
+    const selectCandidates = vi.fn(async () => {
+      throw new Error("should not call selector for an exact catalog name");
+    });
+    const noteCandidate = "нужна консультация по ботоксу";
     const result = await resolveServiceChange(
       {
         type: "resolve_service",
-        utterance: "I need a consultation regarding Botox",
-        query: "consultation",
-        noteCandidate: "I need a consultation regarding Botox",
+        utterance: noteCandidate,
+        query: "Консультація",
+        noteCandidate,
       },
       {
         fetchCatalog: listServices,
-        selectCandidates: async () => ["svc-consult"],
+        selectCandidates,
       },
     );
+    expect(selectCandidates).not.toHaveBeenCalled();
     expect(result).toEqual({
       type: "service_changed",
       service: {
@@ -135,7 +353,44 @@ describe("resolveServiceChange", () => {
         source: "catalog",
       },
       accepted: true,
-      noteCandidate: "I need a consultation regarding Botox",
+      noteCandidate,
+    });
+  });
+
+  it("calls the selector with the query probe, not the original utterance", async () => {
+    const selectCandidates = vi.fn(async (input: {
+      utterance: string;
+      query?: string;
+      candidates: Array<{ id: string }>;
+    }) => {
+      expect(input.utterance).toBe("неотіва");
+      expect(input.query).toBeUndefined();
+      expect(input.candidates.map((row) => row.id)).toContain("svc-botox");
+      return { serviceIds: ["svc-botox"] };
+    });
+    const result = await resolveServiceChange(
+      {
+        type: "resolve_service",
+        utterance: "запиши на неотіву замість ботоксу",
+        query: "неотіва",
+        noteCandidate: "запиши на неотіву замість ботоксу",
+      },
+      {
+        fetchCatalog: listServices,
+        selectCandidates,
+      },
+    );
+    expect(selectCandidates).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      type: "service_changed",
+      service: {
+        id: "svc-botox",
+        name: "Botox",
+        durationMinutes: 45,
+        source: "catalog",
+      },
+      accepted: true,
+      noteCandidate: "запиши на неотіву замість ботоксу",
     });
   });
 
@@ -144,9 +399,111 @@ describe("resolveServiceChange", () => {
       { type: "resolve_service", utterance: "something unknown" },
       {
         fetchCatalog: listServices,
-        selectCandidates: async () => [],
+        selectCandidates: async () => ({ serviceIds: [] }),
       },
     );
     expect(result).toEqual({ type: "service_unresolved" });
+  });
+
+  it("partitions remainingIds without re-filtering the full catalog", async () => {
+    const selectCandidates = vi.fn(async () => {
+      throw new Error("should not filter when partitionCandidates is provided");
+    });
+    const partitionCandidates = vi.fn(async (input: {
+      utterance: string;
+      query?: string;
+      candidates: Array<{ id: string }>;
+    }) => {
+      expect(input.utterance).toBe("ботулінотерапія");
+      expect(input.query).toBeUndefined();
+      expect(input.candidates.map((row) => row.id).sort()).toEqual([
+        "svc-botox-face",
+        "svc-botox-neck",
+      ]);
+      return [
+        { label: "обличчя", serviceIds: ["svc-botox-face"] },
+        { label: "шия", serviceIds: ["svc-botox-neck"] },
+      ];
+    });
+    const result = await resolveServiceChange(
+      {
+        type: "resolve_service",
+        utterance: "хочу змінити на ботулінотерапію обличчя чи шиї",
+        query: "ботулінотерапія",
+        remainingIds: ["svc-botox-face", "svc-botox-neck"],
+      },
+      {
+        fetchCatalog: listServices,
+        selectCandidates,
+        partitionCandidates,
+      },
+    );
+    expect(selectCandidates).not.toHaveBeenCalled();
+    expect(partitionCandidates).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      type: "service_candidates_opened",
+      utterance: "хочу змінити на ботулінотерапію обличчя чи шиї",
+      query: "ботулінотерапія",
+      choices: [
+        { id: "svc-botox-face", label: "обличчя", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "шия", serviceIds: ["svc-botox-neck"] },
+      ],
+    });
+  });
+
+  it("falls back to per-id chips when remainingIds partition does not shrink", async () => {
+    const result = await resolveServiceChange(
+      {
+        type: "resolve_service",
+        utterance: "ботулінотерапія",
+        remainingIds: ["svc-botox-face", "svc-botox-neck"],
+      },
+      {
+        fetchCatalog: listServices,
+        selectCandidates: async () => ({ serviceIds: [] }),
+        partitionCandidates: async () => [
+          {
+            label: "ботулінотерапія",
+            serviceIds: ["svc-botox-face", "svc-botox-neck"],
+          },
+        ],
+      },
+    );
+    expect(result).toEqual({
+      type: "service_candidates_opened",
+      utterance: "ботулінотерапія",
+      choices: [
+        { id: "svc-botox-face", label: "Botox Face", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "Botox Neck", serviceIds: ["svc-botox-neck"] },
+      ],
+    });
+  });
+
+  it("applies a single remainingId without calling the selector", async () => {
+    const selectCandidates = vi.fn(async () => {
+      throw new Error("should not call selector for one remaining id");
+    });
+    const result = await resolveServiceChange(
+      {
+        type: "resolve_service",
+        utterance: "обличчя",
+        remainingIds: ["svc-botox-face"],
+      },
+      {
+        fetchCatalog: listServices,
+        selectCandidates,
+      },
+    );
+    expect(selectCandidates).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      type: "service_changed",
+      service: {
+        id: "svc-botox-face",
+        name: "Botox Face",
+        durationMinutes: 45,
+        source: "catalog",
+      },
+      accepted: true,
+    });
   });
 });

@@ -251,6 +251,15 @@ describe("sessionEventFromClassification", () => {
       utterance: "запиши на ботокс",
       query: "ботокс",
     });
+    expect(
+      sessionEventFromClassification(
+        { kind: "schedule_change_requested" },
+        "А можна інший час?",
+      ),
+    ).toEqual({ type: "schedule_change_requested" });
+    expect(
+      sessionEventFromClassification({ kind: "unresolved" }, "???"),
+    ).toEqual({ type: "unresolved" });
   });
 });
 

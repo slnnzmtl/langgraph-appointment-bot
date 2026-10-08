@@ -63,6 +63,7 @@ import {
   BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
+  BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
   CLINIC_ADDRESS,
   CLINIC_MAPS_MARKDOWN,
@@ -968,11 +969,18 @@ const pendingChatConfirmationDecision = (
   return { kind: "none" };
 };
 
+/**
+ * Decline and LLM-only HITL other still abandon here. When the note orch already
+ * cleared pendingCommand (keep/switch / schedule handoff), this is a no-op.
+ */
 const pendingChatConfirmationCleanup = (
   state: ClinicState,
 ): ClinicStateUpdate => {
   const decision = pendingChatConfirmationDecision(state);
   if (decision.kind !== "unresolved" || !state.bookingDraft) {
+    return {};
+  }
+  if (state.bookingDraft.pendingCommand == null) {
     return {};
   }
   if (
@@ -1250,6 +1258,32 @@ const nearestRescheduleAvailabilityRequest = (
   };
 };
 
+/**
+ * After a mid-booking service change the old date/slot are cleared. Runtime owns
+ * the next nearest availability search for the replacement service duration.
+ */
+const serviceChangeNearestAvailabilityRequest = (
+  state: ClinicState,
+): AvailabilitySlotsToolArgs | null => {
+  const draft = state.bookingDraft;
+  if (
+    state.serviceChangeNotice == null
+    || draft?.mode !== "create"
+    || draft.serviceAcceptance?.status !== "accepted"
+    || draft.selectedDate != null
+    || draft.selectedSlot != null
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return null;
+  }
+  const durationMinutes = draft.serviceAcceptance.service.durationMinutes;
+  return {
+    direction: "nearest",
+    forceRefresh: true,
+    ...(durationMinutes != null ? { durationMinutes } : {}),
+  };
+};
+
 const availabilityRequestFromBookingDraft = (
   state: ClinicState,
 ): AvailabilitySlotsToolArgs | null => {
@@ -1288,6 +1322,24 @@ const availabilityRequestFromBookingDraft = (
   };
 };
 
+const availabilitySlotsAgentMessagesUpdate = (
+  messages: BaseMessage[],
+  toolCallId: string,
+  args: AvailabilitySlotsToolArgs,
+): ClinicStateUpdate => ({
+  agentMessages: new Overwrite(
+    appendOrReplacePendingToolCall(messages, new AIMessage({
+      content: "",
+      tool_calls: [{
+        id: toolCallId,
+        name: "present_availability_slots",
+        args,
+        type: "tool_call" as const,
+      }],
+    })),
+  ),
+});
+
 /**
  * Whether this booking turn has enough authoritative state for the runtime to
  * own the next mutation step. This deliberately ignores model output: the LLM
@@ -1317,6 +1369,9 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
     return true;
   }
   if (availabilityRequestFromBookingDraft(state) != null) {
+    return true;
+  }
+  if (serviceChangeNearestAvailabilityRequest(state) != null) {
     return true;
   }
   if (nearestRescheduleAvailabilityRequest(state) != null) {
@@ -1910,12 +1965,25 @@ export const resolveAvailabilityOffer = (
   return availabilityOfferFromToolTurn(messages);
 };
 
-/** Re-render trusted checkpoint availability after an invalid premature create call. */
+/**
+ * Re-render trusted checkpoint availability from draft phase + selectedDate.
+ * Ignores the human line. Refuses when the snapshot belongs to another service.
+ */
 const availabilityRecoveryOffer = (
   state: ClinicState,
 ): { replyText: string; replyButtons: string[] } | null => {
   const availability = state.availabilityContext;
   if (!availability) {
+    return null;
+  }
+  const acceptedId = state.bookingDraft?.serviceAcceptance?.status === "accepted"
+    ? state.bookingDraft.serviceAcceptance.service.id
+    : undefined;
+  if (
+    availability.serviceId != null
+    && acceptedId != null
+    && availability.serviceId !== acceptedId
+  ) {
     return null;
   }
   const selectedDate = state.bookingDraft?.selectedDate;
@@ -2328,33 +2396,27 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     }
     const nearestRescheduleRequest = nearestRescheduleAvailabilityRequest(state);
     if (nearestRescheduleRequest) {
-      const availabilityCall = {
-        id: `booking_reschedule_nearest_${state.bookingDraft?.version ?? 0}`,
-        name: "present_availability_slots",
-        args: nearestRescheduleRequest,
-        type: "tool_call" as const,
-      };
-      const availabilityAi = new AIMessage({ content: "", tool_calls: [availabilityCall] });
-      return {
-        agentMessages: new Overwrite(
-          appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
-        ),
-      };
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_reschedule_nearest_${state.bookingDraft?.version ?? 0}`,
+        nearestRescheduleRequest,
+      );
+    }
+    const serviceChangeNearestRequest = serviceChangeNearestAvailabilityRequest(state);
+    if (serviceChangeNearestRequest) {
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_service_change_nearest_${state.bookingDraft?.version ?? 0}`,
+        serviceChangeNearestRequest,
+      );
     }
     const availabilityRequest = availabilityRequestFromBookingDraft(state);
     if (availabilityRequest) {
-      const availabilityCall = {
-        id: `booking_availability_${state.bookingDraft?.version ?? 0}`,
-        name: "present_availability_slots",
-        args: availabilityRequest,
-        type: "tool_call" as const,
-      };
-      const availabilityAi = new AIMessage({ content: "", tool_calls: [availabilityCall] });
-      return {
-        agentMessages: new Overwrite(
-          appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
-        ),
-      };
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_availability_${state.bookingDraft?.version ?? 0}`,
+        availabilityRequest,
+      );
     }
     const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
     if (
@@ -3642,18 +3704,29 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       && state.bookingDraft.selectedDate != null;
     const unavailableDate = state.bookingDraft?.selectedDate;
     const unavailableTime = state.bookingDraft?.requestedTime?.value;
+    let clearServiceChangeNotice = false;
+    const consumeServiceChangeNotice = (): string | null => {
+      const notice = state.serviceChangeNotice;
+      if (notice == null || notice.length === 0) {
+        return null;
+      }
+      clearServiceChangeNotice = true;
+      return notice;
+    };
     if (replacementOffered) {
       replyButtons = [...BOOKING_REPLACE_MENU];
     } else if (slotOffer) {
       const unavailablePrefix = requestedTimeUnavailable
         ? `На жаль, о ${unavailableTime} на ${formatKyivDayLabel(unavailableDate!, kyivToday())} немає вільного часу.\n\n`
         : "";
-      replyText = unavailablePrefix
+      const offerBody = unavailablePrefix
         + (
           createError != null && !noteBlockedThisTurn
             ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
             : slotOffer.replyText
         );
+      const notice = consumeServiceChangeNotice();
+      replyText = notice != null ? `${notice}\n\n${offerBody}` : offerBody;
       replyButtons = slotOffer.replyButtons;
     } else if (
       agent.id === BOOKING_AGENT_ID
@@ -3709,6 +3782,35 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       } else {
         // Booking drifted into catalog drill-down: never ship that list without its chips.
         replyButtons = catalogChoiceButtonsFromText(replyText);
+      }
+    }
+
+    // Fail closed: DATE/TIME/SERVICE without a code-owned slot card or committed
+    // write never ships model prose (any language). Runtime owns the next step.
+    const scheduleReselectPending =
+      agent.id === BOOKING_AGENT_ID
+      && !createCommitted
+      && !alreadyBooked
+      && !slotOffer
+      && !replacementOffered
+      && !isBookingOwnedInteraction(state.pendingInteraction)
+      && state.bookingDraft != null
+      && (
+        state.bookingDraft.phase === "date"
+        || state.bookingDraft.phase === "time"
+        || state.bookingDraft.phase === "service"
+      );
+    if (scheduleReselectPending) {
+      const recovered = availabilityRecoveryOffer(state);
+      if (recovered != null) {
+        const notice = consumeServiceChangeNotice();
+        replyText = notice != null
+          ? `${notice}\n\n${recovered.replyText}`
+          : recovered.replyText;
+        replyButtons = recovered.replyButtons;
+      } else {
+        replyText = consumeServiceChangeNotice() ?? BOOKING_SCHEDULE_RESELECT_UK;
+        replyButtons = [];
       }
     }
 
@@ -3768,6 +3870,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...(replyButtons.length > 0 ? { replyButtons } : {}),
       ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
+    const serviceChangeNoticeClear: { serviceChangeNotice?: null } =
+      clearServiceChangeNotice ? { serviceChangeNotice: null } : {};
+
     if (status === "empty") {
       return {
         ...cleared,
@@ -3776,6 +3881,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
         ...clearOccupiedPhoneCandidate,
+        ...serviceChangeNoticeClear,
       };
     }
 
@@ -3792,6 +3898,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
         ...clearOccupiedPhoneCandidate,
+        ...serviceChangeNoticeClear,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -3807,6 +3914,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...bookingDraftOfferUpdate,
       ...confirmationCleanup,
       ...clearOccupiedPhoneCandidate,
+      ...serviceChangeNoticeClear,
       messages: [replyMessage],
     };
   };
@@ -3863,6 +3971,7 @@ export const routeAfterAgentTools = (
   toolsName: string,
   mutationFinalizeName?: string,
   commandPrepareName?: string,
+  noteOrchestratorName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
@@ -3888,6 +3997,15 @@ export const routeAfterAgentTools = (
 
   if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
     return commandPrepareName;
+  }
+
+  if (
+    noteOrchestratorName
+    && chatConfirmation.kind === "unresolved"
+    && chatConfirmation.replyKind === "other"
+    && bookingTurnNeedsNoteOrchestrator(state)
+  ) {
+    return noteOrchestratorName;
   }
 
   return llmName;

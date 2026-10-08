@@ -8,6 +8,8 @@ import {
 export type InteractionChoice = {
   id: string;
   label: string;
+  /** CRM ids covered by this catalog-level option. Singleton groups apply that id. */
+  serviceIds?: string[];
 };
 
 export type VisitNoteInteraction = {
@@ -76,6 +78,8 @@ export type ResolveServiceEffect = {
   utterance: string;
   query?: string;
   noteCandidate?: string;
+  /** Already-narrowed CRM ids; skip full-catalog filter and group among these only. */
+  remainingIds?: string[];
 };
 
 export type ApplyServiceChoiceEffect = {
@@ -315,13 +319,32 @@ export const reduceBookingSession = (
       }
       if (interaction.kind === "service_candidate") {
         const choice = choiceById(interaction, event.choiceId)!;
+        const remainingIds = choice.serviceIds != null && choice.serviceIds.length > 0
+          ? choice.serviceIds
+          : [choice.id];
+        if (remainingIds.length > 1) {
+          return {
+            bookingDraft: draft,
+            pendingInteraction: interaction,
+            clearAvailability: false,
+            effect: {
+              type: "resolve_service",
+              utterance: interaction.utterance,
+              ...(interaction.query != null ? { query: interaction.query } : {}),
+              ...(interaction.noteCandidate != null
+                ? { noteCandidate: interaction.noteCandidate }
+                : {}),
+              remainingIds,
+            },
+          };
+        }
         return {
           bookingDraft: draft,
           pendingInteraction: interaction,
           clearAvailability: false,
           effect: {
             type: "apply_service_choice",
-            serviceId: choice.id,
+            serviceId: remainingIds[0]!,
             label: choice.label,
             ...(interaction.noteCandidate != null
               ? { noteCandidate: interaction.noteCandidate }

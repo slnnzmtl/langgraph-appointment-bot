@@ -4,11 +4,17 @@ import { Command, Overwrite } from "@langchain/langgraph";
 import {
   BOOKING_NOTE_QUESTION_UK,
   RETURN_TO_BOOKING_LABEL_UK,
+  SERVICE_CHANGE_ACK_UK,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
+  serviceChangedNoticeUk,
 } from "../shared/clinic-constants.js";
 import { extractMessageTextContent } from "../shared/message-content.js";
-import type { BookingDraft, BookingService } from "./booking-draft.js";
+import {
+  reduceBookingDraft,
+  type BookingDraft,
+  type BookingService,
+} from "./booking-draft.js";
 import {
   interpretNoteTurn,
   sessionEventFromClassification,
@@ -43,7 +49,7 @@ export type ServiceResolutionResult =
       utterance: string;
       query?: string;
       noteCandidate?: string;
-      choices: Array<{ id: string; label: string }>;
+      choices: Array<{ id: string; label: string; serviceIds?: string[] }>;
     }
   | { type: "service_unresolved" };
 
@@ -66,19 +72,14 @@ export type OrchestrateBookingNoteTurnResult = {
   pendingInteraction: PendingInteraction | null;
   clearAvailability: boolean;
   goto: NoteOrchestratorGoto;
+  /** Set when a final CRM service replaced the draft service and schedule was cleared. */
+  serviceChangeNotice?: string | null;
 };
 
-export const defaultServiceOrNoteChoices = (
-  currentServiceName?: string,
-): Array<{ id: string; label: string }> => {
-  const keepLabel = currentServiceName != null && currentServiceName.trim().length > 0
-    ? `${SERVICE_OR_NOTE_KEEP_LABEL_UK} (${currentServiceName})`
-    : SERVICE_OR_NOTE_KEEP_LABEL_UK;
-  return [
-    { id: "keep_service", label: keepLabel },
-    { id: "switch_service", label: SERVICE_OR_NOTE_SWITCH_LABEL_UK },
-  ];
-};
+export const defaultServiceOrNoteChoices = (): Array<{ id: string; label: string }> => [
+  { id: "keep_service", label: SERVICE_OR_NOTE_KEEP_LABEL_UK },
+  { id: "switch_service", label: SERVICE_OR_NOTE_SWITCH_LABEL_UK },
+];
 
 const applyEffect = async (
   state: {
@@ -98,16 +99,12 @@ const applyEffect = async (
       query: effect.serviceId,
       ...(effect.noteCandidate != null ? { noteCandidate: effect.noteCandidate } : {}),
     });
-    // Prefer applying the known CRM id directly when the resolver confirms it.
     if (resolved.type === "service_changed") {
       const noteCandidate = resolved.noteCandidate ?? effect.noteCandidate;
-      const second = reduceBookingSession(state, {
-        type: "service_changed",
-        service: resolved.service,
-        accepted: resolved.accepted,
+      return applyResolution(state, {
+        ...resolved,
         ...(noteCandidate != null ? { noteCandidate } : {}),
       });
-      return destinationForState(second, second.clearAvailability);
     }
     return applyResolution(state, resolved);
   }
@@ -130,7 +127,14 @@ const applyResolution = (
       accepted: resolved.accepted,
       ...(resolved.noteCandidate != null ? { noteCandidate: resolved.noteCandidate } : {}),
     });
-    return destinationForState(second, second.clearAvailability);
+    const dest = destinationForState(second, second.clearAvailability);
+    const serviceName = resolved.service.name?.trim() || resolved.service.id;
+    return {
+      ...dest,
+      ...(second.clearAvailability
+        ? { serviceChangeNotice: serviceChangedNoticeUk(serviceName) }
+        : {}),
+    };
   }
   if (resolved.type === "service_candidates_opened") {
     const second = reduceBookingSession(state, {
@@ -186,6 +190,20 @@ const destinationForState = (
       };
     }
   }
+  // Service change cleared the old schedule — runtime owns the fresh DATE search.
+  if (
+    clearAvailability
+    && state.bookingDraft?.serviceAcceptance?.status === "accepted"
+    && state.bookingDraft.selectedDate == null
+    && state.bookingDraft.selectedSlot == null
+  ) {
+    return {
+      bookingDraft: state.bookingDraft,
+      pendingInteraction: state.pendingInteraction,
+      clearAvailability,
+      goto: "command_prepare",
+    };
+  }
   const noteDone = state.bookingDraft?.note.status === "answered"
     || state.bookingDraft?.note.status === "skipped";
   const hasSlot = state.bookingDraft?.selectedSlot != null;
@@ -205,6 +223,15 @@ const destinationForState = (
   };
 };
 
+const invalidateSlotForScheduleChange = (
+  draft: BookingDraft | null,
+): BookingDraft | null => {
+  if (draft == null || draft.selectedSlot == null) {
+    return draft;
+  }
+  return reduceBookingDraft(draft, { type: "slot_invalidated", keepDate: true });
+};
+
 /**
  * Interpret once → pure session reduction → optional resolve → pure reduction → goto.
  * CRM and model calls stay outside reduceBookingSession.
@@ -213,6 +240,7 @@ export const orchestrateBookingNoteTurn = async (
   input: OrchestrateBookingNoteTurnInput,
 ): Promise<OrchestrateBookingNoteTurnResult> => {
   const originalPatientText = input.patientText.trim();
+  const draftPhase = input.bookingDraft?.phase;
   const interpreted = await interpretNoteTurn({
     patientText: originalPatientText,
     pendingInteraction: input.pendingInteraction,
@@ -220,6 +248,7 @@ export const orchestrateBookingNoteTurn = async (
     ...(input.currentServiceName != null
       ? { currentServiceName: input.currentServiceName }
       : {}),
+    ...(draftPhase != null ? { draftPhase } : {}),
     classify: input.classify,
   });
 
@@ -231,15 +260,54 @@ export const orchestrateBookingNoteTurn = async (
       interpreted.classification,
       originalPatientText,
     );
+    if (mapped.type === "schedule_change_requested") {
+      return {
+        bookingDraft: invalidateSlotForScheduleChange(input.bookingDraft),
+        pendingInteraction: null,
+        clearAvailability: false,
+        goto: "booking_llm",
+      };
+    }
     if (mapped.type === "unresolved") {
-      const preserved = input.pendingInteraction != null
-        ? input.pendingInteraction
-        : openVisitNoteInteraction();
+      if (input.pendingInteraction != null) {
+        return {
+          bookingDraft: input.bookingDraft,
+          pendingInteraction: input.pendingInteraction,
+          clearAvailability: false,
+          goto: "interaction_render",
+        };
+      }
+      // visit_note only after a slot exists. Before that, unasked is normal DATE/TIME.
+      const noteStepOpen = input.bookingDraft?.selectedSlot != null
+        && (
+          input.bookingDraft.note.status === "awaiting"
+          || input.bookingDraft.note.status === "unasked"
+        );
+      if (noteStepOpen) {
+        return {
+          bookingDraft: input.bookingDraft,
+          pendingInteraction: openVisitNoteInteraction(),
+          clearAvailability: false,
+          goto: "interaction_render",
+        };
+      }
       return {
         bookingDraft: input.bookingDraft,
-        pendingInteraction: preserved,
+        pendingInteraction: null,
         clearAvailability: false,
-        goto: "interaction_render",
+        goto: "booking_llm",
+      };
+    }
+    // note_provided / note_skipped before a slot are not a note step — hand back to booking.
+    if (
+      (mapped.type === "note_provided" || mapped.type === "note_skipped")
+      && input.bookingDraft?.selectedSlot == null
+    ) {
+      return {
+        bookingDraft: input.bookingDraft,
+        pendingInteraction: input.pendingInteraction,
+        clearAvailability: false,
+        goto: "booking_llm",
       };
     }
     if (mapped.type === "service_or_note_opened") {
@@ -247,7 +315,7 @@ export const orchestrateBookingNoteTurn = async (
         ...mapped,
         choices: mapped.choices.length > 0
           ? mapped.choices
-          : defaultServiceOrNoteChoices(input.currentServiceName),
+          : defaultServiceOrNoteChoices(),
       };
     } else {
       sessionEvent = mapped;
@@ -280,23 +348,49 @@ export const bookingTurnNeedsNoteOrchestrator = (state: {
   if (draft == null || draft.mode === "reschedule") {
     return false;
   }
-  return draft.phase === "note"
+  // Confirm-time asides belong to the booking LLM / finalize cleanup.
+  if (
+    draft.phase === "note"
     || (draft.selectedSlot != null
-      && (draft.note.status === "awaiting" || draft.note.status === "unasked"));
+      && (draft.note.status === "awaiting" || draft.note.status === "unasked"))
+  ) {
+    return true;
+  }
+  // DATE/TIME free text may replace the accepted service (classifier owns that).
+  return draft.serviceAcceptance?.status === "accepted"
+    && draft.selectedSlot == null
+    && (draft.phase === "date" || draft.phase === "time");
+};
+
+/** Visible bullets must match the reply keyboard (FAQ catalog pattern). */
+const choiceBullets = (interaction: PendingInteraction): string => {
+  const labels = interaction.choices
+    .map((choice) => choice.label.trim())
+    .filter((label) => label.length > 0);
+  if (labels.length === 0) {
+    return "";
+  }
+  return `${labels.map((label) => `• ${label}`).join("\n")}\n\nЯкий варіант вам підходить?`;
 };
 
 const clarificationBody = (interaction: PendingInteraction): string => {
+  // Skip stays on the reply keyboard only — in-message bullets make free-text notes look like a picker.
   if (interaction.kind === "visit_note") {
     return BOOKING_NOTE_QUESTION_UK;
   }
+  const options = choiceBullets(interaction);
   if (interaction.kind === "service_or_note") {
     const service = interaction.currentService.name ?? interaction.currentService.id;
-    return (
-      `Ви обрали «${service}». Ваше повідомлення також може означати зміну послуги.\n\n`
-      + "Оберіть, будь ласка:"
-    );
+    const intro =
+      `Ви обрали «${service}». Ваше повідомлення також може означати зміну послуги.`;
+    return options.length > 0 ? `${intro}\n\n${options}` : `${intro}\n\nОберіть, будь ласка:`;
   }
-  return "Оберіть, будь ласка, послугу зі списку:";
+  if (interaction.kind === "service_candidate") {
+    return options.length > 0
+      ? `${SERVICE_CHANGE_ACK_UK}\n\n${options}`
+      : SERVICE_CHANGE_ACK_UK;
+  }
+  return options;
 };
 
 /** Build a fresh AIMessage from the open interaction. Never reuse stale agentMessages. */
@@ -332,6 +426,27 @@ export const noteOrchestratorNodeName = (agentId: string): string =>
 export const interactionRenderNodeName = (agentId: string): string =>
   `${agentId}__interaction_render`;
 
+/**
+ * HITL other-replies leave a stale create/reschedule confirm on the draft.
+ * Orch owns abandon: keep the slot when rendering keep/switch or FAQ return;
+ * invalidate the slot when handing schedule/time changes back to the booking LLM.
+ * Finalize cleanup is a no-op once pendingCommand is already null.
+ */
+export const abandonPendingConfirmAfterOrch = (
+  draft: BookingDraft | null,
+  goto: NoteOrchestratorGoto,
+): BookingDraft | null => {
+  if (draft?.pendingCommand == null) {
+    return draft;
+  }
+  return reduceBookingDraft(
+    draft,
+    goto === "booking_llm"
+      ? { type: "slot_invalidated", keepDate: true }
+      : { type: "command_cleared" },
+  );
+};
+
 /** Graph node: interpret → reduce → optional resolve → reduce → Command.goto. */
 export const createBookingNoteOrchestratorNode = (
   deps: BookingNoteOrchestratorDeps,
@@ -364,11 +479,17 @@ export const createBookingNoteOrchestratorNode = (
         ? deps.nodes.faqPrepare
         : deps.nodes.interactionRender;
 
+  const bookingDraft = abandonPendingConfirmAfterOrch(
+    result.bookingDraft,
+    result.goto,
+  );
+
   return new Command({
     update: {
-      bookingDraft: result.bookingDraft,
+      bookingDraft,
       pendingInteraction: result.pendingInteraction,
       noteOrchQueued: false,
+      serviceChangeNotice: result.serviceChangeNotice ?? null,
       ...(result.clearAvailability
         ? { availabilityContext: null, availabilityCursor: null }
         : {}),

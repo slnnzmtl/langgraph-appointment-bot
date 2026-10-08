@@ -9,7 +9,7 @@
   "scripts": {
     "build": "pnpm --filter @personal-assistant/llm-gemini build && tsc -p tsconfig.json",
     "check": "pnpm --filter @personal-assistant/llm-gemini build && tsc --noEmit -p tsconfig.json",
-    "dev": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/index.ts",
+    "dev": "pnpm --filter @personal-assistant/llm-gemini build && tsx watch src/index.ts",
     "smoke": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/smoke.ts",
     "test": "vitest run",
     "test:all": "pnpm -r test",

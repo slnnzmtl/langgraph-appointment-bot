@@ -24,6 +24,21 @@ describe("NOTE_TURN_CLASSIFIER_INSTRUCTION", () => {
     expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
       "Do not use command-phrase lists",
     );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "date or time selection",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "do not return note_provided or note_skipped",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "translated into Ukrainian, the catalog language",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "replacement service name in Ukrainian",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).not.toMatch(
+      /copied from the patient text, not a paraphrase/i,
+    );
     // No UA/EN command templates, skip synonyms, stems, or catalog brands.
     expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).not.toMatch(/запиши на/i);
     expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).not.toMatch(/хочу .+ у зоні/i);

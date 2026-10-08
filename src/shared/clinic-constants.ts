@@ -114,6 +114,18 @@ export const SERVICE_OR_NOTE_KEEP_LABEL_UK = "Продовжити з обран
 export const SERVICE_OR_NOTE_SWITCH_LABEL_UK = "Змінити послугу";
 export const RETURN_TO_BOOKING_LABEL_UK = "Повернутися до запису";
 
+/** Runtime-owned acknowledgement while catalog groups are open after a service-change request. */
+export const SERVICE_CHANGE_ACK_UK =
+  "Зрозуміла: підберу іншу послугу за вашим запитом.";
+
+/** Runtime-owned notice after a CRM service replaces the accepted draft service. */
+export const serviceChangedNoticeUk = (serviceName: string): string =>
+  `Послугу змінено на «${serviceName}». Оберіть нову дату й час.`;
+
+/** Runtime-owned prompt when DATE/TIME/SERVICE is still open and the model claimed a write. */
+export const BOOKING_SCHEDULE_RESELECT_UK =
+  "Оберіть, будь ласка, зручну дату й час для запису.";
+
 /**
  * Labels the supervisor must route itself — never sticky-continue into booking.
  * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,
