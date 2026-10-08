@@ -379,8 +379,34 @@ export const reduceBookingSession = (
       if (draft == null) {
         return noEffect(current);
       }
+      const currentServiceId = draft.serviceAcceptance?.service.id;
+      // Same service id is keep, not a service change: preserve schedule facts.
+      if (currentServiceId != null && currentServiceId === event.service.id) {
+        let next = reduceBookingDraft(draft, {
+          type: "service_selected",
+          service: event.service,
+          accepted: event.accepted,
+          ...(event.turn != null ? { turn: event.turn } : {}),
+        });
+        if (next == null) {
+          return noEffect(current);
+        }
+        if (event.noteCandidate != null && next.selectedSlot != null) {
+          next = reduceBookingDraft(next, {
+            type: "note_status",
+            status: "answered",
+            value: event.noteCandidate,
+          });
+        }
+        return {
+          bookingDraft: next,
+          pendingInteraction: null,
+          clearAvailability: false,
+          effect: null,
+        };
+      }
       // Different service id: clearDownstream then set service. Carry noteCandidate
-      // by answering the note after the service change when provided.
+      // via a draft event after the slot is gone — never assign phase on the object.
       let next = reduceBookingDraft(draft, {
         type: "service_selected",
         service: event.service,
@@ -391,13 +417,11 @@ export const reduceBookingSession = (
         return noEffect(current);
       }
       if (event.noteCandidate != null) {
-        // After a service change the slot is cleared, so note_status would be ignored.
-        // Write the answered note directly onto the cleared aggregate.
-        next = {
-          ...next,
-          note: { status: "answered", value: event.noteCandidate },
-          phase: "date",
-        };
+        next = reduceBookingDraft(next, {
+          type: "note_recorded",
+          status: "answered",
+          value: event.noteCandidate,
+        });
       }
       return {
         bookingDraft: next,

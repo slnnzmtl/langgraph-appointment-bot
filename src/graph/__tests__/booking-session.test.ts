@@ -260,6 +260,61 @@ describe("reduceBookingSession", () => {
     expect(result.clearAvailability).toBe(true);
   });
 
+  it("service_changed to the same service id keeps the slot and does not clear availability", () => {
+    const awaiting = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const sameId = awaiting.bookingDraft!.serviceAcceptance!.service.id;
+    const result = reduceBookingSession(awaiting, {
+      type: "service_changed",
+      service: {
+        id: sameId,
+        name: "Botox",
+        source: "catalog",
+      },
+      accepted: true,
+      noteCandidate: "keep this visit note",
+    });
+
+    expect(result.bookingDraft?.selectedSlot).toEqual(selectedSlot);
+    expect(result.bookingDraft?.selectedDate).toBe("2026-10-17");
+    expect(result.bookingDraft?.note).toEqual({
+      status: "answered",
+      value: "keep this visit note",
+    });
+    expect(result.bookingDraft?.phase).not.toBe("date");
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.clearAvailability).toBe(false);
+  });
+
+  it("service_changed to the same id without a slot closes the interaction only", () => {
+    const draft = acceptedWithDate();
+    const sameId = draft.serviceAcceptance!.service.id;
+    const result = reduceBookingSession(
+      {
+        bookingDraft: draft,
+        pendingInteraction: {
+          kind: "service_candidate",
+          utterance: "ботокс",
+          choices: [{ id: sameId, label: "Botox", serviceIds: [sameId] }],
+        },
+      },
+      {
+        type: "service_changed",
+        service: { id: sameId, name: "Botox", source: "catalog" },
+        accepted: true,
+        noteCandidate: "should not write without a slot",
+      },
+    );
+
+    expect(result.bookingDraft?.selectedSlot).toBeNull();
+    expect(result.bookingDraft?.note.status).toBe("unasked");
+    expect(result.bookingDraft?.phase).toBe("time");
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.clearAvailability).toBe(false);
+  });
+
   it("service_changed without noteCandidate resets the note to unasked", () => {
     const awaiting = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
