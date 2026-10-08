@@ -408,9 +408,9 @@ export const reduceBookingSession = (
           effect: null,
         };
       }
-      // Different service id: clearDownstream then set service. Carry noteCandidate
-      // via a draft event after the slot is gone — never assign phase on the object.
-      let next = reduceBookingDraft(draft, {
+      // Different service id: clearDownstream then set service. Leave note unasked;
+      // noteCandidate is only for same-id keep / catalog resolution, not the new visit.
+      const next = reduceBookingDraft(draft, {
         type: "service_selected",
         service: event.service,
         accepted: event.accepted,
@@ -418,13 +418,6 @@ export const reduceBookingSession = (
       });
       if (next == null) {
         return noEffect(current);
-      }
-      if (event.noteCandidate != null) {
-        next = reduceBookingDraft(next, {
-          type: "note_recorded",
-          status: "answered",
-          value: event.noteCandidate,
-        });
       }
       return {
         bookingDraft: next,

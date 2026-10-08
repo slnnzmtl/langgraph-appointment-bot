@@ -222,7 +222,7 @@ describe("reduceBookingSession", () => {
     });
   });
 
-  it("service_changed with noteCandidate clears schedule facts and keeps the note answered", () => {
+  it("service_changed with noteCandidate clears schedule facts and resets the note to unasked", () => {
     const awaiting = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
       { type: "slot_selected", slot: selectedSlot },
@@ -251,10 +251,7 @@ describe("reduceBookingSession", () => {
     expect(result.bookingDraft?.selectedDate).toBeNull();
     expect(result.bookingDraft?.selectedSlot).toBeNull();
     expect(result.bookingDraft?.pendingCommand).toBeNull();
-    expect(result.bookingDraft?.note).toEqual({
-      status: "answered",
-      value: "I need a consultation regarding Botox",
-    });
+    expect(result.bookingDraft?.note).toEqual({ status: "unasked" });
     expect(result.bookingDraft?.phase).toBe("date");
     expect(result.pendingInteraction).toBeNull();
     expect(result.clearAvailability).toBe(true);
@@ -331,7 +328,7 @@ describe("reduceBookingSession", () => {
     expect(result.clearAvailability).toBe(true);
   });
 
-  it("a later slot_selected after answered noteCandidate does not reopen visit_note", () => {
+  it("a later slot_selected after different-id service_changed reopens visit_note", () => {
     const awaiting = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
       { type: "slot_selected", slot: selectedSlot },
@@ -358,11 +355,8 @@ describe("reduceBookingSession", () => {
       },
     });
 
-    expect(result.bookingDraft?.note).toEqual({
-      status: "answered",
-      value: "I need a consultation regarding Botox",
-    });
-    expect(result.pendingInteraction).toBeNull();
+    expect(result.bookingDraft?.note.status).toBe("awaiting");
+    expect(result.pendingInteraction?.kind).toBe("visit_note");
   });
 
   it("opens service_candidate choices with optional serviceIds on each group", () => {
@@ -513,7 +507,7 @@ describe("reduceBookingSession", () => {
       noteCandidate: "note text",
     });
     expect(applied.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-a");
-    expect(applied.bookingDraft?.note.value).toBe("note text");
+    expect(applied.bookingDraft?.note).toEqual({ status: "unasked" });
   });
 
   it("candidate multi-id group returns resolve_service with remainingIds", () => {

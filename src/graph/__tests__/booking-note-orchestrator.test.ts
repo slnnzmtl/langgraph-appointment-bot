@@ -345,7 +345,7 @@ describe("orchestrateBookingNoteTurn", () => {
       noteCandidate: "I need a consultation regarding Botox",
     });
     expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-consult");
-    expect(result.bookingDraft?.note.value).toBe("I need a consultation regarding Botox");
+    expect(result.bookingDraft?.note).toEqual({ status: "unasked" });
     expect(result.bookingDraft?.selectedSlot).toBeNull();
     expect(result.clearAvailability).toBe(true);
     expect(result.goto).toBe("command_prepare");
@@ -632,6 +632,7 @@ describe("renderBookingInteractionMessage", () => {
     });
     expect(applied.goto).toBe("command_prepare");
     expect(applied.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-a");
+    expect(applied.bookingDraft?.note).toEqual({ status: "unasked" });
     expect(applied.bookingDraft?.selectedSlot).toBeNull();
     expect(applied.bookingDraft?.selectedDate).toBeNull();
     expect(applied.clearAvailability).toBe(true);
