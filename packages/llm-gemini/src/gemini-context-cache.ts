@@ -49,8 +49,9 @@ const isFreshEntry = (entry: CachedEntry, nowMs = Date.now()): boolean =>
 const normalizeModelName = (modelName: string): string =>
   modelName.startsWith("models/") ? modelName : `models/${modelName}`;
 
-// Most-specific families first so e.g. gemini-3-flash matches 4096, not flash's 2048.
+// Most-specific families first. gemini-3.1-flash-lite is 1024; bare gemini-3-* is 4096.
 const CACHE_MIN_TOKEN_RULES: ReadonlyArray<{ match: RegExp; minTokens: number }> = [
+  { match: /gemini-3\.1.*flash-lite/i, minTokens: 1024 },
   { match: /gemini-3/i, minTokens: 4096 },
   { match: /flash-lite/i, minTokens: 1024 },
   { match: /flash/i, minTokens: 2048 },
