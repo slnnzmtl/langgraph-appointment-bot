@@ -21,6 +21,7 @@ import {
   BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
+  RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CHANGE_ACK_UK,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
@@ -188,6 +189,14 @@ const bookingAgent: ClinicAgentDefinition = {
   name: "Booking",
   description: "Booking",
   systemPrompt: "booking",
+  maxSteps: 10,
+};
+
+const faqAgent: ClinicAgentDefinition = {
+  id: "faq",
+  name: "FAQ",
+  description: "FAQ",
+  systemPrompt: "faq",
   maxSteps: 10,
 };
 
@@ -896,6 +905,81 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       }),
       expect.anything(),
     );
+  });
+
+  it("FAQ catalog chip after service_unresolved stays in FAQ, not Booking", async () => {
+    const agentInvoke = vi.fn(async () => new AIMessage(
+      "Ботулінотерапія: Botox/Disport або Nabota. Який варіант вам підходить?",
+    ));
+    const supervisorInvoke = vi.fn(async () => ({ next: "booking" }));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent, faqAgent],
+      agentTools: { booking: [], faq: [] },
+      agentModel: {
+        bindTools: () => ({ invoke: agentInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({ invoke: supervisorInvoke }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage("Ботулінотерапія")],
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          replyText: "Оберіть послугу зі списку",
+          replyButtons: ["Ботулінотерапія", "Консультація", RETURN_TO_BOOKING_LABEL_UK],
+        },
+        pendingInteraction: {
+          kind: "visit_note",
+          choices: [
+            { id: "skip", label: INTENT_SKIP_LABEL },
+            { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+          ],
+        },
+        bookingDraft: {
+          version: 5,
+          mode: "create",
+          phase: "note",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: "svc-botox",
+              name: "Ботулінотерапія Botox, Disport 1 зона",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-19",
+          selectedSlot: {
+            dateStart: "2026-10-19T11:30:00",
+            dateEnd: "2026-10-19T12:00:00",
+            label: "11:30",
+          },
+          requestedTime: null,
+          note: { status: "awaiting" },
+          contactId: "c-1",
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      { configurable: { thread_id: "faq-after-unresolved" } },
+    );
+
+    // Sticky FAQ must win over the preserved booking interaction; supervisor
+    // would otherwise send the patient to Booking.
+    expect(supervisorInvoke).not.toHaveBeenCalled();
+    expect(agentInvoke).toHaveBeenCalled();
+    expect(result.lastHandoff?.agentId).toBe("faq");
+    expect(String(result.lastHandoff?.replyText ?? "")).toContain("Botox/Disport");
+    expect(result.pendingInteraction?.choices.some((c) => c.id === "return_to_booking")).toBe(true);
+    expect(result.bookingDraft?.phase).toBe("note");
   });
 
   it("TIME free-text unresolved keeps the TIME card, not the note question", async () => {

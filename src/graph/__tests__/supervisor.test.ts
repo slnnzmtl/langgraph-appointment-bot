@@ -6,6 +6,7 @@ import {
   DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
   MAIN_MENU_LABEL,
+  RETURN_TO_BOOKING_LABEL_UK,
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import type { ClinicState } from "../state.js";
@@ -195,6 +196,48 @@ describe("stickyContinueAgentId open note reply", () => {
       ...base,
       messages: [new HumanMessage("Обрати іншу процедуру")],
     }))).toBeNull();
+  });
+
+  it("keeps FAQ catalog chip taps in FAQ while a booking interaction is preserved", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("Ботулінотерапія")],
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [
+          { id: "skip", label: INTENT_SKIP_LABEL },
+          { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+        ],
+      },
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "Оберіть послугу зі списку",
+        replyButtons: ["Ботулінотерапія", "Консультація", RETURN_TO_BOOKING_LABEL_UK],
+      },
+    }))).toBe("faq");
+  });
+
+  it("routes explicit return_to_booking to Booking over FAQ catalog", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage(RETURN_TO_BOOKING_LABEL_UK)],
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [
+          { id: "skip", label: INTENT_SKIP_LABEL },
+          { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+        ],
+      },
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "Оберіть послугу зі списку",
+        replyButtons: ["Ботулінотерапія", RETURN_TO_BOOKING_LABEL_UK],
+      },
+    }))).toBe("booking");
   });
 });
 

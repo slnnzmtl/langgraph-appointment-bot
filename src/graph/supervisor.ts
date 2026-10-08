@@ -230,6 +230,11 @@ export const stickyContinueAgentId = (
   if (returnLabel != null && human === returnLabel) {
     return BOOKING_AGENT_ID;
   }
+  // After service_unresolved the booking interaction is preserved for
+  // return_to_booking, but FAQ catalog replies must stay in FAQ.
+  if (shouldContinueInFaq(state) || shouldStayInFaqCatalog(state)) {
+    return FAQ_AGENT_ID;
+  }
   if (
     bookingTurnNeedsNoteOrchestrator(state)
     && human.length > 0
