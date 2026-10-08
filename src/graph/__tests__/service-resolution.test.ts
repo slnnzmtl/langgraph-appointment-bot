@@ -144,7 +144,7 @@ describe("resolveServiceChange", () => {
     });
   });
 
-  it("opens short-label groups when the model returns multiple allowlisted ids", async () => {
+  it("labels singleton groups with CRM names and keeps multi-id partition labels", async () => {
     const result = await resolveServiceChange(
       {
         type: "resolve_service",
@@ -154,10 +154,13 @@ describe("resolveServiceChange", () => {
       {
         fetchCatalog: listServices,
         selectCandidates: async () => ({
-          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+          serviceIds: ["svc-botox-face", "svc-botox-neck", "svc-botox"],
           groups: [
-            { label: "обличчя", serviceIds: ["svc-botox-face"] },
-            { label: "шия", serviceIds: ["svc-botox-neck"] },
+            {
+              label: "зони",
+              serviceIds: ["svc-botox-face", "svc-botox-neck"],
+            },
+            { label: "базовий", serviceIds: ["svc-botox"] },
           ],
         }),
       },
@@ -167,12 +170,60 @@ describe("resolveServiceChange", () => {
       utterance: "ботокс",
       noteCandidate: "I need a consultation regarding Botox",
       choices: [
-        { id: "svc-botox-face", label: "обличчя", serviceIds: ["svc-botox-face"] },
-        { id: "svc-botox-neck", label: "шия", serviceIds: ["svc-botox-neck"] },
+        {
+          id: "g0",
+          label: "зони",
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+        },
+        { id: "svc-botox", label: "Botox", serviceIds: ["svc-botox"] },
       ],
     });
+    expect(JSON.stringify(result)).not.toContain("базовий");
     expect(JSON.stringify(result)).not.toContain("Botox Face");
     expect(JSON.stringify(result)).not.toContain("Botox Neck");
+  });
+
+  it("replaces an abstract singleton partition label with the CRM service name", async () => {
+    // No exact CRM row named «Консультація» — mirrors the live catalog that forced grouping.
+    const catalogRows: ServiceCatalogRow[] = [
+      { id: "svc-weight", name: "Схуднення консультація", duration: 30 },
+      { id: "svc-consult-primary", name: "Консультація первинна", duration: 30 },
+      { id: "svc-consult-repeat", name: "Консультація повторна", duration: 30 },
+      { id: "svc-botox", name: "Botox", duration: 45 },
+    ];
+    const result = await resolveServiceChange(
+      { type: "resolve_service", utterance: "консультація" },
+      {
+        fetchCatalog: async () => ({ ok: true as const, rows: catalogRows }),
+        selectCandidates: async () => ({
+          serviceIds: ["svc-consult-primary", "svc-consult-repeat", "svc-weight"],
+          groups: [
+            {
+              label: "Консультації",
+              serviceIds: ["svc-consult-primary", "svc-consult-repeat"],
+            },
+            { label: "Спеціалізовані", serviceIds: ["svc-weight"] },
+          ],
+        }),
+      },
+    );
+    expect(result).toEqual({
+      type: "service_candidates_opened",
+      utterance: "консультація",
+      choices: [
+        {
+          id: "g0",
+          label: "Консультації",
+          serviceIds: ["svc-consult-primary", "svc-consult-repeat"],
+        },
+        {
+          id: "svc-weight",
+          label: "Схуднення консультація",
+          serviceIds: ["svc-weight"],
+        },
+      ],
+    });
+    expect(JSON.stringify(result)).not.toContain("Спеціалізовані");
   });
 
   it("falls back to per-id CRM chips when one group covers the whole set", async () => {
@@ -279,7 +330,7 @@ describe("resolveServiceChange", () => {
           label: "Botox/Disport",
           serviceIds: ["svc-botox-face", "svc-botox-neck"],
         },
-        { id: "svc-nabota", label: "Nabota", serviceIds: ["svc-nabota"] },
+        { id: "svc-nabota", label: "Nabota Face", serviceIds: ["svc-nabota"] },
         {
           id: "g2",
           label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
@@ -445,8 +496,8 @@ describe("resolveServiceChange", () => {
       utterance: "хочу змінити на ботулінотерапію обличчя чи шиї",
       query: "ботулінотерапія",
       choices: [
-        { id: "svc-botox-face", label: "обличчя", serviceIds: ["svc-botox-face"] },
-        { id: "svc-botox-neck", label: "шия", serviceIds: ["svc-botox-neck"] },
+        { id: "svc-botox-face", label: "Botox Face", serviceIds: ["svc-botox-face"] },
+        { id: "svc-botox-neck", label: "Botox Neck", serviceIds: ["svc-botox-neck"] },
       ],
     });
   });

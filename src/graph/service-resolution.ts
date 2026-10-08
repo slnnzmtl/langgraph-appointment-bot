@@ -304,13 +304,19 @@ const groupsStrictlyShrink = (
 
 const choicesFromGroups = (
   groups: Array<{ label: string; serviceIds: string[] }>,
+  allowlist: Map<string, ServiceCatalogRow>,
 ): InteractionChoice[] =>
   groups.map((group, index) => {
     const serviceIds = group.serviceIds;
     const id = serviceIds.length === 1 ? serviceIds[0]! : `g${index}`;
+    // Singleton groups apply that CRM id immediately — show the real service name,
+    // not an abstract partition label the patient never confirmed.
+    const label = serviceIds.length === 1
+      ? (allowlist.get(serviceIds[0]!)?.name ?? group.label)
+      : group.label;
     return {
       id,
-      label: group.label,
+      label,
       serviceIds,
     };
   });
@@ -367,7 +373,7 @@ const resultFromSelectedIds = (
 
   const sanitized = sanitizeGroups(groups, allowlist, new Set(selectedIds));
   if (groupsStrictlyShrink(selectedIds, sanitized)) {
-    return candidatesOpened(effect, choicesFromGroups(sanitized));
+    return candidatesOpened(effect, choicesFromGroups(sanitized, allowlist));
   }
 
   const leaf = perIdChoices(selectedIds, allowlist);
