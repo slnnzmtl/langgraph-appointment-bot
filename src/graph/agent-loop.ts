@@ -632,21 +632,6 @@ const lastHumanText = (messages: BaseMessage[]): string => {
 const lastPatientText = (state: ClinicState): string =>
   lastHumanText(state.messages) || lastHumanText(state.agentMessages ?? []);
 
-/**
- * A consultation offer is an explicit pending conversation action. An affirmative
- * answer starts the DATE step from today, even when an older exact-date snapshot
- * is still checkpointed. It must not inherit that snapshot's pagination cursor.
- */
-export const isConsultationOfferAcceptance = (state: ClinicState): boolean => {
-  const handoff = state.lastHandoff;
-  return (
-    (handoff?.agentId === BOOKING_AGENT_ID || handoff?.agentId === FAQ_AGENT_ID)
-    && handoff.status === "ok"
-    && isConsultationOfferQuestion(handoff.replyText ?? "")
-    && isYesReply(lastPatientText(state))
-  );
-};
-
 /** Known keyboard labels that must not collide with an «Інша дата» prefix tap. */
 const OTHER_DATE_COLLISION_LABELS = [
   MAIN_MENU_LABEL,
@@ -1510,12 +1495,9 @@ const coerceAvailabilityToolCalls = (
       selectedDate: state.bookingDraft?.selectedDate,
     });
     const dayPick = matchAvailabilityDay(human, days);
-    const consultationAccepted = isConsultationOfferAcceptance(state);
-    const semanticDirection = consultationAccepted
-      ? "nearest"
-      : request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
-        ? request.kind
-        : isYesReply(human) ? "nearest" : undefined;
+    const semanticDirection = request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
+      ? request.kind
+      : isYesReply(human) ? "nearest" : undefined;
     // Recovery is allowed only for a structured patient action. Never turn arbitrary
     // availability-looking prose into an argument-less call that can replay a cache.
     // Pre-HITL leftover slots on the tape do not count as this turn.
@@ -3020,32 +3002,35 @@ export const createAgentToolsNode = (
         if (call.name === "present_availability_slots") {
           // Own paging cursors from checkpoint — the model chooses semantic direction,
           // but must not invent calendar boundaries.
+          const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;
           const runtimeRequest = resolveBookingScheduleRequest(lastPatientText(state), kyivToday(), {
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
             selectedDate: state.bookingDraft?.selectedDate,
-          });
-          const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;
-          const runtimeOwnedArgs = runtimeRequest?.kind === "exact"
-            ? { ...rawArgs, direction: "exact" as const, date: runtimeRequest.date }
-            : rawArgs;
+          }) ?? (
+            state.bookingDraft?.selectedDate
+            && rawArgs.direction === "exact"
+            && rawArgs.date === state.bookingDraft.selectedDate
+              ? { kind: "exact" as const, date: state.bookingDraft.selectedDate }
+              : null
+          );
           const rescheduleArgs = rescheduleAvailabilityArgsFromBookingContext(
             state,
-            runtimeOwnedArgs as Record<string, unknown>,
+            rawArgs as Record<string, unknown>,
+          );
+          const dayPick = matchAvailabilityDay(
+            lastPatientText(state),
+            state.availabilityContext?.days ?? [],
           );
           const args = normalizeAvailabilityToolArgs({
-            args: (rescheduleArgs ?? runtimeOwnedArgs) as AvailabilitySlotsToolArgs,
+            args: (rescheduleArgs ?? rawArgs) as AvailabilitySlotsToolArgs,
+            runtimeRequest,
+            offeredDayDate: dayPick?.date ?? null,
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
             ...(state.bookingDraft?.serviceAcceptance?.service.durationMinutes != null
               ? { serviceDurationMinutes: state.bookingDraft.serviceAcceptance.service.durationMinutes }
               : {}),
-            humanText: lastPatientText(state),
-            pickedOfferedDay: matchAvailabilityDay(
-              lastPatientText(state),
-              state.availabilityContext?.days ?? [],
-            ) != null,
-            consultationAccepted: isConsultationOfferAcceptance(state),
             availabilityPagedThisTurn,
             anchors: bookingDateAnchors(state),
           });

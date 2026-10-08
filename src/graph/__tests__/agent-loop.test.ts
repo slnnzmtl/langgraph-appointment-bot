@@ -24,7 +24,6 @@ import {
   matchAvailabilitySlot,
   meetingMutationClearsAvailability,
   resolveAvailabilityOffer,
-  isConsultationOfferAcceptance,
   routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
@@ -7404,8 +7403,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     const update = await toolsNode(
       clinicState({
+        messages: [new HumanMessage("13 жовтня")],
         availabilityContext: oct13,
         agentMessages: [
+          new HumanMessage("13 жовтня"),
           new AIMessage({
             content: "",
             tool_calls: [
@@ -7428,24 +7429,25 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(body.date).toBe("2026-10-13");
   });
 
-  it("rejects present_availability_slots with invalid date before CRM", async () => {
-    let crmCalls = 0;
+  it("drops an invalid model-only date and searches nearest before CRM", async () => {
+    const invoked: Array<Record<string, unknown>> = [];
     const slotsTool = tool(
-      async () => {
-        crmCalls += 1;
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
         return JSON.stringify({ days: [], stepMinutes: 30 });
       },
       {
         name: "present_availability_slots",
         description: "slots",
         schema: z.object({
+          direction: z.string().optional(),
           durationMinutes: z.number().optional(),
           date: z.string().optional(),
         }),
       },
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
-    const update = await toolsNode(
+    await toolsNode(
       clinicState({
         agentMessages: [
           new AIMessage({
@@ -7463,11 +7465,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
       { configurable: {} },
     );
-    expect(crmCalls).toBe(0);
-    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
-    expect(JSON.parse(String(toolMsg.content))).toMatchObject({
-      error: "Invalid availability arguments",
-    });
+    expect(invoked).toEqual([{ direction: "nearest", durationMinutes: 30 }]);
   });
 
   it("rejects reschedule_meeting with invalid dateStart after align", async () => {
@@ -7726,7 +7724,6 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       next: "booking",
     });
 
-    expect(isConsultationOfferAcceptance(state)).toBe(true);
     const llmUpdate = await llm(state);
     const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
     expect(ai.tool_calls).toEqual([
@@ -8185,8 +8182,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
       clinicState({
+        messages: [new HumanMessage("20 жовтня")],
         availabilityContext: null,
         agentMessages: [
+          new HumanMessage("20 жовтня"),
           new AIMessage({
             content: "",
             tool_calls: [
@@ -8196,7 +8195,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
                 args: {
                   durationMinutes: 30,
                   afterDate: "2025-10-05",
-                  date: "2026-10-01",
+                  date: "2026-10-20",
                   startDate: "2026-09-11",
                 },
                 type: "tool_call",
@@ -8208,7 +8207,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       { configurable: {} },
     );
     expect(invoked).toEqual([
-      { durationMinutes: 30, date: "2026-10-01" },
+      { durationMinutes: 30, date: "2026-10-20" },
     ]);
   });
 
