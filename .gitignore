@@ -16,3 +16,4 @@ dependency-violation-report.html
 .cursor/mcp.json
 data/*.sqlite
 data/*.sqlite-*
+analysis/

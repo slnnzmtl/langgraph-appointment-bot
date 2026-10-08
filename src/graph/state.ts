@@ -8,6 +8,7 @@ import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 import type { BookingDraft } from "./booking-draft.js";
+import type { PendingInteraction } from "./booking-session.js";
 
 export type CancellationPurpose = "direct" | "replacement";
 
@@ -93,6 +94,32 @@ export const createClinicStateAnnotation = ({
     }),
     /** Authoritative checkpointed booking aggregate. New runtime writes must use this field. */
     bookingDraft: Annotation<BookingDraft | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /**
+     * Explicit patient response the workflow is waiting for. Booking-owned kinds
+     * (visit_note, service_or_note, service_candidate) are opened only via
+     * reduceBookingSession. Missing on old checkpoints reads as null.
+     */
+    pendingInteraction: Annotation<PendingInteraction | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /**
+     * Set by booking prepare from the inbound state when the note orchestrator
+     * owns this message. Cleared by the orchestrator. Prevents same-turn slot
+     * picks that open visit_note from immediately re-entering the orchestrator.
+     */
+    noteOrchQueued: Annotation<boolean>({
+      reducer: (_left, right) => right,
+      default: () => false,
+    }),
+    /**
+     * One-turn notice after a mid-booking service change. Prefixed onto the next
+     * code-owned DATE card, then cleared. Missing on old checkpoints reads as null.
+     */
+    serviceChangeNotice: Annotation<string | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),

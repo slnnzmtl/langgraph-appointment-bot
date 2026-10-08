@@ -19,7 +19,7 @@ Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HT
 - **Interface:** private chats only; exclusive per-`thread_id` invoke queue; 20 messages/user/minute; optional `POST /webhooks/tomorrow-reminder`.
 - **State:** file-backed SqliteSaver (`CHECKPOINT_DB_PATH`, default `data/checkpoints.sqlite`) keyed by Telegram `chat.id`; pending HITL chat-confirm + reminder maps stay in-process (single instance). Checkpointed: contact + planned-meetings prefetch (~5 min TTL, dirty after a successful write), `availabilityContext` / `servicesContext`, `lastHandoff`, trimmed history (`MESSAGE_HISTORY_MAX_TOKENS`, default 6000).
 - **Identity:** Telegram user id from Telegraf ALS (`runWithTelegramUserId`) → CRM `cTelegram`. Never from the model. Meeting writes and `list_planned_meetings` require ownership for that user. `assignedUserId` is injected server-side.
-- **Models:** Gemini — chat/supervisor/agent default `gemini-2.5-flash-lite` (`GEMINI_MODEL` / `SUPERVISOR_MODEL` / `AGENT_MODEL`); voice `gemini-3.1-flash-lite` (`AUDIO_MODEL`). Context cache on by default (`GEMINI_CONTEXT_CACHE`).
+- **Models:** Gemini — chat/supervisor/agent default `gemini-3.1-flash-lite` (`GEMINI_MODEL` / `SUPERVISOR_MODEL` / `AGENT_MODEL`); voice `gemini-3.1-flash-lite` (`AUDIO_MODEL`). Context cache on by default (`GEMINI_CONTEXT_CACHE`).
 
 ## Where truth lives
 
@@ -68,7 +68,7 @@ Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<
 
 ### Booking (read/write, `maxSteps` 10)
 
-One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. Booking reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK).
+One ladder step per message: **service → time → details → optional intent note → book**, or **cancel/move**. Catalog browse is FAQ’s job. At the open-note step, one typed turn interpreter emits events; the booking session reducer alone updates state. Service-change requests resolve only against a complete CRM catalog (no hardcoded service-name dictionaries). Booking reuses checkpointed `<list_services>` until slots exist, then omits the catalog from prompts (consultation id is in the prompt; named procedures may call `list_services` once at BOOK).
 
 | Tool | Role |
 | --- | --- |
@@ -105,7 +105,7 @@ The graph writes reply keyboards on `lastHandoff.replyButtons`. Models emit pati
 - **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` (never «Перенести» here). After «Скасувати», cancel then book the new slot.
 - **DATE / TIME** (code-owned): short day labels + «Інша дата», then HH:mm — booking finalize from `present_availability_slots` / `availabilityContext`.
 - **BOOKING OFFER** (code-owned): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no (FAQ also sets `yieldToSupervisor` so «Так» routes to booking).
-- **INTENT skip** (code-owned): «Продовжити без коментаря» while `bookingNoteStatus` is awaiting.
+- **INTENT skip** (code-owned): «Продовжити без коментаря» while a `visit_note` pending interaction is open (snapshotted choice id `skip`). Free-text skip synonyms classify through the note-turn boundary.
 - **Catalog drill-down** (code-owned): direction / family / zone / brand labels recovered from the visible bullet list.
 
 ## Code map

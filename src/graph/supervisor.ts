@@ -54,7 +54,11 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { closedBookingSessionUpdate } from "./booking-draft.js";
+import { bookingTurnNeedsNoteOrchestrator } from "./booking-note-orchestrator.js";
+import {
+  closedBookingSessionUpdate,
+  isBookingOwnedInteraction,
+} from "./booking-session.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -220,6 +224,27 @@ export const stickyContinueAgentId = (
   if (isVisitChangeRouteLabel(state)) {
     return BOOKING_AGENT_ID;
   }
+  const human = lastHumanTextFromMessages(state.messages);
+  const humanLine = lastHumanLineFromMessages(state.messages);
+  const returnLabel = state.pendingInteraction?.choices.find(
+    (choice) => choice.id === "return_to_booking",
+  )?.label;
+  if (returnLabel != null && human === returnLabel) {
+    return BOOKING_AGENT_ID;
+  }
+  // After service_unresolved the booking interaction is preserved for
+  // return_to_booking, but FAQ catalog replies must stay in FAQ.
+  if (shouldContinueInFaq(state) || shouldStayInFaqCatalog(state)) {
+    return FAQ_AGENT_ID;
+  }
+  if (
+    bookingTurnNeedsNoteOrchestrator(state)
+    && human.length > 0
+    && !SUPERVISOR_OWNED_REPLY_LABELS.has(human)
+    && !SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)
+  ) {
+    return BOOKING_AGENT_ID;
+  }
   const agentId = state.lastHandoff?.agentId;
   if (agentId === FAQ_AGENT_ID || agentId === BOOKING_AGENT_ID) {
     return shouldContinueInSpecialist(state, agentId) ? agentId : null;
@@ -315,6 +340,14 @@ export const shouldRouteCatalogMentionToFaq = (state: ClinicState): boolean => {
   if (handoff?.agentId !== BOOKING_AGENT_ID || handoff.status !== "ok") {
     return false;
   }
+  // An open booking-owned interaction or note phase owns the message.
+  if (
+    isBookingOwnedInteraction(state.pendingInteraction)
+    || state.bookingDraft?.phase === "note"
+    || state.bookingDraft?.note.status === "awaiting"
+  ) {
+    return false;
+  }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
   if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
@@ -349,6 +382,13 @@ export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
   if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+    return false;
+  }
+  // Snapshotted return-to-booking is owned by the preserved booking interaction.
+  const returnLabel = state.pendingInteraction?.choices.find(
+    (choice) => choice.id === "return_to_booking",
+  )?.label;
+  if (returnLabel != null && (human === returnLabel || humanLine === returnLabel)) {
     return false;
   }
   if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {

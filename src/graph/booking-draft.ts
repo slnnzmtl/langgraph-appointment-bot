@@ -114,6 +114,8 @@ export type BookingCheckpointUpgradeResult = {
     bookingNoteStatus?: "unasked";
     selectedSlot?: null;
     selectedAvailabilityDate?: null;
+    /** Set by booking-session when composing the checkpoint upgrade. */
+    pendingInteraction?: unknown;
   };
   unsupported: boolean;
   telemetry: BookingCheckpointMigrationTelemetry | null;
@@ -512,9 +514,10 @@ export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
 
 /**
  * Upgrade a version-0 booking checkpoint once from structured fields only.
- * Does not read conversation history or invent Consultation from prose.
+ * Does not open visit_note UI — booking-session composes that after the draft
+ * upgrade. Does not read conversation history or invent Consultation from prose.
  */
-export const upgradeBookingCheckpoint = (
+export const upgradeBookingDraftCheckpoint = (
   state: BookingCheckpointLegacyState,
 ): BookingCheckpointUpgradeResult => {
   const resolved = resolveSchemaVersion(state.bookingSchemaVersion);
@@ -720,19 +723,6 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   replacement: null,
 });
 
-/** Atomically close a booking session, including deprecated checkpoint projections. */
-export const closedBookingSessionUpdate = (): {
-  bookingDraft: null;
-  bookingNoteStatus: "unasked";
-  selectedSlot: null;
-  selectedAvailabilityDate: null;
-} => ({
-  bookingDraft: null,
-  bookingNoteStatus: "unasked",
-  selectedSlot: null,
-  selectedAvailabilityDate: null,
-});
-
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
   ...update,
   version: draft.version + 1,
@@ -907,12 +897,15 @@ export const reduceBookingDraft = (
       ) {
         return draft;
       }
+      const note = draft.mode === "reschedule" || hasCompletedNote(draft)
+        ? draft.note
+        : { status: "awaiting" as const };
       const next = {
         ...draft,
         selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
         requestedTime: null,
-        note: draft.mode === "reschedule" ? draft.note : { status: "awaiting" },
+        note,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });

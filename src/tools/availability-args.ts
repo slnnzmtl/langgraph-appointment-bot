@@ -1,3 +1,4 @@
+import type { BookingScheduleRequest } from "../shared/booking-schedule.js";
 import {
   alignToAnchors,
   availabilityQueryFromContext,
@@ -6,17 +7,15 @@ import {
   type AvailabilityCursor,
   type AvailabilitySlotsToolArgs,
 } from "./availability-tools.js";
-import { resolveAvailabilityRequest } from "./availability-request.js";
 import { kyivToday } from "./availability-slots.js";
 
 type AvailabilityNormalizationInput = {
   args: AvailabilitySlotsToolArgs;
-  humanText: string;
+  runtimeRequest?: BookingScheduleRequest | null;
+  offeredDayDate?: string | null;
   availabilityContext?: AvailabilityContext | null;
   availabilityCursor?: AvailabilityCursor | null;
   serviceDurationMinutes?: number;
-  pickedOfferedDay: boolean;
-  consultationAccepted: boolean;
   availabilityPagedThisTurn: boolean;
   anchors?: readonly string[];
 };
@@ -38,47 +37,53 @@ const lastOpenSnapshotDate = (
   return open.at(-1)?.date;
 };
 
+const directionFromPatient = (
+  runtimeRequest: BookingScheduleRequest | null | undefined,
+  offeredDayDate: string | null | undefined,
+): "exact" | "earlier" | "later" | "nearest" => {
+  if (runtimeRequest?.kind === "exact") {
+    return "exact";
+  }
+  if (
+    runtimeRequest?.kind === "earlier"
+    || runtimeRequest?.kind === "later"
+    || runtimeRequest?.kind === "nearest"
+  ) {
+    return runtimeRequest.kind;
+  }
+  if (offeredDayDate) {
+    return "exact";
+  }
+  return "nearest";
+};
+
 /**
  * Apply the runtime-owned availability direction and cursor to model arguments.
- * This is intentionally pure: it only clones and normalizes the model payload.
+ * Calendar bounds come from the patient utterance (runtimeRequest) or a matched
+ * snapshot day — never from model-invented dates or checkpoint direction alone.
  */
 export const normalizeAvailabilityToolArgs = ({
   args: input,
-  humanText,
+  runtimeRequest = null,
+  offeredDayDate = null,
   availabilityContext,
   availabilityCursor,
   serviceDurationMinutes,
-  pickedOfferedDay,
-  consultationAccepted,
   availabilityPagedThisTurn,
   anchors = [],
 }: AvailabilityNormalizationInput): AvailabilitySlotsToolArgs => {
   const args = { ...input };
-  const request = resolveAvailabilityRequest(humanText, kyivToday());
   const cursor = availabilityCursor;
   const contextQuery = availabilityQueryFromContext(availabilityContext);
   const cursorQuery = availabilityQueryFromCursor(cursor);
   const contextDirection = contextQuery?.kind ?? cursorQuery?.kind;
-  const direction = consultationAccepted
-    ? "nearest"
-    : request?.kind === "exact" && !pickedOfferedDay
-      ? "exact"
-      : request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
-        ? request.kind
-        : args.direction
-          ?? (args.date ? "exact" : contextDirection === "exact" ? "later" : "nearest");
+  const direction = directionFromPatient(runtimeRequest, offeredDayDate);
 
   const firstDate = firstSnapshotDate(availabilityContext, cursor);
   const lastDate = lastSnapshotDate(availabilityContext, cursor);
   const lastOpen = lastOpenSnapshotDate(availabilityContext);
 
-  if (consultationAccepted) {
-    args.direction = "nearest";
-    delete args.date;
-    delete args.afterDate;
-    delete args.beforeDate;
-    delete args.startDate;
-  } else if ((direction === "earlier" || direction === "later") && availabilityPagedThisTurn) {
+  if ((direction === "earlier" || direction === "later") && availabilityPagedThisTurn) {
     delete args.afterDate;
     delete args.beforeDate;
     delete args.date;
@@ -109,14 +114,15 @@ export const normalizeAvailabilityToolArgs = ({
     delete args.date;
   } else if (direction === "exact") {
     args.direction = "exact";
-    if (request?.kind === "exact" && !pickedOfferedDay) {
-      args.date = request.date;
+    if (runtimeRequest?.kind === "exact") {
+      args.date = runtimeRequest.date;
+    } else if (offeredDayDate) {
+      args.date = offeredDayDate;
     }
     delete args.afterDate;
     delete args.beforeDate;
     delete args.startDate;
   } else {
-    // A nearest search is a new search from today. Stale model dates are unsafe.
     args.direction = "nearest";
     delete args.date;
     delete args.afterDate;
@@ -131,7 +137,6 @@ export const normalizeAvailabilityToolArgs = ({
     delete args.beforeDate;
   }
 
-  // Service duration is domain state, not an LLM-owned argument.
   if (serviceDurationMinutes != null) {
     args.durationMinutes = serviceDurationMinutes;
   }

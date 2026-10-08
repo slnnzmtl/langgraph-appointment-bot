@@ -12,7 +12,7 @@ import type { ClinicRuntime } from "../composition/clinic-runtime.js";
 import {
   upgradeBookingCheckpoint,
   type BookingCheckpointLegacyState,
-} from "../graph/booking-draft.js";
+} from "../composition/booking-checkpoint.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";

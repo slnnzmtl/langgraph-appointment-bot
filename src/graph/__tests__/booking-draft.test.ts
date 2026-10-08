@@ -5,9 +5,9 @@ import {
   createEmptyBookingDraft,
   isEmptyLegacyBookingDraft,
   reduceBookingDraft,
-  upgradeBookingCheckpoint,
   type BookingEvent,
 } from "../booking-draft.js";
+import { upgradeBookingCheckpoint } from "../booking-session.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 
 describe("BookingDraft reducer", () => {
@@ -476,6 +476,31 @@ describe("BookingDraft reducer", () => {
     expect(upgraded.update.bookingSchemaVersion).toBe(BOOKING_SCHEMA_VERSION);
     expect(repeated.update).toEqual({});
     expect(repeated.telemetry).toBeNull();
+  });
+
+  it("opens visit_note once when upgrading a slot with an awaiting note", () => {
+    const draft = {
+      ...createEmptyBookingDraft(),
+      version: 3,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: "svc-1", source: "catalog" as const },
+      },
+      selectedDate: "2026-10-17",
+      selectedSlot,
+      note: { status: "awaiting" as const },
+      phase: "note" as const,
+    };
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: draft,
+    });
+
+    expect(upgraded.update.bookingDraft?.note.status).toBe("awaiting");
+    expect(upgraded.update.pendingInteraction).toEqual({
+      kind: "visit_note",
+      choices: [{ id: "skip", label: "Продовжити без коментаря" }],
+    });
   });
 
   it("nulls a blank service id and clears projections", () => {

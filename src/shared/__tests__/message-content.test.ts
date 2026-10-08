@@ -130,6 +130,9 @@ describe("isYesReply / requestsConsultation", () => {
     expect(requestsConsultation("чи є у вас консультація?")).toBe(false);
     expect(requestsConsultation("не хочу консультацію")).toBe(false);
     expect(requestsConsultation("запиши на ботокс")).toBe(false);
+    // Mixed note-step utterances still match — prepare must skip this when orch owns.
+    expect(requestsConsultation("потрібна консультація щодо ювідерм")).toBe(true);
+    expect(requestsConsultation("потрібна консультація щодо збільшення губ")).toBe(true);
   });
 });
 

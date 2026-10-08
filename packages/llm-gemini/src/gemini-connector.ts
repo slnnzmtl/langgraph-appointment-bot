@@ -6,7 +6,7 @@ import type {
   RoutingChain,
 } from "./types.js";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite";
+export const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
 export const DEFAULT_GEMINI_TEMPERATURE = 0;
 
 export const createGeminiChatModel = (

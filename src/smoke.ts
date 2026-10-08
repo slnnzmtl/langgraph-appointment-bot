@@ -9,6 +9,7 @@ import type { ClinicAdapters } from "./composition/clinic-adapters.js";
 import { createClinicRuntime, type ClinicRuntime } from "./composition/clinic-runtime.js";
 import { bookingAgent, faqAgent } from "./composition/agents.js";
 import type { McpCallTool } from "./shared/mcp.js";
+import { runConsultationSwitchSmoke } from "./smoke/consultation-switch.js";
 import { runWithTelegramUserId } from "./tools/telegram-user-context.js";
 
 const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;
@@ -272,6 +273,7 @@ const main = async (): Promise<void> => {
   const runtime = await createClinicRuntime(config);
   try {
     await assertBootstrap(runtime);
+    await runConsultationSwitchSmoke();
 
     if (!shouldInvoke && !shouldIdentity) {
       console.log("Skip LLM invoke (pass --invoke or --identity).");

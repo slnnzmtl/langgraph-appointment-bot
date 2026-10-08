@@ -5,11 +5,14 @@ import {
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
+  MAIN_MENU_LABEL,
+  RETURN_TO_BOOKING_LABEL_UK,
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
+import { openVisitNoteInteraction } from "../booking-session.js";
 
 const createCachedGeminiModel = vi.fn((_apiKey: string, _model: string, handle: { cacheName: string }) => ({
   kind: "cached",
@@ -85,6 +88,159 @@ describe("cancel-and-rebook routing", () => {
   });
 });
 
+describe("stickyContinueAgentId open note reply", () => {
+  const awaitingNoteDraft = () => {
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+    };
+    draft.selectedDate = "2026-10-19";
+    draft.selectedSlot = {
+      dateStart: "2026-10-19T11:30:00",
+      dateEnd: "2026-10-19T12:00:00",
+      label: "11:30",
+    };
+    draft.note = { status: "awaiting" };
+    draft.phase = "note";
+    return draft;
+  };
+
+  it("keeps free text in booking while visit_note is open", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      pendingInteraction: openVisitNoteInteraction(),
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "note?",
+        replyButtons: [INTENT_SKIP_LABEL],
+      },
+    }))).toBe("booking");
+  });
+
+  it("keeps free text in booking when note is awaiting without pendingInteraction", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      pendingInteraction: null,
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "note?",
+        replyButtons: [INTENT_SKIP_LABEL],
+      },
+    }))).toBe("booking");
+  });
+
+  it("keeps free text in booking when note is unasked and slot is selected", () => {
+    const draft = awaitingNoteDraft();
+    draft.note = { status: "unasked" };
+    draft.phase = "note";
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      pendingInteraction: null,
+      bookingDraft: draft,
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "slot?",
+        replyButtons: [],
+      },
+    }))).toBe("booking");
+  });
+
+  it("keeps free text in booking during date phase before a slot", () => {
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+    };
+    draft.phase = "date";
+    draft.selectedDate = "2026-10-19";
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("на завтра")],
+      pendingInteraction: null,
+      bookingDraft: draft,
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "when?",
+        replyButtons: [],
+      },
+    }))).toBe("booking");
+  });
+
+  it("does not sticky-continue supervisor-owned labels during an open note", () => {
+    const base = {
+      pendingInteraction: openVisitNoteInteraction(),
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "booking" as const,
+        agentName: "Booking",
+        status: "ok" as const,
+        replyText: "note?",
+        replyButtons: [INTENT_SKIP_LABEL],
+      },
+    };
+    expect(stickyContinueAgentId(supervisorState({
+      ...base,
+      messages: [new HumanMessage(MAIN_MENU_LABEL)],
+    }))).toBeNull();
+    expect(stickyContinueAgentId(supervisorState({
+      ...base,
+      messages: [new HumanMessage("Обрати іншу процедуру")],
+    }))).toBeNull();
+  });
+
+  it("keeps FAQ catalog chip taps in FAQ while a booking interaction is preserved", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("Ботулінотерапія")],
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [
+          { id: "skip", label: INTENT_SKIP_LABEL },
+          { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+        ],
+      },
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "Оберіть послугу зі списку",
+        replyButtons: ["Ботулінотерапія", "Консультація", RETURN_TO_BOOKING_LABEL_UK],
+      },
+    }))).toBe("faq");
+  });
+
+  it("routes explicit return_to_booking to Booking over FAQ catalog", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage(RETURN_TO_BOOKING_LABEL_UK)],
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [
+          { id: "skip", label: INTENT_SKIP_LABEL },
+          { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+        ],
+      },
+      bookingDraft: awaitingNoteDraft(),
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "Оберіть послугу зі списку",
+        replyButtons: ["Ботулінотерапія", RETURN_TO_BOOKING_LABEL_UK],
+      },
+    }))).toBe("booking");
+  });
+});
+
 describe("createClinicSupervisorNode context cache", () => {
   const invoke = vi.fn();
   const bindRoutingTools = vi.fn(() => ({ invoke }));
@@ -112,7 +268,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
@@ -132,7 +288,7 @@ describe("createClinicSupervisorNode context cache", () => {
     const manager = {
       getOrCreate: vi.fn(async () => ({
         cacheName: "caches/abc",
-        model: "models/gemini-2.5-flash-lite",
+        model: "models/gemini-3.1-flash-lite",
       })),
       invalidate: vi.fn(),
     };
@@ -145,7 +301,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
@@ -170,11 +326,11 @@ describe("createClinicSupervisorNode context cache", () => {
         .fn()
         .mockResolvedValueOnce({
           cacheName: "caches/stale",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
         })
         .mockResolvedValueOnce({
           cacheName: "caches/fresh",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
         }),
       invalidate: vi.fn(),
     };
@@ -191,7 +347,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 
@@ -210,7 +366,7 @@ describe("createClinicSupervisorNode context cache", () => {
         .fn()
         .mockResolvedValueOnce({
           cacheName: "caches/stale",
-          model: "models/gemini-2.5-flash-lite",
+          model: "models/gemini-3.1-flash-lite",
         })
         .mockResolvedValueOnce(null),
       invalidate: vi.fn(),
@@ -228,7 +384,7 @@ describe("createClinicSupervisorNode context cache", () => {
       contextCache: {
         manager,
         apiKey: "key",
-        modelName: "gemini-2.5-flash-lite",
+        modelName: "gemini-3.1-flash-lite",
       },
     });
 

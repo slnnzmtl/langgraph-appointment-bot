@@ -63,6 +63,7 @@ import {
   BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
+  BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
   CLINIC_ADDRESS,
   CLINIC_MAPS_MARKDOWN,
@@ -112,13 +113,22 @@ import {
 } from "./gemini-cache-messages.js";
 import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
-  closedBookingSessionUpdate,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
   type BookingService,
   type ReplacementMeeting,
 } from "./booking-draft.js";
+import {
+  closedBookingSessionUpdate,
+  isBookingOwnedInteraction,
+  reduceBookingSession,
+} from "./booking-session.js";
+import {
+  bookingTurnNeedsNoteOrchestrator,
+  replyButtonsForInteraction,
+  renderBookingInteractionMessage,
+} from "./booking-note-orchestrator.js";
 import {
   isModelFailureMessage,
   tagModelFailureMessage,
@@ -450,6 +460,39 @@ const toolRanThisTurn = (messages: BaseMessage[], toolName: string): boolean =>
     (message) => message instanceof ToolMessage && toolMessageName(message) === toolName,
   );
 
+/** Index of the latest pending_confirmation mutation ToolMessage, or -1. */
+const latestPendingConfirmationIndex = (messages: BaseMessage[]): number => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (
+      message instanceof ToolMessage
+      && classifyMeetingMutationToolMessage(message) === "pending_confirmation"
+    ) {
+      return index;
+    }
+  }
+  return -1;
+};
+
+/**
+ * True when present_availability_slots ran after the latest awaitingConfirmation
+ * mutation (or anywhere on the tape when there is no pending confirmation).
+ * Pre-HITL leftover slots must not block coerce or TIME overlay.
+ */
+const availabilitySlotsRanThisTurn = (messages: BaseMessage[]): boolean => {
+  const start = latestPendingConfirmationIndex(messages) + 1;
+  for (let index = start; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (
+      message instanceof ToolMessage
+      && toolMessageName(message) === "present_availability_slots"
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
 export const captureLatestToolContext = <T>(
   messages: BaseMessage[],
   toolName: string,
@@ -591,21 +634,6 @@ const lastHumanText = (messages: BaseMessage[]): string => {
 const lastPatientText = (state: ClinicState): string =>
   lastHumanText(state.messages) || lastHumanText(state.agentMessages ?? []);
 
-/**
- * A consultation offer is an explicit pending conversation action. An affirmative
- * answer starts the DATE step from today, even when an older exact-date snapshot
- * is still checkpointed. It must not inherit that snapshot's pagination cursor.
- */
-export const isConsultationOfferAcceptance = (state: ClinicState): boolean => {
-  const handoff = state.lastHandoff;
-  return (
-    (handoff?.agentId === BOOKING_AGENT_ID || handoff?.agentId === FAQ_AGENT_ID)
-    && handoff.status === "ok"
-    && isConsultationOfferQuestion(handoff.replyText ?? "")
-    && isYesReply(lastPatientText(state))
-  );
-};
-
 /** Known keyboard labels that must not collide with an «Інша дата» prefix tap. */
 const OTHER_DATE_COLLISION_LABELS = [
   MAIN_MENU_LABEL,
@@ -721,7 +749,6 @@ const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefine
     return undefined;
   }
   const currentText = extractMessageTextContent(current.content).trim();
-  const directCatalogService = catalogServiceForText(currentText, state);
   const directRequest = requestsConsultation(currentText);
   const pendingService = state.bookingDraft?.serviceAcceptance;
   const isAvailabilityContinuation =
@@ -736,17 +763,8 @@ const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefine
       turn: state.stepCount,
     });
   }
-  if (
-    directCatalogService
-    && /(?:запиш\w*|записат\w*|хочу|бажаю|потрібн\w*|треба|book|want|need)/i.test(currentText)
-  ) {
-    return reduceBookingDraft(state.bookingDraft, {
-      type: "service_selected",
-      service: directCatalogService,
-      accepted: true,
-      turn: state.stepCount,
-    });
-  }
+  // Named-procedure acceptance belongs to catalog resolution (note orch / FAQ),
+  // not substring matching against checkpointed service names.
   // A dated request immediately after the consultation offer is an affirmative
   // booking action, even when the patient did not tap «Так».
   if (pendingService?.status === "pending" && isAvailabilityContinuation) {
@@ -938,11 +956,18 @@ const pendingChatConfirmationDecision = (
   return { kind: "none" };
 };
 
+/**
+ * Decline and LLM-only HITL other still abandon here. When the note orch already
+ * cleared pendingCommand (keep/switch / schedule handoff), this is a no-op.
+ */
 const pendingChatConfirmationCleanup = (
   state: ClinicState,
 ): ClinicStateUpdate => {
   const decision = pendingChatConfirmationDecision(state);
   if (decision.kind !== "unresolved" || !state.bookingDraft) {
+    return {};
+  }
+  if (state.bookingDraft.pendingCommand == null) {
     return {};
   }
   if (
@@ -952,11 +977,19 @@ const pendingChatConfirmationCleanup = (
     return closedBookingSessionUpdate();
   }
   if (decision.action === "create" || decision.action === "reschedule") {
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      {
+        type: "draft_event",
+        event: { type: "slot_invalidated", keepDate: true },
+      },
+    );
     return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "slot_invalidated",
-        keepDate: true,
-      }),
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
     };
   }
   if (
@@ -1220,6 +1253,32 @@ const nearestRescheduleAvailabilityRequest = (
   };
 };
 
+/**
+ * After a mid-booking service change the old date/slot are cleared. Runtime owns
+ * the next nearest availability search for the replacement service duration.
+ */
+const serviceChangeNearestAvailabilityRequest = (
+  state: ClinicState,
+): AvailabilitySlotsToolArgs | null => {
+  const draft = state.bookingDraft;
+  if (
+    state.serviceChangeNotice == null
+    || draft?.mode !== "create"
+    || draft.serviceAcceptance?.status !== "accepted"
+    || draft.selectedDate != null
+    || draft.selectedSlot != null
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return null;
+  }
+  const durationMinutes = draft.serviceAcceptance.service.durationMinutes;
+  return {
+    direction: "nearest",
+    forceRefresh: true,
+    ...(durationMinutes != null ? { durationMinutes } : {}),
+  };
+};
+
 const availabilityRequestFromBookingDraft = (
   state: ClinicState,
 ): AvailabilitySlotsToolArgs | null => {
@@ -1258,6 +1317,24 @@ const availabilityRequestFromBookingDraft = (
   };
 };
 
+const availabilitySlotsAgentMessagesUpdate = (
+  messages: BaseMessage[],
+  toolCallId: string,
+  args: AvailabilitySlotsToolArgs,
+): ClinicStateUpdate => ({
+  agentMessages: new Overwrite(
+    appendOrReplacePendingToolCall(messages, new AIMessage({
+      content: "",
+      tool_calls: [{
+        id: toolCallId,
+        name: "present_availability_slots",
+        args,
+        type: "tool_call" as const,
+      }],
+    })),
+  ),
+});
+
 /**
  * Whether this booking turn has enough authoritative state for the runtime to
  * own the next mutation step. This deliberately ignores model output: the LLM
@@ -1287,6 +1364,9 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
     return true;
   }
   if (availabilityRequestFromBookingDraft(state) != null) {
+    return true;
+  }
+  if (serviceChangeNearestAvailabilityRequest(state) != null) {
     return true;
   }
   if (nearestRescheduleAvailabilityRequest(state) != null) {
@@ -1425,16 +1505,14 @@ const coerceAvailabilityToolCalls = (
       selectedDate: state.bookingDraft?.selectedDate,
     });
     const dayPick = matchAvailabilityDay(human, days);
-    const consultationAccepted = isConsultationOfferAcceptance(state);
-    const semanticDirection = consultationAccepted
-      ? "nearest"
-      : request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
-        ? request.kind
-        : isYesReply(human) ? "nearest" : undefined;
+    const semanticDirection = request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
+      ? request.kind
+      : isYesReply(human) ? "nearest" : undefined;
     // Recovery is allowed only for a structured patient action. Never turn arbitrary
     // availability-looking prose into an argument-less call that can replay a cache.
+    // Pre-HITL leftover slots on the tape do not count as this turn.
     if (
-      !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      !availabilitySlotsRanThisTurn(state.agentMessages ?? [])
       && dayPick == null
       && (request != null || semanticDirection != null)
     ) {
@@ -1462,7 +1540,7 @@ const coerceAvailabilityToolCalls = (
     && !toolCalls.some((call) => call.name === "present_availability_slots")
   ) {
     const args = rescheduleAvailabilityArgsFromBookingContext(state);
-    if (args && !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")) {
+    if (args && !availabilitySlotsRanThisTurn(state.agentMessages ?? [])) {
       toolCalls = [
         ...toolCalls,
         {
@@ -1617,14 +1695,6 @@ const NOTE_SKIP_REPLIES = new Set(
   [
     INTENT_SKIP_LABEL,
     INTENT_SKIP_LABEL_EN,
-    "no",
-    "ні",
-    "нет",
-    "без коментаря",
-    "без коментарів",
-    "не треба",
-    "не потрібно",
-    "skip",
   ].map((label) => label.toLowerCase()),
 );
 
@@ -1714,11 +1784,17 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && explicitDate.date !== state.bookingDraft?.selectedDate
   ) {
     trackEvent("booking_date_selected", { date: explicitDate.date });
-    const bookingDraft = reduceBookingDraft(state.bookingDraft, {
-      type: "date_selected",
-      date: explicitDate.date,
-    });
-    return { bookingDraft };
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "date_selected", date: explicitDate.date },
+    );
+    return {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    };
   }
 
   // DATE is a state transition, not just a presentation choice. Keep it until
@@ -1726,11 +1802,17 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   // another day in the same availability page.
   if (matchedDay) {
     trackEvent("booking_date_selected", { date: matchedDay.date });
-    const bookingDraft = reduceBookingDraft(state.bookingDraft, {
-      type: "date_selected",
-      date: matchedDay.date,
-    });
-    return { bookingDraft };
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "date_selected", date: matchedDay.date },
+    );
+    return {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    };
   }
 
   // A same-message requested time is reconciled only after the exact fresh
@@ -1754,7 +1836,10 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
 
-  const reduceSlotSelection = (slot: SelectedBookingSlot): BookingDraft | null => {
+  const reduceSlotSelection = (slot: SelectedBookingSlot): {
+    bookingDraft: BookingDraft | null;
+    pendingInteraction: ReturnType<typeof reduceBookingSession>["pendingInteraction"];
+  } | null => {
     let draft = state.bookingDraft;
     if (draft == null) {
       return null;
@@ -1768,7 +1853,17 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     if (draft == null) {
       return null;
     }
-    return reduceBookingDraft(draft, { type: "slot_selected", slot });
+    const session = reduceBookingSession(
+      {
+        bookingDraft: draft,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "slot_selected", slot },
+    );
+    return {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    };
   };
 
   // Rescheduling has no create-booking note/details ladder. Once the slot is
@@ -1776,63 +1871,52 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   if (state.bookingDraft?.mode === "reschedule") {
     if (matchedSlot && !sameSlot) {
       trackEvent("booking_note_step", { phase: "reschedule_slot" });
-      return { bookingDraft: reduceSlotSelection(matchedSlot) };
+      const selected = reduceSlotSelection(matchedSlot);
+      return selected == null ? {} : {
+        bookingDraft: selected.bookingDraft,
+        pendingInteraction: selected.pendingInteraction,
+      };
     }
     return {};
   }
 
-  // A displayed note prompt and its typed reply must be one runtime-owned
-  // transition. Accept the skip/value even if an older checkpoint still says
-  // `unasked`.
-  if (authoritativeSelectedSlot(state) != null && status === "unasked") {
-    if (isNoteSkipReply(human)) {
+  // Skip / same-slot reaffirm while a note is open. Free-text note answers are
+  // owned by the note orchestrator (classify → reduce), not this ladder.
+  if (
+    (authoritativeSelectedSlot(state) != null && status === "unasked")
+    || status === "awaiting"
+  ) {
+    if (isNoteSkipReply(human) || (status === "awaiting" && sameSlot)) {
       trackEvent("booking_note_step", { phase: "skipped" });
+      const session = reduceBookingSession(
+        {
+          bookingDraft: state.bookingDraft ?? null,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        { type: "note_skipped" },
+      );
       return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "skipped",
-        }),
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
       };
     }
-    if (!matchedSlot && human.length > 0) {
-      trackEvent("booking_note_step", { phase: "answered" });
-      return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "answered",
-          value: human,
-        }),
-      };
-    }
-  }
-
-  if (status === "awaiting") {
-    if (isNoteSkipReply(human) || sameSlot) {
-      trackEvent("booking_note_step", { phase: "skipped" });
-      return {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "skipped",
-        }),
-      };
-    }
-    if (matchedSlot) {
+    if (status === "awaiting" && matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });
-      return { bookingDraft: reduceSlotSelection(matchedSlot) };
+      const selected = reduceSlotSelection(matchedSlot);
+      return selected == null ? {} : {
+        bookingDraft: selected.bookingDraft,
+        pendingInteraction: selected.pendingInteraction,
+      };
     }
-    trackEvent("booking_note_step", { phase: "answered" });
-    return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "note_status",
-        status: "answered",
-        value: human,
-      }),
-    };
   }
 
   if (matchedSlot && (status === "unasked" || !sameSlot)) {
     trackEvent("booking_note_step", { phase: "awaiting" });
-    return { bookingDraft: reduceSlotSelection(matchedSlot) };
+    const selected = reduceSlotSelection(matchedSlot);
+    return selected == null ? {} : {
+      bookingDraft: selected.bookingDraft,
+      pendingInteraction: selected.pendingInteraction,
+    };
   }
 
   return {};
@@ -1847,7 +1931,7 @@ const resetBookingNoteState = (_state?: ClinicState): ClinicStateUpdate => ({});
 export const availabilityOfferFromToolTurn = (
   messages: BaseMessage[],
 ): { replyText: string; replyButtons: string[] } | null => {
-  if (!toolRanThisTurn(messages, "present_availability_slots")) {
+  if (!availabilitySlotsRanThisTurn(messages)) {
     return null;
   }
   const captured = captureAvailabilityFromMessages(messages);
@@ -1885,12 +1969,25 @@ export const resolveAvailabilityOffer = (
   return availabilityOfferFromToolTurn(messages);
 };
 
-/** Re-render trusted checkpoint availability after an invalid premature create call. */
+/**
+ * Re-render trusted checkpoint availability from draft phase + selectedDate.
+ * Ignores the human line. Refuses when the snapshot belongs to another service.
+ */
 const availabilityRecoveryOffer = (
   state: ClinicState,
 ): { replyText: string; replyButtons: string[] } | null => {
   const availability = state.availabilityContext;
   if (!availability) {
+    return null;
+  }
+  const acceptedId = state.bookingDraft?.serviceAcceptance?.status === "accepted"
+    ? state.bookingDraft.serviceAcceptance.service.id
+    : undefined;
+  if (
+    availability.serviceId != null
+    && acceptedId != null
+    && availability.serviceId !== acceptedId
+  ) {
     return null;
   }
   const selectedDate = state.bookingDraft?.selectedDate;
@@ -2124,32 +2221,40 @@ export const createAgentPrepareNode = (agentId: string) =>
       const rescheduleState = startedReschedule
         ? { ...state, bookingDraft: startedReschedule }
         : state;
+      // Orch ownership is inbound-only so a slot pick that opens visit_note
+      // this turn still reaches the booking LLM. Skip utterance-driven draft
+      // mutations when the orch already owns the turn.
+      const queueNoteOrch = bookingTurnNeedsNoteOrchestrator(state);
+      update.noteOrchQueued = queueNoteOrch;
       let bookingDraft: BookingDraft | null | undefined =
-        rescheduleState.bookingDraft?.mode === "reschedule"
-          ? rescheduleState.bookingDraft
-          : bookingDraftForTurn(rescheduleState) ?? rescheduleState.bookingDraft ?? undefined;
-      const scheduleRequest = resolveBookingScheduleRequest(
-        lastPatientText(rescheduleState),
-        kyivToday(),
-        {
-          availabilityContext: rescheduleState.availabilityContext,
-          availabilityCursor: rescheduleState.availabilityCursor,
-          selectedDate: bookingDraft?.selectedDate,
-        },
-      );
-      if (bookingDraft && scheduleRequest?.kind === "exact") {
-        bookingDraft = reduceBookingDraft(bookingDraft, {
-          type: "schedule_requested",
-          date: scheduleRequest.date,
-          ...(scheduleRequest.preferredTime ? { preferredTime: scheduleRequest.preferredTime } : {}),
-        });
+        rescheduleState.bookingDraft ?? undefined;
+      if (!queueNoteOrch) {
+        if (bookingDraft?.mode !== "reschedule") {
+          bookingDraft = bookingDraftForTurn(rescheduleState) ?? bookingDraft;
+        }
+        const scheduleRequest = resolveBookingScheduleRequest(
+          lastPatientText(rescheduleState),
+          kyivToday(),
+          {
+            availabilityContext: rescheduleState.availabilityContext,
+            availabilityCursor: rescheduleState.availabilityCursor,
+            selectedDate: bookingDraft?.selectedDate,
+          },
+        );
+        if (bookingDraft && scheduleRequest?.kind === "exact") {
+          bookingDraft = reduceBookingDraft(bookingDraft, {
+            type: "schedule_requested",
+            date: scheduleRequest.date,
+            ...(scheduleRequest.preferredTime ? { preferredTime: scheduleRequest.preferredTime } : {}),
+          });
+        }
+        const workingState: ClinicState = bookingDraft
+          ? { ...rescheduleState, bookingDraft }
+          : rescheduleState;
+        const noteUpdate = advanceBookingNoteStep(workingState);
+        Object.assign(update, noteUpdate);
+        bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
       }
-      const workingState: ClinicState = bookingDraft
-        ? { ...rescheduleState, bookingDraft }
-        : rescheduleState;
-      const noteUpdate = advanceBookingNoteStep(workingState);
-      Object.assign(update, noteUpdate);
-      bookingDraft = (noteUpdate.bookingDraft as BookingDraft | null | undefined) ?? bookingDraft;
       if (
         bookingDraft
         && bookingDraft.contactId != null
@@ -2295,33 +2400,27 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     }
     const nearestRescheduleRequest = nearestRescheduleAvailabilityRequest(state);
     if (nearestRescheduleRequest) {
-      const availabilityCall = {
-        id: `booking_reschedule_nearest_${state.bookingDraft?.version ?? 0}`,
-        name: "present_availability_slots",
-        args: nearestRescheduleRequest,
-        type: "tool_call" as const,
-      };
-      const availabilityAi = new AIMessage({ content: "", tool_calls: [availabilityCall] });
-      return {
-        agentMessages: new Overwrite(
-          appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
-        ),
-      };
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_reschedule_nearest_${state.bookingDraft?.version ?? 0}`,
+        nearestRescheduleRequest,
+      );
+    }
+    const serviceChangeNearestRequest = serviceChangeNearestAvailabilityRequest(state);
+    if (serviceChangeNearestRequest) {
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_service_change_nearest_${state.bookingDraft?.version ?? 0}`,
+        serviceChangeNearestRequest,
+      );
     }
     const availabilityRequest = availabilityRequestFromBookingDraft(state);
     if (availabilityRequest) {
-      const availabilityCall = {
-        id: `booking_availability_${state.bookingDraft?.version ?? 0}`,
-        name: "present_availability_slots",
-        args: availabilityRequest,
-        type: "tool_call" as const,
-      };
-      const availabilityAi = new AIMessage({ content: "", tool_calls: [availabilityCall] });
-      return {
-        agentMessages: new Overwrite(
-          appendOrReplacePendingToolCall(state.agentMessages ?? [], availabilityAi),
-        ),
-      };
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_availability_${state.bookingDraft?.version ?? 0}`,
+        availabilityRequest,
+      );
     }
     const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
     if (
@@ -2632,10 +2731,7 @@ export const createAgentToolsNode = (
     const synthetic: ToolMessage[] = [];
     const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
     let noteStatusUpdate: ClinicStateUpdate = {};
-    let availabilityPagedThisTurn = toolRanThisTurn(
-      agentMessages,
-      "present_availability_slots",
-    );
+    let availabilityPagedThisTurn = availabilitySlotsRanThisTurn(agentMessages);
 
     if (lastAiIndex >= 0) {
       const lastAi = agentMessages[lastAiIndex] as AIMessage;
@@ -2928,32 +3024,35 @@ export const createAgentToolsNode = (
         if (call.name === "present_availability_slots") {
           // Own paging cursors from checkpoint — the model chooses semantic direction,
           // but must not invent calendar boundaries.
+          const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;
           const runtimeRequest = resolveBookingScheduleRequest(lastPatientText(state), kyivToday(), {
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
             selectedDate: state.bookingDraft?.selectedDate,
-          });
-          const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;
-          const runtimeOwnedArgs = runtimeRequest?.kind === "exact"
-            ? { ...rawArgs, direction: "exact" as const, date: runtimeRequest.date }
-            : rawArgs;
+          }) ?? (
+            state.bookingDraft?.selectedDate
+            && rawArgs.direction === "exact"
+            && rawArgs.date === state.bookingDraft.selectedDate
+              ? { kind: "exact" as const, date: state.bookingDraft.selectedDate }
+              : null
+          );
           const rescheduleArgs = rescheduleAvailabilityArgsFromBookingContext(
             state,
-            runtimeOwnedArgs as Record<string, unknown>,
+            rawArgs as Record<string, unknown>,
+          );
+          const dayPick = matchAvailabilityDay(
+            lastPatientText(state),
+            state.availabilityContext?.days ?? [],
           );
           const args = normalizeAvailabilityToolArgs({
-            args: (rescheduleArgs ?? runtimeOwnedArgs) as AvailabilitySlotsToolArgs,
+            args: (rescheduleArgs ?? rawArgs) as AvailabilitySlotsToolArgs,
+            runtimeRequest,
+            offeredDayDate: dayPick?.date ?? null,
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
             ...(state.bookingDraft?.serviceAcceptance?.service.durationMinutes != null
               ? { serviceDurationMinutes: state.bookingDraft.serviceAcceptance.service.durationMinutes }
               : {}),
-            humanText: lastPatientText(state),
-            pickedOfferedDay: matchAvailabilityDay(
-              lastPatientText(state),
-              state.availabilityContext?.days ?? [],
-            ) != null,
-            consultationAccepted: isConsultationOfferAcceptance(state),
             availabilityPagedThisTurn,
             anchors: bookingDateAnchors(state),
           });
@@ -3196,9 +3295,15 @@ export const createAgentToolsNode = (
           // A CRM race/error or a patient-declined booking invalidates only the
           // selected slot. Keep the accepted service and note so a later
           // availability search still uses the service duration.
-          update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-            type: "slot_invalidated",
-          });
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            { type: "draft_event", event: { type: "slot_invalidated" } },
+          );
+          update.bookingDraft = session.bookingDraft;
+          update.pendingInteraction = session.pendingInteraction;
         } else if (state.bookingDraft) {
           Object.assign(update, closedBookingSessionUpdate());
         }
@@ -3222,10 +3327,15 @@ export const createAgentToolsNode = (
         update.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
         const reconciliation = reconcileRequestedTime(state.bookingDraft, bookingAvailability);
         if (reconciliation.kind === "matched" && state.bookingDraft) {
-          update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-            type: "slot_selected",
-            slot: reconciliation.slot,
-          });
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            { type: "slot_selected", slot: reconciliation.slot },
+          );
+          update.bookingDraft = session.bookingDraft;
+          update.pendingInteraction = session.pendingInteraction;
         } else if (reconciliation.kind === "unavailable" && state.bookingDraft) {
           update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
             type: "requested_time_unavailable",
@@ -3254,10 +3364,24 @@ export const createAgentToolsNode = (
           )
         ) {
           if (bookingDraft) {
-            update.bookingDraft = reduceBookingDraft(bookingDraft, {
-              type: "slot_invalidated",
-              keepDate: selectedDay?.slots.length !== 0,
-            });
+            const session = reduceBookingSession(
+              {
+                bookingDraft,
+                pendingInteraction:
+                  (update.pendingInteraction as typeof state.pendingInteraction | undefined)
+                  ?? state.pendingInteraction
+                  ?? null,
+              },
+              {
+                type: "draft_event",
+                event: {
+                  type: "slot_invalidated",
+                  keepDate: selectedDay?.slots.length !== 0,
+                },
+              },
+            );
+            update.bookingDraft = session.bookingDraft;
+            update.pendingInteraction = session.pendingInteraction;
           }
         }
       }
@@ -3607,19 +3731,47 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       && state.bookingDraft.selectedDate != null;
     const unavailableDate = state.bookingDraft?.selectedDate;
     const unavailableTime = state.bookingDraft?.requestedTime?.value;
+    let clearServiceChangeNotice = false;
+    const consumeServiceChangeNotice = (): string | null => {
+      const notice = state.serviceChangeNotice;
+      if (notice == null || notice.length === 0) {
+        return null;
+      }
+      clearServiceChangeNotice = true;
+      return notice;
+    };
     if (replacementOffered) {
       replyButtons = [...BOOKING_REPLACE_MENU];
     } else if (slotOffer) {
       const unavailablePrefix = requestedTimeUnavailable
         ? `На жаль, о ${unavailableTime} на ${formatKyivDayLabel(unavailableDate!, kyivToday())} немає вільного часу.\n\n`
         : "";
-      replyText = unavailablePrefix
+      const offerBody = unavailablePrefix
         + (
           createError != null && !noteBlockedThisTurn
             ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
             : slotOffer.replyText
         );
+      const notice = consumeServiceChangeNotice();
+      replyText = notice != null ? `${notice}\n\n${offerBody}` : offerBody;
       replyButtons = slotOffer.replyButtons;
+    } else if (
+      agent.id === BOOKING_AGENT_ID
+      && state.pendingInteraction != null
+      && isBookingOwnedInteraction(state.pendingInteraction)
+      && (state.pendingInteraction.kind === "service_or_note"
+        || state.pendingInteraction.kind === "service_candidate"
+        || state.pendingInteraction.kind === "visit_note")
+      && !slotOffer
+      && !alreadyBooked
+    ) {
+      const rendered = renderBookingInteractionMessage(state.pendingInteraction);
+      replyText = String(rendered.content);
+      replyButtons = replyButtonsForInteraction(state.pendingInteraction);
+      trackEvent("reply_menu_filled", {
+        menu: state.pendingInteraction.kind,
+        reason: "pending_interaction",
+      });
     } else if (awaitingNote) {
       // The visible note prompt is a projection of canonical note phase, never
       // model prose. Seeing it therefore guarantees a checkpointed slot.
@@ -3641,6 +3793,17 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         // Accidental leftover trailer only — never the adapter markup channel.
         replyButtons = accidentalButtons;
       }
+      // After service_unresolved, pendingInteraction carries return_to_booking.
+      const returnLabel = state.pendingInteraction?.choices.find(
+        (choice) => choice.id === "return_to_booking",
+      )?.label;
+      if (
+        returnLabel != null
+        && returnLabel.length > 0
+        && !replyButtons.includes(returnLabel)
+      ) {
+        replyButtons = [...replyButtons, returnLabel];
+      }
     } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
       // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
       const idle = agentMessages.some(
@@ -3660,22 +3823,51 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       }
     }
 
+    // Fail closed: DATE/TIME/SERVICE without a code-owned slot card or committed
+    // write never ships model prose (any language). Runtime owns the next step.
+    const scheduleReselectPending =
+      agent.id === BOOKING_AGENT_ID
+      && !createCommitted
+      && !alreadyBooked
+      && !slotOffer
+      && !replacementOffered
+      && !isBookingOwnedInteraction(state.pendingInteraction)
+      && state.bookingDraft != null
+      && (
+        state.bookingDraft.phase === "date"
+        || state.bookingDraft.phase === "time"
+        || state.bookingDraft.phase === "service"
+      );
+    if (scheduleReselectPending) {
+      const recovered = availabilityRecoveryOffer(state);
+      if (recovered != null) {
+        const notice = consumeServiceChangeNotice();
+        replyText = notice != null
+          ? `${notice}\n\n${recovered.replyText}`
+          : recovered.replyText;
+        replyButtons = recovered.replyButtons;
+      } else {
+        replyText = consumeServiceChangeNotice() ?? BOOKING_SCHEDULE_RESELECT_UK;
+        replyButtons = [];
+      }
+    }
+
     if (yieldTag && agent.id === FAQ_AGENT_ID) {
       yieldFlag = true;
     }
 
     const noteStatusForHandoff: ClinicStateUpdate =
-      awaitingNote && !slotOffer
-        ? state.bookingDraft
-          ? {
-              bookingDraft: state.bookingDraft.note.status === "awaiting"
-                ? state.bookingDraft
-                : reduceBookingDraft(state.bookingDraft, {
-                    type: "note_status",
-                    status: "awaiting",
-                  }),
-            }
-          : {}
+      awaitingNote
+      && !slotOffer
+      && state.bookingDraft != null
+      && state.bookingDraft.note.status !== "awaiting"
+      && state.pendingInteraction == null
+        ? {
+            bookingDraft: reduceBookingDraft(state.bookingDraft, {
+              type: "note_status",
+              status: "awaiting",
+            }),
+          }
         : {};
     const offeredService =
       (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
@@ -3716,6 +3908,9 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...(replyButtons.length > 0 ? { replyButtons } : {}),
       ...(yieldFlag ? { yieldToSupervisor: true } : {}),
     };
+    const serviceChangeNoticeClear: { serviceChangeNotice?: null } =
+      clearServiceChangeNotice ? { serviceChangeNotice: null } : {};
+
     if (status === "empty") {
       return {
         ...cleared,
@@ -3724,6 +3919,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
         ...clearOccupiedPhoneCandidate,
+        ...serviceChangeNoticeClear,
       };
     }
 
@@ -3740,6 +3936,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         ...bookingDraftOfferUpdate,
         ...confirmationCleanup,
         ...clearOccupiedPhoneCandidate,
+        ...serviceChangeNoticeClear,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -3755,6 +3952,7 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       ...bookingDraftOfferUpdate,
       ...confirmationCleanup,
       ...clearOccupiedPhoneCandidate,
+      ...serviceChangeNoticeClear,
       messages: [replyMessage],
     };
   };
@@ -3795,10 +3993,15 @@ export const routeAfterAgentPrepare = (
   state: ClinicState,
   llmName: string,
   commandPrepareName?: string,
-): string =>
-  commandPrepareName && bookingTurnNeedsCommandPreparation(state)
+  noteOrchestratorName?: string,
+): string => {
+  if (noteOrchestratorName && state.noteOrchQueued) {
+    return noteOrchestratorName;
+  }
+  return commandPrepareName && bookingTurnNeedsCommandPreparation(state)
     ? commandPrepareName
     : llmName;
+};
 
 export const routeAfterAgentTools = (
   state: ClinicState,
@@ -3806,6 +4009,7 @@ export const routeAfterAgentTools = (
   toolsName: string,
   mutationFinalizeName?: string,
   commandPrepareName?: string,
+  noteOrchestratorName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
@@ -3831,6 +4035,15 @@ export const routeAfterAgentTools = (
 
   if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
     return commandPrepareName;
+  }
+
+  if (
+    noteOrchestratorName
+    && chatConfirmation.kind === "unresolved"
+    && chatConfirmation.replyKind === "other"
+    && bookingTurnNeedsNoteOrchestrator(state)
+  ) {
+    return noteOrchestratorName;
   }
 
   return llmName;
