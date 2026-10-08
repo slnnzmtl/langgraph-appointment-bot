@@ -35,7 +35,7 @@ Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HT
 | Address, consultation id, menu label lists | `src/shared/clinic-constants.ts` |
 | Wiring / agent defs (`maxSteps`) | `src/composition/` |
 
-Do not add a third specialist, a second booking path, or a parallel keyboard format. One graph, one HITL confirm map, one markup channel (`lastHandoff.replyButtons`).
+Do not add a third specialist, a second booking path, or a parallel keyboard format. One graph, one HITL confirm map, one keyboard format. Markup is owned by `pendingInteraction` and rendered into `lastHandoff.replyButtons` for the adapter; `lastHandoff` is presentation/observability only.
 
 ## Agents
 
@@ -50,18 +50,18 @@ Only agent that greets. Each turn: `faq` / `booking` (empty `reply`; specialist 
 
 ### Sticky routing
 
-After an FAQ/booking handoff, tapping a shortcut the specialist just offered continues in that agent (skips the supervisor LLM). Supervisor-owned labels and free text still go through the LLM.
+After an FAQ/booking handoff, tapping a shortcut that matches the **current** `pendingInteraction` continues in that agent (skips the supervisor LLM). Labels absent from the current interaction are ignored. Supervisor-owned labels and free text with no open interaction still go through the LLM.
 
-- FAQ book-handoff offers («Так» after consultation / book-this-procedure) set `lastHandoff.yieldToSupervisor` so the tap is re-routed to booking.
-- Catalog drill-down taps stay in FAQ (no yield).
-- «Перенести» / «Скасувати» sticky-route to booking even after a FINISH visit list or an Already-booked replace offer.
+- FAQ book-handoff offers open `service_confirm` and set `yieldToSupervisor` so «Так» is re-routed to booking.
+- FAQ catalog taps match FAQ-owned `service_candidate` choices (CRM ids on each choice); mid-browse free text stays in FAQ.
+- «Перенести» / «Скасувати» open `visit_select` stages and sticky-route to booking; date/time after a single-visit action menu still starts reschedule.
 
 ### FAQ (read-only, `maxSteps` 4)
 
 Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<list_services>` when present.
 
-- Catalog: grouped summary, **no prices**; close with consultation offer («Так» / «Обрати іншу процедуру»); graph yields «Так» to booking.
-- After «Обрати іншу процедуру»: one catalog level per message (direction → family → zone → brand → book-this-procedure; graph yields the final yes/no).
+- Catalog: `list_services` opens an FAQ-owned `service_candidate` from CRM rows (remaining ids across levels). One remaining id opens `service_confirm`. Graph does **not** attach keyboards from catalog bullets.
+- After «Обрати іншу процедуру» (`choose_other`): FAQ catalog / `catalog_detour` while preserving the booking draft for return-to-booking.
 - Prices: `get_service` for the matched service only; USD→UAH only via tool FX (`priceUah`), never invented.
 - Address only when asked (`CLINIC_ADDRESS` + Maps constants).
 - Skin concerns → offer consultation unless they already chose another procedure.
@@ -88,7 +88,7 @@ Rules:
 
 ## Writes, HITL, reminder
 
-Create / cancel / reschedule pause on ✅/❌ (~15 min pending). Other text while pending returns `awaitingConfirmation` + `userReply` (nothing written). `confirmationGiven: true` is honored only if a matching confirm card was already shown. ❌ or «Головне меню» during confirm declines without a CRM write.
+Create / cancel / reschedule open `mutation_confirm` in the same node that appends the mutation tool call (never on availability revalidation alone), then pause on ✅/❌ (~15 min pending). Adapter resume interprets against `mutation_confirm` and passes the reducer update on `Command.update`. Other text while pending returns `awaitingConfirmation` + `userReply` (nothing written). `confirmationGiven: true` is honored only if a matching confirm card was already shown. ❌ or «Головне меню» during confirm declines without a CRM write.
 
 Voice notes ≤ 60s → Gemini transcription → same text graph. Longer / empty / failed → short Ukrainian fallback, no graph invoke.
 
@@ -98,15 +98,17 @@ Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph re
 
 ## Menus
 
-The graph writes reply keyboards on `lastHandoff.replyButtons`. Models emit patient text only. Accidental `<reply_buttons>` / `<yield_to_supervisor/>` tags are stripped so they never reach Telegram. Adapter always appends «Головне меню». English aliases (Book / Services / Address / …) are recognized for inbound routing; keyboards the graph attaches are Ukrainian-only.
+The graph renders reply keyboards from `pendingInteraction` into `lastHandoff.replyButtons`. Models emit patient text only. Accidental `<reply_buttons>` / `<yield_to_supervisor/>` tags are stripped so they never reach Telegram. Adapter always appends «Головне меню». English aliases (Book / Services / Address / …) are recognized for inbound routing; keyboards the graph attaches are Ukrainian-only.
 
-- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize after a committed create/cancel/reschedule or HITL decline. Mid-flow free-text (phone, name) and FAQ with no choice question: adapter shows only «Головне меню» (no DEFAULT MENU).
-- **VISIT CHANGE** (code-owned): «Перенести», «Скасувати», «Ні, дякую» — supervisor `menu=visit_change` after listing visits for «Мій запис» / a visit inquiry (falls back to DEFAULT when the list is empty).
-- **REPLACE (Already booked)** (code-owned): «Скасувати», «Ні, дякую» — booking finalize when `create_meeting` returned `Already booked` (never «Перенести» here). After «Скасувати», cancel then book the new slot.
-- **DATE / TIME** (code-owned): short day labels + «Інша дата», then HH:mm — booking finalize from `present_availability_slots` / `availabilityContext`.
-- **BOOKING OFFER** (code-owned): «Так», «Обрати іншу процедуру» — consultation or book-this-procedure yes/no (FAQ also sets `yieldToSupervisor` so «Так» routes to booking).
-- **INTENT skip** (code-owned): «Продовжити без коментаря» while a `visit_note` pending interaction is open (snapshotted choice id `skip`). Free-text skip synonyms classify through the note-turn boundary.
-- **Catalog drill-down** (code-owned): direction / family / zone / brand labels recovered from the visible bullet list.
+- **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize after a committed create/cancel/reschedule or HITL decline. Mid-flow free-text (phone, name) and FAQ with no open interaction: adapter shows only «Головне меню» (no DEFAULT MENU).
+- **VISIT CHANGE** (`visit_select` stage `action` / `meeting`): «Перенести», «Скасувати», «Ні, дякую» — after «Мій запис» (unique labels when several meetings). Falls back to DEFAULT when the list is empty.
+- **REPLACE** (`visit_select` stage `replacement`): «Скасувати», «Ні, дякую» — when `create_meeting` returned `Already booked` (never «Перенести» here).
+- **DATE / TIME** (`date_select` / `time_select` with availability render snapshot): short day labels + «Інша дата», then HH:mm — from `present_availability_slots` / `availabilityContext`.
+- **BOOKING OFFER** (`service_confirm`): «Так», «Обрати іншу процедуру» — explicit CRM service id; FAQ also sets `yieldToSupervisor` so «Так» routes to booking.
+- **INTENT skip** (`visit_note`): «Продовжити без коментаря» (choice id `skip`). Free-text skip synonyms classify through the note-turn boundary.
+- **Catalog drill-down** (FAQ-owned `service_candidate`): CRM-grounded choices with remaining `serviceIds`; not recovered from reply bullets.
+- **CONTACT FIELD** (`contact_field`): phone/name waits emit a contact effect; clear only after a successful CRM result.
+- **MUTATION CONFIRM** (`mutation_confirm`): opened only immediately before the mutation tool / interrupt.
 
 ## Code map
 

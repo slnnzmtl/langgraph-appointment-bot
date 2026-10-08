@@ -2,6 +2,7 @@ import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  CONSULTATION_SERVICE_ID,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
@@ -202,10 +203,12 @@ describe("stickyContinueAgentId open note reply", () => {
     expect(stickyContinueAgentId(supervisorState({
       messages: [new HumanMessage("Ботулінотерапія")],
       pendingInteraction: {
-        kind: "visit_note",
+        kind: "service_candidate",
+        owner: "faq",
+        utterance: "процедури",
         choices: [
-          { id: "skip", label: INTENT_SKIP_LABEL },
-          { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+          { id: "svc-b", label: "Ботулінотерапія", serviceIds: ["svc-b"] },
+          { id: "svc-c", label: "Консультація", serviceIds: ["svc-c"] },
         ],
       },
       bookingDraft: awaitingNoteDraft(),
@@ -214,7 +217,7 @@ describe("stickyContinueAgentId open note reply", () => {
         agentName: "FAQ",
         status: "ok",
         replyText: "Оберіть послугу зі списку",
-        replyButtons: ["Ботулінотерапія", "Консультація", RETURN_TO_BOOKING_LABEL_UK],
+        replyButtons: ["Ботулінотерапія", "Консультація"],
       },
     }))).toBe("faq");
   });
@@ -697,6 +700,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     const update = await node(
       supervisorState({
         messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+        pendingInteraction: openVisitNoteInteraction(),
         contactContext: { contacts: [{ id: "stale" }] },
         bookingContext: listedMeetings,
         availabilityContext: {
@@ -1197,6 +1201,7 @@ describe("shouldContinueInBooking", () => {
     expect(
       shouldContinueInBooking(
         supervisorState({
+          pendingInteraction: dateSelectPending,
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1216,6 +1221,7 @@ describe("shouldContinueInBooking", () => {
     expect(
       shouldContinueInBooking(
         supervisorState({
+          pendingInteraction: serviceConfirmPending,
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1307,6 +1313,10 @@ describe("shouldContinueInFaq", () => {
     expect(
       shouldContinueInFaq(
         supervisorState({
+          pendingInteraction: faqCatalogPending([
+            "Ін'єкційні процедури",
+            "Консультації та діагностика",
+          ]),
           lastHandoff: {
             agentId: "faq",
             agentName: "FAQ",
@@ -1326,6 +1336,7 @@ describe("shouldContinueInFaq", () => {
     expect(
       shouldContinueInFaq(
         supervisorState({
+          pendingInteraction: faqCatalogPending(["ботулінотерапія", "збільшення губ"]),
           lastHandoff: {
             agentId: "faq",
             agentName: "FAQ",
@@ -1433,6 +1444,7 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 
     const update = await node(
       supervisorState({
+        pendingInteraction: faqCatalogPending(["Ін'єкційні процедури"]),
         lastHandoff: {
           agentId: "faq",
           agentName: "FAQ",
@@ -1478,12 +1490,54 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
   });
 });
 
+const serviceConfirmPending = {
+  kind: "service_confirm" as const,
+  service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" as const },
+  choices: [
+    { id: "accept", label: "Так" },
+    { id: "choose_other", label: "Обрати іншу процедуру" },
+  ],
+};
+
+const dateSelectPending = {
+  kind: "date_select" as const,
+  snapshot: {
+    snapshotId: "sticky-test",
+    queryKind: "nearest" as const,
+    days: [
+      {
+        date: "2026-08-25",
+        displayLabel: "25 серпня",
+        slotSummaries: ["11:00"],
+        slots: [],
+      },
+    ],
+  },
+  choices: [
+    { id: "2026-08-25", label: "25 серпня" },
+    { id: "2026-09-03", label: "3 вересня" },
+    { id: "other_date", label: "Інша дата" },
+  ],
+};
+
+const faqCatalogPending = (labels: string[]) => ({
+  kind: "service_candidate" as const,
+  owner: "faq" as const,
+  utterance: "catalog",
+  choices: labels.map((label, index) => ({
+    id: `g${index}`,
+    label,
+    serviceIds: [`svc-${index}`],
+  })),
+});
+
 describe("shouldRouteProcedureBrowseToFaq", () => {
   it.each(["20 октября", "20.10", "2026-10-20"])(
     "is false for a supported date format after a consultation offer (%s)", (date) => {
       expect(
         shouldRouteProcedureBrowseToFaq(
           supervisorState({
+            pendingInteraction: serviceConfirmPending,
             lastHandoff: {
               agentId: "booking",
               agentName: "Booking",
@@ -1505,6 +1559,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
         supervisorState({
+          pendingInteraction: serviceConfirmPending,
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1525,6 +1580,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
         supervisorState({
+          pendingInteraction: serviceConfirmPending,
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1545,6 +1601,10 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
         supervisorState({
+          pendingInteraction: {
+            ...serviceConfirmPending,
+            service: { id: "svc-botox", name: "Botox", source: "catalog" },
+          },
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1565,6 +1625,10 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
         supervisorState({
+          pendingInteraction: {
+            ...serviceConfirmPending,
+            service: { id: "svc-botox", name: "Botox", source: "catalog" },
+          },
           lastHandoff: {
             agentId: "faq",
             agentName: "FAQ",
@@ -1626,6 +1690,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
         supervisorState({
+          pendingInteraction: serviceConfirmPending,
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1646,6 +1711,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(
       shouldRouteProcedureBrowseToFaq(
         supervisorState({
+          pendingInteraction: serviceConfirmPending,
           lastHandoff: {
             agentId: "booking",
             agentName: "Booking",
@@ -1676,6 +1742,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
 
     const update = await node(
       supervisorState({
+        pendingInteraction: serviceConfirmPending,
         lastHandoff: {
           agentId: "booking",
           agentName: "Booking",
@@ -1708,6 +1775,10 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
 
     const update = await node(
       supervisorState({
+        pendingInteraction: {
+          ...serviceConfirmPending,
+          service: { id: "svc-botox", name: "Botox", source: "catalog" },
+        },
         lastHandoff: {
           agentId: "faq",
           agentName: "FAQ",
@@ -1729,10 +1800,20 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
 });
 
 describe("shouldStayInFaqCatalog", () => {
-  it("keeps free text in FAQ while catalog chips are showing", () => {
+  it("keeps free text in FAQ while FAQ-owned catalog interaction is open", () => {
     expect(
       shouldStayInFaqCatalog(
         supervisorState({
+          pendingInteraction: {
+            kind: "service_candidate",
+            owner: "faq",
+            utterance: "ботулінотерапія",
+            choices: [
+              { id: "svc-d", label: "Disport", serviceIds: ["svc-d"] },
+              { id: "svc-n", label: "Nabota", serviceIds: ["svc-n"] },
+              { id: "svc-b", label: "Botox", serviceIds: ["svc-b"] },
+            ],
+          },
           lastHandoff: {
             agentId: "faq",
             agentName: "FAQ",
@@ -1796,6 +1877,7 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
     const update = await node(
       supervisorState({
+        pendingInteraction: dateSelectPending,
         lastHandoff: {
           agentId: "booking",
           agentName: "Booking",
@@ -2326,7 +2408,12 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
     );
 
-    expect(update.lastHandoff?.pendingAction).toBe("reschedule");
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "visit_select",
+      stage: "action",
+      meetingId: meetings.meetings[0]!.id,
+    });
+    expect(update.lastHandoff?.pendingAction).toBeUndefined();
   });
 
   it("replaces a stale «Мій запис» list with prefetch labels", async () => {

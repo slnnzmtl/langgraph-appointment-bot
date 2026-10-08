@@ -1,10 +1,8 @@
-import { AIMessage, HumanMessage } from "@langchain/core/messages";
+import { HumanMessage } from "@langchain/core/messages";
 import { Command, Overwrite } from "@langchain/langgraph";
 
 import {
-  BOOKING_NOTE_QUESTION_UK,
   RETURN_TO_BOOKING_LABEL_UK,
-  SERVICE_CHANGE_ACK_UK,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
   serviceChangedNoticeUk,
@@ -15,6 +13,10 @@ import {
   type BookingDraft,
   type BookingService,
 } from "./booking-draft.js";
+import {
+  renderBookingInteractionMessage,
+  replyButtonsForInteraction,
+} from "./booking-interaction-render.js";
 import {
   interpretNoteTurn,
   sessionEventFromClassification,
@@ -91,6 +93,23 @@ const applyEffect = async (
 ): Promise<OrchestrateBookingNoteTurnResult> => {
   if (effect == null) {
     return destinationForState(state, false);
+  }
+  if (effect.type === "open_faq_catalog") {
+    return {
+      bookingDraft: state.bookingDraft,
+      pendingInteraction: state.pendingInteraction,
+      clearAvailability: false,
+      goto: "faq_prepare",
+    };
+  }
+  if (effect.type === "resolve_contact") {
+    // Contact CRM work runs in the booking agent tools path; orch only preserves the wait.
+    return {
+      bookingDraft: state.bookingDraft,
+      pendingInteraction: state.pendingInteraction,
+      clearAvailability: false,
+      goto: "booking_llm",
+    };
   }
   if (effect.type === "apply_service_choice") {
     const resolved = await resolveServiceChange({
@@ -338,11 +357,25 @@ export const orchestrateBookingNoteTurn = async (
   return destinationForState(first, first.clearAvailability);
 };
 
+const NOTE_ORCH_INTERACTION_KINDS = new Set([
+  "visit_note",
+  "service_or_note",
+  "service_candidate",
+  "catalog_detour",
+  "date_select",
+  "time_select",
+]);
+
 export const bookingTurnNeedsNoteOrchestrator = (state: {
   bookingDraft?: BookingDraft | null;
   pendingInteraction?: PendingInteraction | null;
 }): boolean => {
-  if (isBookingOwnedInteraction(state.pendingInteraction)) {
+  const interaction = state.pendingInteraction;
+  if (interaction != null && NOTE_ORCH_INTERACTION_KINDS.has(interaction.kind)) {
+    // FAQ-owned catalog is interpreted by FAQ sticky / catalog producer, not note orch.
+    if (interaction.kind === "service_candidate" && interaction.owner === "faq") {
+      return false;
+    }
     return true;
   }
   const draft = state.bookingDraft;
@@ -362,50 +395,6 @@ export const bookingTurnNeedsNoteOrchestrator = (state: {
     && draft.selectedSlot == null
     && (draft.phase === "date" || draft.phase === "time");
 };
-
-/** Visible bullets must match the reply keyboard (FAQ catalog pattern). */
-const choiceBullets = (interaction: PendingInteraction): string => {
-  const labels = interaction.choices
-    .map((choice) => choice.label.trim())
-    .filter((label) => label.length > 0);
-  if (labels.length === 0) {
-    return "";
-  }
-  return `${labels.map((label) => `• ${label}`).join("\n")}\n\nЯкий варіант вам підходить?`;
-};
-
-const clarificationBody = (interaction: PendingInteraction): string => {
-  // Skip stays on the reply keyboard only — in-message bullets make free-text notes look like a picker.
-  if (interaction.kind === "visit_note") {
-    return BOOKING_NOTE_QUESTION_UK;
-  }
-  const options = choiceBullets(interaction);
-  if (interaction.kind === "service_or_note") {
-    const service = interaction.currentService.name ?? interaction.currentService.id;
-    const intro =
-      `Ви обрали «${service}». Ваше повідомлення також може означати зміну послуги.`;
-    return options.length > 0 ? `${intro}\n\n${options}` : `${intro}\n\nОберіть, будь ласка:`;
-  }
-  if (interaction.kind === "service_candidate") {
-    return options.length > 0
-      ? `${SERVICE_CHANGE_ACK_UK}\n\n${options}`
-      : SERVICE_CHANGE_ACK_UK;
-  }
-  if (interaction.kind === "catalog_detour") {
-    return options;
-  }
-  return options;
-};
-
-/** Build a fresh AIMessage from the open interaction. Never reuse stale agentMessages. */
-export const renderBookingInteractionMessage = (
-  interaction: PendingInteraction,
-): AIMessage =>
-  new AIMessage(clarificationBody(interaction));
-
-export const replyButtonsForInteraction = (
-  interaction: PendingInteraction,
-): string[] => interaction.choices.map((choice) => choice.label);
 
 export type BookingNoteOrchestratorDeps = {
   classify: ClassifyNoteTurn;

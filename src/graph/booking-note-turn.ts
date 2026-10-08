@@ -5,9 +5,10 @@ import {
   SUPERVISOR_OWNED_REPLY_LABELS,
 } from "../shared/clinic-constants.js";
 import type { SelectedBookingSlot } from "./types.js";
-import type {
-  BookingSessionEvent,
-  PendingInteraction,
+import {
+  interpretInteractionReply,
+  type BookingSessionEvent,
+  type PendingInteraction,
 } from "./booking-session.js";
 
 export const NOTE_TURN_KINDS = [
@@ -68,12 +69,10 @@ const matchInteractionChoice = (
   patientText: string,
   interaction: PendingInteraction | null,
 ): { type: "interaction_choice"; choiceId: string } | null => {
-  if (interaction == null) {
-    return null;
-  }
-  const trimmed = patientText.trim();
-  const choice = interaction.choices.find((entry) => entry.label === trimmed);
-  return choice != null ? { type: "interaction_choice", choiceId: choice.id } : null;
+  const match = interpretInteractionReply(interaction, patientText);
+  return match.kind === "choice"
+    ? { type: "interaction_choice", choiceId: match.choiceId }
+    : null;
 };
 
 const isStableMenuLeave = (patientText: string): boolean => {
@@ -108,6 +107,15 @@ export const interpretNoteTurn = async (
 
   const schedule = input.matchSchedule?.(patientText) ?? null;
   if (schedule != null) {
+    if (input.pendingInteraction?.kind === "service_confirm") {
+      return {
+        source: "trusted",
+        sessionEvent: {
+          type: "service_confirm_schedule",
+          schedule,
+        },
+      };
+    }
     return { source: "trusted", sessionEvent: schedule };
   }
 

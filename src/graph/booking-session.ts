@@ -1,4 +1,10 @@
-import { INTENT_SKIP_LABEL } from "../shared/clinic-constants.js";
+import {
+  BOOKING_OFFER_MENU,
+  BOOKING_REPLACE_MENU,
+  INTENT_SKIP_LABEL,
+  RETURN_TO_BOOKING_LABEL_UK,
+  VISIT_CHANGE_MENU,
+} from "../shared/clinic-constants.js";
 import {
   reduceBookingDraft,
   upgradeBookingDraftCheckpoint,
@@ -33,6 +39,8 @@ export type ServiceCandidateInteraction = {
   utterance: string;
   query?: string;
   noteCandidate?: string;
+  /** Who owns this catalog wait: booking = mid-flow change; faq = catalog browse. */
+  owner?: "faq" | "booking";
   choices: InteractionChoice[];
 };
 
@@ -42,18 +50,106 @@ export type CatalogDetourInteraction = {
   choices: InteractionChoice[];
 };
 
+export type ServiceConfirmInteraction = {
+  kind: "service_confirm";
+  service: BookingService;
+  choices: InteractionChoice[];
+};
+
+/** Immutable copy for DATE/TIME cards — choices alone cannot rebuild hours/headings. */
+export type AvailabilityRenderSlot = {
+  id: string;
+  label: string;
+  dateStart: string;
+  dateEnd: string;
+};
+
+export type AvailabilityRenderDay = {
+  date: string;
+  displayLabel: string;
+  slotSummaries: string[];
+  slots: AvailabilityRenderSlot[];
+};
+
+export type AvailabilityRenderSnapshot = {
+  snapshotId: string;
+  queryKind?: "exact" | "earlier" | "later" | "nearest";
+  queryAnchor?: string;
+  days: AvailabilityRenderDay[];
+  /** Empty-window prompts (earlier/later only). */
+  emptyMode?: "earlier" | "exact" | "other";
+  canSearchEarlier?: boolean;
+};
+
+export type DateSelectInteraction = {
+  kind: "date_select";
+  snapshot: AvailabilityRenderSnapshot;
+  choices: InteractionChoice[];
+};
+
+export type TimeSelectInteraction = {
+  kind: "time_select";
+  date: string;
+  snapshot: AvailabilityRenderSnapshot;
+  choices: InteractionChoice[];
+};
+
+export type VisitSelectMeeting = {
+  id: string;
+  name?: string;
+  dateStart?: string;
+  dateEnd?: string;
+};
+
+export type VisitSelectInteraction = {
+  kind: "visit_select";
+  stage: "action" | "meeting" | "replacement";
+  /** Known meeting when stage is action/replacement; selected target when stage is meeting. */
+  meetingId?: string;
+  /** Action already chosen when stage is meeting. */
+  action?: "reschedule" | "cancel";
+  meetings?: VisitSelectMeeting[];
+  choices: InteractionChoice[];
+};
+
+export type ContactFieldInteraction = {
+  kind: "contact_field";
+  field: "phoneNumber" | "firstName" | "lastName";
+  /** Occupied-phone copy stays open until a different number succeeds. */
+  occupied?: boolean;
+  choices: InteractionChoice[];
+};
+
+export type MutationConfirmInteraction = {
+  kind: "mutation_confirm";
+  action: "create" | "reschedule" | "cancel";
+  choices: InteractionChoice[];
+};
+
 /** Booking-owned pendingInteraction kinds. */
 export type PendingInteraction =
   | VisitNoteInteraction
   | ServiceOrNoteInteraction
   | ServiceCandidateInteraction
-  | CatalogDetourInteraction;
+  | CatalogDetourInteraction
+  | ServiceConfirmInteraction
+  | DateSelectInteraction
+  | TimeSelectInteraction
+  | VisitSelectInteraction
+  | ContactFieldInteraction
+  | MutationConfirmInteraction;
 
 export const BOOKING_OWNED_INTERACTION_KINDS = [
   "visit_note",
   "service_or_note",
   "service_candidate",
   "catalog_detour",
+  "service_confirm",
+  "date_select",
+  "time_select",
+  "visit_select",
+  "contact_field",
+  "mutation_confirm",
 ] as const;
 
 export const isBookingOwnedInteraction = (
@@ -89,6 +185,69 @@ export const openCatalogDetourInteraction = (
   choices: [{ id: "return_to_booking", label: returnLabel }],
 });
 
+export const openServiceConfirmInteraction = (
+  service: BookingService,
+  acceptLabel: string = BOOKING_OFFER_MENU[0],
+  chooseOtherLabel: string = BOOKING_OFFER_MENU[1],
+): ServiceConfirmInteraction => ({
+  kind: "service_confirm",
+  service,
+  choices: [
+    { id: "accept", label: acceptLabel },
+    { id: "choose_other", label: chooseOtherLabel },
+  ],
+});
+
+/** Unique patient-facing label for a meeting when several visits are listed. */
+export const visitMeetingChoiceLabel = (meeting: VisitSelectMeeting): string => {
+  const name = meeting.name?.trim() || "Візит";
+  const day = meeting.dateStart?.slice(0, 10) ?? "";
+  const time = meeting.dateStart?.slice(11, 16) ?? "";
+  const when = [day, time].filter((part) => part.length > 0).join(" ");
+  return when.length > 0 ? `${name} — ${when}` : name;
+};
+
+export const openVisitActionInteraction = (
+  meeting: VisitSelectMeeting,
+): VisitSelectInteraction => ({
+  kind: "visit_select",
+  stage: "action",
+  meetingId: meeting.id,
+  meetings: [meeting],
+  choices: [
+    { id: "reschedule", label: VISIT_CHANGE_MENU[0] },
+    { id: "cancel", label: VISIT_CHANGE_MENU[1] },
+    { id: "decline", label: VISIT_CHANGE_MENU[2] },
+  ],
+});
+
+export const openVisitMeetingInteraction = (
+  action: "reschedule" | "cancel",
+  meetings: VisitSelectMeeting[],
+): VisitSelectInteraction => ({
+  kind: "visit_select",
+  stage: "meeting",
+  action,
+  meetings,
+  choices: meetings.map((meeting) => ({
+    id: meeting.id,
+    label: visitMeetingChoiceLabel(meeting),
+  })),
+});
+
+export const openVisitReplacementInteraction = (
+  meeting: VisitSelectMeeting,
+): VisitSelectInteraction => ({
+  kind: "visit_select",
+  stage: "replacement",
+  meetingId: meeting.id,
+  meetings: [meeting],
+  choices: [
+    { id: "cancel_existing", label: BOOKING_REPLACE_MENU[0] },
+    { id: "decline", label: BOOKING_REPLACE_MENU[1] },
+  ],
+});
+
 export type ResolveServiceEffect = {
   type: "resolve_service";
   utterance: string;
@@ -105,7 +264,43 @@ export type ApplyServiceChoiceEffect = {
   noteCandidate?: string;
 };
 
-export type BookingSessionEffect = ResolveServiceEffect | ApplyServiceChoiceEffect;
+/** Browse FAQ catalog while preserving the booking draft (choose_other / return path). */
+export type OpenFaqCatalogEffect = {
+  type: "open_faq_catalog";
+};
+
+export type ResolveContactEffect = {
+  type: "resolve_contact";
+  field: ContactFieldInteraction["field"];
+  value: string;
+};
+
+export type BookingSessionEffect =
+  | ResolveServiceEffect
+  | ApplyServiceChoiceEffect
+  | OpenFaqCatalogEffect
+  | ResolveContactEffect;
+
+export const openContactFieldInteraction = (
+  field: ContactFieldInteraction["field"],
+  occupied = false,
+): ContactFieldInteraction => ({
+  kind: "contact_field",
+  field,
+  occupied,
+  choices: [],
+});
+
+export const openMutationConfirmInteraction = (
+  action: MutationConfirmInteraction["action"],
+): MutationConfirmInteraction => ({
+  kind: "mutation_confirm",
+  action,
+  choices: [
+    { id: "confirm", label: "✅" },
+    { id: "decline", label: "❌" },
+  ],
+});
 
 export type BookingSessionState = {
   bookingDraft: BookingDraft | null;
@@ -147,9 +342,52 @@ export type BookingSessionEvent =
       utterance: string;
       query?: string;
       noteCandidate?: string;
+      owner?: "faq" | "booking";
       choices: InteractionChoice[];
     }
   | { type: "service_unresolved"; returnLabel: string }
+  | {
+      type: "service_offered";
+      service: BookingService;
+      acceptLabel?: string;
+      chooseOtherLabel?: string;
+    }
+  | {
+      type: "availability_presented";
+      interaction: DateSelectInteraction | TimeSelectInteraction;
+    }
+  | {
+      type: "service_confirm_schedule";
+      schedule:
+        | { type: "date_selected"; date: string }
+        | { type: "slot_selected"; slot: NonNullable<BookingDraft["selectedSlot"]> };
+      turn?: number;
+    }
+  | {
+      type: "visit_menu_opened";
+      interaction: VisitSelectInteraction;
+    }
+  | {
+      type: "contact_field_required";
+      field: ContactFieldInteraction["field"];
+      occupied?: boolean;
+    }
+  | {
+      type: "contact_field_submitted";
+      value: string;
+    }
+  | {
+      type: "contact_field_resolved";
+    }
+  | {
+      type: "contact_field_failed";
+      occupied?: boolean;
+    }
+  | {
+      type: "mutation_confirm_opened";
+      action: MutationConfirmInteraction["action"];
+    }
+  | { type: "mutation_confirm_cleared" }
   | { type: "leave_booking"; destination: "main_menu" }
   | { type: "draft_event"; event: Parameters<typeof reduceBookingDraft>[1] };
 
@@ -167,6 +405,32 @@ const choiceById = (
   choiceId: string,
 ): InteractionChoice | null =>
   interaction?.choices.find((choice) => choice.id === choiceId) ?? null;
+
+export type InteractionReplyMatch =
+  | { kind: "choice"; choiceId: string }
+  | { kind: "unmatched" };
+
+/**
+ * Match patient text against the current interaction only.
+ * Exact label → stable choice.id. Labels absent from the current interaction are unmatched
+ * (Telegram cannot attribute reused labels to an older keyboard).
+ */
+export const interpretInteractionReply = (
+  interaction: PendingInteraction | null | undefined,
+  text: string,
+): InteractionReplyMatch => {
+  if (interaction == null) {
+    return { kind: "unmatched" };
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return { kind: "unmatched" };
+  }
+  const choice = interaction.choices.find((entry) => entry.label === trimmed);
+  return choice != null
+    ? { kind: "choice", choiceId: choice.id }
+    : { kind: "unmatched" };
+};
 
 const withoutReturnChoice = (interaction: PendingInteraction): PendingInteraction => ({
   ...interaction,
@@ -335,6 +599,129 @@ export const reduceBookingSession = (
       if (interaction.kind === "visit_note" && event.choiceId === "skip") {
         return reduceBookingSession(current, { type: "note_skipped" });
       }
+      if (interaction.kind === "service_confirm") {
+        if (event.choiceId === "accept") {
+          if (draft == null) {
+            return noEffect(current);
+          }
+          return noEffect({
+            bookingDraft: reduceBookingDraft(draft, {
+              type: "service_accepted",
+            }),
+            pendingInteraction: null,
+          });
+        }
+        if (event.choiceId === "choose_other") {
+          // Preserve draft for return-to-booking; FAQ catalog owns the next turn.
+          return {
+            bookingDraft: draft,
+            pendingInteraction: openCatalogDetourInteraction(RETURN_TO_BOOKING_LABEL_UK),
+            clearAvailability: false,
+            effect: { type: "open_faq_catalog" },
+          };
+        }
+      }
+      if (interaction.kind === "visit_select") {
+        if (event.choiceId === "decline") {
+          return noEffect({
+            bookingDraft: draft,
+            pendingInteraction: null,
+          });
+        }
+        if (interaction.stage === "action") {
+          if (event.choiceId === "reschedule" || event.choiceId === "cancel") {
+            const meeting = interaction.meetings?.find((m) => m.id === interaction.meetingId)
+              ?? (interaction.meetingId != null
+                ? { id: interaction.meetingId }
+                : null);
+            if (event.choiceId === "reschedule" && meeting != null) {
+              return noEffect({
+                bookingDraft: reduceBookingDraft(draft, {
+                  type: "reschedule_started",
+                  meeting,
+                }),
+                pendingInteraction: null,
+              });
+            }
+            // Cancel is prepared by booking command-prepare from bookingContext.
+            return noEffect({
+              bookingDraft: draft,
+              pendingInteraction: null,
+            });
+          }
+        }
+        if (interaction.stage === "meeting") {
+          const meeting = interaction.meetings?.find((m) => m.id === event.choiceId);
+          if (meeting == null) {
+            return noEffect(current);
+          }
+          if (interaction.action === "reschedule") {
+            return noEffect({
+              bookingDraft: reduceBookingDraft(draft, {
+                type: "reschedule_started",
+                meeting,
+              }),
+              pendingInteraction: null,
+            });
+          }
+          return noEffect({
+            bookingDraft: draft,
+            pendingInteraction: null,
+          });
+        }
+        if (interaction.stage === "replacement") {
+          if (event.choiceId === "cancel_existing") {
+            return noEffect({
+              bookingDraft: draft,
+              pendingInteraction: null,
+            });
+          }
+        }
+      }
+      if (interaction.kind === "mutation_confirm") {
+        if (event.choiceId === "confirm") {
+          // Keep interaction until the write succeeds; adapter clears after resume.
+          return noEffect(current);
+        }
+        if (event.choiceId === "decline") {
+          return noEffect({
+            bookingDraft: draft != null
+              ? reduceBookingDraft(draft, { type: "command_cleared" })
+              : null,
+            pendingInteraction: null,
+          });
+        }
+      }
+      if (interaction.kind === "date_select" || interaction.kind === "time_select") {
+        if (event.choiceId === "other_date" || event.choiceId === "earlier" || event.choiceId === "later") {
+          return noEffect({
+            bookingDraft: draft,
+            pendingInteraction: null,
+          });
+        }
+        if (interaction.kind === "date_select" && /^\d{4}-\d{2}-\d{2}$/.test(event.choiceId)) {
+          return reduceBookingSession(current, {
+            type: "date_selected",
+            date: event.choiceId,
+          });
+        }
+        if (interaction.kind === "time_select") {
+          const day = interaction.snapshot.days.find((entry) => entry.date === interaction.date);
+          const slot = day?.slots.find((entry) => entry.id === event.choiceId);
+          if (slot == null) {
+            return noEffect(current);
+          }
+          return reduceBookingSession(current, {
+            type: "slot_selected",
+            slot: {
+              slotId: slot.id,
+              dateStart: slot.dateStart,
+              dateEnd: slot.dateEnd,
+              label: slot.label,
+            },
+          });
+        }
+      }
       if (interaction.kind === "service_or_note") {
         if (event.choiceId === "keep_service") {
           return noEffect({
@@ -453,6 +840,7 @@ export const reduceBookingSession = (
           utterance: event.utterance,
           ...(event.query != null ? { query: event.query } : {}),
           ...(event.noteCandidate != null ? { noteCandidate: event.noteCandidate } : {}),
+          owner: event.owner ?? "booking",
           choices: event.choices,
         },
       });
@@ -465,6 +853,116 @@ export const reduceBookingSession = (
         bookingDraft: draft,
         pendingInteraction: preserved,
       });
+    }
+    case "service_offered": {
+      const nextDraft = reduceBookingDraft(draft, {
+        type: "service_selected",
+        service: event.service,
+        accepted: false,
+      });
+      return noEffect({
+        bookingDraft: nextDraft,
+        pendingInteraction: openServiceConfirmInteraction(
+          event.service,
+          event.acceptLabel,
+          event.chooseOtherLabel,
+        ),
+      });
+    }
+    case "availability_presented": {
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: event.interaction,
+      });
+    }
+    case "visit_menu_opened": {
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: event.interaction,
+      });
+    }
+    case "contact_field_required": {
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: openContactFieldInteraction(
+          event.field,
+          event.occupied === true,
+        ),
+      });
+    }
+    case "contact_field_submitted": {
+      if (interaction?.kind !== "contact_field") {
+        return noEffect(current);
+      }
+      const value = event.value.trim();
+      if (value.length === 0) {
+        return noEffect(current);
+      }
+      return {
+        bookingDraft: draft,
+        pendingInteraction: interaction,
+        clearAvailability: false,
+        effect: {
+          type: "resolve_contact",
+          field: interaction.field,
+          value,
+        },
+      };
+    }
+    case "contact_field_resolved": {
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: clearBookingOwnedInteraction(interaction),
+      });
+    }
+    case "contact_field_failed": {
+      if (interaction?.kind !== "contact_field") {
+        return noEffect(current);
+      }
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: openContactFieldInteraction(
+          interaction.field,
+          event.occupied === true,
+        ),
+      });
+    }
+    case "mutation_confirm_opened": {
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: openMutationConfirmInteraction(event.action),
+      });
+    }
+    case "mutation_confirm_cleared": {
+      if (interaction?.kind !== "mutation_confirm") {
+        return noEffect(current);
+      }
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: null,
+      });
+    }
+    case "service_confirm_schedule": {
+      if (interaction?.kind !== "service_confirm") {
+        return noEffect(current);
+      }
+      let nextDraft = draft;
+      if (nextDraft != null) {
+        nextDraft = reduceBookingDraft(nextDraft, {
+          type: "service_accepted",
+          ...(event.turn != null ? { turn: event.turn } : {}),
+        });
+      }
+      if (event.schedule.type === "date_selected") {
+        return reduceBookingSession(
+          { bookingDraft: nextDraft, pendingInteraction: null },
+          { type: "date_selected", date: event.schedule.date },
+        );
+      }
+      return reduceBookingSession(
+        { bookingDraft: nextDraft, pendingInteraction: null },
+        { type: "slot_selected", slot: event.schedule.slot },
+      );
     }
     default:
       return noEffect(current);

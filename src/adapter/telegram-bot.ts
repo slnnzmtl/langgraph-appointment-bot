@@ -14,7 +14,15 @@ import {
   type BookingCheckpointLegacyState,
 } from "../composition/booking-checkpoint.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
+import {
+  isConfirmationAffirmation,
+  isConfirmationDecline,
+} from "../shared/message-content.js";
 import type { McpCallTool } from "../shared/mcp.js";
+import {
+  interpretInteractionReply,
+  reduceBookingSession,
+} from "../graph/booking-session.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
 import {
   REMINDER_CONFIRMED_ACK,
@@ -324,12 +332,47 @@ export const handleGraphTextTurn = async (
             config,
           );
         }
+        const channelValues = (
+          snapshot.values as {
+            bookingDraft?: unknown;
+            pendingInteraction?: unknown;
+          } | undefined
+        ) ?? {};
+        const mutationInteraction =
+          channelValues.pendingInteraction != null
+          && typeof channelValues.pendingInteraction === "object"
+          && (channelValues.pendingInteraction as { kind?: string }).kind === "mutation_confirm"
+            ? channelValues.pendingInteraction as Parameters<typeof reduceBookingSession>[0]["pendingInteraction"]
+            : null;
+        const interactionUpdate = (
+          choiceId: "confirm" | "decline",
+        ): Record<string, unknown> => {
+          if (mutationInteraction == null) {
+            return bookingUpdate;
+          }
+          const session = reduceBookingSession(
+            {
+              bookingDraft: (channelValues.bookingDraft as Parameters<
+                typeof reduceBookingSession
+              >[0]["bookingDraft"]) ?? null,
+              pendingInteraction: mutationInteraction,
+            },
+            { type: "interaction_choice", choiceId },
+          );
+          return {
+            ...bookingUpdate,
+            bookingDraft: session.bookingDraft,
+            pendingInteraction: choiceId === "confirm"
+              ? session.pendingInteraction
+              : null,
+          };
+        };
         const decision = classifyConfirmReply(text);
         if (decision.kind === "confirmed") {
           return graph.invoke(
             new Command({
               resume: { confirmed: true },
-              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
+              update: interactionUpdate("confirm"),
             }) as never,
             config,
           );
@@ -338,10 +381,40 @@ export const handleGraphTextTurn = async (
           return graph.invoke(
             new Command({
               resume: { confirmed: false },
-              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
+              update: interactionUpdate("decline"),
             }) as never,
             config,
           );
+        }
+        // Chat text while paused: interpret against mutation_confirm when open.
+        if (mutationInteraction != null) {
+          const match = interpretInteractionReply(mutationInteraction, text);
+          const action = (mutationInteraction as { action?: "create" | "reschedule" | "cancel" })
+            .action;
+          if (
+            match.kind === "choice" && match.choiceId === "confirm"
+            || (action != null && isConfirmationAffirmation(text, action))
+          ) {
+            return graph.invoke(
+              new Command({
+                resume: { confirmed: true },
+                update: interactionUpdate("confirm"),
+              }) as never,
+              config,
+            );
+          }
+          if (
+            match.kind === "choice" && match.choiceId === "decline"
+            || isConfirmationDecline(text)
+          ) {
+            return graph.invoke(
+              new Command({
+                resume: { confirmed: false },
+                update: interactionUpdate("decline"),
+              }) as never,
+              config,
+            );
+          }
         }
         return graph.invoke(
           new Command({

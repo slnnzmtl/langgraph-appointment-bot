@@ -937,10 +937,12 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
           replyButtons: ["Ботулінотерапія", "Консультація", RETURN_TO_BOOKING_LABEL_UK],
         },
         pendingInteraction: {
-          kind: "visit_note",
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "процедури",
           choices: [
-            { id: "skip", label: INTENT_SKIP_LABEL },
-            { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+            { id: "svc-b", label: "Ботулінотерапія", serviceIds: ["svc-b"] },
+            { id: "svc-c", label: "Консультація", serviceIds: ["svc-c"] },
           ],
         },
         bookingDraft: {
@@ -977,8 +979,9 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(supervisorInvoke).not.toHaveBeenCalled();
     expect(agentInvoke).toHaveBeenCalled();
     expect(result.lastHandoff?.agentId).toBe("faq");
-    expect(String(result.lastHandoff?.replyText ?? "")).toContain("Botox/Disport");
-    expect(result.pendingInteraction?.choices.some((c) => c.id === "return_to_booking")).toBe(true);
+    expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    expect(result.pendingInteraction?.owner).toBe("faq");
+    expect(String(result.lastHandoff?.replyText ?? "")).toContain("Ботулінотерапія");
     expect(result.bookingDraft?.phase).toBe("note");
   });
 
@@ -1073,7 +1076,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(result.lastHandoff?.replyButtons).toEqual(
       expect.arrayContaining(["11:30", "12:30", "13:30"]),
     );
-    expect(result.pendingInteraction).toBeNull();
+    expect(result.pendingInteraction?.kind).toBe("time_select");
     expect(result.bookingDraft?.selectedDate).toBe("2026-10-19");
   });
 
@@ -1807,9 +1810,14 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
 
     const third = await invoke({ messages: [new HumanMessage("Так")] });
 
+    // After chat-other invalidates the slot, a later "Так" must not reuse the
+    // cleared confirmation path. Runtime recovers with a fresh TIME card.
     expect(writeInvoke).not.toHaveBeenCalled();
-    expect(third.__interrupt__).toHaveLength(1);
-    expect(third.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+    expect(third.__interrupt__).toBeUndefined();
+    expect(third.pendingInteraction?.kind).toBe("time_select");
+    expect(String(third.lastHandoff?.replyText ?? "")).toContain("Вільні години");
+    expect(third.lastHandoff?.replyButtons).toEqual(expect.arrayContaining(["11:00"]));
+    expect(modelInvoke).toHaveBeenCalledOnce();
   });
 
   it("ends a reschedule on typed no without another LLM or availability offer", async () => {

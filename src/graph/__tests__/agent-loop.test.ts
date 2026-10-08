@@ -3264,6 +3264,7 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [
           new AIMessage(
             "Підібрати вільний час на консультацію?\n\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
@@ -3273,14 +3274,13 @@ describe("createAgentFinalizeNode", () => {
     );
 
     const stored = update.messages?.[0] as AIMessage;
-    expect(String(stored.content)).toBe("Підібрати вільний час на консультацію?");
     expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff).toMatchObject({
       agentId: "booking",
       status: "ok",
-      replyText: "Підібрати вільний час на консультацію?",
       replyButtons: [...BOOKING_OFFER_MENU],
     });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
@@ -3323,11 +3323,13 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
       }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
@@ -3336,6 +3338,7 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [
           new AIMessage(
             "Записати вас на консультацію?\n<reply_buttons>\nЗаписатись\nПослуги\n</reply_buttons>",
@@ -3344,8 +3347,9 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(String(update.messages?.[0]?.content)).toBe("Записати вас на консультацію?");
+    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("strips an empty reply_buttons trailer and omits DEFAULT MENU for mid-flow booking", () => {
@@ -3873,6 +3877,10 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("запиши на консультацію")],
+        servicesContext: {
+          list: [{ id: CONSULTATION_SERVICE_ID, name: "Консультація" }],
+        },
         agentMessages: [new AIMessage("Записати вас на консультацію?")],
       }),
     );
@@ -3880,10 +3888,11 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "faq",
       status: "ok",
-      replyText: "Записати вас на консультацію?",
       replyButtons: [...BOOKING_OFFER_MENU],
       yieldToSupervisor: true,
     });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.bookingDraft?.serviceAcceptance?.status).toBe("pending");
   });
 
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
@@ -3898,6 +3907,10 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("запиши на консультацію")],
+        servicesContext: {
+          list: [{ id: CONSULTATION_SERVICE_ID, name: "Консультація" }],
+        },
         agentMessages: [
           new AIMessage(
             "Записати вас на консультацію?\n<yield_to_supervisor/>\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
@@ -3907,15 +3920,15 @@ describe("createAgentFinalizeNode", () => {
     );
 
     const stored = update.messages?.[0] as AIMessage;
-    expect(String(stored.content)).toBe("Записати вас на консультацію?");
     expect(String(stored.content)).not.toContain("yield_to_supervisor");
+    expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff).toMatchObject({
       agentId: "faq",
       status: "ok",
-      replyText: "Записати вас на консультацію?",
-      replyButtons: ["Так", "Обрати іншу процедуру"],
+      replyButtons: [...BOOKING_OFFER_MENU],
       yieldToSupervisor: true,
     });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("strips a yield-only trailer and omits DEFAULT MENU for faq", () => {
@@ -3947,7 +3960,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("recovers catalog buttons when faq lists procedures without a trailer", () => {
+  it("attaches FAQ catalog buttons from structured CRM choices, not reply bullets", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -3960,19 +3973,33 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
+        servicesContext: {
+          list: [
+            { id: "svc-lip", name: "збільшення губ" },
+            { id: "svc-botox", name: "ботулінотерапія" },
+          ],
+        },
         agentMessages: [
-          new AIMessage(
-            "В ін'єкційних процедурах є, наприклад:\n• збільшення губ\n• ботулінотерапія\n\nЯка процедура вас цікавить?",
-          ),
+          new ToolMessage({
+            content: JSON.stringify({
+              list: [
+                { id: "svc-lip", name: "збільшення губ" },
+                { id: "svc-botox", name: "ботулінотерапія" },
+              ],
+            }),
+            name: "list_services",
+            tool_call_id: "ls-1",
+          }),
+          new AIMessage("Ось доступні процедури."),
         ],
       }),
     );
 
-    expect(update.lastHandoff?.replyText).toContain("Яка процедура вас цікавить?");
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
     expect(update.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
   });
 
-  it("recovers dermatology family buttons on a second catalog browse", () => {
+  it("renders an open FAQ catalog interaction without parsing bullets", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -3985,10 +4012,18 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "дерматологія",
+          choices: [
+            { id: "svc-a", label: "видалення новоутворень", serviceIds: ["svc-a"] },
+            { id: "svc-b", label: "пілінги", serviceIds: ["svc-b"] },
+            { id: "svc-c", label: "мезотерапія", serviceIds: ["svc-c"] },
+          ],
+        },
         agentMessages: [
-          new AIMessage(
-            "У напрямку дерматологічних послуг та догляду є, наприклад:\n• видалення новоутворень\n• пілінги\n• мезотерапія\n\nЯка саме процедура вас цікавить?",
-          ),
+          new AIMessage("У напрямку дерматологічних послуг є кілька варіантів."),
         ],
       }),
     );
@@ -4000,7 +4035,7 @@ describe("createAgentFinalizeNode", () => {
     ]);
   });
 
-  it("recovers numbered injection families and zone bullets without a trailer", () => {
+  it("keeps FAQ catalog choice ids when narrowing remaining CRM rows", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4013,11 +4048,16 @@ describe("createAgentFinalizeNode", () => {
     const families = finalize(
       clinicState({
         stepCount: 1,
-        agentMessages: [
-          new AIMessage(
-            "В ін'єкційних процедурах є:\n1. збільшення губ\n2. ботулінотерапія\n\nЯка процедура вас цікавить?",
-          ),
-        ],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ін'єкції",
+          choices: [
+            { id: "g0", label: "збільшення губ", serviceIds: ["svc-lip"] },
+            { id: "g1", label: "ботулінотерапія", serviceIds: ["svc-b1", "svc-b2"] },
+          ],
+        },
+        agentMessages: [new AIMessage("Оберіть процедуру.")],
       }),
     );
     expect(families.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
@@ -4025,11 +4065,16 @@ describe("createAgentFinalizeNode", () => {
     const zones = finalize(
       clinicState({
         stepCount: 1,
-        agentMessages: [
-          new AIMessage(
-            "Для ботулінотерапії є варіанти за зонами:\n• 1 зона\n• 2 зони\n\nЯкий варіант вам підходить?",
-          ),
-        ],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботулінотерапія",
+          choices: [
+            { id: "svc-b1", label: "1 зона", serviceIds: ["svc-b1"] },
+            { id: "svc-b2", label: "2 зони", serviceIds: ["svc-b2"] },
+          ],
+        },
+        agentMessages: [new AIMessage("Оберіть зону.")],
       }),
     );
     expect(zones.lastHandoff?.replyButtons).toEqual(["1 зона", "2 зони"]);
@@ -4037,17 +4082,23 @@ describe("createAgentFinalizeNode", () => {
     const brands = finalize(
       clinicState({
         stepCount: 1,
-        agentMessages: [
-          new AIMessage(
-            "Для ботулінотерапії (1 зона) є препарати:\n• Disport\n• Nabota\n• Botox\n\nЯкий препарат вас цікавить?",
-          ),
-        ],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботулінотерапія 1 зона",
+          choices: [
+            { id: "svc-d", label: "Disport", serviceIds: ["svc-d"] },
+            { id: "svc-n", label: "Nabota", serviceIds: ["svc-n"] },
+            { id: "svc-b", label: "Botox", serviceIds: ["svc-b"] },
+          ],
+        },
+        agentMessages: [new AIMessage("Оберіть препарат.")],
       }),
     );
     expect(brands.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota", "Botox"]);
   });
 
-  it("recovers послуга catalog choice without a trailer", () => {
+  it("opens FAQ catalog choices for consultation service names from CRM", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4059,11 +4110,16 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
-        agentMessages: [
-          new AIMessage(
-            "Ось послуги напрямку:\n• Консультація дерматолога\n• Консультація косметолога\n\nЯка саме послуга вас цікавить?",
-          ),
-        ],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "консультації",
+          choices: [
+            { id: "svc-d", label: "Консультація дерматолога", serviceIds: ["svc-d"] },
+            { id: "svc-c", label: "Консультація косметолога", serviceIds: ["svc-c"] },
+          ],
+        },
+        agentMessages: [new AIMessage("Ось послуги напрямку.")],
       }),
     );
 
@@ -4085,6 +4141,10 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("запиши на консультацію")],
+        servicesContext: {
+          list: [{ id: CONSULTATION_SERVICE_ID, name: "Консультація" }],
+        },
         agentMessages: [
           new AIMessage(
             "У нашій клініці доступні такі напрями\n\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЗаписати вас на консультацію?",
@@ -4095,6 +4155,7 @@ describe("createAgentFinalizeNode", () => {
 
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
     expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", () => {
@@ -4105,6 +4166,7 @@ describe("createAgentFinalizeNode", () => {
         bookingNoteStatus: "unasked",
         availabilityContext: null,
         selectedSlot: null,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [
           new HumanMessage("Записатись"),
           new AIMessage(
@@ -4117,6 +4179,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
     expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("DDD-54: booking omits DEFAULT MENU for non-offer mid-flow replies without a trailer", () => {
@@ -4134,7 +4197,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("prefers catalog bullets over an accidental leftover trailer", () => {
+  it("prefers open FAQ catalog interaction over an accidental leftover trailer", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4146,9 +4209,18 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "напрями",
+          choices: [
+            { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
+            { id: "g1", label: "Ін'єкційні процедури", serviceIds: ["b"] },
+          ],
+        },
         agentMessages: [
           new AIMessage(
-            "Ось основні напрями:\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЯкий напрямок?\n<reply_buttons>\nIgnored\nLabels\n</reply_buttons>",
+            "Ось основні напрями.\n<reply_buttons>\nIgnored\nLabels\n</reply_buttons>",
           ),
         ],
       }),
@@ -4161,7 +4233,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
   });
 
-  it("harvests an accidental catalog trailer when bullets are missing", () => {
+  it("strips an accidental catalog trailer when no FAQ catalog interaction is open", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4181,8 +4253,10 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toEqual(["Консультації", "Ін'єкційні процедури"]);
+    // Accidental trailers are stripped; chips only come from pendingInteraction.
     expect(String(update.messages?.[0]?.content)).toBe("Який напрямок?");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.pendingInteraction ?? null).toBeNull();
   });
 
   it("does not attach buttons for faq location-only replies", () => {
@@ -5041,6 +5115,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
       }),
     );
+    expect(offer.pendingInteraction?.kind).toBe("service_confirm");
     const prepare = createAgentPrepareNode("booking");
     const picked = await prepare(
       clinicState({
@@ -5050,6 +5125,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new HumanMessage("14:00"),
         ],
         bookingDraft: offer.bookingDraft,
+        pendingInteraction: offer.pendingInteraction,
         availabilityContext: snapshot,
       }),
     );

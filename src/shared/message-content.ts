@@ -1,4 +1,4 @@
-import { AIMessage, HumanMessage, type BaseMessage } from "@langchain/core/messages";
+import type { BaseMessage } from "@langchain/core/messages";
 
 type NonTextContentPart = Exclude<
   Extract<BaseMessage["content"], readonly unknown[]>[number],
@@ -155,24 +155,6 @@ const stripYieldToSupervisorTags = (raw: string): { cleaned: string; yieldToSupe
   return { cleaned, yieldToSupervisor };
 };
 
-/** Yes/no booking offers — never recover catalog bullets from these replies. */
-const BOOKING_OFFER_QUESTION =
-  /(?:записати\s+вас\s+на\s+консультацію|бажаєте\s+записатися|підібрати\s+(?:вільний\s+)?час|записатися\s+на\s+цю\s+процедуру|book(?:\s+a|\s+you\s+for)?\s+(?:a\s+)?consultation|would\s+you\s+like\s+to\s+book|book\s+this\s+(?:procedure|service))/i;
-
-const lastNonEmptyLine = (text: string): string =>
-  text
-    .trim()
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .at(-1) ?? "";
-
-/** True when the reply ends with a consultation / book-this-procedure yes/no question. */
-export const isBookingOfferQuestion = (text: string): boolean => {
-  const lastLine = lastNonEmptyLine(text);
-  return lastLine.includes("?") && BOOKING_OFFER_QUESTION.test(lastLine);
-};
-
 const YES_REPLY = /^(так|yes|да)$/i;
 const CONFIRMATION_AFFIRMATION = [
   /^(?:так|yes|да)(?:[\s,]+(?:будь\s+ласка|please|підтверджую|підтвердіть|confirm(?:ed)?|подтверждаю|подтвердите|звісно|sure|of\s+course|конечно))*[\s.!]*$/iu,
@@ -198,10 +180,6 @@ const CONSULTATION_NEGATION =
 /** Book/browse request naming consultation — not a topic question or decline. */
 const CONSULTATION_REQUEST =
   /(?:запиш\w*|записат\w*|хочу|бажаю|потрібн\w*|треба|book|want|need).{0,40}(?:консультац|consultation)|(?:консультац|consultation).{0,40}(?:запиш\w*|записат\w*|будь\s*ласка|please)|^(?:консультація|consultation)$/i;
-/** Book intent naming a non-consultation procedure/family. */
-const OTHER_PROCEDURE_BOOK =
-  /(?:запиш\w*|записат\w*|на\s+\S+.{0,40}запиш\w*|book|want).{0,60}/i;
-
 /** Exact «Так» / Yes / Да (booking-offer keyboard). */
 export const isYesReply = (text: string): boolean => YES_REPLY.test(text.trim());
 
@@ -237,80 +215,6 @@ export const requestsConsultation = (text: string): boolean => {
   return CONSULTATION_REQUEST.test(trimmed);
 };
 
-/** Mentions consultation as a topic without requesting to book it. */
-const declinesOrQuestionsConsultation = (text: string): boolean => {
-  const trimmed = text.trim();
-  if (!MENTIONS_CONSULTATION.test(trimmed)) {
-    return false;
-  }
-  return trimmed.includes("?") || CONSULTATION_NEGATION.test(trimmed);
-};
-
-/** Book/browse intent for something other than consultation. */
-export const namesOtherProcedureBook = (text: string): boolean => {
-  const trimmed = text.trim();
-  if (!trimmed || requestsConsultation(trimmed) || isYesReply(trimmed)) {
-    return false;
-  }
-  if (MENTIONS_CONSULTATION.test(trimmed) && !CONSULTATION_NEGATION.test(trimmed)) {
-    return false;
-  }
-  return OTHER_PROCEDURE_BOOK.test(trimmed);
-};
-
-/** True when the booking-offer question is specifically for «Консультація». */
-export const isConsultationOfferQuestion = (text: string): boolean => {
-  if (!isBookingOfferQuestion(text)) {
-    return false;
-  }
-  return MENTIONS_CONSULTATION.test(lastNonEmptyLine(text));
-};
-
-/**
- * True when the latest agreement state is to book «Консультація»
- * («Так» after a consultation offer, or an explicit consultation request).
- * Topic questions, declines, and a later other-procedure book clear agreement.
- */
-export const patientAgreedToConsultation = (messages: BaseMessage[]): boolean => {
-  let awaitingYes = false;
-  let agreed = false;
-  for (const message of messages) {
-    if (message instanceof AIMessage) {
-      if (isConsultationOfferQuestion(extractMessageTextContent(message.content))) {
-        awaitingYes = true;
-      }
-      continue;
-    }
-    if (!(message instanceof HumanMessage)) {
-      continue;
-    }
-    const text = extractMessageTextContent(message.content).trim();
-    if (requestsConsultation(text)) {
-      agreed = true;
-      awaitingYes = false;
-      continue;
-    }
-    if (awaitingYes && isYesReply(text)) {
-      agreed = true;
-      awaitingYes = false;
-      continue;
-    }
-    if (
-      namesOtherProcedureBook(text)
-      || declinesOrQuestionsConsultation(text)
-      || (awaitingYes && text.length > 0 && !isYesReply(text))
-    ) {
-      agreed = false;
-      awaitingYes = false;
-    }
-  }
-  return agreed;
-};
-
-/** Catalog drill-down closing questions (direction / family / zone / brand). */
-const CATALOG_CHOICE_QUESTION =
-  /(?:який\s+(?:саме\s+)?напрямок|яка\s+(?:саме\s+)?(?:процедура|послуга|зона|ділянка|область|частина)|які\s+(?:саме\s+)?зони|який\s+(?:саме\s+)?варіант|який\s+(?:саме\s+)?препарат|which\s+(?:direction|procedure|service|variant|preparation|zone|area))/i;
-
 /**
  * Stems of CRM service names for loose Ukrainian-declension matching
  * («ботулінотерапія» / «ботулінотерапію» both match the stem «ботулінотерапі»).
@@ -336,55 +240,6 @@ export const mentionsCatalogProcedure = (text: string, names: string[]): boolean
     return false;
   }
   return catalogNameStems(names).some((stem) => normalized.includes(stem));
-};
-
-/** Bullet or numbered CRM-style list item (`• label`, `1. label`, `1) label`). */
-const LIST_ITEM_PREFIX = /^(?:[\s•\u2022\-\*]+\s*|\d+[\.\)]\s+)(.+)$/;
-
-const labelBeforeDescription = (raw: string): string => {
-  const trimmed = raw.trim();
-  const dash = trimmed.search(/\s+[—–]\s+/);
-  return (dash >= 0 ? trimmed.slice(0, dash) : trimmed).trim();
-};
-
-/**
- * Recover catalog drill-down shortcuts from visible bullet lists.
- * Returns [] unless the reply ends with a catalog-choice question (not a booking offer).
- */
-export const catalogChoiceButtonsFromText = (text: string): string[] => {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return [];
-  }
-
-  const lines = trimmed.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  const lastLine = lines.at(-1) ?? "";
-  if (!lastLine.includes("?") || isBookingOfferQuestion(trimmed) || !CATALOG_CHOICE_QUESTION.test(lastLine)) {
-    return [];
-  }
-
-  const seen = new Set<string>();
-  const buttons: string[] = [];
-  for (const line of lines) {
-    if (line === lastLine) {
-      continue;
-    }
-    const match = line.match(LIST_ITEM_PREFIX);
-    if (!match) {
-      continue;
-    }
-    const label = labelBeforeDescription(match[1]!);
-    if (!label || seen.has(label)) {
-      continue;
-    }
-    seen.add(label);
-    buttons.push(label);
-    if (buttons.length >= MAX_REPLY_BUTTONS) {
-      break;
-    }
-  }
-
-  return buttons;
 };
 
 /**

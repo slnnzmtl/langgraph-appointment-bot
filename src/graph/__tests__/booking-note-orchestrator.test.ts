@@ -19,10 +19,12 @@ import {
   createBookingNoteOrchestratorNode,
   defaultServiceOrNoteChoices,
   orchestrateBookingNoteTurn,
-  renderBookingInteractionMessage,
-  replyButtonsForInteraction,
   type ResolveServiceChange,
 } from "../booking-note-orchestrator.js";
+import {
+  renderBookingInteractionMessage,
+  replyButtonsForInteraction,
+} from "../booking-interaction-render.js";
 import type { ClassifyNoteTurn } from "../booking-note-turn.js";
 import {
   openVisitNoteInteraction,

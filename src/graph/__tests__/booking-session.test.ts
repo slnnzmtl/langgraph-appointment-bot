@@ -7,6 +7,7 @@ import {
 import {
   BOOKING_OWNED_INTERACTION_KINDS,
   clearBookingOwnedInteraction,
+  interpretInteractionReply,
   isBookingOwnedInteraction,
   reduceBookingSession,
   type PendingInteraction,
@@ -378,12 +379,75 @@ describe("reduceBookingSession", () => {
       kind: "service_candidate",
       utterance: "ботокс",
       noteCandidate: "I need a consultation regarding Botox",
+      owner: "booking",
       choices: [
         { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
         { id: "g1", label: "шия", serviceIds: ["svc-b", "svc-c"] },
       ],
     });
     expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-botox");
+  });
+
+  it("service_offered opens service_confirm with accept/choose_other choice ids", () => {
+    const result = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+      },
+    );
+    expect(result.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: "svc-consult" },
+    });
+    expect(result.pendingInteraction?.kind).toBe("service_confirm");
+    expect(result.pendingInteraction?.choices.map((c) => c.id)).toEqual([
+      "accept",
+      "choose_other",
+    ]);
+  });
+
+  it("accept on service_confirm accepts the service; choose_other opens catalog_detour", () => {
+    const offered = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+        acceptLabel: "Yes",
+        chooseOtherLabel: "Other",
+      },
+    );
+    const accepted = reduceBookingSession(offered, {
+      type: "interaction_choice",
+      choiceId: "accept",
+    });
+    expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(accepted.pendingInteraction).toBeNull();
+
+    const other = reduceBookingSession(offered, {
+      type: "interaction_choice",
+      choiceId: "choose_other",
+    });
+    expect(other.bookingDraft?.serviceAcceptance?.status).toBe("pending");
+    expect(other.pendingInteraction?.kind).toBe("catalog_detour");
+    expect(other.effect).toEqual({ type: "open_faq_catalog" });
+  });
+
+  it("service_confirm_schedule accepts the service and applies the date atomically", () => {
+    const offered = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+      },
+    );
+    const scheduled = reduceBookingSession(offered, {
+      type: "service_confirm_schedule",
+      schedule: { type: "date_selected", date: "2026-10-20" },
+    });
+    expect(scheduled.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(scheduled.bookingDraft?.selectedDate).toBe("2026-10-20");
+    expect(scheduled.pendingInteraction).toBeNull();
   });
 
   it("service_unresolved preserves the interaction and adds return_to_booking", () => {
@@ -661,6 +725,12 @@ describe("booking-owned pendingInteraction helpers", () => {
       "service_or_note",
       "service_candidate",
       "catalog_detour",
+      "service_confirm",
+      "date_select",
+      "time_select",
+      "visit_select",
+      "contact_field",
+      "mutation_confirm",
     ]);
     expect(isBookingOwnedInteraction({ kind: "visit_note", choices: [] })).toBe(true);
     expect(isBookingOwnedInteraction({
@@ -682,5 +752,39 @@ describe("booking-owned pendingInteraction helpers", () => {
         choices: [{ id: "return_to_booking", label: "Back" }],
       }),
     ).toBeNull();
+  });
+});
+
+describe("interpretInteractionReply", () => {
+  const visitNote: PendingInteraction = {
+    kind: "visit_note",
+    choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+  };
+
+  it("maps an exact current label to the stable choice id", () => {
+    expect(interpretInteractionReply(visitNote, INTENT_SKIP_LABEL)).toEqual({
+      kind: "choice",
+      choiceId: "skip",
+    });
+  });
+
+  it("keeps the same choice id when the visible label changes", () => {
+    const englishSkip: PendingInteraction = {
+      kind: "visit_note",
+      choices: [{ id: "skip", label: "Continue with no comments" }],
+    };
+    expect(interpretInteractionReply(englishSkip, "Continue with no comments")).toEqual({
+      kind: "choice",
+      choiceId: "skip",
+    });
+    expect(interpretInteractionReply(englishSkip, INTENT_SKIP_LABEL)).toEqual({
+      kind: "unmatched",
+    });
+  });
+
+  it("rejects labels that are not on the current interaction", () => {
+    expect(interpretInteractionReply(visitNote, "Так")).toEqual({ kind: "unmatched" });
+    expect(interpretInteractionReply(null, INTENT_SKIP_LABEL)).toEqual({ kind: "unmatched" });
+    expect(interpretInteractionReply(visitNote, "  ")).toEqual({ kind: "unmatched" });
   });
 });

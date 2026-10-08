@@ -28,10 +28,8 @@ import {
 import {
   extractMessageTextContent,
   extractReplyButtons,
-  isBookingOfferQuestion,
   isYesReply,
   mentionsCatalogProcedure,
-  replyButtonLabels,
   requestsConsultation,
 } from "../shared/message-content.js";
 import { normalizeClinicPhone } from "../shared/phone.js";
@@ -57,8 +55,18 @@ import type { ClinicState, ClinicStateUpdate } from "./state.js";
 import { bookingTurnNeedsNoteOrchestrator } from "./booking-note-orchestrator.js";
 import {
   closedBookingSessionUpdate,
+  interpretInteractionReply,
   isBookingOwnedInteraction,
+  openVisitActionInteraction,
+  openVisitMeetingInteraction,
+  reduceBookingSession,
+  type VisitSelectMeeting,
 } from "./booking-session.js";
+import {
+  renderBookingInteractionMessage,
+  replyButtonsForInteraction,
+} from "./booking-interaction-render.js";
+import { restorePendingInteraction } from "./booking-interaction-restore.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
@@ -197,8 +205,28 @@ export const shouldContinueInSpecialist = (
     }
   }
 
-  const labels = replyButtonLabels(state.lastHandoff.replyButtons);
-  return labels.includes(humanText);
+  const interactionMatch = interpretInteractionReply(
+    state.pendingInteraction,
+    humanText,
+  );
+  if (interactionMatch.kind === "choice") {
+    return true;
+  }
+  // Date/time free text while a schedule interaction is open stays in booking.
+  if (
+    agentId === BOOKING_AGENT_ID
+    && (state.pendingInteraction?.kind === "date_select"
+      || state.pendingInteraction?.kind === "time_select"
+      || state.pendingInteraction?.kind === "service_confirm"
+      || state.pendingInteraction?.kind === "visit_note"
+      || (state.pendingInteraction?.kind === "visit_select"
+        && state.pendingInteraction.stage === "action"))
+  ) {
+    if (isDayOrTimeReply(humanText) || isOtherDateReply(humanText)) {
+      return true;
+    }
+  }
+  return false;
 };
 
 export const shouldContinueInBooking = (state: ClinicState): boolean =>
@@ -280,11 +308,22 @@ const isPendingRescheduleSelection = (
   state: ClinicState,
   human: string,
   bookingContext: ClinicState["bookingContext"],
-): boolean =>
-  state.lastHandoff?.agentId === FINISH_ROUTE
-  && state.lastHandoff.pendingAction === "reschedule"
-  && (bookingContext?.meetings.length ?? 0) === 1
-  && isDayOrTimeReply(human);
+): boolean => {
+  const visitSelect = state.pendingInteraction?.kind === "visit_select"
+    ? state.pendingInteraction
+    : null;
+  const singleMeeting = (bookingContext?.meetings.length ?? 0) === 1;
+  const actionStageWithMeeting =
+    visitSelect?.stage === "action"
+    && visitSelect.meetingId != null
+    && singleMeeting;
+  // Legacy checkpoints may still carry pendingAction until restore migrates them.
+  const legacyPending =
+    state.lastHandoff?.agentId === FINISH_ROUTE
+    && state.lastHandoff.pendingAction === "reschedule"
+    && singleMeeting;
+  return (actionStageWithMeeting || legacyPending) && isDayOrTimeReply(human);
+};
 
 const isVisitChangeIntent = (human: string): boolean =>
   VISIT_CHANGE_INTENT.test(human)
@@ -297,15 +336,7 @@ const isVisitChangeIntent = (human: string): boolean =>
  * so booking cannot silently attach consultation slots without catalog chips.
  */
 export const shouldRouteProcedureBrowseToFaq = (state: ClinicState): boolean => {
-  const handoff = state.lastHandoff;
-  if (
-    (handoff?.agentId !== BOOKING_AGENT_ID && handoff?.agentId !== FAQ_AGENT_ID)
-    || handoff.status !== "ok"
-  ) {
-    return false;
-  }
-  const offerText = handoff.replyText ?? "";
-  if (!isBookingOfferQuestion(offerText)) {
+  if (state.pendingInteraction?.kind !== "service_confirm") {
     return false;
   }
   const human = lastHumanTextFromMessages(state.messages);
@@ -313,22 +344,24 @@ export const shouldRouteProcedureBrowseToFaq = (state: ClinicState): boolean => 
   if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
     return false;
   }
+  const match = interpretInteractionReply(state.pendingInteraction, human);
+  if (match.kind === "choice" && match.choiceId === "accept") {
+    return false;
+  }
+  if (match.kind === "choice" && match.choiceId === "choose_other") {
+    return true;
+  }
   if (isYesReply(human) || requestsConsultation(human)) {
     return false;
   }
   if (isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
     return false;
   }
-  // After book-this-procedure, a day/time is agreement to book that CRM row.
-  // After a consultation offer, day/time still belongs to booking (slots), not FAQ.
   if (isDayOrTimeReply(human)) {
     return false;
   }
   return true;
 };
-
-/** @deprecated Use shouldRouteProcedureBrowseToFaq */
-export const shouldRouteNamedProcedureToFaq = shouldRouteProcedureBrowseToFaq;
 
 /**
  * Mid-booking ladder (DATE/TIME/details), naming a catalog procedure is a browse
@@ -384,21 +417,31 @@ export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {
   if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
     return false;
   }
-  // Snapshotted return-to-booking is owned by the preserved booking interaction.
-  const returnLabel = state.pendingInteraction?.choices.find(
-    (choice) => choice.id === "return_to_booking",
-  )?.label;
-  if (returnLabel != null && (human === returnLabel || humanLine === returnLabel)) {
-    return false;
+  const interaction = state.pendingInteraction;
+  if (interaction?.kind === "catalog_detour") {
+    const match = interpretInteractionReply(interaction, human);
+    if (match.kind === "choice" && match.choiceId === "return_to_booking") {
+      return false;
+    }
+    if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+      return false;
+    }
+    return true;
   }
-  if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
-    return false;
+  if (
+    interaction?.kind === "service_candidate" && interaction.owner === "faq"
+  ) {
+    const match = interpretInteractionReply(interaction, human);
+    if (match.kind === "choice") {
+      return false;
+    }
+    // Free text during FAQ catalog browse stays in FAQ.
+    if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+      return false;
+    }
+    return true;
   }
-  const labels = replyButtonLabels(handoff.replyButtons);
-  if (labels.length === 0 || labels.includes(human) || labels.includes(humanLine)) {
-    return false;
-  }
-  return true;
+  return false;
 };
 
 const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
@@ -602,7 +645,13 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
 
     if (visitStatusIntent) {
       const replyText = attachPrefetchVisits("", bookingContext, "visit_ask");
-      const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+      const meetings = (bookingContext?.meetings ?? []).map((meeting): VisitSelectMeeting => ({
+        id: meeting.id,
+        ...(meeting.name != null ? { name: meeting.name } : {}),
+        ...(meeting.dateStart != null ? { dateStart: meeting.dateStart } : {}),
+        ...(meeting.dateEnd != null ? { dateEnd: meeting.dateEnd } : {}),
+      }));
+      const hasVisit = meetings.length > 0;
       trackEvent("visit_status_response", {
         source: bookingContext == null
           ? "prefetch_unavailable"
@@ -610,21 +659,54 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
             ? "crm_list"
             : "crm_empty",
       });
-      const replyButtons = hasVisit ? [...VISIT_CHANGE_MENU] : [...defaultMenuLabels(false)];
+      if (!hasVisit) {
+        const replyButtons = [...defaultMenuLabels(false)];
+        return {
+          next: FINISH_ROUTE,
+          ...prefetchUpdate,
+          pendingInteraction: null,
+          lastHandoff: {
+            agentId: FINISH_ROUTE,
+            agentName: "supervisor",
+            status: "ok",
+            replyText,
+            replyButtons,
+          },
+          messages: [new AIMessage(replyText)],
+        };
+      }
+      const visitInteraction = meetings.length === 1
+        ? openVisitActionInteraction(meetings[0]!)
+        : openVisitMeetingInteraction("reschedule", meetings);
+      const session = reduceBookingSession(
+        {
+          bookingDraft: state.bookingDraft ?? null,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        { type: "visit_menu_opened", interaction: visitInteraction },
+      );
+      // Prefetch visit-ask copy already asks move/cancel; only append picker copy
+      // when listing multiple meetings (stage meeting) or when prefetch is empty.
+      const renderedText = String(renderBookingInteractionMessage(visitInteraction).content);
+      const combinedText = replyText.trim().length > 0
+        && visitInteraction.stage === "action"
+        ? replyText.trim()
+        : replyText.trim().length > 0
+          ? `${replyText.trim()}\n\n${renderedText}`
+          : renderedText;
+      const replyButtons = replyButtonsForInteraction(visitInteraction);
       return {
         next: FINISH_ROUTE,
         ...prefetchUpdate,
+        pendingInteraction: session.pendingInteraction,
         lastHandoff: {
           agentId: FINISH_ROUTE,
           agentName: "supervisor",
           status: "ok",
-          replyText,
+          replyText: combinedText,
           replyButtons,
-          ...(bookingContext?.meetings.length === 1
-            ? { pendingAction: "reschedule" as const }
-            : {}),
         },
-        messages: [new AIMessage(replyText)],
+        messages: [new AIMessage(combinedText)],
       };
     }
 
