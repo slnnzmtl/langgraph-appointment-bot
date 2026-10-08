@@ -975,11 +975,19 @@ const pendingChatConfirmationCleanup = (
     return closedBookingSessionUpdate();
   }
   if (decision.action === "create" || decision.action === "reschedule") {
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      {
+        type: "draft_event",
+        event: { type: "slot_invalidated", keepDate: true },
+      },
+    );
     return {
-      bookingDraft: reduceBookingDraft(state.bookingDraft, {
-        type: "slot_invalidated",
-        keepDate: true,
-      }),
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
     };
   }
   if (
@@ -1774,11 +1782,17 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && explicitDate.date !== state.bookingDraft?.selectedDate
   ) {
     trackEvent("booking_date_selected", { date: explicitDate.date });
-    const bookingDraft = reduceBookingDraft(state.bookingDraft, {
-      type: "date_selected",
-      date: explicitDate.date,
-    });
-    return { bookingDraft };
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "date_selected", date: explicitDate.date },
+    );
+    return {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    };
   }
 
   // DATE is a state transition, not just a presentation choice. Keep it until
@@ -1786,11 +1800,17 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   // another day in the same availability page.
   if (matchedDay) {
     trackEvent("booking_date_selected", { date: matchedDay.date });
-    const bookingDraft = reduceBookingDraft(state.bookingDraft, {
-      type: "date_selected",
-      date: matchedDay.date,
-    });
-    return { bookingDraft };
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "date_selected", date: matchedDay.date },
+    );
+    return {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    };
   }
 
   // A same-message requested time is reconciled only after the exact fresh
@@ -3273,9 +3293,15 @@ export const createAgentToolsNode = (
           // A CRM race/error or a patient-declined booking invalidates only the
           // selected slot. Keep the accepted service and note so a later
           // availability search still uses the service duration.
-          update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-            type: "slot_invalidated",
-          });
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            { type: "draft_event", event: { type: "slot_invalidated" } },
+          );
+          update.bookingDraft = session.bookingDraft;
+          update.pendingInteraction = session.pendingInteraction;
         } else if (state.bookingDraft) {
           Object.assign(update, closedBookingSessionUpdate());
         }
@@ -3336,10 +3362,24 @@ export const createAgentToolsNode = (
           )
         ) {
           if (bookingDraft) {
-            update.bookingDraft = reduceBookingDraft(bookingDraft, {
-              type: "slot_invalidated",
-              keepDate: selectedDay?.slots.length !== 0,
-            });
+            const session = reduceBookingSession(
+              {
+                bookingDraft,
+                pendingInteraction:
+                  (update.pendingInteraction as typeof state.pendingInteraction | undefined)
+                  ?? state.pendingInteraction
+                  ?? null,
+              },
+              {
+                type: "draft_event",
+                event: {
+                  type: "slot_invalidated",
+                  keepDate: selectedDay?.slots.length !== 0,
+                },
+              },
+            );
+            update.bookingDraft = session.bookingDraft;
+            update.pendingInteraction = session.pendingInteraction;
           }
         }
       }

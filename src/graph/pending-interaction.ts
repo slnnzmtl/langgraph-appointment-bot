@@ -169,6 +169,22 @@ const withReturnChoice = (
 };
 
 /**
+ * visit_note requires a selected slot. Clear booking-owned UI when a schedule
+ * transition drops that slot, or when visit_note is already illegal.
+ */
+const clearInteractionAfterSlotDrop = (
+  draft: BookingDraft | null | undefined,
+  interaction: PendingInteraction | null,
+  nextDraft: BookingDraft | null,
+): PendingInteraction | null => {
+  const droppedSlot = draft?.selectedSlot != null && nextDraft?.selectedSlot == null;
+  if (droppedSlot || interaction?.kind === "visit_note") {
+    return clearBookingOwnedInteraction(interaction);
+  }
+  return interaction;
+};
+
+/**
  * Sole transition that updates the booking draft and booking-owned pendingInteraction
  * together. Callers dispatch events; they do not construct visit_note themselves.
  */
@@ -181,9 +197,13 @@ export const reduceBookingSession = (
 
   switch (event.type) {
     case "draft_event": {
+      const nextDraft = reduceBookingDraft(draft, event.event);
+      const nextInteraction = event.event.type === "slot_invalidated"
+        ? clearInteractionAfterSlotDrop(draft, interaction, nextDraft)
+        : interaction;
       return noEffect({
-        bookingDraft: reduceBookingDraft(draft, event.event),
-        pendingInteraction: interaction,
+        bookingDraft: nextDraft,
+        pendingInteraction: nextInteraction,
       });
     }
     case "slot_selected": {
@@ -208,12 +228,13 @@ export const reduceBookingSession = (
       });
     }
     case "date_selected": {
+      const nextDraft = reduceBookingDraft(draft, {
+        type: "date_selected",
+        date: event.date,
+      });
       return noEffect({
-        bookingDraft: reduceBookingDraft(draft, {
-          type: "date_selected",
-          date: event.date,
-        }),
-        pendingInteraction: interaction,
+        bookingDraft: nextDraft,
+        pendingInteraction: clearInteractionAfterSlotDrop(draft, interaction, nextDraft),
       });
     }
     case "leave_booking": {

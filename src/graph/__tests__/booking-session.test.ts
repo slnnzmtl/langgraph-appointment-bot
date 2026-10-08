@@ -493,6 +493,84 @@ describe("reduceBookingSession", () => {
   });
 });
 
+describe("schedule transitions clear visit_note", () => {
+  it("date_selected after a slotted visit_note clears the note interaction", () => {
+    const awaiting = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    expect(awaiting.pendingInteraction?.kind).toBe("visit_note");
+    expect(awaiting.bookingDraft?.selectedSlot).not.toBeNull();
+
+    const result = reduceBookingSession(awaiting, {
+      type: "date_selected",
+      date: "2026-10-20",
+    });
+
+    expect(result.bookingDraft?.selectedSlot).toBeNull();
+    expect(result.bookingDraft?.selectedDate).toBe("2026-10-20");
+    expect(result.bookingDraft?.phase).toBe("time");
+    expect(result.pendingInteraction).toBeNull();
+  });
+
+  it("date_selected without a prior slot keeps service_candidate open", () => {
+    const dated = {
+      bookingDraft: acceptedWithDate(),
+      pendingInteraction: {
+        kind: "service_candidate" as const,
+        utterance: "ботокс",
+        choices: [
+          { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
+          { id: "svc-b", label: "шия", serviceIds: ["svc-b"] },
+        ],
+      },
+    };
+    expect(dated.bookingDraft.selectedSlot).toBeNull();
+
+    const result = reduceBookingSession(dated, {
+      type: "date_selected",
+      date: "2026-10-21",
+    });
+
+    expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    expect(result.bookingDraft?.selectedDate).toBe("2026-10-21");
+  });
+
+  it("slot_invalidated via draft_event clears visit_note", () => {
+    const awaiting = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const result = reduceBookingSession(awaiting, {
+      type: "draft_event",
+      event: { type: "slot_invalidated", keepDate: true },
+    });
+
+    expect(result.bookingDraft?.selectedSlot).toBeNull();
+    expect(result.bookingDraft?.phase).toBe("time");
+    expect(result.pendingInteraction).toBeNull();
+  });
+
+  it("visit_note implies a selected slot after every session reduction", () => {
+    const awaiting = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    expect(awaiting.pendingInteraction?.kind).toBe("visit_note");
+    expect(awaiting.bookingDraft?.selectedSlot).not.toBeNull();
+
+    const afterDate = reduceBookingSession(awaiting, {
+      type: "date_selected",
+      date: "2026-10-22",
+    });
+    if (afterDate.pendingInteraction?.kind === "visit_note") {
+      expect(afterDate.bookingDraft?.selectedSlot).not.toBeNull();
+    }
+    expect(afterDate.pendingInteraction?.kind).not.toBe("visit_note");
+    expect(["date", "time"]).toContain(afterDate.bookingDraft?.phase);
+  });
+});
+
 describe("booking-owned pendingInteraction helpers", () => {
   it("identifies booking-owned kinds", () => {
     expect(BOOKING_OWNED_INTERACTION_KINDS).toEqual([
