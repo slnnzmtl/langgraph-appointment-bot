@@ -8,7 +8,7 @@ import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 import type { BookingDraft } from "./booking-draft.js";
-import type { PendingInteraction } from "./pending-interaction.js";
+import type { PendingInteraction } from "./booking-session.js";
 
 export type CancellationPurpose = "direct" | "replacement";
 

@@ -7,7 +7,7 @@ import type {
   ResolveServiceChange,
   ServiceResolutionResult,
 } from "./booking-note-orchestrator.js";
-import type { InteractionChoice, ResolveServiceEffect } from "./pending-interaction.js";
+import type { InteractionChoice, ResolveServiceEffect } from "./booking-session.js";
 import type { ILLMConnector } from "./types.js";
 
 export type ServiceCatalogRow = {

@@ -36,19 +36,25 @@ export type ServiceCandidateInteraction = {
   choices: InteractionChoice[];
 };
 
-/** Booking-owned kinds for phases 3–4. Later phases may extend this union. */
+/** FAQ catalog detour after unresolved service; carries only return_to_booking. */
+export type CatalogDetourInteraction = {
+  kind: "catalog_detour";
+  choices: InteractionChoice[];
+};
+
+/** Booking-owned pendingInteraction kinds. */
 export type PendingInteraction =
   | VisitNoteInteraction
   | ServiceOrNoteInteraction
-  | ServiceCandidateInteraction;
+  | ServiceCandidateInteraction
+  | CatalogDetourInteraction;
 
 export const BOOKING_OWNED_INTERACTION_KINDS = [
   "visit_note",
   "service_or_note",
   "service_candidate",
+  "catalog_detour",
 ] as const;
-
-export type BookingOwnedInteractionKind = (typeof BOOKING_OWNED_INTERACTION_KINDS)[number];
 
 export const isBookingOwnedInteraction = (
   interaction: PendingInteraction | null | undefined,
@@ -56,7 +62,7 @@ export const isBookingOwnedInteraction = (
   interaction != null
   && (BOOKING_OWNED_INTERACTION_KINDS as readonly string[]).includes(interaction.kind);
 
-/** Clear booking-owned interactions only; leave future FAQ/contact kinds intact. */
+/** Clear any booking-owned pendingInteraction (the union is booking-owned only). */
 export const clearBookingOwnedInteraction = (
   interaction: PendingInteraction | null | undefined,
 ): PendingInteraction | null => {
@@ -74,6 +80,13 @@ export const openVisitNoteInteraction = (
 ): VisitNoteInteraction => ({
   kind: "visit_note",
   choices: [{ id: "skip", label: skipLabel }],
+});
+
+export const openCatalogDetourInteraction = (
+  returnLabel: string,
+): CatalogDetourInteraction => ({
+  kind: "catalog_detour",
+  choices: [{ id: "return_to_booking", label: returnLabel }],
 });
 
 export type ResolveServiceEffect = {
@@ -308,6 +321,12 @@ export const reduceBookingSession = (
         return noEffect(current);
       }
       if (event.choiceId === "return_to_booking") {
+        if (interaction.kind === "catalog_detour") {
+          return noEffect({
+            bookingDraft: draft,
+            pendingInteraction: null,
+          });
+        }
         return noEffect({
           bookingDraft: draft,
           pendingInteraction: withoutReturnChoice(interaction),
@@ -440,11 +459,11 @@ export const reduceBookingSession = (
     }
     case "service_unresolved": {
       const preserved: PendingInteraction = interaction != null
-        ? interaction
-        : openVisitNoteInteraction();
+        ? withReturnChoice(interaction, event.returnLabel)
+        : openCatalogDetourInteraction(event.returnLabel);
       return noEffect({
         bookingDraft: draft,
-        pendingInteraction: withReturnChoice(preserved, event.returnLabel),
+        pendingInteraction: preserved,
       });
     }
     default:

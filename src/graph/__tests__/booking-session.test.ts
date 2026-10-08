@@ -415,6 +415,40 @@ describe("reduceBookingSession", () => {
     expect(result.effect).toBeNull();
   });
 
+  it("service_unresolved with no interaction opens catalog_detour, not visit_note", () => {
+    const timeDraft = acceptedWithDate();
+    expect(timeDraft.phase).toBe("time");
+    expect(timeDraft.selectedSlot).toBeNull();
+    const result = reduceBookingSession(
+      { bookingDraft: timeDraft, pendingInteraction: null },
+      { type: "service_unresolved", returnLabel: "Повернутися до запису" },
+    );
+
+    expect(result.pendingInteraction).toEqual({
+      kind: "catalog_detour",
+      choices: [{ id: "return_to_booking", label: "Повернутися до запису" }],
+    });
+    expect(result.bookingDraft?.note).toEqual({ status: "unasked" });
+    expect(result.bookingDraft?.selectedSlot).toBeNull();
+    expect(result.bookingDraft?.phase).toBe("time");
+  });
+
+  it("return_to_booking on catalog_detour clears the interaction", () => {
+    const timeDraft = acceptedWithDate();
+    const unresolved = reduceBookingSession(
+      { bookingDraft: timeDraft, pendingInteraction: null },
+      { type: "service_unresolved", returnLabel: "Повернутися до запису" },
+    );
+    const result = reduceBookingSession(unresolved, {
+      type: "interaction_choice",
+      choiceId: "return_to_booking",
+    });
+
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.bookingDraft?.phase).toBe("time");
+    expect(result.bookingDraft?.note.status).toBe("unasked");
+  });
+
   it("return_to_booking removes only the return choice and does not reclassify", () => {
     const awaiting = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
@@ -626,27 +660,27 @@ describe("booking-owned pendingInteraction helpers", () => {
       "visit_note",
       "service_or_note",
       "service_candidate",
+      "catalog_detour",
     ]);
     expect(isBookingOwnedInteraction({ kind: "visit_note", choices: [] })).toBe(true);
-    expect(
-      isBookingOwnedInteraction({
-        kind: "faq_catalog",
-        choices: [{ id: "x", label: "X" }],
-      } as PendingInteraction),
-    ).toBe(false);
+    expect(isBookingOwnedInteraction({
+      kind: "catalog_detour",
+      choices: [{ id: "return_to_booking", label: "Back" }],
+    })).toBe(true);
   });
 
-  it("clears only booking-owned interactions when closing a booking", () => {
+  it("clears booking-owned interactions when closing a booking", () => {
     expect(
       clearBookingOwnedInteraction({
         kind: "visit_note",
         choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
       }),
     ).toBeNull();
-    const futureFaq = {
-      kind: "faq_catalog",
-      choices: [{ id: "family", label: "Lips" }],
-    } as PendingInteraction;
-    expect(clearBookingOwnedInteraction(futureFaq)).toEqual(futureFaq);
+    expect(
+      clearBookingOwnedInteraction({
+        kind: "catalog_detour",
+        choices: [{ id: "return_to_booking", label: "Back" }],
+      }),
+    ).toBeNull();
   });
 });

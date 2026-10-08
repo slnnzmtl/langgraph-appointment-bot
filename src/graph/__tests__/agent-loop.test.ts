@@ -5059,7 +5059,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(picked.bookingDraft?.note.status).toBe("awaiting");
 
     const { orchestrateBookingNoteTurn } = await import("../booking-note-orchestrator.js");
-    const { openVisitNoteInteraction } = await import("../pending-interaction.js");
+    const { openVisitNoteInteraction } = await import("../booking-session.js");
     const skipped = await orchestrateBookingNoteTurn({
       patientText: "Продовжити без коментаря",
       bookingDraft: picked.bookingDraft ?? null,

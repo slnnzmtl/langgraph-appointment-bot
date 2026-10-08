@@ -3793,6 +3793,17 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         // Accidental leftover trailer only — never the adapter markup channel.
         replyButtons = accidentalButtons;
       }
+      // After service_unresolved, pendingInteraction carries return_to_booking.
+      const returnLabel = state.pendingInteraction?.choices.find(
+        (choice) => choice.id === "return_to_booking",
+      )?.label;
+      if (
+        returnLabel != null
+        && returnLabel.length > 0
+        && !replyButtons.includes(returnLabel)
+      ) {
+        replyButtons = [...replyButtons, returnLabel];
+      }
     } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
       // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
       const idle = agentMessages.some(

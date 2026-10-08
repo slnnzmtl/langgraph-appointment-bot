@@ -12,7 +12,7 @@ import {
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
-import { openVisitNoteInteraction } from "../pending-interaction.js";
+import { openVisitNoteInteraction } from "../booking-session.js";
 
 const createCachedGeminiModel = vi.fn((_apiKey: string, _model: string, handle: { cacheName: string }) => ({
   kind: "cached",

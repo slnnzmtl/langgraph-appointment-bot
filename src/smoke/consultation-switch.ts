@@ -15,7 +15,10 @@ import {
   orchestrateBookingNoteTurn,
 } from "../graph/booking-note-orchestrator.js";
 import type { ClassifyNoteTurn } from "../graph/booking-note-turn.js";
-import { openVisitNoteInteraction } from "../graph/pending-interaction.js";
+import {
+  openVisitNoteInteraction,
+  reduceBookingSession,
+} from "../graph/booking-session.js";
 import {
   resolveServiceChange,
   type ServiceCatalogRow,
@@ -125,13 +128,41 @@ export const runConsultationSwitchSmoke = async (): Promise<void> => {
   if (switched.bookingDraft?.selectedSlot != null) {
     throw new Error("Expected slot cleared after service change");
   }
+  if (switched.bookingDraft?.selectedDate != null) {
+    throw new Error("Expected date cleared after service change");
+  }
   const notice = switched.serviceChangeNotice;
   const expectedNotice = serviceChangedNoticeUk("Консультація");
   if (notice !== expectedNotice) {
     throw new Error(`Expected service change notice "${expectedNotice}", got "${notice ?? ""}"`);
   }
-  if (switched.bookingDraft?.note.value !== patientText) {
-    throw new Error("Expected original patient text preserved as visit note");
+  if (switched.bookingDraft?.note.status !== "unasked") {
+    throw new Error(
+      `Expected note reset to unasked after different-id switch, got ${switched.bookingDraft?.note.status}`,
+    );
+  }
+
+  const dated = reduceBookingSession(
+    { bookingDraft: switched.bookingDraft, pendingInteraction: null },
+    { type: "date_selected", date: "2026-10-22" },
+  );
+  const slotted = reduceBookingSession(dated, {
+    type: "slot_selected",
+    slot: {
+      dateStart: "2026-10-22T11:00:00",
+      dateEnd: "2026-10-22T11:30:00",
+      label: "11:00",
+    },
+  });
+  if (slotted.pendingInteraction?.kind !== "visit_note") {
+    throw new Error(
+      `Expected visit_note after fresh slot, got ${slotted.pendingInteraction?.kind ?? "null"}`,
+    );
+  }
+  if (slotted.bookingDraft?.note.status !== "awaiting") {
+    throw new Error(
+      `Expected note awaiting after fresh slot, got ${slotted.bookingDraft?.note.status}`,
+    );
   }
 
   console.log("✓ Consultation switch smoke (note → Змінити послугу → Консультація)");

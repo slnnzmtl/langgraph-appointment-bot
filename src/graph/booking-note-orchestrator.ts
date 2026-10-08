@@ -1,4 +1,4 @@
-import { AIMessage, HumanMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { Command, Overwrite } from "@langchain/langgraph";
 
 import {
@@ -28,7 +28,7 @@ import {
   type BookingSessionEffect,
   type PendingInteraction,
   type ResolveServiceEffect,
-} from "./pending-interaction.js";
+} from "./booking-session.js";
 import type { ClinicState } from "./state.js";
 
 export type NoteOrchestratorGoto =
@@ -189,6 +189,7 @@ const destinationForState = (
         goto: "interaction_render",
       };
     }
+    // catalog_detour is FAQ-owned UI; never send it to interaction_render.
   }
   // Service change cleared the old schedule — runtime owns the fresh DATE search.
   if (
@@ -390,13 +391,15 @@ const clarificationBody = (interaction: PendingInteraction): string => {
       ? `${SERVICE_CHANGE_ACK_UK}\n\n${options}`
       : SERVICE_CHANGE_ACK_UK;
   }
+  if (interaction.kind === "catalog_detour") {
+    return options;
+  }
   return options;
 };
 
 /** Build a fresh AIMessage from the open interaction. Never reuse stale agentMessages. */
 export const renderBookingInteractionMessage = (
   interaction: PendingInteraction,
-  _options?: { staleMessages?: BaseMessage[] },
 ): AIMessage =>
   new AIMessage(clarificationBody(interaction));
 

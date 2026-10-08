@@ -1220,7 +1220,6 @@ describe("booking session lifecycle", () => {
     [{ type: "slot_selected", slot: selectedSlot }],
     [{ type: "requested_time_unavailable" }],
     [{ type: "note_status", status: "skipped" }],
-    [{ type: "note_recorded", status: "answered", value: "concern" }],
     [{ type: "contact_resolved", contactId: "c-1" }],
     [{ type: "contact_unresolved" }],
     [{

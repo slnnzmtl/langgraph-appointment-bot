@@ -4,6 +4,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import {
   BOOKING_NOTE_QUESTION_UK,
   INTENT_SKIP_LABEL,
+  RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CHANGE_ACK_UK,
   serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
@@ -26,7 +27,7 @@ import type { ClassifyNoteTurn } from "../booking-note-turn.js";
 import {
   openVisitNoteInteraction,
   type PendingInteraction,
-} from "../pending-interaction.js";
+} from "../booking-session.js";
 
 const acceptedSlotDraft = () => {
   const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
@@ -499,7 +500,57 @@ describe("orchestrateBookingNoteTurn", () => {
 
     expect(result.goto).toBe("faq_prepare");
     expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-botox");
+    expect(result.pendingInteraction?.kind).toBe("visit_note");
     expect(result.pendingInteraction?.choices.some((c) => c.id === "return_to_booking")).toBe(true);
+  });
+
+  it("TIME unresolved service opens catalog_detour then return restores TIME, not visit_note", async () => {
+    const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-botox", name: "Botox", source: "catalog" },
+      accepted: true,
+    });
+    const timeDraft = reduceBookingDraft(accepted, {
+      type: "date_selected",
+      date: "2026-10-19",
+    });
+    expect(timeDraft?.phase).toBe("time");
+    expect(timeDraft?.selectedSlot).toBeNull();
+
+    const classify = vi.fn<ClassifyNoteTurn>(async () => ({
+      kind: "service_change_requested",
+      query: "unknown",
+    }));
+    const resolve = vi.fn<ResolveServiceChange>(async () => ({ type: "service_unresolved" }));
+    const detoured = await orchestrateBookingNoteTurn({
+      patientText: "запиши на unknown",
+      bookingDraft: timeDraft,
+      pendingInteraction: null,
+      classify,
+      resolveServiceChange: resolve,
+    });
+
+    expect(detoured.goto).toBe("faq_prepare");
+    expect(detoured.pendingInteraction?.kind).toBe("catalog_detour");
+    expect(detoured.bookingDraft?.note.status).toBe("unasked");
+    expect(detoured.bookingDraft?.phase).toBe("time");
+
+    const returned = await orchestrateBookingNoteTurn({
+      patientText: RETURN_TO_BOOKING_LABEL_UK,
+      bookingDraft: detoured.bookingDraft,
+      pendingInteraction: detoured.pendingInteraction,
+      classify: async () => {
+        throw new Error("classifier must not run on return_to_booking");
+      },
+      resolveServiceChange: async () => {
+        throw new Error("resolve must not run on return_to_booking");
+      },
+    });
+
+    expect(returned.goto).toBe("booking_llm");
+    expect(returned.pendingInteraction).toBeNull();
+    expect(returned.bookingDraft?.phase).toBe("time");
+    expect(returned.bookingDraft?.note.status).toBe("unasked");
   });
 });
 
@@ -519,24 +570,29 @@ describe("renderBookingInteractionMessage", () => {
     })).toEqual([INTENT_SKIP_LABEL]);
   });
 
-  it("does not reuse a stale assistant message", () => {
-    const stale = new AIMessage("stale body from last turn");
-    const message = renderBookingInteractionMessage(
-      {
-        kind: "service_or_note",
-        currentService: { id: "svc-1", name: "Botox" },
-        noteCandidate: "mixed",
-        choices: [
-          { id: "keep_service", label: "Keep" },
-          { id: "switch_service", label: "Switch" },
-        ],
-      },
-      { staleMessages: [stale, new HumanMessage("Switch")] },
-    );
+  it("writes a fresh assistant message from the open interaction", () => {
+    const message = renderBookingInteractionMessage({
+      kind: "service_or_note",
+      currentService: { id: "svc-1", name: "Botox" },
+      noteCandidate: "mixed",
+      choices: [
+        { id: "keep_service", label: "Keep" },
+        { id: "switch_service", label: "Switch" },
+      ],
+    });
     expect(String(message.content)).not.toContain("stale body");
     expect(String(message.content)).toContain("Botox");
     expect(String(message.content)).toContain("• Keep");
     expect(String(message.content)).toContain("• Switch");
+  });
+
+  it("catalog_detour renders only the return choice, never the note question", () => {
+    const message = renderBookingInteractionMessage({
+      kind: "catalog_detour",
+      choices: [{ id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK }],
+    });
+    expect(String(message.content)).toContain(RETURN_TO_BOOKING_LABEL_UK);
+    expect(String(message.content)).not.toContain(BOOKING_NOTE_QUESTION_UK);
   });
 
   it("templates service_candidate with a service-change acknowledgement and FAQ-shaped bullets", () => {

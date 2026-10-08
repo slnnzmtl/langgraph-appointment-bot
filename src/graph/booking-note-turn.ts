@@ -8,7 +8,7 @@ import type { SelectedBookingSlot } from "./types.js";
 import type {
   BookingSessionEvent,
   PendingInteraction,
-} from "./pending-interaction.js";
+} from "./booking-session.js";
 
 export const NOTE_TURN_KINDS = [
   "note_provided",

@@ -79,8 +79,6 @@ export type BookingEvent =
   | { type: "slot_selected"; slot: SelectedBookingSlot }
   | { type: "requested_time_unavailable" }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
-  /** Record a completed note after the slot was cleared (e.g. real service change). */
-  | { type: "note_recorded"; status: "answered" | "skipped"; value?: string }
   | { type: "contact_resolved"; contactId: string }
   | { type: "contact_unresolved" }
   | { type: "command_prepared"; command: PendingBookingCommand }
@@ -927,20 +925,6 @@ export const reduceBookingDraft = (
     }
     case "note_status": {
       if (draft.mode === "reschedule" || draft.selectedSlot == null) {
-        return draft;
-      }
-      const next = {
-        ...draft,
-        note: {
-          status: event.status,
-          ...(event.value !== undefined ? { value: event.value } : {}),
-        },
-        pendingCommand: null,
-      } satisfies Omit<BookingDraft, "version">;
-      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
-    }
-    case "note_recorded": {
-      if (draft.mode === "reschedule") {
         return draft;
       }
       const next = {
