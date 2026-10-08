@@ -10,7 +10,7 @@ import {
   isBookingOwnedInteraction,
   reduceBookingSession,
   type PendingInteraction,
-} from "../pending-interaction.js";
+} from "../booking-session.js";
 import { INTENT_SKIP_LABEL } from "../../shared/clinic-constants.js";
 
 const selectedSlot = {

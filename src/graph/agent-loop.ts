@@ -113,20 +113,22 @@ import {
 } from "./gemini-cache-messages.js";
 import type { CancellationPurpose, ClinicState, ClinicStateUpdate } from "./state.js";
 import {
-  closedBookingSessionUpdate,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
   type BookingService,
   type ReplacementMeeting,
 } from "./booking-draft.js";
-import { reduceBookingSession } from "./pending-interaction.js";
+import {
+  closedBookingSessionUpdate,
+  isBookingOwnedInteraction,
+  reduceBookingSession,
+} from "./booking-session.js";
 import {
   bookingTurnNeedsNoteOrchestrator,
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
 } from "./booking-note-orchestrator.js";
-import { isBookingOwnedInteraction } from "./pending-interaction.js";
 import {
   isModelFailureMessage,
   tagModelFailureMessage,

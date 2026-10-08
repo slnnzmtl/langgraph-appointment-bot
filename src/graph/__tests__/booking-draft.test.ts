@@ -5,9 +5,9 @@ import {
   createEmptyBookingDraft,
   isEmptyLegacyBookingDraft,
   reduceBookingDraft,
-  upgradeBookingCheckpoint,
   type BookingEvent,
 } from "../booking-draft.js";
+import { upgradeBookingCheckpoint } from "../booking-session.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 
 describe("BookingDraft reducer", () => {

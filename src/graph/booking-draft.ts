@@ -1,19 +1,4 @@
 import type { SelectedBookingSlot } from "./types.js";
-import {
-  clearBookingOwnedInteraction,
-  openVisitNoteInteraction,
-  type PendingInteraction,
-} from "./pending-interaction.js";
-
-/** Open visit_note once when a checkpoint already awaits a note after a slot pick. */
-const pendingInteractionForUpgradedDraft = (
-  draft: BookingDraft | null,
-): PendingInteraction | null => {
-  if (draft == null || draft.selectedSlot == null || draft.note.status !== "awaiting") {
-    return null;
-  }
-  return openVisitNoteInteraction();
-};
 
 export const BOOKING_SCHEMA_VERSION = 1;
 
@@ -131,7 +116,8 @@ export type BookingCheckpointUpgradeResult = {
     bookingNoteStatus?: "unasked";
     selectedSlot?: null;
     selectedAvailabilityDate?: null;
-    pendingInteraction?: PendingInteraction | null;
+    /** Set by booking-session when composing the checkpoint upgrade. */
+    pendingInteraction?: unknown;
   };
   unsupported: boolean;
   telemetry: BookingCheckpointMigrationTelemetry | null;
@@ -530,9 +516,10 @@ export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
 
 /**
  * Upgrade a version-0 booking checkpoint once from structured fields only.
- * Does not read conversation history or invent Consultation from prose.
+ * Does not open visit_note UI — booking-session composes that after the draft
+ * upgrade. Does not read conversation history or invent Consultation from prose.
  */
-export const upgradeBookingCheckpoint = (
+export const upgradeBookingDraftCheckpoint = (
   state: BookingCheckpointLegacyState,
 ): BookingCheckpointUpgradeResult => {
   const resolved = resolveSchemaVersion(state.bookingSchemaVersion);
@@ -649,7 +636,6 @@ export const upgradeBookingCheckpoint = (
         update: {
           ...stamp,
           bookingDraft: kept,
-          pendingInteraction: pendingInteractionForUpgradedDraft(kept),
         },
         unsupported: false,
         telemetry: {
@@ -714,7 +700,6 @@ export const upgradeBookingCheckpoint = (
     update: {
       ...stamp,
       bookingDraft: canonical,
-      pendingInteraction: pendingInteractionForUpgradedDraft(canonical),
     },
     unsupported: false,
     telemetry: {
@@ -738,25 +723,6 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   pendingCommand: null,
   rescheduleTarget: null,
   replacement: null,
-});
-
-/** Atomically close a booking session, including deprecated checkpoint projections. */
-export const closedBookingSessionUpdate = (
-  pendingInteraction?: PendingInteraction | null,
-): {
-  bookingDraft: null;
-  bookingNoteStatus: "unasked";
-  selectedSlot: null;
-  selectedAvailabilityDate: null;
-  pendingInteraction: PendingInteraction | null;
-  serviceChangeNotice: null;
-} => ({
-  bookingDraft: null,
-  bookingNoteStatus: "unasked",
-  selectedSlot: null,
-  selectedAvailabilityDate: null,
-  pendingInteraction: clearBookingOwnedInteraction(pendingInteraction),
-  serviceChangeNotice: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({

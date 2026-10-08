@@ -54,9 +54,11 @@ import {
   buildClinicRoutingSchema,
 } from "./routing.js";
 import type { ClinicState, ClinicStateUpdate } from "./state.js";
-import { closedBookingSessionUpdate } from "./booking-draft.js";
 import { bookingTurnNeedsNoteOrchestrator } from "./booking-note-orchestrator.js";
-import { isBookingOwnedInteraction } from "./pending-interaction.js";
+import {
+  closedBookingSessionUpdate,
+  isBookingOwnedInteraction,
+} from "./booking-session.js";
 import { stripToolNoiseFromMessages } from "./supervisor-history.js";
 import {
   BOOKING_AGENT_ID,
