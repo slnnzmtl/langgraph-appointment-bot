@@ -22,6 +22,18 @@ describe("NOTE_TURN_CLASSIFIER_INSTRUCTION", () => {
       "does not locate that treatment on the body",
     );
     expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "already a consultation visit",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "subject/topic of that consult",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "consult is about a procedure (topic of this visit) → note_provided",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
+      "booked visit to become that procedure instead",
+    );
+    expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(
       "Do not use command-phrase lists",
     );
     expect(NOTE_TURN_CLASSIFIER_INSTRUCTION).toContain(

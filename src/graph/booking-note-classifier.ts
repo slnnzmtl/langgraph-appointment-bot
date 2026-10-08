@@ -22,11 +22,12 @@ Decision order (compare against the current accepted service name):
 1. On the note step only: decline to leave a note → note_skipped.
 2. They are replacing which service this visit is for (the booked row should change to a different visit type) → service_change_requested. query is the replacement service name in Ukrainian (the catalog language), not the whole sentence.
 3. On the note step only: they locate a treatment or concern on the body for this already-selected visit → note_provided. This stays a note even when the treatment name differs from the selected service; the body location marks visit detail, not a service switch.
-4. The text names a different visit type than the selected service AND can still be a comment about this visit — reason for coming, what they have in mind, consultation about a procedure, or a procedure named while a consultation (or other service) is already selected — and does not locate that treatment on the body → service_or_note_clarification_required. Do not pick a CRM id. Do not resolve catalog. query is the other visit type in Ukrainian (the catalog language), not the whole sentence.
-5. On the note step only: other concern or symptom about the already selected visit with no other visit type named → note_provided.
-6. They ask to change the already chosen day or time without replacing the service → schedule_change_requested.
-7. On date or time selection (time not chosen yet): do not return note_provided or note_skipped; prefer service_change_requested, service_or_note_clarification_required, schedule_change_requested, or unresolved.
-8. Otherwise unresolved.
+4. On the note step only: the accepted service is already a consultation visit (primary/follow-up/weight-loss consultation or equivalent) AND the patient describes why they are coming or what the consultation is about — including naming a procedure as the subject/topic of that consult — without clearly replacing this booking with that procedure as the CRM row → note_provided. Reaffirming consultation while naming a procedure topic is visit detail, not a service switch.
+5. The text names a different visit type than what is already selected AND can still be a comment about this visit — e.g. consultation named while a procedure is selected, or a procedure named as the desired booked service while consultation is selected (wish to undergo that treatment, not consult about it) — and does not locate that treatment on the body → service_or_note_clarification_required. Do not pick a CRM id. Do not resolve catalog. query is the other visit type in Ukrainian (the catalog language), not the whole sentence.
+6. On the note step only: other concern or symptom about the already selected visit with no other visit type named → note_provided.
+7. They ask to change the already chosen day or time without replacing the service → schedule_change_requested.
+8. On date or time selection (time not chosen yet): do not return note_provided or note_skipped; prefer service_change_requested, service_or_note_clarification_required, schedule_change_requested, or unresolved.
+9. Otherwise unresolved.
 
 Rules:
 - Never invent a CRM service id.
@@ -39,7 +40,8 @@ Contrastive situations (kinds only; no trigger phrases or catalog names):
 - Selected service A; patient clearly replaces this visit with a different visit type → service_change_requested
 - Selected any; patient locates a treatment or concern on the body for this visit (even if the treatment name differs from the selected service) → note_provided
 - Selected a named procedure; patient speaks of a consultation about that procedure → service_or_note_clarification_required
-- Selected a consultation; patient names another procedure as a wish or concern without locating it on the body and without replacing the visit → service_or_note_clarification_required
+- Selected a consultation; patient states the consult is about a procedure (topic of this visit) → note_provided
+- Selected a consultation; patient wants the booked visit to become that procedure instead → service_or_note_clarification_required or service_change_requested
 - Selected any; patient declines a note → note_skipped
 - Date or time stage; patient replaces the visit type → service_change_requested (never note_provided)`;
 

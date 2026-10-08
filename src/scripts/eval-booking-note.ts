@@ -58,6 +58,18 @@ const FIXTURES: Array<{
     expectKind: "service_or_note_clarification_required",
   },
   {
+    id: "ua-consultation-topic-note",
+    patientText: "потрібна консультація з ботоксу",
+    currentServiceName: "Консультація",
+    expectKind: "note_provided",
+  },
+  {
+    id: "ua-consultation-primary-topic-note",
+    patientText: "потрібна консультація з ботоксу",
+    currentServiceName: "Консультація первинна",
+    expectKind: "note_provided",
+  },
+  {
     id: "ua-genuine-note",
     patientText: "хочу ботокс у зоні лоба",
     currentServiceName: "Консультація",

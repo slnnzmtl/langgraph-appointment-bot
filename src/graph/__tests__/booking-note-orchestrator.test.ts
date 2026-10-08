@@ -307,6 +307,53 @@ describe("orchestrateBookingNoteTurn", () => {
     ]);
   });
 
+  it("Consultation + consult topic about a procedure is note_provided, not service_or_note", async () => {
+    const patientText = "потрібна консультація з ботоксу";
+    const consultationDraft = (() => {
+      const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "service_selected",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+        accepted: true,
+      });
+      const dated = reduceBookingDraft(accepted, {
+        type: "date_selected",
+        date: "2026-10-22",
+      });
+      return reduceBookingDraft(dated, {
+        type: "slot_selected",
+        slot: {
+          dateStart: "2026-10-22T12:00:00",
+          dateEnd: "2026-10-22T12:30:00",
+          label: "12:00",
+        },
+      })!;
+    })();
+    const classify = vi.fn<ClassifyNoteTurn>(async () => ({ kind: "note_provided" }));
+    const resolve = vi.fn<ResolveServiceChange>();
+    const result = await orchestrateBookingNoteTurn({
+      patientText,
+      bookingDraft: consultationDraft,
+      pendingInteraction: openVisitNoteInteraction(),
+      currentServiceName: "Консультація",
+      classify,
+      resolveServiceChange: resolve,
+    });
+
+    expect(classify).toHaveBeenCalledWith(expect.objectContaining({
+      patientText,
+      currentServiceName: "Консультація",
+    }));
+    expect(resolve).not.toHaveBeenCalled();
+    expect(result.goto).toBe("command_prepare");
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.bookingDraft?.note).toEqual({
+      status: "answered",
+      value: patientText,
+    });
+    expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-consult");
+    expect(result.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-22T12:00:00");
+  });
+
   it("switch_service runs resolve then a second reduction", async () => {
     const classify = vi.fn<ClassifyNoteTurn>();
     const resolve = vi.fn<ResolveServiceChange>(async (effect) => ({
