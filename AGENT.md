@@ -88,7 +88,7 @@ Rules:
 
 ## Writes, HITL, reminder
 
-Create / cancel / reschedule open `mutation_confirm` in the same node that appends the mutation tool call (never on availability revalidation alone), then pause on ✅/❌ (~15 min pending). Adapter resume interprets against `mutation_confirm` and passes the reducer update on `Command.update`. Other text while pending returns `awaitingConfirmation` + `userReply` (nothing written). `confirmationGiven: true` is honored only if a matching confirm card was already shown. ❌ or «Головне меню» during confirm declines without a CRM write.
+Create / cancel / reschedule open `mutation_confirm` in the same node that appends the mutation tool call (never on availability revalidation alone), then pause on ✅/❌ (~15 min pending). Composition `resumeConfirmBookingHitl` interprets against `mutation_confirm` and returns the reducer update; the adapter resumes with `Command`. Other text while pending returns `awaitingConfirmation` + `userReply` (nothing written). `confirmationGiven: true` is honored only if a matching confirm card was already shown. ❌ or «Головне меню» during confirm declines without a CRM write.
 
 Voice notes ≤ 60s → Gemini transcription → same text graph. Longer / empty / failed → short Ukrainian fallback, no graph invoke.
 

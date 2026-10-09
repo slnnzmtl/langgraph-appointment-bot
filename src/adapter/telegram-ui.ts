@@ -1,10 +1,14 @@
 import {
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
   MAIN_MENU_LABEL,
   defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 import { unescapeModelLineBreaks } from "../shared/message-content.js";
 
 export {
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   MAIN_MENU_LABEL,
@@ -14,10 +18,6 @@ export {
 } from "../shared/clinic-constants.js";
 
 export { extractReplyButtons, type ExtractedReplyButtons } from "../shared/message-content.js";
-
-/** Labels on the HITL Yes/No reply keyboard (sent as normal chat text when tapped). */
-export const CONFIRM_YES_LABEL = "✅";
-export const CONFIRM_NO_LABEL = "❌";
 
 export type KeyboardButton = {
   text: string;

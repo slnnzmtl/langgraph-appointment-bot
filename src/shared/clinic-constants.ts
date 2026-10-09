@@ -62,6 +62,9 @@ export const MAX_PROPOSED_AVAILABILITY_DAYS = 3;
 
 /** Always appended last on every reply keyboard (back to idle DEFAULT MENU). */
 export const MAIN_MENU_LABEL = "Головне меню";
+/** Labels on the HITL Yes/No reply keyboard (sent as normal chat text when tapped). */
+export const CONFIRM_YES_LABEL = "✅";
+export const CONFIRM_NO_LABEL = "❌";
 /** DATE-step extra shortcut; TIME step may include it too. */
 export const OTHER_DATE_LABEL = "Інша дата";
 export const OTHER_DATE_LABEL_EN = "Another date";
@@ -122,10 +125,10 @@ export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as cons
  */
 export const REPLY_LABELS = {
   visitReschedule: { uk: VISIT_CHANGE_MENU[0], en: VISIT_CHANGE_MENU_EN[0] },
+  /** Shared with REPLACE «Скасувати»; visit vs replacement is interaction state. */
   visitCancel: { uk: VISIT_CHANGE_MENU[1], en: VISIT_CHANGE_MENU_EN[1] },
+  /** Shared with REPLACE «Ні, дякую»; visit vs replacement is interaction state. */
   visitDecline: { uk: VISIT_CHANGE_MENU[2], en: VISIT_CHANGE_MENU_EN[2] },
-  replaceCancel: { uk: BOOKING_REPLACE_MENU[0], en: BOOKING_REPLACE_MENU_EN[0] },
-  replaceDecline: { uk: BOOKING_REPLACE_MENU[1], en: BOOKING_REPLACE_MENU_EN[1] },
   mainBook: { uk: DEFAULT_MENU_NO_VISITS[0], en: "Book" },
   mainServices: { uk: DEFAULT_MENU_NO_VISITS[1], en: "Services" },
   mainAddress: { uk: DEFAULT_MENU_NO_VISITS[2], en: "Address" },

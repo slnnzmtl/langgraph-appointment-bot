@@ -190,15 +190,49 @@ export const faqChoiceTextLabel = (choice: InteractionChoice): string =>
 const FAQ_LIST_LINE = /^\s*(?:[•*\-]|\d+[.)])\s/m;
 
 /**
+ * After a trailing `?`, only decoration may remain: whitespace, emoji, markdown
+ * markers, quotes, and closing brackets.
+ */
+const AFTER_QUESTION_DECORATION =
+  /^[\s*_`~"'»«)\]}.…\uFE0F\uFE0E\p{Extended_Pictographic}\u200D]*$/u;
+
+/**
+ * Remove a trailing question sentence (allowing formatting/emoji after `?`).
+ * Keeps earlier sentences in the same paragraph.
+ */
+const stripTrailingQuestionSentence = (text: string): string => {
+  const trimmed = text.trim();
+  const q = trimmed.lastIndexOf("?");
+  if (q < 0) {
+    return trimmed;
+  }
+  if (!AFTER_QUESTION_DECORATION.test(trimmed.slice(q + 1))) {
+    return trimmed;
+  }
+  const before = trimmed.slice(0, q);
+  const boundary = Math.max(
+    before.lastIndexOf("."),
+    before.lastIndexOf("!"),
+    before.lastIndexOf("\n"),
+  );
+  if (boundary < 0) {
+    return "";
+  }
+  return trimmed
+    .slice(0, boundary + (trimmed[boundary] === "\n" ? 0 : 1))
+    .trim();
+};
+
+/**
  * Keep a short model explanation ahead of deterministic catalog bullets.
- * Drops list lines and trailing question paragraphs so chips/close stay graph-owned.
+ * Drops list lines and trailing question sentences so chips/close stay graph-owned.
  */
 export const faqCatalogIntroFromModel = (text: string): string => {
   const beforeList = text.split(FAQ_LIST_LINE)[0] ?? "";
   const paragraphs = beforeList
     .split(/\n{2,}/)
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0 && !part.endsWith("?"));
+    .map((part) => stripTrailingQuestionSentence(part))
+    .filter((part) => part.length > 0);
   return paragraphs.slice(0, 2).join("\n\n").trim();
 };
 

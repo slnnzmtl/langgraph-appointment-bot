@@ -46,10 +46,8 @@ export const lastHumanTextFromMessages = (messages: BaseMessage[]): string => {
 export const isGreetingOrMainMenuLine = (line: string): boolean =>
   labelIdFor(line) === "mainMenu";
 
-const isCancelChip = (line: string): boolean => {
-  const id = labelIdFor(line);
-  return id === "visitCancel" || id === "replaceCancel";
-};
+const isCancelChip = (line: string): boolean =>
+  labelIdFor(line) === "visitCancel";
 
 /**
  * Classify a bare «Скасувати» / Cancel chip once for the turn.
@@ -241,9 +239,7 @@ export const isPendingRescheduleSelection = (
 
 const isVisitChangeLabel = (human: string): boolean => {
   const id = labelIdFor(human);
-  return id === "visitReschedule"
-    || id === "visitCancel"
-    || id === "replaceCancel";
+  return id === "visitReschedule" || id === "visitCancel";
 };
 
 const isSharedFaqRoutingExclusion = (human: string, humanLine: string): boolean =>

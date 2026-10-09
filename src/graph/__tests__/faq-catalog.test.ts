@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildFaqCatalogChoices,
+  faqCatalogIntroFromModel,
   faqChoiceTextLabel,
   renderFaqCatalogReply,
   shortenFaqChoiceLabels,
@@ -134,6 +135,26 @@ describe("shortenFaqChoiceLabels", () => {
     expect(choices[0]!.label.length).toBeLessThanOrEqual(MAX_CHIP_LEN);
     expect(choices[0]!.displayLabel).toBe(longSuffix);
     expect(choices[0]!.label.endsWith("…")).toBe(true);
+  });
+});
+
+describe("faqCatalogIntroFromModel", () => {
+  it("drops a trailing question with emoji or markdown decoration", () => {
+    expect(faqCatalogIntroFromModel("Який препарат вас цікавить? 🌿")).toBe("");
+    expect(faqCatalogIntroFromModel("Який препарат вас цікавить?**")).toBe("");
+    expect(faqCatalogIntroFromModel("*Який препарат вас цікавить?*")).toBe("");
+  });
+
+  it("keeps prose ahead of a decorated trailing question", () => {
+    expect(
+      faqCatalogIntroFromModel("Філери від 4500 грн. Який препарат вас цікавить? 🌿"),
+    ).toBe("Філери від 4500 грн.");
+  });
+
+  it("still drops a bare trailing question paragraph", () => {
+    expect(
+      faqCatalogIntroFromModel("Коротке пояснення\n\nЯкий варіант вам підходить?"),
+    ).toBe("Коротке пояснення");
   });
 });
 

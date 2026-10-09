@@ -211,8 +211,8 @@ const lastSpecialistReplyText = (state: ClinicState): string => {
 };
 
 /**
- * Apply mutation_chat_other when the adapter did not (e.g. direct Command resume
- * in tests). Idempotent with an already-applied adapter update.
+ * Apply mutation_chat_other when composition resumeConfirmBookingHitl did not
+ * (e.g. direct Command resume in tests). Idempotent with an already-applied update.
  */
 export const applyMutationChatOtherCleanup = (state: ClinicState): ClinicStateUpdate => {
   if (state.pendingInteraction?.kind === "mutation_confirm") {

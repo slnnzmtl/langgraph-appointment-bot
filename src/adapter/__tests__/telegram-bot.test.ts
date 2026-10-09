@@ -362,6 +362,103 @@ describe("text while HITL pending", () => {
       pendingCommand: null,
     });
   });
+
+  it("declines typed main-menu variants while mutation_confirm is open", async () => {
+    const MutationState = Annotation.Root({
+      result: Annotation<string>({
+        reducer: (_left, right) => right,
+        default: () => "",
+      }),
+      messages: Annotation<unknown[]>({
+        reducer: (left: unknown[], right: unknown | unknown[]) =>
+          left.concat(Array.isArray(right) ? right : [right]),
+        default: () => [],
+      }),
+      bookingDraft: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      pendingInteraction: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      bookingSchemaVersion: Annotation<number>({
+        reducer: (_left, right) => right,
+        default: () => 1,
+      }),
+    });
+    const graph = new StateGraph(MutationState)
+      .addNode("ask", async () => {
+        const decision = interrupt({
+          type: "confirm_booking",
+          draft: { confirmMessage: "Confirm?" },
+        });
+        return { result: JSON.stringify(decision) };
+      })
+      .addEdge(START, "ask")
+      .addEdge("ask", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+    const threadId = "text-hitl-mutation-main-menu-variant";
+    await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 1,
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", name: "Процедура", source: "catalog" },
+          },
+          selectedDate: "2026-10-27",
+          selectedSlot: {
+            dateStart: "2026-10-27T11:00:00",
+            dateEnd: "2026-10-27T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "c-1",
+              dateStart: "2026-10-27T11:00:00",
+              dateEnd: "2026-10-27T11:30:00",
+            },
+          },
+          replacement: null,
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "головне меню");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
+    expect(snap.values.pendingInteraction).toBeNull();
+    expect(snap.values.bookingDraft).toMatchObject({
+      selectedDate: "2026-10-27",
+      selectedSlot: {
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+        label: "11:00",
+      },
+      pendingCommand: null,
+    });
+  });
 });
 
 describe("booking schema upgrade on text turn", () => {
