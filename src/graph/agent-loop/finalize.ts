@@ -19,7 +19,6 @@ import {
   BOOKING_REPLACE_MENU,
   BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
-  FAQ_CONSULTATION_OFFER_UK,
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
@@ -28,7 +27,6 @@ import {
   extractMessageTextContent,
   extractReplyButtons,
   matchesReplyLabel,
-  normalizeReplyLabel,
 } from "../../shared/message-content.js";
 import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -46,7 +44,10 @@ import {
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
 } from "../booking-interaction-render.js";
-import { renderFaqCatalogReply } from "../faq-catalog.js";
+import {
+  faqCatalogIntroFromModel,
+  renderFaqCatalogReply,
+} from "../faq-catalog.js";
 import { isModelFailureMessage, tagRuntimeAgentMessage } from "../sub-agent-messages.js";
 
 import {
@@ -178,24 +179,11 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-/** Graph-owned consultation yes-no closes the model must not keep. */
-const KNOWN_SERVICE_OFFER_QUESTIONS = [
-  "Підібрати вільний час на консультацію?",
-  FAQ_CONSULTATION_OFFER_UK.split("\n\n").at(-1) ?? "Записати вас на консультацію?",
-  "Записати вас на консультацію?",
-] as const;
-
-const PROCEDURE_OFFER_QUESTION =
-  /^чудово, обрано:.+\.\s*бажаєте записатися на цю процедуру\?$/u;
-
 /**
- * Drop a trailing paragraph only when it duplicates a known service_confirm
- * offer question. Keep other closing questions (allergies, clarifications).
+ * When the graph opens service_confirm it owns the only trailing question.
+ * Drop any model-authored trailing question sentence so the patient never sees two.
  */
-const stripTrailingOfferQuestion = (
-  text: string,
-  graphQuestion: string,
-): string => {
+const stripTrailingQuestion = (text: string): string => {
   const parts = text
     .split(/\n{2,}/)
     .map((part) => part.trim())
@@ -203,14 +191,24 @@ const stripTrailingOfferQuestion = (
   if (parts.length === 0) {
     return "";
   }
-  const last = normalizeReplyLabel(parts[parts.length - 1]!);
-  const known = new Set(
-    [graphQuestion, ...KNOWN_SERVICE_OFFER_QUESTIONS].map(normalizeReplyLabel),
-  );
-  if (known.has(last) || PROCEDURE_OFFER_QUESTION.test(last)) {
-    parts.pop();
-    trackEvent("faq_offer_question_dropped", { reason: "duplicate_offer_copy" });
+  const last = parts[parts.length - 1]!;
+  if (!last.endsWith("?")) {
+    return parts.join("\n\n").trim();
   }
+  const boundary = Math.max(
+    last.lastIndexOf("."),
+    last.lastIndexOf("!"),
+    last.lastIndexOf("\n"),
+  );
+  const withoutQuestion = boundary >= 0
+    ? last.slice(0, boundary + (last[boundary] === "\n" ? 0 : 1)).trim()
+    : "";
+  if (withoutQuestion.length === 0) {
+    parts.pop();
+  } else {
+    parts[parts.length - 1] = withoutQuestion;
+  }
+  trackEvent("faq_offer_question_dropped", { reason: "model_trailing_question" });
   return parts.join("\n\n").trim();
 };
 
@@ -220,7 +218,7 @@ const withServiceConfirmQuestion = (
   interaction: PendingInteraction & { kind: "service_confirm" },
 ): string => {
   const question = String(renderBookingInteractionMessage(interaction).content);
-  const explanation = stripTrailingOfferQuestion(modelText, question);
+  const explanation = stripTrailingQuestion(modelText);
   if (explanation.length === 0) {
     return question;
   }
@@ -468,12 +466,15 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
             reason: "faq_catalog_close",
           });
         } else {
-          // keep_catalog, or missing/invalid action: body and chips from the
-          // same structured choices so model prose cannot diverge.
+          // keep_catalog may keep a short clarification; missing/invalid drop
+          // model prose so stale choose_other copy cannot diverge from chips.
+          const modelIntro = faqCatalogAction === "keep_catalog"
+            ? faqCatalogIntroFromModel(replyText)
+            : "";
           replyText = renderFaqCatalogReply(
             catalog.choices,
             state.servicesContext?.list ?? [],
-            "",
+            modelIntro,
           );
           replyButtons = replyButtonsForInteraction(catalog);
           trackEvent("reply_menu_filled", {

@@ -187,6 +187,21 @@ export const shortenFaqChoiceLabels = (
 export const faqChoiceTextLabel = (choice: InteractionChoice): string =>
   sourceTextLabel(choice);
 
+const FAQ_LIST_LINE = /^\s*(?:[•*\-]|\d+[.)])\s/m;
+
+/**
+ * Keep a short model explanation ahead of deterministic catalog bullets.
+ * Drops list lines and trailing question paragraphs so chips/close stay graph-owned.
+ */
+export const faqCatalogIntroFromModel = (text: string): string => {
+  const beforeList = text.split(FAQ_LIST_LINE)[0] ?? "";
+  const paragraphs = beforeList
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0 && !part.endsWith("?"));
+  return paragraphs.slice(0, 2).join("\n\n").trim();
+};
+
 /**
  * Deterministic FAQ catalog body from structured choices. Optional model intro
  * is kept; empty intro falls back to a short graph-owned line. Singleton CRM

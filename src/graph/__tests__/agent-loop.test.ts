@@ -676,7 +676,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(preparedLabels);
     expect(update.lastHandoff?.replyButtons).not.toEqual([...BOOKING_OFFER_MENU]);
     expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
-    expect(update.lastHandoff?.replyText).toContain("Доступні такі варіанти:");
+    expect(update.lastHandoff?.replyText).toContain("Для Botox/Disport доступні варіанти за зонами:");
     expect(update.lastHandoff?.replyText).not.toContain("Підібрати вільний час на консультацію?");
     expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
   });
@@ -4349,13 +4349,14 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
     expect(update.lastHandoff?.replyText).toContain("У нашій клініці доступні такі напрями");
-    // Non-offer clarifying questions stay; only duplicate offer copy is stripped.
-    expect(update.lastHandoff?.replyText).toContain("Який напрямок вам цікавий?");
+    // Graph owns the only trailing question when service_confirm opens.
+    expect(update.lastHandoff?.replyText).not.toContain("Який напрямок вам цікавий?");
     expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
     expect(
       (update.lastHandoff?.replyText ?? "")
         .split("Підібрати вільний час на консультацію?").length - 1,
     ).toBe(1);
+    expect((update.lastHandoff?.replyText ?? "").match(/\?/g)?.length).toBe(1);
   });
 
   it("replaces divergent model FAQ catalog prose with structured-choice bullets", () => {
@@ -4408,6 +4409,81 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("Консультація первинна");
     expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
     expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
+  });
+
+  it("keep_catalog retains a sanitized model explanation ahead of structured bullets", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Neotiva", serviceIds: ["n"] },
+      { id: "g1", label: "Juvederm", serviceIds: ["j"] },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ціна губ",
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi(
+            "Філери для губ коштують від 4500 грн залежно від препарату.\n\n• Wrong bullet\n\nЯкий варіант вам підходить?",
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain(
+      "Філери для губ коштують від 4500 грн залежно від препарату.",
+    );
+    expect(update.lastHandoff?.replyText).toContain("• Neotiva");
+    expect(update.lastHandoff?.replyText).toContain("• Juvederm");
+    expect(update.lastHandoff?.replyText).not.toContain("Wrong bullet");
+    expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
+    expect(update.lastHandoff?.replyButtons).toEqual(["Neotiva", "Juvederm"]);
+  });
+
+  it("keep_catalog falls back to the graph intro when the model only asked a question", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Neotiva", serviceIds: ["n"] },
+      { id: "g1", label: "Juvederm", serviceIds: ["j"] },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "губи",
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi("Який препарат вас цікавить?", "keep_catalog"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Доступні такі варіанти:");
+    expect(update.lastHandoff?.replyText).not.toContain("Який препарат вас цікавить?");
+    expect(update.lastHandoff?.replyText).toContain("• Neotiva");
+    expect(update.lastHandoff?.replyButtons).toEqual(["Neotiva", "Juvederm"]);
   });
 
   it("keeps FAQ catalog chips when draft still has a pending serviceAcceptance", () => {
@@ -4607,7 +4683,7 @@ describe("createAgentFinalizeNode", () => {
     expect(families.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
     expect(families.lastHandoff?.replyText).toContain("збільшення губ");
     expect(families.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
-    expect(families.lastHandoff?.replyText).toContain("Доступні такі варіанти:");
+    expect(families.lastHandoff?.replyText).toContain("В ін'єкційних є кілька процедур:");
 
     const zones = finalize(
       clinicState({
@@ -4814,7 +4890,8 @@ describe("createAgentFinalizeNode", () => {
       "Консультації та діагностика",
       "Ін'єкційні процедури",
     ]);
-    expect(update.lastHandoff?.replyText).toContain("Доступні такі варіанти:");
+    expect(update.lastHandoff?.replyText).toContain("Ось основні напрями");
+    expect(update.lastHandoff?.replyText).toContain("• Консультації та діагностика");
     expect(update.lastHandoff?.replyText).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
     expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
@@ -4990,7 +5067,7 @@ describe("createAgentFinalizeNode", () => {
     ).toBe(1);
   });
 
-  it("offer_consultation keeps a non-offer trailing question (allergy) and appends the graph offer", () => {
+  it("offer_consultation drops a trailing allergy question and keeps the intro prose", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -5019,8 +5096,10 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyText).toContain(allergy);
+    expect(update.lastHandoff?.replyText).toContain("Для губ є кілька препаратів.");
+    expect(update.lastHandoff?.replyText).not.toContain(allergy);
     expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect((update.lastHandoff?.replyText ?? "").match(/\?/g)?.length).toBe(1);
   });
 
   it("close_catalog clears chips and keeps hours/location answers", () => {

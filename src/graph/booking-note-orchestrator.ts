@@ -102,15 +102,6 @@ const applyEffect = async (
       goto: "faq_prepare",
     };
   }
-  if (effect.type === "resolve_contact") {
-    // Contact CRM work runs in the booking agent tools path; orch only preserves the wait.
-    return {
-      bookingDraft: state.bookingDraft,
-      pendingInteraction: state.pendingInteraction,
-      clearAvailability: false,
-      goto: "booking_llm",
-    };
-  }
   if (effect.type === "apply_service_choice") {
     const resolved = await resolveServiceChange({
       type: "resolve_service",

@@ -3,10 +3,10 @@ import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 import {
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
-  SUPERVISOR_OWNED_REPLY_LABELS,
 } from "../../shared/clinic-constants.js";
 import {
   extractMessageTextContent,
+  isSupervisorOwnedLabel,
   isYesReply,
   labelIdFor,
 } from "../../shared/message-content.js";
@@ -123,7 +123,7 @@ export const shouldContinueInSpecialist = (
     return false;
   }
   const humanText = extractMessageTextContent(lastHuman.content).trim();
-  if (!humanText || SUPERVISOR_OWNED_REPLY_LABELS.has(humanText)) {
+  if (!humanText || isSupervisorOwnedLabel(humanText)) {
     return false;
   }
 
@@ -211,8 +211,8 @@ export const stickyContinueAgentId = (
   if (
     bookingTurnNeedsNoteOrchestrator(state)
     && human.length > 0
-    && !SUPERVISOR_OWNED_REPLY_LABELS.has(human)
-    && !SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)
+    && !isSupervisorOwnedLabel(human)
+    && !isSupervisorOwnedLabel(humanLine)
   ) {
     return BOOKING_AGENT_ID;
   }
@@ -248,7 +248,7 @@ const isVisitChangeLabel = (human: string): boolean => {
 
 const isSharedFaqRoutingExclusion = (human: string, humanLine: string): boolean =>
   human.length === 0
-  || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)
+  || isSupervisorOwnedLabel(humanLine)
   || isYesReply(human)
   || isVisitChangeLabel(human)
   || normalizeClinicPhone(human) != null;

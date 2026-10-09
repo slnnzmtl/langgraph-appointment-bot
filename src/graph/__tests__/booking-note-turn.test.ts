@@ -72,6 +72,21 @@ describe("interpretNoteTurn trusted path", () => {
     expect(classify).not.toHaveBeenCalled();
   });
 
+  it("maps typed Main menu (case-insensitive) to leave_booking without classifying", async () => {
+    const classify = vi.fn<ClassifyNoteTurn>();
+    const result = await interpretNoteTurn({
+      patientText: "main menu",
+      pendingInteraction: visitNote,
+      classify,
+    });
+
+    expect(result).toEqual({
+      source: "trusted",
+      sessionEvent: { type: "leave_booking", destination: "main_menu" },
+    });
+    expect(classify).not.toHaveBeenCalled();
+  });
+
   it("accepts a schedule match from the injected snapshot matcher", async () => {
     const classify = vi.fn<ClassifyNoteTurn>();
     const result = await interpretNoteTurn({

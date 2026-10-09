@@ -297,17 +297,10 @@ export type OpenFaqCatalogEffect = {
   type: "open_faq_catalog";
 };
 
-export type ResolveContactEffect = {
-  type: "resolve_contact";
-  field: ContactFieldInteraction["field"];
-  value: string;
-};
-
 export type BookingSessionEffect =
   | ResolveServiceEffect
   | ApplyServiceChoiceEffect
-  | OpenFaqCatalogEffect
-  | ResolveContactEffect;
+  | OpenFaqCatalogEffect;
 
 export const openContactFieldInteraction = (
   field: ContactFieldInteraction["field"],
@@ -398,17 +391,6 @@ export type BookingSessionEvent =
   | {
       type: "contact_field_required";
       field: ContactFieldInteraction["field"];
-      occupied?: boolean;
-    }
-  | {
-      type: "contact_field_submitted";
-      value: string;
-    }
-  | {
-      type: "contact_field_resolved";
-    }
-  | {
-      type: "contact_field_failed";
       occupied?: boolean;
     }
   | {
@@ -938,43 +920,6 @@ export const reduceBookingSession = (
         bookingDraft: draft,
         pendingInteraction: openContactFieldInteraction(
           event.field,
-          event.occupied === true,
-        ),
-      });
-    }
-    case "contact_field_submitted": {
-      if (interaction?.kind !== "contact_field") {
-        return noEffect(current);
-      }
-      const value = event.value.trim();
-      if (value.length === 0) {
-        return noEffect(current);
-      }
-      return {
-        bookingDraft: draft,
-        pendingInteraction: interaction,
-        clearAvailability: false,
-        effect: {
-          type: "resolve_contact",
-          field: interaction.field,
-          value,
-        },
-      };
-    }
-    case "contact_field_resolved": {
-      return noEffect({
-        bookingDraft: draft,
-        pendingInteraction: clearBookingOwnedInteraction(interaction),
-      });
-    }
-    case "contact_field_failed": {
-      if (interaction?.kind !== "contact_field") {
-        return noEffect(current);
-      }
-      return noEffect({
-        bookingDraft: draft,
-        pendingInteraction: openContactFieldInteraction(
-          interaction.field,
           event.occupied === true,
         ),
       });

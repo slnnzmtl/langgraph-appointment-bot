@@ -160,7 +160,8 @@ export const buildSupervisorTurnContext = async (
     contactContext = result.contactContext;
     bookingContext = result.bookingContext;
     if (result.ok || visitStatusIntent) {
-      prefetchUpdate = result.update;
+      // Preserve draft mutations computed before prefetch (stale-cancel cleanup).
+      prefetchUpdate = { ...prefetchUpdate, ...result.update };
     }
   }
 

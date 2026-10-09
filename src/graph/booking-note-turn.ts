@@ -1,9 +1,6 @@
 import { z } from "zod";
 
-import {
-  MAIN_MENU_LABEL,
-  SUPERVISOR_OWNED_REPLY_LABELS,
-} from "../shared/clinic-constants.js";
+import { isSupervisorOwnedLabel } from "../shared/message-content.js";
 import type { SelectedBookingSlot } from "./types.js";
 import {
   interpretInteractionReply,
@@ -75,10 +72,8 @@ const matchInteractionChoice = (
     : null;
 };
 
-const isStableMenuLeave = (patientText: string): boolean => {
-  const trimmed = patientText.trim();
-  return trimmed === MAIN_MENU_LABEL || SUPERVISOR_OWNED_REPLY_LABELS.has(trimmed);
-};
+const isStableMenuLeave = (patientText: string): boolean =>
+  isSupervisorOwnedLabel(patientText);
 
 /**
  * Interpret one note-phase patient message.

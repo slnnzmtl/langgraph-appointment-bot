@@ -1,7 +1,4 @@
-import {
-  SUPERVISOR_OWNED_REPLY_LABELS,
-} from "../../shared/clinic-constants.js";
-import { labelIdFor } from "../../shared/message-content.js";
+import { isSupervisorOwnedLabel, labelIdFor } from "../../shared/message-content.js";
 import {
   closedBookingSessionUpdate,
   openVisitMeetingInteraction,
@@ -122,7 +119,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
   const keepAvailability =
     ctx.state.lastHandoff?.agentId === BOOKING_AGENT_ID
     && routed.next === BOOKING_AGENT_ID
-    && !SUPERVISOR_OWNED_REPLY_LABELS.has(ctx.lastHumanLine);
+    && !isSupervisorOwnedLabel(ctx.lastHumanLine);
   const abandonDraft = isGreetingOrMainMenuLine(ctx.lastHumanLine)
     || labelIdFor(ctx.lastHumanLine) === "offerChooseOther";
 

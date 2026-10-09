@@ -42,19 +42,25 @@ const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
 const AVAILABILITY_GENERIC_DATE_HEADING = "Доступні дні";
 const AVAILABILITY_TIME_HEADING = "Вільні години на ";
 
-const headingForSnapshot = (snapshot: AvailabilityRenderSnapshot): string => {
-  if (snapshot.queryKind === "nearest") {
+/** Shared DATE-page heading from a search query kind + optional anchor. */
+export const availabilityDateHeading = (
+  queryKind: AvailabilityRenderSnapshot["queryKind"],
+  queryAnchor?: string,
+): string => {
+  if (queryKind === "nearest") {
     return AVAILABILITY_DATE_HEADING;
   }
-  const anchor = snapshot.queryAnchor;
-  if (snapshot.queryKind === "later" && anchor) {
-    return `Вільні дні після ${shortDayMonthLabel(formatKyivDayLabel(anchor, kyivToday()))}`;
+  if (queryKind === "later" && queryAnchor) {
+    return `Вільні дні після ${shortDayMonthLabel(formatKyivDayLabel(queryAnchor, kyivToday()))}`;
   }
-  if (snapshot.queryKind === "earlier" && anchor) {
-    return `Вільні дні до ${shortDayMonthLabel(formatKyivDayLabel(anchor, kyivToday()))}`;
+  if (queryKind === "earlier" && queryAnchor) {
+    return `Вільні дні до ${shortDayMonthLabel(formatKyivDayLabel(queryAnchor, kyivToday()))}`;
   }
   return AVAILABILITY_GENERIC_DATE_HEADING;
 };
+
+const headingForSnapshot = (snapshot: AvailabilityRenderSnapshot): string =>
+  availabilityDateHeading(snapshot.queryKind, snapshot.queryAnchor);
 
 const emptyBody = (snapshot: AvailabilityRenderSnapshot): string => {
   if (snapshot.emptyMode === "earlier") {

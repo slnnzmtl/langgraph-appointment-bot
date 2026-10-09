@@ -23,11 +23,11 @@ import {
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CHANGE_ACK_UK,
+  SERVICE_CANDIDATE_OTHER_LABEL_UK,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
   serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
-import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../service-resolution.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 import type { ResolveServiceChange } from "../booking-note-orchestrator.js";
 

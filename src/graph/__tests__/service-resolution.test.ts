@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { setTrackEventForTests } from "../../analytics/track.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.js";
 import {
-  SERVICE_CANDIDATE_OTHER_LABEL_UK,
   SERVICE_CANDIDATE_PARTITION_INSTRUCTION,
   SERVICE_CANDIDATE_SELECTOR_INSTRUCTION,
   createServiceCandidatePartitioner,
@@ -265,6 +265,36 @@ describe("resolveServiceChange", () => {
       },
     );
     expect(result).toEqual({ type: "service_unresolved" });
+  });
+
+  it("returns unresolved and emits tool_error when selectCandidates rejects", async () => {
+    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+    try {
+      const result = await resolveServiceChange(
+        { type: "resolve_service", utterance: "ботокс" },
+        {
+          fetchCatalog: listServices,
+          selectCandidates: async () => {
+            throw new Error("model unavailable");
+          },
+        },
+      );
+      expect(result).toEqual({ type: "service_unresolved" });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "tool_error",
+          props: expect.objectContaining({
+            tool: "select_service_candidates",
+            error_message: expect.stringContaining("model unavailable"),
+          }),
+        }),
+      );
+    } finally {
+      setTrackEventForTests(null);
+    }
   });
 
   it("falls back to per-id CRM chips when groups are missing for multiple ids", async () => {

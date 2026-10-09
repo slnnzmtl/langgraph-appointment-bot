@@ -165,22 +165,3 @@ export const serviceChangedNoticeUk = (serviceName: string): string =>
 /** Runtime-owned prompt when DATE/TIME/SERVICE is still open and the model claimed a write. */
 export const BOOKING_SCHEDULE_RESELECT_UK =
   "Оберіть, будь ласка, зручну дату й час для запису.";
-
-/**
- * Labels the supervisor must route itself — never sticky-continue into booking.
- * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,
- * and soft declines after a move/cancel or replace offer.
- */
-export const SUPERVISOR_OWNED_REPLY_LABELS = new Set<string>([
-  MAIN_MENU_LABEL,
-  ...DEFAULT_MENU_NO_VISITS,
-  ...DEFAULT_MENU_HAS_VISITS,
-  "Book",
-  "Services",
-  "Address",
-  "My visit",
-  "Обрати іншу процедуру",
-  "Choose another procedure",
-  VISIT_CHANGE_MENU[2],
-  VISIT_CHANGE_MENU_EN[2],
-]);

@@ -415,6 +415,34 @@ describe("shouldStayInFaqCatalog", () => {
     expect(shouldStayInFaqCatalog(openFaqCatalogState())).toBe(true);
   });
 
+  it.each(["main menu", "MAIN MENU", "головне меню"])(
+    "leaves FAQ catalog for typed %s",
+    (line) => {
+      expect(
+        shouldStayInFaqCatalog(
+          supervisorState({
+            ...openFaqCatalogState(),
+            messages: [
+              new AIMessage("Який препарат вас цікавить?"),
+              new HumanMessage(line),
+            ],
+          }),
+        ),
+      ).toBe(false);
+      expect(
+        stickyContinueAgentId(
+          supervisorState({
+            ...openFaqCatalogState(),
+            messages: [
+              new AIMessage("Який препарат вас цікавить?"),
+              new HumanMessage(line),
+            ],
+          }),
+        ),
+      ).toBeNull();
+    },
+  );
+
   it("stickyContinueAgentId returns faq before the session-close FAQ route", () => {
     expect(stickyContinueAgentId(openFaqCatalogState())).toBe("faq");
   });
@@ -461,6 +489,38 @@ describe("shouldStayInFaqCatalog", () => {
     // Sticky path omits pendingInteraction — session-close must not null it.
     expect(update.pendingInteraction).toBeUndefined();
     expect(catalogPending?.kind).toBe("service_candidate");
+  });
+
+  it("typed main menu leaves FAQ catalog and renders the main menu", async () => {
+    const invoke = vi.fn();
+    const supervisorLlm = {
+      bindRoutingTools: vi.fn(() => ({ invoke })),
+    } as unknown as ILLMConnector;
+    invoke.mockResolvedValue({
+      next: "FINISH",
+      reply: "Чим можу допомогти?",
+      menu: "default",
+    });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        ...openFaqCatalogState(),
+        messages: [
+          new AIMessage("Який препарат вас цікавить?"),
+          new HumanMessage("main menu"),
+        ],
+      }),
+    );
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
+    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
   });
 });
 

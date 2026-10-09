@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { trackToolError } from "../analytics/track.js";
-import { SERVICE_CANDIDATE_OTHER_LABEL_UK as SERVICE_CANDIDATE_OTHER_LABEL } from "../shared/clinic-constants.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import type { BookingService } from "./booking-draft.js";
@@ -11,9 +11,6 @@ import type {
 } from "./booking-note-orchestrator.js";
 import type { InteractionChoice, ResolveServiceEffect } from "./booking-session.js";
 import type { ILLMConnector } from "./types.js";
-
-/** Re-export for callers that historically imported the label from this module. */
-export const SERVICE_CANDIDATE_OTHER_LABEL_UK = SERVICE_CANDIDATE_OTHER_LABEL;
 
 export type ServiceCatalogRow = {
   id: string;
@@ -186,6 +183,23 @@ const safePartition = async (
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     trackToolError("partition_service_candidates", message);
+    return undefined;
+  }
+};
+
+type SelectInput = Parameters<SelectServiceCandidates>[0];
+type SelectResult = Awaited<ReturnType<SelectServiceCandidates>>;
+
+/** Run selectCandidates; on failure log and return undefined so callers fall back. */
+const safeSelect = async (
+  selectCandidates: SelectServiceCandidates,
+  input: SelectInput,
+): Promise<SelectResult | undefined> => {
+  try {
+    return await selectCandidates(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    trackToolError("select_service_candidates", message);
     return undefined;
   }
 };
@@ -506,10 +520,13 @@ export const resolveServiceChange = async (
     if (exact.length === 1) {
       selectedIds = [exact[0]!.id];
     } else {
-      const selection = await deps.selectCandidates({
+      const selection = await safeSelect(deps.selectCandidates, {
         utterance: probe,
         candidates: toCandidateRows(catalog.rows),
       });
+      if (selection == null) {
+        return { type: "service_unresolved" };
+      }
       selectedIds = [...new Set(selection.serviceIds.filter((id) => allowlist.has(id)))];
       selectionGroups = selection.groups;
       if (selection.serviceIds.some((id) => !allowlist.has(id)) && selectedIds.length === 0) {

@@ -221,6 +221,25 @@ export const labelIdFor = (text: string): ReplyLabelId | null => {
   return null;
 };
 
+/**
+ * Labels the supervisor must own (main menu, DEFAULT MENU, choose-other, soft decline).
+ * Matches each owned id's UK/EN labels so case/whitespace variants work — do not use
+ * exact string Sets alongside {@link labelIdFor}.
+ */
+const SUPERVISOR_OWNED_LABEL_IDS = [
+  "mainBook",
+  "mainServices",
+  "mainAddress",
+  "mainMyVisit",
+  "mainMenu",
+  "offerChooseOther",
+  "visitDecline",
+] as const satisfies readonly ReplyLabelId[];
+
+export const isSupervisorOwnedLabel = (text: string): boolean =>
+  SUPERVISOR_OWNED_LABEL_IDS.some((id) =>
+    matchesReplyLabel(text, [REPLY_LABELS[id].uk, REPLY_LABELS[id].en]));
+
 /** Explicit free-text affirmation for an already displayed mutation confirmation. */
 export const isConfirmationAffirmation = (
   text: string,

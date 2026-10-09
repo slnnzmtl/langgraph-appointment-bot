@@ -15,7 +15,6 @@ import {
   type AvailabilityContext,
 } from "../../tools/availability-tools.js";
 import {
-  formatKyivDayLabel,
   kyivToday,
   shortDayMonthLabel,
 } from "../../tools/availability-slots.js";
@@ -64,6 +63,7 @@ import {
   type TimeSelectInteraction,
 } from "../booking-session.js";
 import {
+  availabilityDateHeading,
   buildDateSelectInteraction,
   buildEmptyAvailabilityInteraction,
   buildTimeSelectInteraction,
@@ -429,32 +429,13 @@ export const captureServicesFromMessages = (
 ): ServicesContext | null | undefined =>
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
-const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
-
-const AVAILABILITY_GENERIC_DATE_HEADING = "Доступні дні";
-
-const availabilityHeadingAnchor = (context: AvailabilityContext): string | undefined => {
-  const query = availabilityQueryFromContext(context);
-  if (query?.kind === "later" || query?.kind === "earlier") {
-    return query.anchor;
-  }
-  return undefined;
-};
-
 /** Heading for a DATE page, derived from the runtime-owned search query. */
 export const formatAvailabilityHeading = (context: AvailabilityContext): string => {
-  const kind = availabilityQueryFromContext(context)?.kind;
-  if (kind === "nearest") {
-    return AVAILABILITY_DATE_HEADING;
-  }
-  const anchor = availabilityHeadingAnchor(context);
-  if (kind === "later" && anchor) {
-    return `Вільні дні після ${shortDayMonthLabel(formatKyivDayLabel(anchor, kyivToday()))}`;
-  }
-  if (kind === "earlier" && anchor) {
-    return `Вільні дні до ${shortDayMonthLabel(formatKyivDayLabel(anchor, kyivToday()))}`;
-  }
-  return AVAILABILITY_GENERIC_DATE_HEADING;
+  const query = availabilityQueryFromContext(context);
+  const anchor = query?.kind === "later" || query?.kind === "earlier"
+    ? query.anchor
+    : undefined;
+  return availabilityDateHeading(query?.kind, anchor);
 };
 
 const renderedAvailabilityOffer = (

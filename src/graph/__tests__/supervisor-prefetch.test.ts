@@ -739,6 +739,43 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     });
   });
 
+  it("keeps stale-cancel cleanup when a successful prefetch refreshes CRM context", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+    const staleCancelDraft = createEmptyBookingDraft();
+    staleCancelDraft.phase = "confirming";
+    staleCancelDraft.pendingCommand = {
+      action: "cancel",
+      payload: { meetingId: "m-stale" },
+    };
+
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("скільки коштує ботокс?")],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        bookingDraft: staleCancelDraft,
+        prefetchDirty: true,
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).toHaveBeenCalledOnce();
+    expect(update.contactContext).toEqual(listedContact);
+    expect(update.bookingDraft?.pendingCommand).toBeNull();
+    expect(update.bookingDraft).toMatchObject({
+      pendingCommand: null,
+    });
+  });
+
   it("refetches when prefetchFetchedAt is missing", async () => {
     const prefetch = vi.fn(async () => ({
       contactContext: listedContact,
