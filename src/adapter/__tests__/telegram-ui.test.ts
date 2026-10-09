@@ -28,7 +28,7 @@ describe("telegram-ui confirm reply keyboard", () => {
   it("classifies confirm taps vs free chat text", () => {
     expect(classifyConfirmReply("✅")).toEqual({ kind: "confirmed" });
     expect(classifyConfirmReply("❌")).toEqual({ kind: "declined" });
-    expect(classifyConfirmReply(MAIN_MENU_LABEL)).toEqual({ kind: "declined" });
+    expect(classifyConfirmReply(MAIN_MENU_LABEL)).toEqual({ kind: "leave" });
     expect(classifyConfirmReply("так")).toEqual({ kind: "chat" });
     expect(classifyConfirmReply("ні")).toEqual({ kind: "chat" });
     expect(classifyConfirmReply("✅\uFE0F")).toEqual({ kind: "confirmed" });

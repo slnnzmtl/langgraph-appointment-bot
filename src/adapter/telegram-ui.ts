@@ -18,6 +18,10 @@ export {
 } from "../shared/clinic-constants.js";
 
 export { extractReplyButtons, type ExtractedReplyButtons } from "../shared/message-content.js";
+export {
+  classifyConfirmReply,
+  type ConfirmReplyDecision,
+} from "../shared/confirm-reply.js";
 
 export type KeyboardButton = {
   text: string;
@@ -27,23 +31,6 @@ export type ReplyKeyboardMarkup = {
   keyboard: KeyboardButton[][];
   resize_keyboard?: boolean;
   one_time_keyboard?: boolean;
-};
-
-export type ConfirmReplyDecision =
-  | { kind: "confirmed" }
-  | { kind: "declined" }
-  | { kind: "chat" };
-
-/** Map HITL reply-keyboard taps (or free text) while a confirm card is pending. */
-export const classifyConfirmReply = (text: string): ConfirmReplyDecision => {
-  const trimmed = text.trim().replace(/\uFE0F|\uFE0E/g, "");
-  if (trimmed === CONFIRM_YES_LABEL) {
-    return { kind: "confirmed" };
-  }
-  if (trimmed === CONFIRM_NO_LABEL || trimmed === MAIN_MENU_LABEL) {
-    return { kind: "declined" };
-  }
-  return { kind: "chat" };
 };
 
 /** Append «Головне меню» last when missing (adapter-owned; the model need not emit it). */

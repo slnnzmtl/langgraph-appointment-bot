@@ -34,7 +34,6 @@ import {
   buildDefaultMenuKeyboard,
   classifyConfirmReply,
   formatForTelegram,
-  MAIN_MENU_LABEL,
 } from "./telegram-ui.js";
 import {
   buildStartHistoryText,
@@ -486,8 +485,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     const threadId = String(chatId);
     const confirmTap = classifyConfirmReply(text);
     const isReminderConfirmTap =
-      confirmTap.kind === "confirmed" ||
-      (confirmTap.kind === "declined" && text.replace(/\uFE0F|\uFE0E/g, "") !== MAIN_MENU_LABEL);
+      confirmTap.kind === "confirmed" || confirmTap.kind === "declined";
     if (
       isReminderConfirmTap
       && !(await withCheckpointThreadRetry(checkpointer, threadId, async () => {

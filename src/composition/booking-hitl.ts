@@ -1,14 +1,10 @@
 /**
  * Facade for adapter-layer confirm-card resume. Keeps telegram-bot off graph/*.
  */
-import {
-  CONFIRM_NO_LABEL,
-  CONFIRM_YES_LABEL,
-} from "../shared/clinic-constants.js";
+import { classifyConfirmReply } from "../shared/confirm-reply.js";
 import {
   isConfirmationAffirmation,
   isConfirmationDecline,
-  labelIdFor,
 } from "../shared/message-content.js";
 import type { BookingDraft } from "../graph/booking-draft.js";
 import {
@@ -53,9 +49,6 @@ const asBookingDraft = (bookingDraft: unknown): BookingDraft | null =>
     ? bookingDraft as BookingDraft
     : null;
 
-const stripVariationSelectors = (text: string): string =>
-  text.trim().replace(/\uFE0F|\uFE0E/g, "");
-
 /**
  * Interpret patient text while a create/cancel/reschedule confirm card is pending.
  * Returns resume payload + booking-state update for Command; adapter appends HumanMessage.
@@ -90,14 +83,14 @@ export const resumeConfirmBookingHitl = (
     };
   };
 
-  const stripped = stripVariationSelectors(text);
-  if (stripped === CONFIRM_YES_LABEL) {
+  const tap = classifyConfirmReply(text);
+  if (tap.kind === "confirmed") {
     return {
       resume: { confirmed: true },
       update: interactionUpdate("confirm"),
     };
   }
-  if (stripped === CONFIRM_NO_LABEL || labelIdFor(text) === "mainMenu") {
+  if (tap.kind === "declined" || tap.kind === "leave") {
     return {
       resume: { confirmed: false },
       update: interactionUpdate("decline"),
