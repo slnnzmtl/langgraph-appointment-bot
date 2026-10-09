@@ -9,11 +9,20 @@ import {
   isConfirmationAffirmation,
   isConfirmationDecline,
   isYesReply,
+  matchesReplyLabel,
   parseLeakedModelToolCalls,
   replyButtonLabels,
   requestsConsultation,
   unescapeModelLineBreaks,
 } from "../message-content.js";
+
+describe("matchesReplyLabel", () => {
+  it("matches menu chips case-insensitively after trimming", () => {
+    expect(matchesReplyLabel("послуги", ["Послуги", "Services"])).toBe(true);
+    expect(matchesReplyLabel("  Services  ", ["Послуги", "Services"])).toBe(true);
+    expect(matchesReplyLabel("адреса", ["Послуги", "Services"])).toBe(false);
+  });
+});
 
 describe("isYesReply / requestsConsultation", () => {
   it("detects yes replies", () => {
@@ -78,45 +87,40 @@ describe("free-text mutation confirmation", () => {
 });
 
 describe("extractFaqCatalogAction", () => {
-  it("extracts keep_catalog and strips the control tag from visible text", () => {
+  it.each([
+    "keep_catalog",
+    "offer_consultation",
+    "close_catalog",
+  ] as const)("extracts paired body tag %s and strips it from visible text", (action) => {
     expect(
-      extractFaqCatalogAction(
-        [
-          "Ось основні напрями 🌿",
-          "• Консультації та діагностика",
-          "",
-          "Який саме напрямок вас цікавить?",
-          "<faq_catalog_action>keep_catalog</faq_catalog_action>",
-        ].join("\n"),
-      ),
+      extractFaqCatalogAction(`Видимий текст.\n<faq_catalog_action>${action}</faq_catalog_action>`),
     ).toEqual({
-      text: [
-        "Ось основні напрями 🌿",
-        "• Консультації та діагностика",
-        "",
-        "Який саме напрямок вас цікавить?",
-      ].join("\n"),
-      action: "keep_catalog",
+      text: "Видимий текст.",
+      action,
     });
   });
 
-  it("accepts offer_consultation and close_catalog", () => {
+  it.each([
+    "keep_catalog",
+    "offer_consultation",
+    "close_catalog",
+  ] as const)("extracts self-closing attribute tag %s", (action) => {
     expect(
       extractFaqCatalogAction(
-        "Лікар підбере препарат на консультації.\n<faq_catalog_action>offer_consultation</faq_catalog_action>",
+        `Видимий текст.\n<faq_catalog_action action="${action}"/>`,
       ),
     ).toEqual({
-      text: "Лікар підбере препарат на консультації.",
-      action: "offer_consultation",
+      text: "Видимий текст.",
+      action,
     });
+  });
+
+  it("accepts single quotes and surrounding whitespace on the attribute", () => {
     expect(
       extractFaqCatalogAction(
-        "Ми працюємо з 9 до 18.\n<faq_catalog_action>close_catalog</faq_catalog_action>",
+        `Текст.\n<faq_catalog_action   action='keep_catalog'  />`,
       ),
-    ).toEqual({
-      text: "Ми працюємо з 9 до 18.",
-      action: "close_catalog",
-    });
+    ).toEqual({ text: "Текст.", action: "keep_catalog" });
   });
 
   it("returns null action when the tag is missing", () => {
@@ -128,7 +132,7 @@ describe("extractFaqCatalogAction", () => {
     });
   });
 
-  it("returns null action for invalid values without interpreting prose", () => {
+  it("strips invalid tags and returns null action", () => {
     expect(
       extractFaqCatalogAction(
         "Текст.\n<faq_catalog_action>maybe_consult</faq_catalog_action>",
@@ -139,12 +143,53 @@ describe("extractFaqCatalogAction", () => {
     });
     expect(
       extractFaqCatalogAction(
+        'Текст.\n<faq_catalog_action action="not_a_real_action"/>',
+      ),
+    ).toEqual({
+      text: "Текст.",
+      action: null,
+    });
+  });
+
+  it("accepts case-insensitive enum values", () => {
+    expect(
+      extractFaqCatalogAction(
         "Текст.\n<faq_catalog_action>KEEP_CATALOG</faq_catalog_action>",
       ),
     ).toEqual({
       text: "Текст.",
       action: "keep_catalog",
     });
+  });
+
+  it("returns null action for duplicate or conflicting valid tags", () => {
+    expect(
+      extractFaqCatalogAction(
+        [
+          "Текст.",
+          "<faq_catalog_action>keep_catalog</faq_catalog_action>",
+          '<faq_catalog_action action="keep_catalog"/>',
+        ].join("\n"),
+      ),
+    ).toEqual({ text: "Текст.", action: null });
+    expect(
+      extractFaqCatalogAction(
+        [
+          "Текст.",
+          "<faq_catalog_action>keep_catalog</faq_catalog_action>",
+          '<faq_catalog_action action="close_catalog"/>',
+        ].join("\n"),
+      ),
+    ).toEqual({ text: "Текст.", action: null });
+  });
+
+  it("leaves no faq_catalog_action substring after stripping malformed tags", () => {
+    const result = extractFaqCatalogAction(
+      'Текст.\n<faq_catalog_action action="keep_catalog"/><faq_catalog_action>broken',
+    );
+    expect(result.text).not.toContain("faq_catalog_action");
+    expect(result.text).toContain("Текст.");
+    expect(result.action).toBe("keep_catalog");
   });
 });
 

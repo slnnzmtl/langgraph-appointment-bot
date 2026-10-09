@@ -1,3 +1,4 @@
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js";
 import type { InteractionChoice } from "./booking-session.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 
@@ -248,10 +249,27 @@ export const buildFaqCatalogChoices = (
     }];
   }
 
-  const capped = rows.slice(0, MAX_FAQ_CATALOG_CHOICES);
-  return capped.map((row) => ({
-    id: row.id,
-    label: row.name.trim(),
-    serviceIds: [row.id],
-  }));
+  if (rows.length <= MAX_FAQ_CATALOG_CHOICES) {
+    return rows.map((row) => ({
+      id: row.id,
+      label: row.name.trim(),
+      serviceIds: [row.id],
+    }));
+  }
+
+  // Keep seven CRM chips + one overflow group so every id stays reachable.
+  const visible = rows.slice(0, MAX_FAQ_CATALOG_CHOICES - 1);
+  const overflow = rows.slice(MAX_FAQ_CATALOG_CHOICES - 1);
+  return [
+    ...visible.map((row) => ({
+      id: row.id,
+      label: row.name.trim(),
+      serviceIds: [row.id],
+    })),
+    {
+      id: "faq_other",
+      label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+      serviceIds: overflow.map((row) => row.id),
+    },
+  ];
 };

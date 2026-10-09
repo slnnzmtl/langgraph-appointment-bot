@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { setTrackEventForTests } from "../../analytics/track.js";
 import {
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
   SERVICE_CANDIDATE_PARTITION_INSTRUCTION,
@@ -12,6 +13,7 @@ import {
   type ServiceCatalogRow,
 } from "../service-resolution.js";
 import type { ILLMConnector } from "../types.js";
+import { buildFaqCatalogChoices } from "../faq-catalog.js";
 
 const rows: ServiceCatalogRow[] = [
   { id: "svc-consult", name: "Консультація", duration: 30, description: "Primary visit" },
@@ -596,5 +598,63 @@ describe("partitionRemainingServiceChoices", () => {
       ],
     });
     expect(choices).toEqual([]);
+  });
+
+  it("returns empty and emits tool_error when the partitioner rejects", async () => {
+    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+    try {
+      const choices = await partitionRemainingServiceChoices({
+        rows,
+        utterance: "Обрати іншу процедуру",
+        partitionCandidates: async () => {
+          throw new Error("network down");
+        },
+      });
+      expect(choices).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "tool_error",
+          props: expect.objectContaining({
+            tool: "partition_service_candidates",
+            error_message: expect.stringContaining("network down"),
+          }),
+        }),
+      );
+    } finally {
+      setTrackEventForTests(null);
+    }
+  });
+});
+
+describe("buildFaqCatalogChoices overflow", () => {
+  it("parks services after the first page under Інші варіанти", () => {
+    const services = Array.from({ length: 9 }, (_, index) => ({
+      id: `svc-${index + 1}`,
+      name: `Service ${index + 1}`,
+    }));
+    const choices = buildFaqCatalogChoices(services);
+    expect(choices).toHaveLength(8);
+    expect(choices.slice(0, 7).map((c) => c.id)).toEqual([
+      "svc-1", "svc-2", "svc-3", "svc-4", "svc-5", "svc-6", "svc-7",
+    ]);
+    expect(choices[7]).toEqual({
+      id: "faq_other",
+      label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+      serviceIds: ["svc-8", "svc-9"],
+    });
+  });
+
+  it("returns all rows when eight or fewer", () => {
+    const services = Array.from({ length: 8 }, (_, index) => ({
+      id: `svc-${index + 1}`,
+      name: `Service ${index + 1}`,
+    }));
+    const choices = buildFaqCatalogChoices(services);
+    expect(choices).toHaveLength(8);
+    expect(choices.every((c) => c.serviceIds?.length === 1)).toBe(true);
+    expect(choices.some((c) => c.label === SERVICE_CANDIDATE_OTHER_LABEL_UK)).toBe(false);
   });
 });

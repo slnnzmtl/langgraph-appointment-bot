@@ -2,7 +2,6 @@ import { AIMessage } from "@langchain/core/messages";
 
 import {
   BOOKING_NOTE_QUESTION_UK,
-  BOOKING_OFFER_MENU,
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
   EARLIER_DATE_LABEL,
@@ -14,7 +13,11 @@ import {
   availabilityQueryFromContext,
   type AvailabilityContext,
 } from "../tools/availability-tools.js";
-import { formatKyivDayLabel, kyivToday, shortDayMonthLabel } from "../tools/availability-slots.js";
+import {
+  formatKyivDayLabel,
+  kyivToday,
+  shortDayMonthLabel,
+} from "../tools/availability-slots.js";
 import type {
   AvailabilityRenderSnapshot,
   DateSelectInteraction,

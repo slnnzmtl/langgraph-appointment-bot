@@ -1,5 +1,10 @@
 import type { BaseMessage } from "@langchain/core/messages";
 
+import {
+  REPLY_LABELS,
+  type ReplyLabelId,
+} from "./clinic-constants.js";
+
 type NonTextContentPart = Exclude<
   Extract<BaseMessage["content"], readonly unknown[]>[number],
   string | { type: "text"; text: string }
@@ -183,6 +188,39 @@ const CONSULTATION_REQUEST =
 /** Exact «Так» / Yes / Да (booking-offer keyboard). */
 export const isYesReply = (text: string): boolean => YES_REPLY.test(text.trim());
 
+/** Case-fold + collapse whitespace for comparing Telegram chip / menu labels. */
+export const normalizeReplyLabel = (text: string): string =>
+  text.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+
+/** True when `text` matches any label after {@link normalizeReplyLabel}. */
+export const matchesReplyLabel = (
+  text: string,
+  labels: Iterable<string>,
+): boolean => {
+  const normalized = normalizeReplyLabel(text);
+  if (normalized.length === 0) {
+    return false;
+  }
+  for (const label of labels) {
+    if (normalizeReplyLabel(label) === normalized) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/** Map a patient tap/typed shortcut to a stable {@link ReplyLabelId}. */
+export const labelIdFor = (text: string): ReplyLabelId | null => {
+  for (const [id, pair] of Object.entries(REPLY_LABELS) as Array<
+    [ReplyLabelId, { uk: string; en: string }]
+  >) {
+    if (matchesReplyLabel(text, [pair.uk, pair.en])) {
+      return id;
+    }
+  }
+  return null;
+};
+
 /** Explicit free-text affirmation for an already displayed mutation confirmation. */
 export const isConfirmationAffirmation = (
   text: string,
@@ -304,8 +342,12 @@ export const replyButtonLabels = (stored: unknown): string[] => {
   return [];
 };
 
-const FAQ_CATALOG_ACTION_TAG =
-  /<faq_catalog_action\b[^>]*>\s*([\s\S]*?)\s*<\/faq_catalog_action\s*>/i;
+/** Paired or self-closing faq_catalog_action tags (global). */
+const FAQ_CATALOG_ACTION_TAG_GLOBAL =
+  /<faq_catalog_action\b([^>]*)(?:\/>|>\s*([\s\S]*?)\s*<\/faq_catalog_action\s*>)/gi;
+
+const FAQ_CATALOG_ACTION_ATTR =
+  /\baction\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 
 export type FaqCatalogAction = "keep_catalog" | "offer_consultation" | "close_catalog";
 
@@ -318,25 +360,44 @@ const FAQ_CATALOG_ACTIONS = new Set<FaqCatalogAction>([
 export type ExtractedFaqCatalogAction = {
   /** Visible patient text with the control tag removed. */
   text: string;
-  /** Validated action, or null when missing/invalid. */
+  /** Validated action, or null when missing/invalid/conflicting. */
   action: FaqCatalogAction | null;
 };
 
-/**
- * Extract a validated FAQ catalog control action. Accepts only exact enum values;
- * missing or invalid tags leave action null without interpreting prose.
- */
-export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction => {
-  const match = raw.match(FAQ_CATALOG_ACTION_TAG);
-  if (match == null || match.index === undefined) {
-    return { text: raw, action: null };
+const parseFaqCatalogActionValue = (raw: string | undefined): FaqCatalogAction | null => {
+  if (raw == null) {
+    return null;
   }
-  const value = (match[1] ?? "").trim().toLowerCase();
-  const action = FAQ_CATALOG_ACTIONS.has(value as FaqCatalogAction)
+  const value = raw.trim().toLowerCase();
+  return FAQ_CATALOG_ACTIONS.has(value as FaqCatalogAction)
     ? (value as FaqCatalogAction)
     : null;
-  const text = `${raw.slice(0, match.index)}${raw.slice(match.index + match[0].length)}`
+};
+
+/**
+ * Extract a validated FAQ catalog control action.
+ * Strips every paired and self-closing tag. One valid action is returned;
+ * zero, invalid-only, or multiple/conflicting valid actions yield action null.
+ */
+export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction => {
+  const validActions: FaqCatalogAction[] = [];
+  const text = raw
+    .replace(FAQ_CATALOG_ACTION_TAG_GLOBAL, (_full, attrs: string, body?: string) => {
+      const fromAttr = FAQ_CATALOG_ACTION_ATTR.exec(attrs ?? "");
+      const attrValue = fromAttr?.[1] ?? fromAttr?.[2];
+      const parsed = parseFaqCatalogActionValue(attrValue)
+        ?? parseFaqCatalogActionValue(body);
+      if (parsed != null) {
+        validActions.push(parsed);
+      }
+      return "";
+    })
+    // Scrub any leftover malformed open/close fragments.
+    .replace(/<\/?faq_catalog_action\b[^>]*>?/gi, "")
     .replace(/(?:\r?\n){3,}/g, "\n\n")
     .trim();
+
+  // Zero, duplicate, or conflicting valid tags → null (do not pick the first).
+  const action = validActions.length === 1 ? validActions[0]! : null;
   return { text, action };
 };

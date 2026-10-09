@@ -41,6 +41,16 @@ describe("clinic routing schema", () => {
     );
   });
 
+  it("accepts optional intent and choiceId", () => {
+    const schema = buildClinicRoutingSchema(agents);
+    expect(
+      schema.parse({ next: "booking", intent: "visit_cancel" }).intent,
+    ).toBe("visit_cancel");
+    expect(
+      schema.parse({ next: "FINISH", reply: "ok", choiceId: "decline" }).choiceId,
+    ).toBe("decline");
+  });
+
   it("normalizes reply placeholders", () => {
     expect(normalizeSupervisorReply("  hi  ")).toBe("hi");
     expect(normalizeSupervisorReply("null")).toBeUndefined();

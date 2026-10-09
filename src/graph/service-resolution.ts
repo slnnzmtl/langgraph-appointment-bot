@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { trackToolError } from "../analytics/track.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK as SERVICE_CANDIDATE_OTHER_LABEL } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import type { BookingService } from "./booking-draft.js";
@@ -9,6 +11,9 @@ import type {
 } from "./booking-note-orchestrator.js";
 import type { InteractionChoice, ResolveServiceEffect } from "./booking-session.js";
 import type { ILLMConnector } from "./types.js";
+
+/** Re-export for callers that historically imported the label from this module. */
+export const SERVICE_CANDIDATE_OTHER_LABEL_UK = SERVICE_CANDIDATE_OTHER_LABEL;
 
 export type ServiceCatalogRow = {
   id: string;
@@ -165,8 +170,25 @@ export type PartitionServiceCandidates = (input: {
   candidates: Array<{ id: string; name: string; description?: string }>;
 }) => Promise<Array<{ label: string; serviceIds: string[] }>>;
 
-/** Code-owned fallback chip when the selector leaves some selected ids ungrouped. */
-export const SERVICE_CANDIDATE_OTHER_LABEL_UK = "Інші варіанти";
+type PartitionInput = Parameters<PartitionServiceCandidates>[0];
+type PartitionGroups = Awaited<ReturnType<PartitionServiceCandidates>>;
+
+/** Run partitionCandidates; on failure log and return undefined so callers fall back. */
+const safePartition = async (
+  partitionCandidates: PartitionServiceCandidates | undefined,
+  input: PartitionInput,
+): Promise<PartitionGroups | undefined> => {
+  if (partitionCandidates == null) {
+    return undefined;
+  }
+  try {
+    return await partitionCandidates(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    trackToolError("partition_service_candidates", message);
+    return undefined;
+  }
+};
 
 /** System instruction for filter + one-level groups. */
 export const SERVICE_CANDIDATE_SELECTOR_INSTRUCTION =
@@ -378,11 +400,14 @@ export const partitionRemainingServiceChoices = async (input: {
     return [];
   }
   const remainingRows = selectedIds.map((id) => allowlist.get(id)!);
-  const groups = await partitionCandidates({
+  const groups = await safePartition(partitionCandidates, {
     utterance,
     ...(input.query != null ? { query: input.query } : {}),
     candidates: toCandidateRows(remainingRows),
   });
+  if (groups == null) {
+    return [];
+  }
   const sanitized = sanitizeGroups(groups, allowlist, new Set(selectedIds));
   if (!groupsStrictlyShrink(selectedIds, sanitized)) {
     return [];
@@ -464,13 +489,10 @@ export const resolveServiceChange = async (
     }
     const remainingRows = remainingIds.map((id) => allowlist.get(id)!);
     const probe = effect.query ?? effect.utterance;
-    const partitionInput = {
+    const groups = await safePartition(deps.partitionCandidates, {
       utterance: probe,
       candidates: toCandidateRows(remainingRows),
-    };
-    const groups = deps.partitionCandidates != null
-      ? await deps.partitionCandidates(partitionInput)
-      : undefined;
+    });
     return resultFromSelectedIds(effect, allowlist, remainingIds, groups);
   }
 

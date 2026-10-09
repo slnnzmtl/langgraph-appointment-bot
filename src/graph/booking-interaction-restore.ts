@@ -10,8 +10,8 @@ import {
 import {
   openContactFieldInteraction,
   openServiceConfirmInteraction,
-  openVisitActionInteraction,
   openVisitNoteInteraction,
+  openVisitReplacementInteraction,
   type PendingInteraction,
   type VisitSelectMeeting,
 } from "./booking-session.js";
@@ -46,15 +46,14 @@ export const restorePendingInteraction = (
   }
   const draft = input.bookingDraft;
   if (draft == null) {
-    // Legacy single-visit reschedule marker on FINISH handoff.
-    if (
-      input.prefetchFresh
-      && input.lastHandoff?.pendingAction === "reschedule"
-      && (input.bookingContext?.meetings.length ?? 0) === 1
-    ) {
-      return openVisitActionInteraction(input.bookingContext!.meetings[0]!);
-    }
     return null;
+  }
+
+  if (
+    draft.replacement?.status === "offered"
+    || draft.replacement?.status === "cancelling"
+  ) {
+    return openVisitReplacementInteraction(draft.replacement.meeting);
   }
 
   if (draft.selectedSlot != null && draft.note.status === "awaiting") {

@@ -1,6 +1,8 @@
 import {
   BOOKING_OFFER_MENU,
+  BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
+  BOOKING_REPLACE_MENU_EN,
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   VISIT_CHANGE_MENU,
@@ -13,6 +15,7 @@ import {
   type BookingDraft,
   type BookingService,
 } from "./booking-draft.js";
+import { cancelCommandFromMeeting } from "./cancel-command.js";
 
 export type InteractionChoice = {
   id: string;
@@ -23,6 +26,11 @@ export type InteractionChoice = {
    * Absent when identical to {@link label}.
    */
   displayLabel?: string;
+  /**
+   * Extra exact reply texts that resolve to this choice (e.g. «Так» affirming
+   * a cancel-and-rebook offer whose chip label is «Скасувати»).
+   */
+  aliases?: string[];
   /** CRM ids covered by this catalog-level option. Singleton groups apply that id. */
   serviceIds?: string[];
 };
@@ -213,13 +221,14 @@ export const visitMeetingChoiceLabel = (meeting: VisitSelectMeeting): string => 
   return when.length > 0 ? `${name} — ${when}` : name;
 };
 
-export const openVisitActionInteraction = (
-  meeting: VisitSelectMeeting,
+/** Move / Cancel / No thanks after «Мій запис». meetingId only when exactly one visit. */
+export const openVisitActionMenuInteraction = (
+  meetings: VisitSelectMeeting[],
 ): VisitSelectInteraction => ({
   kind: "visit_select",
   stage: "action",
-  meetingId: meeting.id,
-  meetings: [meeting],
+  ...(meetings.length === 1 ? { meetingId: meetings[0]!.id } : {}),
+  meetings,
   choices: [
     { id: "reschedule", label: VISIT_CHANGE_MENU[0] },
     { id: "cancel", label: VISIT_CHANGE_MENU[1] },
@@ -249,8 +258,21 @@ export const openVisitReplacementInteraction = (
   meetingId: meeting.id,
   meetings: [meeting],
   choices: [
-    { id: "cancel_existing", label: BOOKING_REPLACE_MENU[0] },
-    { id: "decline", label: BOOKING_REPLACE_MENU[1] },
+    {
+      id: "cancel_existing",
+      label: BOOKING_REPLACE_MENU[0],
+      // Affirmation of the "cancel current and book new" offer.
+      aliases: [
+        BOOKING_OFFER_MENU[0],
+        BOOKING_OFFER_MENU_EN[0],
+        BOOKING_REPLACE_MENU_EN[0],
+      ],
+    },
+    {
+      id: "decline",
+      label: BOOKING_REPLACE_MENU[1],
+      aliases: [BOOKING_REPLACE_MENU_EN[1]],
+    },
   ],
 });
 
@@ -433,7 +455,12 @@ export const interpretInteractionReply = (
   if (trimmed.length === 0) {
     return { kind: "unmatched" };
   }
-  const choice = interaction.choices.find((entry) => entry.label === trimmed);
+  const choice = interaction.choices.find((entry) => {
+    if (entry.label === trimmed) {
+      return true;
+    }
+    return entry.aliases?.some((alias) => alias === trimmed) === true;
+  });
   return choice != null
     ? { kind: "choice", choiceId: choice.id }
     : { kind: "unmatched" };
@@ -637,11 +664,24 @@ export const reduceBookingSession = (
         }
         if (interaction.stage === "action") {
           if (event.choiceId === "reschedule" || event.choiceId === "cancel") {
-            const meeting = interaction.meetings?.find((m) => m.id === interaction.meetingId)
+            const meetings = interaction.meetings ?? [];
+            if (meetings.length > 1) {
+              return noEffect({
+                bookingDraft: draft,
+                pendingInteraction: openVisitMeetingInteraction(
+                  event.choiceId,
+                  meetings,
+                ),
+              });
+            }
+            const meeting = meetings.find((entry) => entry.id === interaction.meetingId)
               ?? (interaction.meetingId != null
                 ? { id: interaction.meetingId }
-                : null);
-            if (event.choiceId === "reschedule" && meeting != null) {
+                : meetings[0] ?? null);
+            if (meeting == null) {
+              return noEffect(current);
+            }
+            if (event.choiceId === "reschedule") {
               return noEffect({
                 bookingDraft: reduceBookingDraft(draft, {
                   type: "reschedule_started",
@@ -650,9 +690,11 @@ export const reduceBookingSession = (
                 pendingInteraction: null,
               });
             }
-            // Cancel is prepared by booking command-prepare from bookingContext.
             return noEffect({
-              bookingDraft: draft,
+              bookingDraft: reduceBookingDraft(draft, {
+                type: "command_prepared",
+                command: cancelCommandFromMeeting(meeting),
+              }),
               pendingInteraction: null,
             });
           }
@@ -672,7 +714,10 @@ export const reduceBookingSession = (
             });
           }
           return noEffect({
-            bookingDraft: draft,
+            bookingDraft: reduceBookingDraft(draft, {
+              type: "command_prepared",
+              command: cancelCommandFromMeeting(meeting),
+            }),
             pendingInteraction: null,
           });
         }

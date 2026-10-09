@@ -91,6 +91,19 @@ export const CONTEXT_TAGS = {
 export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "Ні, дякую"] as const;
 export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;
 
+/** Decline reply after «Ні, дякую» on the visit-change menu. */
+export const VISIT_DECLINE_REPLY_UK = "Добре. Чим ще можу допомогти?";
+
+/** Code-owned FINISH when the patient abandons an in-progress booking. */
+export const ABANDON_BOOKING_REPLY_UK = "Добре, скасувала запис. Чим ще можу допомогти?";
+
+/** Confirm copy before cancel_meeting HITL / CRM write. */
+export const CANCEL_CONFIRMATION_UK =
+  "Скасувати цей візит? Після підтвердження запис буде скасовано.";
+
+/** Overflow chip when a service catalog level has more rows than Telegram can show. */
+export const SERVICE_CANDIDATE_OTHER_LABEL_UK = "Інші варіанти";
+
 /**
  * When a new booking is blocked by an existing Planned or Confirmed visit — cancel then book
  * the new slot. Never includes «Перенести» (reschedule is only after «Мій запис»).
@@ -102,6 +115,27 @@ export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 /** Code-owned yes/no shortcuts for consultation or book-this-procedure offers. */
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
+
+/**
+ * Stable reply-label identity for chips and main-menu shortcuts.
+ * Prefer {@link labelIdFor} over ad-hoc Sets of Ukrainian/English strings.
+ */
+export const REPLY_LABELS = {
+  visitReschedule: { uk: VISIT_CHANGE_MENU[0], en: VISIT_CHANGE_MENU_EN[0] },
+  visitCancel: { uk: VISIT_CHANGE_MENU[1], en: VISIT_CHANGE_MENU_EN[1] },
+  visitDecline: { uk: VISIT_CHANGE_MENU[2], en: VISIT_CHANGE_MENU_EN[2] },
+  replaceCancel: { uk: BOOKING_REPLACE_MENU[0], en: BOOKING_REPLACE_MENU_EN[0] },
+  replaceDecline: { uk: BOOKING_REPLACE_MENU[1], en: BOOKING_REPLACE_MENU_EN[1] },
+  mainBook: { uk: DEFAULT_MENU_NO_VISITS[0], en: "Book" },
+  mainServices: { uk: DEFAULT_MENU_NO_VISITS[1], en: "Services" },
+  mainAddress: { uk: DEFAULT_MENU_NO_VISITS[2], en: "Address" },
+  mainMyVisit: { uk: DEFAULT_MENU_HAS_VISITS[0], en: "My visit" },
+  mainMenu: { uk: MAIN_MENU_LABEL, en: "Main menu" },
+  offerAccept: { uk: BOOKING_OFFER_MENU[0], en: BOOKING_OFFER_MENU_EN[0] },
+  offerChooseOther: { uk: BOOKING_OFFER_MENU[1], en: BOOKING_OFFER_MENU_EN[1] },
+} as const;
+
+export type ReplyLabelId = keyof typeof REPLY_LABELS;
 
 /** FAQ «Послуги» close when the model listed directions but skipped the consultation offer. */
 export const FAQ_CONSULTATION_OFFER_UK =
