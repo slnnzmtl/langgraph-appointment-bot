@@ -1728,6 +1728,130 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     ).toBe(true);
   });
 
+  it.each(["Обрати іншу процедуру", "Choose another procedure"] as const)(
+    "is true for choose_other chip %s despite SUPERVISOR_OWNED",
+    (label) => {
+      expect(
+        shouldRouteProcedureBrowseToFaq(
+          supervisorState({
+            pendingInteraction: {
+              ...serviceConfirmPending,
+              service: { id: "svc-peel", name: "Пілінг поверхневий", source: "catalog" },
+              choices: [
+                { id: "accept", label: label === "Choose another procedure" ? "Yes" : "Так" },
+                { id: "choose_other", label },
+              ],
+            },
+            lastHandoff: {
+              agentId: "faq",
+              agentName: "FAQ",
+              status: "ok",
+              yieldToSupervisor: true,
+              replyText: "Бажаєте записатися на цю процедуру?",
+              replyButtons: [
+                label === "Choose another procedure" ? "Yes" : "Так",
+                label,
+              ],
+            },
+            messages: [
+              new AIMessage("Бажаєте записатися на цю процедуру?"),
+              new HumanMessage(label),
+            ],
+          }),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("skips the LLM and routes to faq after Обрати іншу процедуру on service_confirm", async () => {
+    const invoke = vi.fn();
+    const supervisorLlm = {
+      bindRoutingTools: vi.fn(() => ({ invoke })),
+    } as unknown as ILLMConnector;
+    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+
+    const update = await node(
+      supervisorState({
+        pendingInteraction: {
+          ...serviceConfirmPending,
+          service: { id: "svc-peel", name: "Пілінг поверхневий", source: "catalog" },
+        },
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          yieldToSupervisor: true,
+          replyText: "Бажаєте записатися на цю процедуру?",
+          replyButtons: ["Так", "Обрати іншу процедуру"],
+        },
+        messages: [
+          new AIMessage("Бажаєте записатися на цю процедуру?"),
+          new HumanMessage("Обрати іншу процедуру"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update).toMatchObject({
+      next: "faq",
+      lastHandoff: null,
+      availabilityContext: null,
+      bookingDraft: null,
+      pendingInteraction: null,
+    });
+  });
+
+  it("keeps procedure service_confirm after Скільки коштує clarifying question", async () => {
+    const invoke = vi.fn();
+    const supervisorLlm = {
+      bindRoutingTools: vi.fn(() => ({ invoke })),
+    } as unknown as ILLMConnector;
+    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+    const procedureOffer = {
+      ...serviceConfirmPending,
+      service: {
+        id: "svc-hyper",
+        name: "Лікування гіпергідрозу",
+        source: "catalog" as const,
+      },
+    };
+
+    const update = await node(
+      supervisorState({
+        pendingInteraction: procedureOffer,
+        lastHandoff: {
+          agentId: "faq",
+          agentName: "FAQ",
+          status: "ok",
+          yieldToSupervisor: true,
+          replyText: "Бажаєте записатися на цю процедуру?",
+          replyButtons: ["Так", "Обрати іншу процедуру"],
+        },
+        messages: [
+          new AIMessage(
+            "Чудово, обрано: Лікування гіпергідрозу.\n\nБажаєте записатися на цю процедуру?",
+          ),
+          new HumanMessage("Скільки коштує"),
+        ],
+      }),
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("faq");
+    expect(update.lastHandoff).toBeNull();
+    expect(update.pendingInteraction).toEqual(procedureOffer);
+  });
+
   it("skips the LLM and routes to faq after запиши на ботулінотерапію", async () => {
     const invoke = vi.fn();
     const supervisorLlm = {
@@ -1800,34 +1924,37 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
 });
 
 describe("shouldStayInFaqCatalog", () => {
+  const openFaqCatalogState = () =>
+    supervisorState({
+      pendingInteraction: {
+        kind: "service_candidate",
+        owner: "faq",
+        utterance: "ботулінотерапія",
+        choices: [
+          { id: "svc-d", label: "Disport", serviceIds: ["svc-d"] },
+          { id: "svc-n", label: "Nabota", serviceIds: ["svc-n"] },
+          { id: "svc-b", label: "Botox", serviceIds: ["svc-b"] },
+        ],
+      },
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "Який препарат вас цікавить?",
+        replyButtons: ["Disport", "Nabota", "Botox"],
+      },
+      messages: [
+        new AIMessage("Який препарат вас цікавить?"),
+        new HumanMessage("запиши на ботокс"),
+      ],
+    });
+
   it("keeps free text in FAQ while FAQ-owned catalog interaction is open", () => {
-    expect(
-      shouldStayInFaqCatalog(
-        supervisorState({
-          pendingInteraction: {
-            kind: "service_candidate",
-            owner: "faq",
-            utterance: "ботулінотерапія",
-            choices: [
-              { id: "svc-d", label: "Disport", serviceIds: ["svc-d"] },
-              { id: "svc-n", label: "Nabota", serviceIds: ["svc-n"] },
-              { id: "svc-b", label: "Botox", serviceIds: ["svc-b"] },
-            ],
-          },
-          lastHandoff: {
-            agentId: "faq",
-            agentName: "FAQ",
-            status: "ok",
-            replyText: "Який препарат вас цікавить?",
-            replyButtons: ["Disport", "Nabota", "Botox"],
-          },
-          messages: [
-            new AIMessage("Який препарат вас цікавить?"),
-            new HumanMessage("запиши на ботокс"),
-          ],
-        }),
-      ),
-    ).toBe(true);
+    expect(shouldStayInFaqCatalog(openFaqCatalogState())).toBe(true);
+  });
+
+  it("stickyContinueAgentId returns faq before the session-close FAQ route", () => {
+    expect(stickyContinueAgentId(openFaqCatalogState())).toBe("faq");
   });
 
   it("is false when FAQ yielded a book-this-procedure offer", () => {
@@ -1849,6 +1976,29 @@ describe("shouldStayInFaqCatalog", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("supervisor sticky-routes catalog free text without clearing pendingInteraction", async () => {
+    const invoke = vi.fn();
+    const supervisorLlm = {
+      bindRoutingTools: vi.fn(() => ({ invoke })),
+    } as unknown as ILLMConnector;
+    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+    });
+    const catalogPending = openFaqCatalogState().pendingInteraction;
+
+    const update = await node(openFaqCatalogState());
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("faq");
+    expect(update.lastHandoff).toBeNull();
+    // Sticky path omits pendingInteraction — session-close must not null it.
+    expect(update.pendingInteraction).toBeUndefined();
+    expect(catalogPending?.kind).toBe("service_candidate");
   });
 });
 

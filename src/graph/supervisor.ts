@@ -330,6 +330,17 @@ const isVisitChangeIntent = (human: string): boolean =>
   || VISIT_CHANGE_ROUTE_LABELS.has(human.trim());
 
 /**
+ * Shared “not owned by booking shortcuts” checks for FAQ routing predicates.
+ * Browse/stay keep their own kind gates and browse-only exclusions.
+ */
+const isSharedFaqRoutingExclusion = (human: string, humanLine: string): boolean =>
+  human.length === 0
+  || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)
+  || isYesReply(human)
+  || isVisitChangeIntent(human)
+  || normalizeClinicPhone(human) != null;
+
+/**
  * Default-to-FAQ after a consultation / book-this-procedure yes/no when the reply
  * is not owned by booking (Так, consultation request, day/time, visit-change, phone).
  * Not a named-procedure detector — leftover free text after an offer goes to FAQ
@@ -341,9 +352,8 @@ export const shouldRouteProcedureBrowseToFaq = (state: ClinicState): boolean => 
   }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
-  if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
-    return false;
-  }
+  // Match chip ids before SUPERVISOR_OWNED exclusion — «Обрати іншу процедуру»
+  // is owned for sticky-continue but must still open FAQ catalog browse.
   const match = interpretInteractionReply(state.pendingInteraction, human);
   if (match.kind === "choice" && match.choiceId === "accept") {
     return false;
@@ -351,10 +361,10 @@ export const shouldRouteProcedureBrowseToFaq = (state: ClinicState): boolean => 
   if (match.kind === "choice" && match.choiceId === "choose_other") {
     return true;
   }
-  if (isYesReply(human) || requestsConsultation(human)) {
+  if (isSharedFaqRoutingExclusion(human, humanLine)) {
     return false;
   }
-  if (isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+  if (requestsConsultation(human)) {
     return false;
   }
   if (isDayOrTimeReply(human)) {
@@ -383,13 +393,10 @@ export const shouldRouteCatalogMentionToFaq = (state: ClinicState): boolean => {
   }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
-  if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+  if (isSharedFaqRoutingExclusion(human, humanLine)) {
     return false;
   }
-  if (isYesReply(human) || requestsConsultation(human)) {
-    return false;
-  }
-  if (isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
+  if (requestsConsultation(human)) {
     return false;
   }
   if (isDayOrTimeReply(human)) {
@@ -414,16 +421,13 @@ export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {
   }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
-  if (!human || SUPERVISOR_OWNED_REPLY_LABELS.has(humanLine)) {
+  if (isSharedFaqRoutingExclusion(human, humanLine)) {
     return false;
   }
   const interaction = state.pendingInteraction;
   if (interaction?.kind === "catalog_detour") {
     const match = interpretInteractionReply(interaction, human);
     if (match.kind === "choice" && match.choiceId === "return_to_booking") {
-      return false;
-    }
-    if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
       return false;
     }
     return true;
@@ -436,9 +440,6 @@ export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {
       return false;
     }
     // Free text during FAQ catalog browse stays in FAQ.
-    if (isYesReply(human) || isVisitChangeIntent(human) || normalizeClinicPhone(human) != null) {
-      return false;
-    }
     return true;
   }
   return false;
@@ -719,18 +720,31 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       };
     }
 
+    // shouldStayInFaqCatalog is handled only by stickyContinueAgentId above —
+    // when true, this block is never reached.
     if (
       shouldRouteProcedureBrowseToFaq(state)
-      || shouldStayInFaqCatalog(state)
       || shouldRouteCatalogMentionToFaq(state)
     ) {
+      // Clarifying leftover text (price, product, …) on an open service_confirm
+      // must keep Так/Обрати. Only «Обрати іншу процедуру» leaves the offer.
+      const offerMatch = state.pendingInteraction?.kind === "service_confirm"
+        ? interpretInteractionReply(
+          state.pendingInteraction,
+          lastHumanTextFromMessages(state.messages),
+        )
+        : { kind: "unmatched" as const };
+      const leavingOffer =
+        offerMatch.kind === "choice" && offerMatch.choiceId === "choose_other";
       return {
         next: FAQ_AGENT_ID,
         lastHandoff: null,
         ...prefetchUpdate,
         availabilityContext: null,
         availabilityCursor: null,
-        ...closedBookingSessionUpdate(),
+        ...(shouldRouteProcedureBrowseToFaq(state) && !leavingOffer
+          ? { pendingInteraction: state.pendingInteraction }
+          : closedBookingSessionUpdate()),
       };
     }
 

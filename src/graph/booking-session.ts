@@ -16,7 +16,13 @@ import {
 
 export type InteractionChoice = {
   id: string;
+  /** Telegram chip label (may be length-capped). */
   label: string;
+  /**
+   * Full patient-facing label for message bullets when longer than the chip.
+   * Absent when identical to {@link label}.
+   */
+  displayLabel?: string;
   /** CRM ids covered by this catalog-level option. Singleton groups apply that id. */
   serviceIds?: string[];
 };
@@ -388,6 +394,7 @@ export type BookingSessionEvent =
       action: MutationConfirmInteraction["action"];
     }
   | { type: "mutation_confirm_cleared" }
+  | { type: "mutation_chat_other" }
   | { type: "leave_booking"; destination: "main_menu" }
   | { type: "draft_event"; event: Parameters<typeof reduceBookingDraft>[1] };
 
@@ -775,7 +782,7 @@ export const reduceBookingSession = (
           effect: {
             type: "apply_service_choice",
             serviceId: remainingIds[0]!,
-            label: choice.label,
+            label: choice.displayLabel ?? choice.label,
             ...(interaction.noteCandidate != null
               ? { noteCandidate: interaction.noteCandidate }
               : {}),
@@ -940,6 +947,39 @@ export const reduceBookingSession = (
       return noEffect({
         bookingDraft: draft,
         pendingInteraction: null,
+      });
+    }
+    case "mutation_chat_other": {
+      // Chat text while HITL is paused: invalidate the frozen mutation but keep
+      // mutation_confirm until tools/finalize clear it. Affirm/decline use
+      // confirmed resume and never reach this event.
+      if (interaction?.kind !== "mutation_confirm") {
+        return noEffect(current);
+      }
+      const action = interaction.action;
+      if (action === "create" || action === "reschedule") {
+        if (draft == null) {
+          return noEffect({ bookingDraft: null, pendingInteraction: interaction });
+        }
+        return noEffect({
+          bookingDraft: reduceBookingDraft(draft, {
+            type: "slot_invalidated",
+            keepDate: true,
+          }),
+          pendingInteraction: interaction,
+        });
+      }
+      if (draft?.replacement?.status === "cancelling") {
+        return noEffect({
+          bookingDraft: null,
+          pendingInteraction: null,
+        }, true);
+      }
+      return noEffect({
+        bookingDraft: draft != null
+          ? reduceBookingDraft(draft, { type: "command_cleared" })
+          : null,
+        pendingInteraction: interaction,
       });
     }
     case "service_confirm_schedule": {

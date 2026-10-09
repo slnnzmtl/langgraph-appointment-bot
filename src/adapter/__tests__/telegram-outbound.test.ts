@@ -188,11 +188,44 @@ describe("interpretInvokeResult reply selection", () => {
       "Підтвердити запис?\n\nКонсультація - Daniel\n7 Aug 2026, 09:00–09:30",
     );
     expect(result.text).not.toContain("Confirm booking?");
+    expect(result.prefixText).toBeUndefined();
     expect(asReply(result.reply_markup).keyboard).toEqual([
       [{ text: CONFIRM_YES_LABEL }, { text: CONFIRM_NO_LABEL }],
       [{ text: MAIN_MENU_LABEL }],
     ]);
     expect(asReply(result.reply_markup).one_time_keyboard).toBe(true);
+  });
+
+  it("keeps specialist replyText as prefixText when a confirm interrupt is open", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "booking",
+        status: "ok",
+        replyText: "Вартість первинної консультації становить 300 грн.",
+      },
+      messages: [],
+      __interrupt__: [
+        {
+          value: {
+            type: "confirm_booking",
+            draft: {
+              name: "Консультація - Daniel Test",
+              dateStart: "2026-10-20T12:00:00",
+              dateEnd: "2026-10-20T12:30:00",
+              confirmMessage: "Скасувати цей візит? Після підтвердження запис буде скасовано.",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(result.prefixText).toBe("Вартість первинної консультації становить 300 грн.");
+    expect(result.text).toContain("Скасувати цей візит?");
+    expect(asReply(result.reply_markup).keyboard).toEqual([
+      [{ text: CONFIRM_YES_LABEL }, { text: CONFIRM_NO_LABEL }],
+      [{ text: MAIN_MENU_LABEL }],
+    ]);
   });
 
   it("strips an accidental reply_buttons trailer from visible text without using it as markup", () => {

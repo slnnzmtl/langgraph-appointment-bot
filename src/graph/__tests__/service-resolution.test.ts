@@ -7,6 +7,7 @@ import {
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
   fetchCompleteServiceCatalog,
+  partitionRemainingServiceChoices,
   resolveServiceChange,
   type ServiceCatalogRow,
 } from "../service-resolution.js";
@@ -556,5 +557,44 @@ describe("resolveServiceChange", () => {
       },
       accepted: true,
     });
+  });
+});
+
+describe("partitionRemainingServiceChoices", () => {
+  it("returns shrinking partition groups as InteractionChoice chips", async () => {
+    const choices = await partitionRemainingServiceChoices({
+      rows,
+      utterance: "Обрати іншу процедуру",
+      partitionCandidates: async () => [
+        { label: "Консультація", serviceIds: ["svc-consult"] },
+        { label: "Ботокс", serviceIds: ["svc-botox", "svc-botox-face", "svc-botox-neck"] },
+      ],
+    });
+    expect(choices).toEqual([
+      {
+        id: "svc-consult",
+        label: "Консультація",
+        serviceIds: ["svc-consult"],
+      },
+      {
+        id: "g1",
+        label: "Ботокс",
+        serviceIds: ["svc-botox", "svc-botox-face", "svc-botox-neck"],
+      },
+    ]);
+  });
+
+  it("returns empty when partition does not shrink (caller uses CRM fallback)", async () => {
+    const choices = await partitionRemainingServiceChoices({
+      rows: [rows[2]!, rows[3]!],
+      utterance: "ботулінотерапія",
+      partitionCandidates: async () => [
+        {
+          label: "ботулінотерапія",
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+        },
+      ],
+    });
+    expect(choices).toEqual([]);
   });
 });

@@ -83,6 +83,8 @@ export const CONTEXT_TAGS = {
   availability: "availability",
   bookingDraft: "booking_draft",
   services: "list_services",
+  /** Open FAQ catalog chip level (labels the specialist must describe this turn). */
+  faqCatalog: "faq_catalog_choices",
 } as const;
 
 /** Visit-change shortcuts after listing upcoming visits (supervisor «Мій запис»). */
@@ -100,6 +102,10 @@ export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 /** Code-owned yes/no shortcuts for consultation or book-this-procedure offers. */
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
+
+/** FAQ «Послуги» close when the model listed directions but skipped the consultation offer. */
+export const FAQ_CONSULTATION_OFFER_UK =
+  "Для першого візиту найкраще записатися на консультацію — лікар підбере процедуру саме для вас.\n\nЗаписати вас на консультацію?";
 
 /** Code-owned INTENT skip while bookingNoteStatus is awaiting (DDD-48). */
 export const INTENT_SKIP_LABEL = "Продовжити без коментаря";

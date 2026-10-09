@@ -669,6 +669,21 @@ describe("renderBookingInteractionMessage", () => {
     })).toEqual(["обличчя", "шия"]);
   });
 
+  it("does not use a separate FAQ catalog body when rendering service_candidate", () => {
+    const message = renderBookingInteractionMessage({
+      kind: "service_candidate",
+      owner: "faq",
+      utterance: "ботокс",
+      choices: [
+        { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
+        { id: "svc-b", label: "шия", serviceIds: ["svc-b"] },
+      ],
+    });
+    const body = String(message.content);
+    expect(body).toContain(SERVICE_CHANGE_ACK_UK);
+    expect(body).not.toContain("послугу зі списку");
+  });
+
   it("narrows a multi-id group then applies the last singleton without FAQ handoff", async () => {
     const classify = vi.fn<ClassifyNoteTurn>();
     const resolve = vi.fn<ResolveServiceChange>(async (effect) => {

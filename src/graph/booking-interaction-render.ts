@@ -22,6 +22,8 @@ import type {
   TimeSelectInteraction,
 } from "./booking-session.js";
 
+const FAQ_CATALOG_CLOSE_UK = "Який варіант вам підходить?";
+
 /** Visible bullets must match the reply keyboard (FAQ catalog pattern). */
 const choiceBullets = (interaction: PendingInteraction): string => {
   const labels = interaction.choices
@@ -30,7 +32,7 @@ const choiceBullets = (interaction: PendingInteraction): string => {
   if (labels.length === 0) {
     return "";
   }
-  return `${labels.map((label) => `• ${label}`).join("\n")}\n\nЯкий варіант вам підходить?`;
+  return `${labels.map((label) => `• ${label}`).join("\n")}\n\n${FAQ_CATALOG_CLOSE_UK}`;
 };
 
 const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
@@ -140,11 +142,7 @@ const clarificationBody = (interaction: PendingInteraction): string => {
     return options.length > 0 ? `${intro}\n\n${options}` : `${intro}\n\nОберіть, будь ласка:`;
   }
   if (interaction.kind === "service_candidate") {
-    if (interaction.owner === "faq") {
-      return options.length > 0
-        ? `${options}`
-        : "Оберіть, будь ласка, послугу зі списку.";
-    }
+    // FAQ browse body is renderFaqCatalogReply in FAQ finalize, not this renderer.
     return options.length > 0
       ? `${SERVICE_CHANGE_ACK_UK}\n\n${options}`
       : SERVICE_CHANGE_ACK_UK;

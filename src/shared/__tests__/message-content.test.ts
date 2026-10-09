@@ -2,6 +2,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import {
+  extractFaqCatalogAction,
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
@@ -73,6 +74,77 @@ describe("free-text mutation confirmation", () => {
     ["Скасуйте", "cancel"],
   ] as const)("accepts an action-specific affirmation: %s", (reply, action) => {
     expect(isConfirmationAffirmation(reply, action)).toBe(true);
+  });
+});
+
+describe("extractFaqCatalogAction", () => {
+  it("extracts keep_catalog and strips the control tag from visible text", () => {
+    expect(
+      extractFaqCatalogAction(
+        [
+          "Ось основні напрями 🌿",
+          "• Консультації та діагностика",
+          "",
+          "Який саме напрямок вас цікавить?",
+          "<faq_catalog_action>keep_catalog</faq_catalog_action>",
+        ].join("\n"),
+      ),
+    ).toEqual({
+      text: [
+        "Ось основні напрями 🌿",
+        "• Консультації та діагностика",
+        "",
+        "Який саме напрямок вас цікавить?",
+      ].join("\n"),
+      action: "keep_catalog",
+    });
+  });
+
+  it("accepts offer_consultation and close_catalog", () => {
+    expect(
+      extractFaqCatalogAction(
+        "Лікар підбере препарат на консультації.\n<faq_catalog_action>offer_consultation</faq_catalog_action>",
+      ),
+    ).toEqual({
+      text: "Лікар підбере препарат на консультації.",
+      action: "offer_consultation",
+    });
+    expect(
+      extractFaqCatalogAction(
+        "Ми працюємо з 9 до 18.\n<faq_catalog_action>close_catalog</faq_catalog_action>",
+      ),
+    ).toEqual({
+      text: "Ми працюємо з 9 до 18.",
+      action: "close_catalog",
+    });
+  });
+
+  it("returns null action when the tag is missing", () => {
+    expect(
+      extractFaqCatalogAction("• Консультації та діагностика\n\nЯкий варіант вам підходить?"),
+    ).toEqual({
+      text: "• Консультації та діагностика\n\nЯкий варіант вам підходить?",
+      action: null,
+    });
+  });
+
+  it("returns null action for invalid values without interpreting prose", () => {
+    expect(
+      extractFaqCatalogAction(
+        "Текст.\n<faq_catalog_action>maybe_consult</faq_catalog_action>",
+      ),
+    ).toEqual({
+      text: "Текст.",
+      action: null,
+    });
+    expect(
+      extractFaqCatalogAction(
+        "Текст.\n<faq_catalog_action>KEEP_CATALOG</faq_catalog_action>",
+      ),
+    ).toEqual({
+      text: "Текст.",
+      action: "keep_catalog",
+    });
   });
 });
 

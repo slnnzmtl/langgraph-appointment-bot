@@ -43,7 +43,10 @@ import {
   noteOrchestratorNodeName,
   type ResolveServiceChange,
 } from "./booking-note-orchestrator.js";
-import { createResolveServiceChange } from "./service-resolution.js";
+import {
+  createResolveServiceChange,
+  createServiceCandidatePartitioner,
+} from "./service-resolution.js";
 import type { AgentPrefetchResult } from "./types.js";
 import { createClinicStateAnnotation } from "./state.js";
 import {
@@ -134,6 +137,10 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     [FINISH_ROUTE]: END,
   };
 
+  const faqPartitionCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
+    ? createServiceCandidatePartitioner(options.supervisorLlm)
+    : undefined;
+
   for (const agent of options.agents) {
     const tools = options.agentTools[agent.id] ?? [];
     const prepare = prepareNodeName(agent.id);
@@ -147,7 +154,15 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const isBooking = agent.id === BOOKING_AGENT_ID;
 
     graph = graph
-      .addNode(prepare, createAgentPrepareNode(agent.id))
+      .addNode(
+        prepare,
+        createAgentPrepareNode(
+          agent.id,
+          agent.id === FAQ_AGENT_ID && faqPartitionCandidates != null
+            ? { partitionCandidates: faqPartitionCandidates }
+            : undefined,
+        ),
+      )
       .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
       .addNode(mutationFinalize, createAgentMutationFinalizeNode(agent))
       .addNode(

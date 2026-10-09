@@ -415,6 +415,29 @@ export const handleGraphTextTurn = async (
               config,
             );
           }
+          // Chat-other: invalidate the frozen mutation via the reducer, then
+          // resume with userReply so HITL does not write.
+          const session = reduceBookingSession(
+            {
+              bookingDraft: (channelValues.bookingDraft as Parameters<
+                typeof reduceBookingSession
+              >[0]["bookingDraft"]) ?? null,
+              pendingInteraction: mutationInteraction,
+            },
+            { type: "mutation_chat_other" },
+          );
+          return graph.invoke(
+            new Command({
+              resume: { userReply: text },
+              update: {
+                messages: [new HumanMessage(text)],
+                ...bookingUpdate,
+                bookingDraft: session.bookingDraft,
+                pendingInteraction: session.pendingInteraction,
+              },
+            }) as never,
+            config,
+          );
         }
         return graph.invoke(
           new Command({
@@ -432,6 +455,12 @@ export const handleGraphTextTurn = async (
   );
 
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {
+  const prefix = outbound.prefixText?.trim();
+  if (prefix != null && prefix.length > 0) {
+    await ctx.reply(formatForTelegram(prefix), {
+      parse_mode: "HTML",
+    });
+  }
   await ctx.reply(formatForTelegram(outbound.text), {
     parse_mode: "HTML",
     ...(outbound.reply_markup ? { reply_markup: outbound.reply_markup } : {}),

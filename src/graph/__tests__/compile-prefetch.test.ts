@@ -1325,19 +1325,22 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     });
     expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
 
+    // Adapter maps NL affirm to { confirmed: true } when mutation_confirm is open.
     const resumed = await runWithTelegramUserId("tg-42", () => graph.invoke(
       new Command({
-        resume: { userReply: "Так, підтверджую" },
-        update: { messages: [new HumanMessage("Так, підтверджую")] },
+        resume: { confirmed: true },
+        update: {
+          messages: [new HumanMessage("Так, підтверджую")],
+          pendingInteraction: null,
+        },
       }) as never,
       config,
     ));
 
     expect(modelInvoke).toHaveBeenCalledOnce();
-    expect(createInvoke).toHaveBeenCalledTimes(3);
+    expect(createInvoke).toHaveBeenCalledTimes(2);
     expect(createInvoke.mock.calls.at(-1)?.[0]).toMatchObject({
       contactId: "c-phone",
-      confirmationGiven: true,
     });
     expect(resumed.__interrupt__).toBeUndefined();
   });
@@ -1958,7 +1961,11 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     });
     expect(first.__interrupt__).toHaveLength(1);
 
-    const second = await invoke(new Command({ resume: { userReply: "ні" } }));
+    // Adapter maps NL decline to { confirmed: false } when mutation_confirm is open.
+    const second = await invoke(new Command({
+      resume: { confirmed: false },
+      update: { pendingInteraction: null },
+    }));
 
     expect(modelInvoke).not.toHaveBeenCalled();
     expect(updateInvoke).not.toHaveBeenCalled();

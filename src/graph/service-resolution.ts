@@ -185,6 +185,11 @@ export const SERVICE_CANDIDATE_PARTITION_INSTRUCTION =
   + "Never invent ids. Never drop ids. Never use full brand+zone CRM titles as group labels "
   + "before the last distinguishing level.";
 
+/** First FAQ browse level after «Обрати іншу процедуру»: напрями, not families. */
+export const FAQ_ROOT_PARTITION_QUERY =
+  "Group the full clinic catalog into a few service directions (напрями послуг). "
+  + "Do not use procedure families, zones, brands, or full CRM titles at this level.";
+
 export const createServiceCandidateSelector = (
   llm: ILLMConnector,
 ): SelectServiceCandidates => {
@@ -343,6 +348,47 @@ const candidatesOpened = (
   ...(effect.noteCandidate != null ? { noteCandidate: effect.noteCandidate } : {}),
   choices,
 });
+
+/**
+ * Partition a fixed CRM id set into one catalog level of InteractionChoice chips.
+ * Returns [] when the partitioner is missing, empty, or does not shrink the set
+ * (caller should use a deterministic CRM-name fallback).
+ */
+export const partitionRemainingServiceChoices = async (input: {
+  rows: ServiceCatalogRow[];
+  remainingIds?: readonly string[];
+  utterance: string;
+  query?: string;
+  partitionCandidates?: PartitionServiceCandidates;
+}): Promise<InteractionChoice[]> => {
+  const { partitionCandidates, utterance } = input;
+  if (partitionCandidates == null) {
+    return [];
+  }
+  const allowlist = new Map(input.rows.map((row) => [row.id, row]));
+  const selectedIds = [
+    ...new Set(
+      (input.remainingIds != null && input.remainingIds.length > 0
+        ? input.remainingIds
+        : input.rows.map((row) => row.id)
+      ).filter((id) => allowlist.has(id)),
+    ),
+  ];
+  if (selectedIds.length <= 1) {
+    return [];
+  }
+  const remainingRows = selectedIds.map((id) => allowlist.get(id)!);
+  const groups = await partitionCandidates({
+    utterance,
+    ...(input.query != null ? { query: input.query } : {}),
+    candidates: toCandidateRows(remainingRows),
+  });
+  const sanitized = sanitizeGroups(groups, allowlist, new Set(selectedIds));
+  if (!groupsStrictlyShrink(selectedIds, sanitized)) {
+    return [];
+  }
+  return choicesFromGroups(sanitized, allowlist);
+};
 
 const changedFromRow = (
   row: ServiceCatalogRow,

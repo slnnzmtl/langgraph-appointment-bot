@@ -65,6 +65,7 @@ import {
   BOOKING_REPLACE_MENU_EN,
   BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
+  FAQ_CONSULTATION_OFFER_UK,
   CLINIC_ADDRESS,
   CLINIC_MAPS_MARKDOWN,
   CLINIC_SLOT_MINUTES,
@@ -82,11 +83,10 @@ import {
 } from "../shared/clinic-constants.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import {
+  extractFaqCatalogAction,
   extractMessageTextContent,
   extractRawMessageText,
   extractReplyButtons,
-  isConfirmationAffirmation,
-  isConfirmationDecline,
   isYesReply,
   parseLeakedModelToolCalls,
   requestsConsultation,
@@ -99,6 +99,7 @@ import {
   formatBookingMeetingsContext,
   formatBookingDraftContext,
   formatContactContext,
+  formatFaqCatalogChoicesContext,
   formatPlannedVisitsFlag,
   formatServicesContext,
 } from "./context-blocks.js";
@@ -122,6 +123,7 @@ import {
   openVisitReplacementInteraction,
   reduceBookingSession,
   type DateSelectInteraction,
+  type InteractionChoice,
   type PendingInteraction,
   type TimeSelectInteraction,
 } from "./booking-session.js";
@@ -136,7 +138,16 @@ import {
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
 } from "./booking-interaction-render.js";
-import { buildFaqCatalogChoices } from "./faq-catalog.js";
+import {
+  buildFaqCatalogChoices,
+  renderFaqCatalogReply,
+  shortenFaqChoiceLabels,
+} from "./faq-catalog.js";
+import {
+  FAQ_ROOT_PARTITION_QUERY,
+  partitionRemainingServiceChoices,
+  type PartitionServiceCandidates,
+} from "./service-resolution.js";
 import {
   isModelFailureMessage,
   tagModelFailureMessage,
@@ -172,6 +183,19 @@ const MEETING_MUTATION_TOOLS = new Set([
   "create_meeting",
   "cancel_meeting",
   "reschedule_meeting",
+]);
+
+/** Browse shortcuts that open catalog chips even when list_services is reused. */
+const FAQ_CATALOG_SHORTCUT_LABELS = new Set<string>([
+  BOOKING_OFFER_MENU[1],
+  BOOKING_OFFER_MENU_EN[1],
+]);
+
+/** Services-guide taps: consultation offer, not catalog drill-down chips. */
+const FAQ_SERVICES_GUIDE_LABELS = new Set<string>([
+  DEFAULT_MENU_NO_VISITS[1],
+  DEFAULT_MENU_HAS_VISITS[1],
+  "Services",
 ]);
 
 const CREATE_CONSULTATION_REQUIRED_ERROR = "Consultation agreement required";
@@ -716,19 +740,40 @@ const consultationService = (source: "catalog" | "direct"): {
   source,
 });
 
+/** Min length so tiny taps like «1» do not steal an offer keyboard or resume. */
+const FAQ_CATALOG_NAME_MIN_LEN = 3;
+
+/**
+ * CRM rows whose names match free-text (brand/family/full title). Shared by
+ * offeredServiceForTurn (first hit) and post-offer catalog resume (all ids).
+ */
+const matchingCatalogRows = (
+  text: string,
+  services: ServicesContext["list"],
+): ServicesContext["list"] => {
+  const normalized = text.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  if (
+    normalized.length < FAQ_CATALOG_NAME_MIN_LEN
+    || normalized.includes("?")
+  ) {
+    return [];
+  }
+  return services.filter((row) => {
+    const name = row.name.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+    return (
+      normalized === name
+      || name.includes(normalized)
+      || normalized.includes(name)
+    );
+  });
+};
+
 const catalogServiceForText = (
   text: string,
   state: ClinicState,
 ): { id: string; name: string; durationMinutes?: number; source: "catalog" } | null => {
-  const normalized = text.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-  if (!normalized || normalized.includes("?")) {
-    return null;
-  }
-  const service = state.servicesContext?.list.find((candidate) => {
-    const name = candidate.name.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-    return normalized === name || normalized.includes(name) || name.includes(normalized);
-  });
-  if (!service) {
+  const service = matchingCatalogRows(text, state.servicesContext?.list ?? [])[0];
+  if (service == null) {
     return null;
   }
   return {
@@ -825,17 +870,11 @@ const offeredServiceForTurn = (
   if (state.bookingDraft?.serviceAcceptance?.status === "accepted") {
     return null;
   }
-  if (state.bookingDraft?.serviceAcceptance?.status === "pending") {
-    return state.bookingDraft.serviceAcceptance.service;
-  }
   // Mid-catalog drill-down is owned by FAQ service_candidate, not a book offer.
   if (
     state.pendingInteraction?.kind === "service_candidate"
     && state.pendingInteraction.owner === "faq"
   ) {
-    return null;
-  }
-  if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
     return null;
   }
   const lastHuman = (state.messages ?? []).filter(
@@ -844,15 +883,29 @@ const offeredServiceForTurn = (
   const lastHumanText = lastHuman != null
     ? extractMessageTextContent(lastHuman.content).trim()
     : "";
+  // «Обрати іншу процедуру» opens FAQ catalog — do not re-offer the pending peel.
+  if (FAQ_CATALOG_SHORTCUT_LABELS.has(lastHumanText)) {
+    return null;
+  }
+  if (state.bookingDraft?.serviceAcceptance?.status === "pending") {
+    return state.bookingDraft.serviceAcceptance.service;
+  }
+  if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
+    return null;
+  }
   const service = catalogServiceForText(lastHumanText, state);
   if (service != null) {
     return service;
   }
+  // «Послуги» / «Записатись» → consultation even when list_services ran this turn.
+  if (
+    MAIN_MENU_BOOK_LABELS.has(lastHumanText)
+    || FAQ_SERVICES_GUIDE_LABELS.has(lastHumanText)
+  ) {
+    return consultationService("catalog");
+  }
   if (toolRanThisTurn(agentMessages, "list_services")) {
     return null;
-  }
-  if (MAIN_MENU_BOOK_LABELS.has(lastHumanText)) {
-    return consultationService("catalog");
   }
   if (requestsConsultation(lastHumanText)) {
     return consultationService("direct");
@@ -939,20 +992,6 @@ const commandActionForTool = (name: string): "create" | "reschedule" | "replace"
   return null;
 };
 
-type PendingChatConfirmationDecision =
-  | { kind: "none" }
-  | {
-      kind: "unresolved";
-      action: "create" | "reschedule" | "cancel" | null;
-      replyKind: "declined" | "other";
-    }
-  | {
-      kind: "affirmed";
-      action: "create" | "reschedule" | "cancel";
-      toolName: "create_meeting" | "reschedule_meeting" | "cancel_meeting";
-      command: PendingBookingCommand;
-    };
-
 const toolNameForCommandAction = (
   action: "create" | "reschedule" | "cancel",
 ): "create_meeting" | "reschedule_meeting" | "cancel_meeting" =>
@@ -962,76 +1001,141 @@ const toolNameForCommandAction = (
       ? "reschedule_meeting"
       : "cancel_meeting";
 
-/** Read and classify the latest chat-text confirmation without trusting model output. */
-const pendingChatConfirmationDecision = (
-  state: ClinicState,
-): PendingChatConfirmationDecision => {
-  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
-    const message = state.agentMessages?.[index];
-    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
-      continue;
+/** Latest meeting-mutation ToolMessage on the agent tape, if any. */
+const latestMeetingMutationToolMessage = (messages: BaseMessage[]): ToolMessage | null => {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message instanceof ToolMessage && MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+      return message;
     }
-    if (classifyMeetingMutationToolMessage(message) !== "pending_confirmation") {
-      return { kind: "none" };
-    }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
-    const userReply = record?.userReply;
-    const action = commandActionForTool(message.name ?? "");
-    if (action !== "create" && action !== "reschedule" && action !== "cancel") {
-      return { kind: "unresolved", action: null, replyKind: "other" };
-    }
-    const command = state.bookingDraft?.pendingCommand;
-    if (
-      typeof userReply !== "string"
-      || command == null
-      || command.action !== action
-      || !isConfirmationAffirmation(userReply, action)
-    ) {
-      return {
-        kind: "unresolved",
-        action,
-        replyKind: typeof userReply === "string" && isConfirmationDecline(userReply)
-          ? "declined"
-          : "other",
-      };
-    }
-    return {
-      kind: "affirmed",
-      action,
-      toolName: toolNameForCommandAction(action),
-      command: {
-        ...command,
-        payload: { ...command.payload, confirmationGiven: true },
-      },
-    };
   }
-  return { kind: "none" };
+  return null;
 };
 
 /**
- * Decline and LLM-only HITL other still abandon here. When the note orch already
- * cleared pendingCommand (keep/switch / schedule handoff), this is a no-op.
+ * HITL returned awaitingConfirmation (chat-other). Affirm/decline use
+ * `{ confirmed }` resume and never produce this tool result when mutation_confirm
+ * is open. Only the latest mutation tool result counts — a later write supersedes
+ * an older awaitingConfirmation on the same tape. Do not read userReply.
  */
-const pendingChatConfirmationCleanup = (
-  state: ClinicState,
-): ClinicStateUpdate => {
-  const decision = pendingChatConfirmationDecision(state);
-  if (decision.kind !== "unresolved" || !state.bookingDraft) {
-    return {};
-  }
-  if (state.bookingDraft.pendingCommand == null) {
-    return {};
+const hasPendingConfirmationChatOther = (state: ClinicState): boolean => {
+  const latest = latestMeetingMutationToolMessage(state.agentMessages ?? []);
+  return latest != null
+    && classifyMeetingMutationToolMessage(latest) === "pending_confirmation";
+};
+
+/**
+ * Cancel HITL chat-other: after the model answers the unmatched ask, re-arm a
+ * fresh cancel_meeting HITL (confirmationGiven false). Create/reschedule
+ * chat-other stays slot-invalidate only. The awaitingConfirmation cancel_meeting
+ * already ran this turn — that is expected.
+ */
+const shouldRearmCancelAfterChatOther = (state: ClinicState): boolean => {
+  if (!hasPendingConfirmationChatOther(state)) {
+    return false;
   }
   if (
-    decision.replyKind === "declined"
-    && (decision.action === "create" || decision.action === "reschedule")
+    state.pendingInteraction?.kind !== "mutation_confirm"
+    || state.pendingInteraction.action !== "cancel"
   ) {
-    return closedBookingSessionUpdate();
+    return false;
   }
-  if (decision.action === "create" || decision.action === "reschedule") {
+  if (
+    state.pendingCancellationPurpose === "replacement"
+    || state.bookingDraft?.replacement?.status === "cancelling"
+    || state.bookingDraft?.replacement?.status === "offered"
+    || state.bookingDraft?.replacement?.status === "create_pending"
+  ) {
+    return false;
+  }
+  return (state.bookingContext?.meetings.length ?? 0) === 1;
+};
+
+/** Build cancel payload from the single planned visit (no current-utterance cancel intent). */
+const cancelCommandFromPlannedVisit = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  if (state.bookingContext?.meetings.length !== 1) {
+    return null;
+  }
+  const meeting = state.bookingContext.meetings[0];
+  if (!meeting) {
+    return null;
+  }
+  const payload: Record<string, unknown> = {
+    meetingId: meeting.id,
+    confirmMessage: cancelConfirmationMessage(),
+    ...(meeting.name ? { name: meeting.name } : {}),
+  };
+  for (const [key, value] of [
+    ["dateStart", meeting.dateStart],
+    ["dateEnd", meeting.dateEnd],
+  ] as const) {
+    try {
+      payload[key] = normalizeLocalIsoDatetime(value);
+    } catch {
+      // Meeting id is authoritative; CRM can fill a malformed display date.
+    }
+  }
+  return { action: "cancel", payload };
+};
+
+/** Last specialist AI text on this turn (strip trailers); empty if none. */
+const lastSpecialistReplyText = (state: ClinicState): string => {
+  const messages = state.agentMessages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof AIMessage)) {
+      continue;
+    }
+    const text = extractReplyButtons(extractMessageTextContent(message.content)).text.trim();
+    if (text.length > 0) {
+      return text;
+    }
+  }
+  return "";
+};
+
+/**
+ * Apply mutation_chat_other when the adapter did not (e.g. direct Command resume
+ * in tests). Idempotent with an already-applied adapter update.
+ */
+const applyMutationChatOtherCleanup = (state: ClinicState): ClinicStateUpdate => {
+  if (state.pendingInteraction?.kind === "mutation_confirm") {
     const session = reduceBookingSession(
       {
         bookingDraft: state.bookingDraft ?? null,
+        pendingInteraction: state.pendingInteraction,
+      },
+      { type: "mutation_chat_other" },
+    );
+    const cleared = reduceBookingSession(
+      {
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
+      },
+      { type: "mutation_confirm_cleared" },
+    );
+    return {
+      bookingDraft: cleared.bookingDraft,
+      pendingInteraction: cleared.pendingInteraction,
+      ...(state.pendingCancellationPurpose != null
+        ? { pendingCancellationPurpose: null }
+        : {}),
+      ...(session.clearAvailability
+        ? { availabilityContext: null, availabilityCursor: null }
+        : {}),
+    };
+  }
+  // Legacy resume without mutation_confirm: still abandon the frozen command.
+  if (state.bookingDraft?.pendingCommand == null) {
+    return {};
+  }
+  const action = state.bookingDraft.pendingCommand.action;
+  if (action === "create" || action === "reschedule") {
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft,
         pendingInteraction: state.pendingInteraction ?? null,
       },
       {
@@ -1045,11 +1149,8 @@ const pendingChatConfirmationCleanup = (
     };
   }
   if (
-    decision.action === "cancel"
-    && (
-      state.pendingCancellationPurpose === "replacement"
-      || state.bookingDraft.replacement?.status === "cancelling"
-    )
+    state.pendingCancellationPurpose === "replacement"
+    || state.bookingDraft.replacement?.status === "cancelling"
   ) {
     return {
       ...closedBookingSessionUpdate(),
@@ -1058,10 +1159,11 @@ const pendingChatConfirmationCleanup = (
   }
   return {
     bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "command_cleared" }),
-    ...(decision.action === "cancel" ? { pendingCancellationPurpose: null } : {}),
+    ...(action === "cancel" ? { pendingCancellationPurpose: null } : {}),
   };
 };
 
+/** Replay after confirmed chat: args already carry confirmationGiven. */
 const isPendingChatConfirmationReplay = (
   state: ClinicState,
   action: "create" | "reschedule" | "cancel",
@@ -1070,14 +1172,15 @@ const isPendingChatConfirmationReplay = (
   if (typeof args !== "object" || args === null || Array.isArray(args)) {
     return false;
   }
-  const decision = pendingChatConfirmationDecision(state);
-  return decision.kind === "affirmed"
-    && decision.action === action
-    && (args as Record<string, unknown>).confirmationGiven === true;
+  return (args as Record<string, unknown>).confirmationGiven === true
+    && state.bookingDraft?.pendingCommand?.action === action;
 };
 
 const hasMutationCallDuringUnresolvedConfirmation = (state: ClinicState): boolean => {
-  if (pendingChatConfirmationDecision(state).kind !== "unresolved") {
+  if (
+    state.pendingInteraction?.kind !== "mutation_confirm"
+    && !hasPendingConfirmationChatOther(state)
+  ) {
     return false;
   }
   const lastAi = [...(state.agentMessages ?? [])]
@@ -1153,35 +1256,6 @@ const rescheduleTargetFromBookingContext = (
       || human === dayNumber;
   });
   return matches.length === 1 ? matches[0]! : null;
-};
-
-/** Build a cancellation command from the supervisor's authoritative meeting list. */
-const cancelCommandFromBookingContext = (
-  state: ClinicState,
-): PendingBookingCommand | null => {
-  if (!isDirectCancelIntent(state) || state.bookingContext?.meetings.length !== 1) {
-    return null;
-  }
-  const meeting = state.bookingContext.meetings[0];
-  if (!meeting) {
-    return null;
-  }
-  const payload: Record<string, unknown> = {
-    meetingId: meeting.id,
-    confirmMessage: cancelConfirmationMessage(),
-    ...(meeting.name ? { name: meeting.name } : {}),
-  };
-  for (const [key, value] of [
-    ["dateStart", meeting.dateStart],
-    ["dateEnd", meeting.dateEnd],
-  ] as const) {
-    try {
-      payload[key] = normalizeLocalIsoDatetime(value);
-    } catch {
-      // The meeting id is authoritative; CRM can fill a malformed display date.
-    }
-  }
-  return { action: "cancel", payload };
 };
 
 const cancellationPurposeForState = (state: ClinicState): CancellationPurpose =>
@@ -1397,19 +1471,19 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
   if (bookingMutationNeedsModelRecovery(state)) {
     return false;
   }
-  const confirmation = pendingChatConfirmationDecision(state);
-  if (confirmation.kind === "affirmed") {
-    return true;
-  }
-  // A non-affirmative chat reply must return to the model. It must not cause
-  // the frozen mutation to be replayed or trigger a new availability search.
-  if (confirmation.kind === "unresolved") {
-    return false;
+  // Chat-other after HITL must return to the model — never replay the frozen
+  // mutation. Cancel is the exception: after the model answers (no pending
+  // tool calls), re-arm HITL.
+  if (hasPendingConfirmationChatOther(state)) {
+    return shouldRearmCancelAfterChatOther(state)
+      && !hasPendingToolCalls(state.agentMessages)
+      && !lastMessageRequestsTools(state.agentMessages);
   }
   if (
     replacementActionForTurn(state) != null
     || (
-      cancelCommandFromBookingContext(state) != null
+      isDirectCancelIntent(state)
+      && cancelCommandFromPlannedVisit(state) != null
       && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
     )
   ) {
@@ -1448,9 +1522,8 @@ const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
  * LLM unless they are terminal mutation outcomes.
  */
 const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
-  const confirmation = pendingChatConfirmationDecision(state);
-  if (confirmation.kind !== "none") {
-    return confirmation.kind === "affirmed";
+  if (hasPendingConfirmationChatOther(state)) {
+    return false;
   }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
     return true;
@@ -2236,7 +2309,42 @@ const resolveHandoffStatus = (
   return "ok";
 };
 
-export const createAgentPrepareNode = (agentId: string) =>
+const resolveFaqCatalogChoices = async (input: {
+  services: ServicesContext["list"];
+  remainingIds?: readonly string[];
+  utterance: string;
+  query?: string;
+  selectedLabel?: string;
+  partitionCandidates?: PartitionServiceCandidates;
+}): Promise<InteractionChoice[]> => {
+  const partitioned = await partitionRemainingServiceChoices({
+    rows: input.services,
+    ...(input.remainingIds != null ? { remainingIds: input.remainingIds } : {}),
+    utterance: input.utterance,
+    ...(input.query != null ? { query: input.query } : {}),
+    ...(input.partitionCandidates != null
+      ? { partitionCandidates: input.partitionCandidates }
+      : {}),
+  });
+  const choices = partitioned.length > 0
+    ? partitioned
+    : buildFaqCatalogChoices(input.services, input.remainingIds);
+  return shortenFaqChoiceLabels(
+    choices,
+    input.selectedLabel != null && input.selectedLabel.length > 0
+      ? { selectedLabel: input.selectedLabel }
+      : undefined,
+  );
+};
+
+export type CreateAgentPrepareOptions = {
+  partitionCandidates?: PartitionServiceCandidates;
+};
+
+export const createAgentPrepareNode = (
+  agentId: string,
+  options?: CreateAgentPrepareOptions,
+) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const update: ClinicStateUpdate = {
       agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
@@ -2244,9 +2352,12 @@ export const createAgentPrepareNode = (agentId: string) =>
     };
     if (agentId === FAQ_AGENT_ID) {
       const interaction = state.pendingInteraction;
+      const patientText = lastPatientText(state).trim();
+      let handledCatalogChoice = false;
       if (interaction?.kind === "service_candidate" && interaction.owner === "faq") {
-        const match = interpretInteractionReply(interaction, lastPatientText(state));
+        const match = interpretInteractionReply(interaction, patientText);
         if (match.kind === "choice") {
+          handledCatalogChoice = true;
           const choice = interaction.choices.find((entry) => entry.id === match.choiceId);
           const remainingIds = choice?.serviceIds != null && choice.serviceIds.length > 0
             ? choice.serviceIds
@@ -2274,7 +2385,18 @@ export const createAgentPrepareNode = (agentId: string) =>
               update.pendingInteraction = session.pendingInteraction;
             }
           } else {
-            const choices = buildFaqCatalogChoices(services, remainingIds);
+            const selectedLabel = choice != null
+              ? (choice.displayLabel ?? choice.label).trim()
+              : patientText;
+            const choices = await resolveFaqCatalogChoices({
+              services,
+              remainingIds,
+              utterance: patientText || interaction.utterance,
+              ...(selectedLabel.length > 0 ? { selectedLabel } : {}),
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+            });
             const session = reduceBookingSession(
               {
                 bookingDraft: state.bookingDraft ?? null,
@@ -2290,8 +2412,66 @@ export const createAgentPrepareNode = (agentId: string) =>
             update.pendingInteraction = session.pendingInteraction;
           }
         }
+        // Unmatched text (comparisons, «який краще?», «не знаю», prices, …)
+        // reaches the FAQ model with the open catalog context.
+      } else if (interaction?.kind === "service_confirm") {
+        // Free-text brand/family pick after offer_consultation (e.g. «botox»)
+        // must reopen catalog chips — otherwise Так/Обрати stays stuck.
+        const offerMatch = interpretInteractionReply(interaction, patientText);
+        if (offerMatch.kind !== "choice") {
+          const services = state.servicesContext?.list ?? [];
+          const matchingRows = matchingCatalogRows(patientText, services);
+          if (matchingRows.length === 1) {
+            const row = matchingRows[0]!;
+            handledCatalogChoice = true;
+            const session = reduceBookingSession(
+              {
+                bookingDraft: state.bookingDraft ?? null,
+                pendingInteraction: interaction,
+              },
+              {
+                type: "service_offered",
+                service: {
+                  id: row.id,
+                  name: row.name,
+                  ...(row.duration != null ? { durationMinutes: row.duration } : {}),
+                  source: "catalog",
+                },
+              },
+            );
+            update.bookingDraft = session.bookingDraft;
+            update.pendingInteraction = session.pendingInteraction;
+          } else if (matchingRows.length > 1) {
+            const matchingIds = matchingRows.map((row) => row.id);
+            const choices = await resolveFaqCatalogChoices({
+              services,
+              remainingIds: matchingIds,
+              utterance: patientText,
+              selectedLabel: patientText,
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+            });
+            if (choices.length > 0) {
+              handledCatalogChoice = true;
+              const session = reduceBookingSession(
+                {
+                  bookingDraft: state.bookingDraft ?? null,
+                  pendingInteraction: interaction,
+                },
+                {
+                  type: "service_candidates_opened",
+                  utterance: patientText,
+                  owner: "faq",
+                  choices,
+                },
+              );
+              update.pendingInteraction = session.pendingInteraction;
+            }
+          }
+        }
       } else if (interaction?.kind === "catalog_detour") {
-        const match = interpretInteractionReply(interaction, lastPatientText(state));
+        const match = interpretInteractionReply(interaction, patientText);
         if (match.kind === "choice" && match.choiceId === "return_to_booking") {
           const session = reduceBookingSession(
             {
@@ -2299,6 +2479,37 @@ export const createAgentPrepareNode = (agentId: string) =>
               pendingInteraction: interaction,
             },
             { type: "interaction_choice", choiceId: "return_to_booking" },
+          );
+          update.pendingInteraction = session.pendingInteraction;
+        }
+      }
+      // Browse open: «Обрати іншу процедуру» (not «Послуги») — partition all CRM ids.
+      if (
+        !handledCatalogChoice
+        && FAQ_CATALOG_SHORTCUT_LABELS.has(patientText)
+        && (state.servicesContext?.list.length ?? 0) > 0
+      ) {
+        const services = state.servicesContext!.list;
+        const choices = await resolveFaqCatalogChoices({
+          services,
+          utterance: patientText,
+          query: FAQ_ROOT_PARTITION_QUERY,
+          ...(options?.partitionCandidates != null
+            ? { partitionCandidates: options.partitionCandidates }
+            : {}),
+        });
+        if (choices.length > 0) {
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            {
+              type: "service_candidates_opened",
+              utterance: patientText || "catalog",
+              owner: "faq",
+              choices,
+            },
           );
           update.pendingInteraction = session.pendingInteraction;
         }
@@ -2538,27 +2749,75 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     if (agentId !== BOOKING_AGENT_ID) {
       return {};
     }
-    const confirmation = pendingChatConfirmationDecision(state);
-    if (confirmation.kind === "affirmed") {
+    // Cancel chat-other: re-arm a fresh cancel HITL after the unmatched ask was
+    // answered. Create/reschedule chat-other must not prepare/replay.
+    if (hasPendingConfirmationChatOther(state)) {
+      if (!shouldRearmCancelAfterChatOther(state)) {
+        return {};
+      }
+      const messages = state.agentMessages ?? [];
+      const lastAi = [...messages].reverse().find((message) => message instanceof AIMessage);
+      const pendingCalls = lastAi?.tool_calls ?? [];
+      const nonMutationCalls = pendingCalls.filter(
+        (call) => commandActionForTool(call.name) == null,
+      );
+      // Price/catalog lookups must finish before re-arming cancel HITL.
+      if (
+        nonMutationCalls.length > 0
+        && (hasPendingToolCalls(messages) || lastMessageRequestsTools(messages))
+      ) {
+        if (nonMutationCalls.length === pendingCalls.length) {
+          return {};
+        }
+        const strippedAi = new AIMessage({
+          content: lastAi!.content,
+          tool_calls: nonMutationCalls,
+          additional_kwargs: lastAi!.additional_kwargs,
+          response_metadata: lastAi!.response_metadata,
+          id: lastAi!.id,
+        } as ConstructorParameters<typeof AIMessage>[0]);
+        const lastIndex = messages.lastIndexOf(lastAi!);
+        return {
+          agentMessages: new Overwrite([
+            ...messages.slice(0, lastIndex),
+            strippedAi,
+            ...messages.slice(lastIndex + 1),
+          ]),
+        };
+      }
+      const rearmCancel = cancelCommandFromPlannedVisit(state);
+      if (rearmCancel == null) {
+        return {};
+      }
+      const answerText = lastSpecialistReplyText(state);
       const syntheticCall = {
-        id: `booking_chat_confirm_${state.bookingDraft?.version ?? 0}`,
-        name: confirmation.toolName,
-        args: confirmation.command.payload,
+        id: `booking_cancel_rearm_${state.bookingDraft?.version ?? 0}`,
+        name: "cancel_meeting",
+        args: rearmCancel.payload,
         type: "tool_call" as const,
       };
       const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
-      return {
+      const prepared = withMutationConfirm(state, "cancel", {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "command_prepared",
-          command: confirmation.command,
+          command: rearmCancel,
         }),
-        agentMessages: new Overwrite(
-          appendOrReplacePendingToolCall(state.agentMessages ?? [], syntheticAi),
-        ),
+        pendingCancellationPurpose: "direct",
+        agentMessages: new Overwrite(appendOrReplacePendingToolCall(messages, syntheticAi)),
+      });
+      return {
+        ...prepared,
+        ...(answerText.length > 0
+          ? {
+              lastHandoff: {
+                agentId: BOOKING_AGENT_ID,
+                agentName: "booking",
+                status: "ok" as const,
+                replyText: answerText,
+              },
+            }
+          : {}),
       };
-    }
-    if (confirmation.kind === "unresolved") {
-      return {};
     }
     // Replacement is a compound mutation. Once it has started, the original
     // patient message (often `Скасувати`) and the stale meeting snapshot must
@@ -2570,7 +2829,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
       || replacementStatus === "create_pending";
     const directCancelCommand = replacementInProgress
       ? null
-      : cancelCommandFromBookingContext(state);
+      : (isDirectCancelIntent(state) ? cancelCommandFromPlannedVisit(state) : null);
     if (
       directCancelCommand
       && !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
@@ -2897,6 +3156,15 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
       && !toolRanThisTurn(state.agentMessages, "list_services")
     ) {
       dynamicParts.push(formatServicesContext(state.servicesContext));
+    }
+    if (
+      agent.id === FAQ_AGENT_ID
+      && state.pendingInteraction?.kind === "service_candidate"
+      && state.pendingInteraction.owner === "faq"
+    ) {
+      dynamicParts.push(
+        formatFaqCatalogChoicesContext(state.pendingInteraction.choices),
+      );
     }
     const dynamic = dynamicParts.filter((part) => part.length > 0).join("\n\n");
 
@@ -3737,46 +4005,6 @@ export const createAgentToolsNode = (
  */
 export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
-    const chatConfirmation = pendingChatConfirmationDecision(state);
-    if (
-      chatConfirmation.kind === "unresolved"
-      && chatConfirmation.replyKind === "declined"
-      && chatConfirmation.action != null
-    ) {
-      const mutationName = toolNameForCommandAction(chatConfirmation.action);
-      const replacementCancellation = state.pendingCancellationPurpose === "replacement";
-      const replyText = chatConfirmation.action === "create"
-        ? "Запис не було створено."
-        : chatConfirmation.action === "reschedule"
-          ? "Запис не було перенесено."
-          : replacementCancellation
-            ? "Скасування поточного візиту скасовано. Новий запис не було створено."
-            : "Запис не було скасовано.";
-      const replyButtons = chatConfirmation.action === "cancel" && !replacementCancellation
-        ? [...VISIT_CHANGE_MENU]
-        : [...defaultMenuLabels(defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext))];
-      clearPendingConfirmForRuntime(config);
-      const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
-      const cleanup = pendingChatConfirmationCleanup(state);
-      trackEvent("meeting_mutation_outcome", {
-        mutation: mutationName,
-        outcome: "declined",
-      });
-      return {
-        ...cleanup,
-        agentMessages: new Overwrite([] as BaseMessage[]),
-        stepCount: 0,
-        pendingCancellationPurpose: null,
-        messages: [message],
-        lastHandoff: {
-          agentId: agent.id,
-          agentName: agent.name,
-          status: "ok",
-          replyText,
-          replyButtons,
-        },
-      };
-    }
     const result = terminalMeetingMutationOutcome(state);
     if (!result) {
       return {};
@@ -3855,18 +4083,33 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
     };
   };
 
+const hasFaqConsultationOfferQuestion = (text: string): boolean =>
+  /записати вас на консультацію\?/iu.test(text)
+  || /підібрати вільний час на консультацію\?/iu.test(text);
+
+const stripFaqDirectionInterestQuestion = (text: string): string =>
+  text
+    .replace(/\n*\s*Який саме напрямок вас цікавить\?\s*/giu, "\n\n")
+    .replace(/\n*\s*Which direction are you interested in\?\s*/giu, "\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+/** Keep the catalog summary; guarantee a consultation yes/no close on «Послуги». */
+const withFaqConsultationOffer = (replyText: string): string => {
+  const trimmed = stripFaqDirectionInterestQuestion(replyText);
+  if (hasFaqConsultationOfferQuestion(trimmed)) {
+    return trimmed;
+  }
+  if (trimmed.length === 0) {
+    return FAQ_CONSULTATION_OFFER_UK;
+  }
+  return `${trimmed}\n\n${FAQ_CONSULTATION_OFFER_UK}`;
+};
+
 export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
   (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
-      return createAgentMutationFinalizeNode(agent)(state, config);
-    }
-    const chatConfirmation = pendingChatConfirmationDecision(state);
-    if (
-      chatConfirmation.kind === "unresolved"
-      && chatConfirmation.replyKind === "declined"
-      && chatConfirmation.action != null
-    ) {
       return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;
@@ -3876,8 +4119,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       agentMessages: new Overwrite([] as BaseMessage[]),
       stepCount: 0,
     };
-    const confirmationCleanup = pendingChatConfirmationCleanup(state);
-    if (pendingChatConfirmationDecision(state).kind === "unresolved") {
+    const chatOther = hasPendingConfirmationChatOther(state);
+    const confirmationCleanup = chatOther
+      ? applyMutationChatOtherCleanup(state)
+      : {};
+    if (chatOther) {
       clearPendingConfirmForRuntime(config);
     }
 
@@ -3896,8 +4142,10 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
+    const { text: textWithoutCatalogAction, action: faqCatalogAction } =
+      extractFaqCatalogAction(rawText);
     const { text, buttons: accidentalButtons, yieldToSupervisor: yieldTag } =
-      extractReplyButtons(rawText);
+      extractReplyButtons(textWithoutCatalogAction);
     let replyText = text.trim();
     let replyButtons: string[] = [];
     let yieldFlag = false;
@@ -4056,48 +4304,83 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     } else if (alreadyBooked) {
       replyButtons = [...BOOKING_REPLACE_MENU];
     } else if (agent.id === FAQ_AGENT_ID) {
-      let faqCatalogUpdate: ClinicStateUpdate = {};
       const openFaqCatalog =
         state.pendingInteraction?.kind === "service_candidate"
         && state.pendingInteraction.owner === "faq";
       const openCatalogDetour = state.pendingInteraction?.kind === "catalog_detour";
-      if (openFaqCatalog || openCatalogDetour) {
-        const rendered = renderBookingInteractionMessage(state.pendingInteraction!);
-        replyText = String(rendered.content);
+      if (openFaqCatalog) {
+        const catalog = state.pendingInteraction as PendingInteraction & {
+          kind: "service_candidate";
+          owner: "faq";
+        };
+        if (faqCatalogAction === "offer_consultation") {
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: catalog,
+            },
+            {
+              type: "service_offered",
+              service: consultationService("catalog"),
+            },
+          );
+          serviceOfferUpdate = {
+            bookingDraft: session.bookingDraft,
+            pendingInteraction: session.pendingInteraction,
+          };
+          if (session.pendingInteraction?.kind === "service_confirm") {
+            const consultQuestion = String(
+              renderBookingInteractionMessage(session.pendingInteraction).content,
+            );
+            if (!hasFaqConsultationOfferQuestion(replyText)) {
+              replyText = replyText.length > 0
+                ? `${replyText}\n\n${consultQuestion}`
+                : consultQuestion;
+            }
+            replyButtons = replyButtonsForInteraction(session.pendingInteraction);
+            yieldFlag = true;
+            trackEvent("reply_menu_filled", {
+              menu: "service_confirm",
+              reason: "faq_catalog_action",
+            });
+          }
+        } else if (faqCatalogAction === "close_catalog") {
+          serviceOfferUpdate = { pendingInteraction: null };
+          // Keep model prose; drop catalog chips.
+          replyButtons = [];
+          trackEvent("reply_menu_filled", {
+            menu: "service_candidate",
+            reason: "faq_catalog_close",
+          });
+        } else {
+          // keep_catalog, or missing/invalid action: keep catalog keyboard.
+          // «Обрати іншу процедуру» restarts at root chips — drop stale model
+          // lists from the previous drill-down so bullets match the keyboard.
+          const catalogShortcut = FAQ_CATALOG_SHORTCUT_LABELS.has(
+            lastPatientText(state).trim(),
+          );
+          if (replyText.length === 0 || catalogShortcut) {
+            replyText = renderFaqCatalogReply(
+              catalog.choices,
+              state.servicesContext?.list ?? [],
+              "",
+            );
+          }
+          replyButtons = replyButtonsForInteraction(catalog);
+          trackEvent("reply_menu_filled", {
+            menu: "service_candidate",
+            reason: "pending_interaction",
+          });
+        }
+      } else if (openCatalogDetour) {
+        replyText = String(
+          renderBookingInteractionMessage(state.pendingInteraction!).content,
+        );
         replyButtons = replyButtonsForInteraction(state.pendingInteraction!);
         trackEvent("reply_menu_filled", {
           menu: state.pendingInteraction!.kind,
           reason: "pending_interaction",
         });
-      } else if (
-        toolRanThisTurn(agentMessages, "list_services")
-        && (state.servicesContext?.list.length ?? 0) > 0
-        && state.pendingInteraction?.kind !== "service_confirm"
-      ) {
-        const choices = buildFaqCatalogChoices(state.servicesContext!.list);
-        if (choices.length > 0) {
-          const session = reduceBookingSession(
-            {
-              bookingDraft: state.bookingDraft ?? null,
-              pendingInteraction: state.pendingInteraction ?? null,
-            },
-            {
-              type: "service_candidates_opened",
-              utterance: lastPatientText(state) || "catalog",
-              owner: "faq",
-              choices,
-            },
-          );
-          faqCatalogUpdate = { pendingInteraction: session.pendingInteraction };
-          if (session.pendingInteraction != null) {
-            replyText = String(renderBookingInteractionMessage(session.pendingInteraction).content);
-            replyButtons = replyButtonsForInteraction(session.pendingInteraction);
-            trackEvent("reply_menu_filled", {
-              menu: "service_candidate",
-              reason: "faq_catalog",
-            });
-          }
-        }
       } else {
         // Accidental trailers / bullets never become FAQ chips — only reducer-
         // opened catalog interactions own replyButtons.
@@ -4108,10 +4391,6 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         if (returnLabel != null && returnLabel.length > 0) {
           replyButtons = [returnLabel];
         }
-      }
-      // Merge FAQ catalog interaction into the later update bag via serviceOfferUpdate slot.
-      if (Object.keys(faqCatalogUpdate).length > 0) {
-        serviceOfferUpdate = { ...serviceOfferUpdate, ...faqCatalogUpdate };
       }
     } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
       // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
@@ -4206,7 +4485,20 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           pendingInteraction: session.pendingInteraction,
         };
         if (session.pendingInteraction?.kind === "service_confirm") {
-          replyText = String(renderBookingInteractionMessage(session.pendingInteraction).content);
+          // FAQ «Послуги» keeps the model catalog summary and always closes
+          // with a consultation offer so Так / Обрати іншу процедуру make sense.
+          const servicesGuide = FAQ_SERVICES_GUIDE_LABELS.has(lastPatientText(state).trim());
+          if (replyText.length === 0) {
+            replyText = String(
+              renderBookingInteractionMessage(session.pendingInteraction).content,
+            );
+          } else if (
+            agent.id === FAQ_AGENT_ID
+            && servicesGuide
+            && offeredService.id === CONSULTATION_SERVICE_ID
+          ) {
+            replyText = withFaqConsultationOffer(replyText);
+          }
           replyButtons = replyButtonsForInteraction(session.pendingInteraction);
           if (agent.id === FAQ_AGENT_ID) {
             yieldFlag = true;
@@ -4220,7 +4512,12 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       && !slotOffer
       && replyButtons.length === 0
     ) {
-      replyText = String(renderBookingInteractionMessage(state.pendingInteraction).content);
+      // Offer keyboard still open (price/comparison follow-up, unmatched
+      // text). Catalog resume happens in prepare: it opens service_candidate
+      // before the LLM, and keep_catalog then attaches those chips above.
+      if (replyText.length === 0) {
+        replyText = String(renderBookingInteractionMessage(state.pendingInteraction).content);
+      }
       replyButtons = replyButtonsForInteraction(state.pendingInteraction);
       if (agent.id === FAQ_AGENT_ID) {
         yieldFlag = true;
@@ -4330,13 +4627,19 @@ export const routeAfterAgentLlm = (
   finalizeName: string,
   commandPrepareName?: string,
 ): string => {
-  // Runtime-owned booking transitions outrank both model text and the model's
-  // step budget. Once canonical state is ready, no LLM-authored terminal claim
-  // is eligible for finalization.
-  if (commandPrepareName && hasMutationCallDuringUnresolvedConfirmation(state)) {
+  // Cancel chat-other re-arm outranks a model mutation call during unresolved
+  // confirm (command_prepare replaces it). Other agents still finalize.
+  if (
+    commandPrepareName
+    && hasMutationCallDuringUnresolvedConfirmation(state)
+    && !shouldRearmCancelAfterChatOther(state)
+  ) {
     return finalizeName;
   }
 
+  // Runtime-owned booking transitions outrank both model text and the model's
+  // step budget. Once canonical state is ready, no LLM-authored terminal claim
+  // is eligible for finalization.
   if (commandPrepareName && bookingTurnNeedsCommandPreparation(state)) {
     return commandPrepareName;
   }
@@ -4385,16 +4688,6 @@ export const routeAfterAgentTools = (
     return llmName;
   }
 
-  const chatConfirmation = pendingChatConfirmationDecision(state);
-  if (
-    mutationFinalizeName
-    && chatConfirmation.kind === "unresolved"
-    && chatConfirmation.replyKind === "declined"
-    && chatConfirmation.action != null
-  ) {
-    return mutationFinalizeName;
-  }
-
   if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
     return mutationFinalizeName;
   }
@@ -4405,8 +4698,7 @@ export const routeAfterAgentTools = (
 
   if (
     noteOrchestratorName
-    && chatConfirmation.kind === "unresolved"
-    && chatConfirmation.replyKind === "other"
+    && hasPendingConfirmationChatOther(state)
     && bookingTurnNeedsNoteOrchestrator(state)
   ) {
     return noteOrchestratorName;

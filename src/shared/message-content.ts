@@ -303,3 +303,40 @@ export const replyButtonLabels = (stored: unknown): string[] => {
   }
   return [];
 };
+
+const FAQ_CATALOG_ACTION_TAG =
+  /<faq_catalog_action\b[^>]*>\s*([\s\S]*?)\s*<\/faq_catalog_action\s*>/i;
+
+export type FaqCatalogAction = "keep_catalog" | "offer_consultation" | "close_catalog";
+
+const FAQ_CATALOG_ACTIONS = new Set<FaqCatalogAction>([
+  "keep_catalog",
+  "offer_consultation",
+  "close_catalog",
+]);
+
+export type ExtractedFaqCatalogAction = {
+  /** Visible patient text with the control tag removed. */
+  text: string;
+  /** Validated action, or null when missing/invalid. */
+  action: FaqCatalogAction | null;
+};
+
+/**
+ * Extract a validated FAQ catalog control action. Accepts only exact enum values;
+ * missing or invalid tags leave action null without interpreting prose.
+ */
+export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction => {
+  const match = raw.match(FAQ_CATALOG_ACTION_TAG);
+  if (match == null || match.index === undefined) {
+    return { text: raw, action: null };
+  }
+  const value = (match[1] ?? "").trim().toLowerCase();
+  const action = FAQ_CATALOG_ACTIONS.has(value as FaqCatalogAction)
+    ? (value as FaqCatalogAction)
+    : null;
+  const text = `${raw.slice(0, match.index)}${raw.slice(match.index + match[0].length)}`
+    .replace(/(?:\r?\n){3,}/g, "\n\n")
+    .trim();
+  return { text, action };
+};

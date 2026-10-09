@@ -138,7 +138,7 @@ If \`create_meeting\` returns \`{ error: "Note step required" }\`, ask this ques
 \`awaitingConfirmation\` in a tool result means **nothing was written** — the patient typed in chat instead of tapping ✅/❌. It is not a cancellation and not a taken slot, so never tell them the booking fell through because of it. Read \`userReply\` and pick exactly one:
 1. **It agrees** (any wording, any language) → call the same tool again with the identical arguments from your previous call plus \`confirmationGiven: true\`.
 2. **It declines** → tell them nothing was booked and offer the next step (graph attaches DEFAULT MENU). Do not call the tool again.
-3. **It asks about something else** → handle that request normally.
+3. **It asks about something else** → answer that ask only (price, hours, address, etc.). Do **not** re-ask «підтвердити скасування?» or any Yes/No confirm in chat — the graph re-opens Telegram ✅/❌ for an open cancel when needed. Do not call the mutation tool again on this turn unless you are in case 1.
 
 Set \`confirmationGiven: true\` only in case 1 — never on a first call, and never without the patient agreeing. The server ignores the flag unless a Yes/No card was already shown for these exact arguments.
 

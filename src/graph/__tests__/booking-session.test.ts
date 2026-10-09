@@ -755,6 +755,36 @@ describe("booking-owned pendingInteraction helpers", () => {
   });
 });
 
+describe("mutation_chat_other", () => {
+  it("invalidates create slot while keeping mutation_confirm open", () => {
+    const drafted = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const withCommand = {
+      bookingDraft: reduceBookingDraft(drafted.bookingDraft!, {
+        type: "command_prepared",
+        command: {
+          action: "create" as const,
+          payload: { serviceId: "svc-1", dateStart: selectedSlot.dateStart },
+        },
+      }),
+      pendingInteraction: null as PendingInteraction | null,
+    };
+    const opened = reduceBookingSession(withCommand, {
+      type: "mutation_confirm_opened",
+      action: "create",
+    });
+    expect(opened.pendingInteraction?.kind).toBe("mutation_confirm");
+
+    const other = reduceBookingSession(opened, { type: "mutation_chat_other" });
+    expect(other.pendingInteraction?.kind).toBe("mutation_confirm");
+    expect(other.bookingDraft?.selectedSlot).toBeNull();
+    expect(other.bookingDraft?.selectedDate).toBe(selectedSlot.dateStart.slice(0, 10));
+    expect(other.bookingDraft?.pendingCommand).toBeNull();
+  });
+});
+
 describe("interpretInteractionReply", () => {
   const visitNote: PendingInteraction = {
     kind: "visit_note",
