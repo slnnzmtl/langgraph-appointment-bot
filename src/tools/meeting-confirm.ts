@@ -11,11 +11,13 @@ import { errorMessage } from "../shared/json-record.js";
 import { toToolResult } from "./tool-result.js";
 
 /**
- * HITL resume payloads: Telegram ✅/❌ reply-keyboard taps send `{ confirmed }`, other chat text
- * while the confirm card is pending sends `{ userReply }`. Anything else counts as a decline.
+ * HITL resume payloads: Telegram ✅/❌ reply-keyboard taps send `{ confirmed }`, main-menu taps
+ * send `{ left: true }`, other chat text while the confirm card is pending sends `{ userReply }`.
+ * Anything else counts as a decline.
  */
 type ConfirmDecision =
   | { kind: "confirmed" }
+  | { kind: "left" }
   | { kind: "chatReply"; userReply: string }
   | { kind: "declined" };
 
@@ -23,9 +25,16 @@ const parseConfirmDecision = (decision: unknown): ConfirmDecision => {
   if (typeof decision !== "object" || decision === null) {
     return { kind: "declined" };
   }
-  const { confirmed, userReply } = decision as { confirmed?: unknown; userReply?: unknown };
+  const { confirmed, userReply, left } = decision as {
+    confirmed?: unknown;
+    userReply?: unknown;
+    left?: unknown;
+  };
   if (confirmed === true) {
     return { kind: "confirmed" };
+  }
+  if (left === true) {
+    return { kind: "left" };
   }
   const reply = typeof userReply === "string" ? userReply.trim() : "";
   return reply.length > 0 ? { kind: "chatReply", userReply: reply } : { kind: "declined" };
@@ -270,6 +279,18 @@ const withUserConfirm = async (
   }
   if (threadId) {
     clearPendingConfirm(threadId);
+  }
+  if (decision.kind === "left") {
+    trackEvent("booking_declined", {
+      ...hitlProps(ctx),
+      outcome: "declined",
+      reason: "main_menu",
+    });
+    return JSON.stringify({
+      cancelled: true,
+      left: true,
+      message: ctx.cancelledMessage ?? "Cancelled by user.",
+    });
   }
   trackEvent("booking_declined", {
     ...hitlProps(ctx),

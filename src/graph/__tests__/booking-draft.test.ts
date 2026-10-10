@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   BOOKING_SCHEMA_VERSION,
+  availabilityMatchesBooking,
+  bookingAvailabilityScope,
+  bookingVisitDurationMinutes,
   createEmptyBookingDraft,
   isEmptyLegacyBookingDraft,
   reduceBookingDraft,
@@ -1312,5 +1315,164 @@ describe("booking session lifecycle", () => {
       ...empty,
       replacement: { meeting: { id: "m-1" }, status: "offered" },
     })).toBe(false);
+  });
+});
+
+describe("booking availability scope", () => {
+  it("reads create duration from the accepted service", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-60", name: "Пілінг", durationMinutes: 60, source: "catalog" },
+      accepted: true,
+    });
+    expect(bookingVisitDurationMinutes(draft)).toBe(60);
+    expect(bookingAvailabilityScope(draft)).toEqual({
+      serviceId: "svc-60",
+      durationMinutes: 60,
+    });
+  });
+
+  it("omits create duration when the accepted service has none", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", source: "catalog" },
+      accepted: true,
+    });
+    expect(bookingVisitDurationMinutes(draft)).toBeUndefined();
+    expect(bookingAvailabilityScope(draft)).toEqual({ serviceId: "svc-1" });
+  });
+
+  it("reads reschedule duration from the CRM visit span", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-1",
+        name: "Пілінг поверхневий",
+        dateStart: "2026-10-26T11:00:00",
+        dateEnd: "2026-10-26T12:00:00",
+      },
+    });
+    expect(bookingVisitDurationMinutes(draft)).toBe(60);
+    expect(bookingAvailabilityScope(draft)).toEqual({
+      durationMinutes: 60,
+      excludeMeetingIds: ["meeting-1"],
+    });
+  });
+
+  it("omits reschedule duration when dateEnd is missing or the span is out of range", () => {
+    const missingEnd = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: { id: "meeting-1", dateStart: "2026-10-26T11:00:00" },
+    });
+    expect(bookingVisitDurationMinutes(missingEnd)).toBeUndefined();
+    expect(bookingAvailabilityScope(missingEnd)).toEqual({
+      excludeMeetingIds: ["meeting-1"],
+    });
+
+    const tooLong = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-1",
+        dateStart: "2026-10-26T11:00:00",
+        dateEnd: "2026-10-26T15:00:00",
+      },
+    });
+    expect(bookingVisitDurationMinutes(tooLong)).toBeUndefined();
+  });
+
+  it("rejects a reschedule command whose payload span differs from the visit", () => {
+    const started = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-1",
+        dateStart: "2026-10-26T11:00:00",
+        dateEnd: "2026-10-26T12:00:00",
+      },
+    });
+    const dated = reduceBookingDraft(started, { type: "date_selected", date: "2026-10-23" });
+    const shortSlot = {
+      dateStart: "2026-10-23T11:00:00",
+      dateEnd: "2026-10-23T11:30:00",
+      label: "11:00",
+    };
+    const slotted = reduceBookingDraft(dated, { type: "slot_selected", slot: shortSlot });
+    const rejected = reduceBookingDraft(slotted, {
+      type: "command_prepared",
+      command: {
+        action: "reschedule",
+        payload: {
+          meetingId: "meeting-1",
+          dateStart: shortSlot.dateStart,
+          dateEnd: shortSlot.dateEnd,
+        },
+      },
+    });
+    expect(rejected.pendingCommand).toBeNull();
+    expect(rejected.phase).toBe("ready");
+
+    const fullSlot = {
+      dateStart: "2026-10-23T11:00:00",
+      dateEnd: "2026-10-23T12:00:00",
+      label: "11:00",
+    };
+    const fullSlotted = reduceBookingDraft(dated, { type: "slot_selected", slot: fullSlot });
+    const accepted = reduceBookingDraft(fullSlotted, {
+      type: "command_prepared",
+      command: {
+        action: "reschedule",
+        payload: {
+          meetingId: "meeting-1",
+          dateStart: fullSlot.dateStart,
+          dateEnd: fullSlot.dateEnd,
+        },
+      },
+    });
+    expect(accepted.pendingCommand?.action).toBe("reschedule");
+    expect(accepted.phase).toBe("confirming");
+  });
+
+  it("does not trust a 30-minute snapshot for a 60-minute reschedule", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-1",
+        dateStart: "2026-10-26T11:00:00",
+        dateEnd: "2026-10-26T12:00:00",
+      },
+    });
+    expect(availabilityMatchesBooking(
+      {
+        stepMinutes: 30,
+        excludeMeetingIds: ["meeting-1"],
+        days: [{
+          slots: [{
+            dateStart: "2026-10-23T11:00:00",
+            dateEnd: "2026-10-23T11:30:00",
+          }],
+        }],
+      },
+      draft,
+    )).toBe(false);
+    expect(availabilityMatchesBooking(
+      {
+        stepMinutes: 60,
+        excludeMeetingIds: ["meeting-1"],
+      },
+      draft,
+    )).toBe(true);
+    // Legacy checkpoints stored start cadence in stepMinutes; slot spans win.
+    expect(availabilityMatchesBooking(
+      {
+        stepMinutes: 30,
+        excludeMeetingIds: ["meeting-1"],
+        days: [{
+          slots: [{
+            dateStart: "2026-10-23T11:00:00",
+            dateEnd: "2026-10-23T12:00:00",
+          }],
+        }],
+      },
+      draft,
+    )).toBe(true);
   });
 });

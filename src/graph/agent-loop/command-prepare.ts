@@ -19,6 +19,7 @@ import type {
   ClinicStateUpdate,
 } from "../state.js";
 import {
+  availabilityRequestFieldsFromDraft,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -273,8 +274,8 @@ const lastSpecialistReplyText = (state: ClinicState): string => {
 };
 
 /**
- * Apply mutation_chat_other when composition resumeConfirmBookingHitl did not
- * (e.g. direct Command resume in tests). Idempotent with an already-applied update.
+ * Apply mutation_chat_other for a free-text reply while the confirm card is open.
+ * Owns the session transition (adapter resume no longer pre-patches the draft).
  */
 export const applyMutationChatOtherCleanup = (state: ClinicState): ClinicStateUpdate => {
   if (state.pendingInteraction?.kind === "mutation_confirm") {
@@ -512,8 +513,8 @@ const nearestRescheduleAvailabilityRequest = (
   }
   return {
     direction: "nearest",
-    excludeMeetingIds: [draft.rescheduleTarget.id],
     forceRefresh: true,
+    ...availabilityRequestFieldsFromDraft(draft),
   };
 };
 
@@ -535,11 +536,10 @@ const serviceChangeNearestAvailabilityRequest = (
   ) {
     return null;
   }
-  const durationMinutes = draft.serviceAcceptance.service.durationMinutes;
   return {
     direction: "nearest",
     forceRefresh: true,
-    ...(durationMinutes != null ? { durationMinutes } : {}),
+    ...availabilityRequestFieldsFromDraft(draft),
   };
 };
 
@@ -560,11 +560,10 @@ const replacementCancelNearestAvailabilityRequest = (
   ) {
     return null;
   }
-  const durationMinutes = draft.serviceAcceptance.service.durationMinutes;
   return {
     direction: "nearest",
     forceRefresh: true,
-    ...(durationMinutes != null ? { durationMinutes } : {}),
+    ...availabilityRequestFieldsFromDraft(draft),
   };
 };
 
@@ -594,15 +593,11 @@ const availabilityRequestFromBookingDraft = (
   if (!dateIntentRequiresFreshLookup && !pendingRequestedTime) {
     return null;
   }
-  const durationMinutes = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
   return {
     direction: "exact",
     date: selectedDate,
-    ...(state.bookingDraft?.mode === "reschedule" && state.bookingDraft.rescheduleTarget
-      ? { excludeMeetingIds: [state.bookingDraft.rescheduleTarget.id] }
-      : {}),
     forceRefresh: true,
-    ...(durationMinutes != null ? { durationMinutes } : {}),
+    ...availabilityRequestFieldsFromDraft(state.bookingDraft),
   };
 };
 
@@ -941,8 +936,8 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         args: {
           direction: "exact",
           date: state.bookingDraft?.selectedDate,
-          excludeMeetingIds: [state.bookingDraft!.rescheduleTarget!.id],
           forceRefresh: true,
+          ...availabilityRequestFieldsFromDraft(state.bookingDraft),
         },
         type: "tool_call" as const,
       };
@@ -991,10 +986,8 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         args: {
           direction: "exact",
           date: state.bookingDraft.selectedDate,
-          ...(state.bookingDraft.serviceAcceptance?.service.durationMinutes
-            ? { durationMinutes: state.bookingDraft.serviceAcceptance.service.durationMinutes }
-            : {}),
           forceRefresh: true,
+          ...availabilityRequestFieldsFromDraft(state.bookingDraft),
         },
         type: "tool_call" as const,
       };
