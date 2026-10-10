@@ -726,20 +726,8 @@ export const reduceBookingSession = (
           }
         }
       }
-      if (interaction.kind === "mutation_confirm") {
-        if (event.choiceId === "confirm") {
-          // Keep interaction until the write succeeds; adapter clears after resume.
-          return noEffect(current);
-        }
-        if (event.choiceId === "decline") {
-          return noEffect({
-            bookingDraft: draft != null
-              ? reduceBookingDraft(draft, { type: "command_cleared" })
-              : null,
-            pendingInteraction: null,
-          });
-        }
-      }
+      // mutation_confirm affirm/decline are resume decisions (confirmed / left),
+      // not interaction_choice events — the adapter no longer pre-patches here.
       if (interaction.kind === "date_select" || interaction.kind === "time_select") {
         if (event.choiceId === "other_date" || event.choiceId === "earlier" || event.choiceId === "later") {
           return noEffect({
@@ -985,8 +973,8 @@ export const reduceBookingSession = (
     }
     case "mutation_chat_other": {
       // Chat text while HITL is paused: invalidate the frozen mutation but keep
-      // mutation_confirm until tools/finalize clear it. Affirm/decline use
-      // confirmed resume and never reach this event.
+      // mutation_confirm until tools/finalize clear it. Affirm/decline/leave use
+      // typed resume payloads and never reach this event.
       if (interaction?.kind !== "mutation_confirm") {
         return noEffect(current);
       }

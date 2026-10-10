@@ -50,6 +50,8 @@ import { normalizeClinicPhone } from "../../shared/phone.js";
 import { getTelegramUserId } from "../../tools/telegram-user-context.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
+  availabilityMatchesBooking,
+  availabilityRequestFieldsFromDraft,
   reduceBookingDraft,
   type BookingDraft,
   type BookingService,
@@ -159,6 +161,7 @@ export type MeetingMutationOutcome =
   | "committed"
   | "pending_confirmation"
   | "declined"
+  | "abandoned"
   | "blocked"
   | "failed"
   | null;
@@ -181,6 +184,10 @@ export const classifyMeetingMutationToolMessage = (
   if (record.awaitingConfirmation === true) {
     return "pending_confirmation";
   }
+  // Main-menu leave: cancelled write with an explicit left flag.
+  if (record.left === true && record.cancelled === true) {
+    return "abandoned";
+  }
   if (record.cancelled === true) {
     return "declined";
   }
@@ -190,9 +197,9 @@ export const classifyMeetingMutationToolMessage = (
   return committedMeetingEntityId(body) != null ? "committed" : "failed";
 };
 
+/** HITL ❌ only — main-menu leave is `abandoned` and must not keep the draft for re-pick. */
 export const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
-  MEETING_MUTATION_TOOLS.has(message.name ?? "")
-  && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
+  classifyMeetingMutationToolMessage(message) === "declined";
 
 /**
  * True when model prose must not ship: a non-committed meeting write this turn,
@@ -210,6 +217,7 @@ export const bookingOutcomeRiskState = (state: ClinicState): boolean => {
       outcome === "failed"
       || outcome === "blocked"
       || outcome === "declined"
+      || outcome === "abandoned"
       || outcome === "pending_confirmation"
     ) {
       return true;
@@ -235,19 +243,31 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
       const record = asJsonRecord(extractMessageTextContent(message.content).trim());
       const isReplacementConflict = record?.error === "Already booked";
       const isInvariantGuard = record?.error === CREATE_CONSULTATION_REQUIRED_ERROR;
-      if (!isReplacementConflict && (isInvariantGuard || outcome === "committed" || outcome === "declined" || outcome === "failed")) {
+      if (
+        !isReplacementConflict
+        && (
+          isInvariantGuard
+          || outcome === "committed"
+          || outcome === "declined"
+          || outcome === "abandoned"
+          || outcome === "failed"
+        )
+      ) {
         return message;
       }
       continue;
     }
     // A committed replacement cancellation is a continuation, not a
     // patient-facing terminal outcome: the replacement create flow owns it.
-    // Declined/failed replacement cancellation outcomes are terminal, but must
-    // retain their replacement origin for the correct response/menu.
+    // Declined/failed/abandoned replacement cancellation outcomes are terminal,
+    // but must retain their replacement origin for the correct response/menu.
     if (state.pendingCancellationPurpose === "replacement") {
-      // Failed/blocked replacement cancel must close the session — leaving
-      // cancelling + originalCommand would replay a stale create later.
-      return outcome === "declined" || outcome === "failed" || outcome === "blocked"
+      // Failed/blocked/abandoned replacement cancel must close the session —
+      // leaving cancelling + originalCommand would replay a stale create later.
+      return outcome === "declined"
+        || outcome === "abandoned"
+        || outcome === "failed"
+        || outcome === "blocked"
         ? message
         : null;
     }
@@ -256,7 +276,13 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     if (state.bookingDraft?.replacement != null) {
       return null;
     }
-    if (outcome === "committed" || outcome === "declined" || outcome === "blocked" || outcome === "failed") {
+    if (
+      outcome === "committed"
+      || outcome === "declined"
+      || outcome === "abandoned"
+      || outcome === "blocked"
+      || outcome === "failed"
+    ) {
       return message;
     }
     return null;
@@ -264,14 +290,19 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
   return null;
 };
 
-/** Committed, failed, or HITL ❌ — stale free/busy and note step must not survive. */
+/** Committed, failed, HITL ❌, or main-menu leave — stale free/busy must not survive. */
 export const meetingMutationClearsAvailability = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
     if (!(message instanceof ToolMessage)) {
       return false;
     }
     const outcome = classifyMeetingMutationToolMessage(message);
-    return outcome === "committed" || outcome === "failed" || meetingMutationIsHitlDecline(message);
+    return (
+      outcome === "committed"
+      || outcome === "failed"
+      || outcome === "declined"
+      || outcome === "abandoned"
+    );
   });
 
 const toolMessageName = (message: BaseMessage): string | undefined => {
@@ -779,12 +810,10 @@ export const rescheduleAvailabilityArgsFromBookingContext = (
   if (!meeting) {
     return null;
   }
-  const durationMinutes = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
   return {
     ...args,
     direction: args.direction ?? "nearest",
-    excludeMeetingIds: [meeting.id],
-    ...(durationMinutes != null ? { durationMinutes } : {}),
+    ...availabilityRequestFieldsFromDraft(state.bookingDraft),
   };
 };
 
@@ -1042,10 +1071,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
 
   const selectedDate = state.bookingDraft?.selectedDate
     ?? (authoritativeSelectedSlot(state)?.dateStart.slice(0, 10) || null);
-  const availabilityMatchesService = availability == null
-    || availability.serviceId == null
-    || availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id;
-  const matchedSlot = availabilityMatchesService
+  const matchedSlot = availabilityMatchesBooking(availability, state.bookingDraft)
     ? matchAvailabilitySlot(human, availability, selectedDate)
     : null;
 
@@ -1208,14 +1234,7 @@ export const availabilityRecoveryOffer = (
   if (!availability) {
     return null;
   }
-  const acceptedId = state.bookingDraft?.serviceAcceptance?.status === "accepted"
-    ? state.bookingDraft.serviceAcceptance.service.id
-    : undefined;
-  if (
-    availability.serviceId != null
-    && acceptedId != null
-    && availability.serviceId !== acceptedId
-  ) {
+  if (!availabilityMatchesBooking(availability, state.bookingDraft)) {
     return null;
   }
   const selectedDate = state.bookingDraft?.selectedDate;

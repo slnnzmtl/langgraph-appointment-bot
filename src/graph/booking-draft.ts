@@ -1,6 +1,12 @@
+import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
+import { kyivLocalIsoToUtcMs } from "../tools/availability-slots.js";
 import type { SelectedBookingSlot } from "./types.js";
 
 export const BOOKING_SCHEMA_VERSION = 1;
+
+/** Allowed visit lengths for availability search and command guards (tool schema). */
+const MIN_VISIT_DURATION_MINUTES = 15;
+const MAX_VISIT_DURATION_MINUTES = 180;
 
 export type BookingMode = "create" | "reschedule" | "replace";
 
@@ -91,6 +97,180 @@ export type BookingEvent =
   | { type: "slot_invalidated"; keepDate?: boolean }
   | { type: "draft_abandoned" }
   | { type: "draft_resumed" };
+
+/**
+ * Authoritative availability query scope derived from the booking draft.
+ * Create/replace use the accepted service; reschedule uses the CRM visit span
+ * and excludes that meeting as busy.
+ */
+export type BookingAvailabilityScope = {
+  durationMinutes?: number;
+  excludeMeetingIds?: string[];
+  serviceId?: string;
+};
+
+/** Minimal availability snapshot fields needed to decide trust. */
+export type AvailabilityBookingTrust = {
+  serviceId?: string;
+  stepMinutes: number;
+  excludeMeetingIds?: string[];
+  days?: Array<{ slots: Array<{ dateStart: string; dateEnd: string }> }>;
+};
+
+const boundedVisitDurationMinutes = (minutes: number): number | undefined =>
+  Number.isFinite(minutes)
+    && minutes >= MIN_VISIT_DURATION_MINUTES
+    && minutes <= MAX_VISIT_DURATION_MINUTES
+    ? Math.round(minutes)
+    : undefined;
+
+/** Span of two Kyiv-local CRM datetimes in minutes, or undefined when invalid. */
+const visitSpanMinutes = (
+  dateStart: string | null | undefined,
+  dateEnd: string | null | undefined,
+): number | undefined => {
+  if (typeof dateStart !== "string" || typeof dateEnd !== "string") {
+    return undefined;
+  }
+  if (!dateStart.trim() || !dateEnd.trim()) {
+    return undefined;
+  }
+  try {
+    const minutes = (kyivLocalIsoToUtcMs(dateEnd) - kyivLocalIsoToUtcMs(dateStart)) / 60_000;
+    return boundedVisitDurationMinutes(minutes);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Visit length owned by the booking draft: accepted service duration for
+ * create/replace, or the CRM meeting span for a direct reschedule.
+ */
+export const bookingVisitDurationMinutes = (
+  draft: BookingDraft | null | undefined,
+): number | undefined => {
+  if (draft == null) {
+    return undefined;
+  }
+  if (draft.mode === "reschedule") {
+    const target = draft.rescheduleTarget;
+    return visitSpanMinutes(target?.dateStart, target?.dateEnd);
+  }
+  const accepted = draft.serviceAcceptance?.status === "accepted"
+    ? draft.serviceAcceptance.service
+    : null;
+  if (accepted?.durationMinutes == null) {
+    return undefined;
+  }
+  return boundedVisitDurationMinutes(accepted.durationMinutes);
+};
+
+/** Duration + excludeMeetingIds (+ serviceId) for every availability request. */
+export const bookingAvailabilityScope = (
+  draft: BookingDraft | null | undefined,
+): BookingAvailabilityScope => {
+  if (draft == null) {
+    return {};
+  }
+  const durationMinutes = bookingVisitDurationMinutes(draft);
+  if (draft.mode === "reschedule") {
+    const meetingId = draft.rescheduleTarget?.id?.trim();
+    return {
+      ...(durationMinutes != null ? { durationMinutes } : {}),
+      ...(meetingId ? { excludeMeetingIds: [meetingId] } : {}),
+    };
+  }
+  const accepted = draft.serviceAcceptance?.status === "accepted"
+    ? draft.serviceAcceptance.service
+    : null;
+  if (accepted == null) {
+    return {};
+  }
+  const serviceId = accepted.id.trim();
+  return {
+    ...(serviceId ? { serviceId } : {}),
+    ...(durationMinutes != null ? { durationMinutes } : {}),
+  };
+};
+
+/** Tool-arg fields from the draft scope (duration + excluded meetings only). */
+export const availabilityRequestFieldsFromDraft = (
+  draft: BookingDraft | null | undefined,
+): Pick<BookingAvailabilityScope, "durationMinutes" | "excludeMeetingIds"> => {
+  const scope = bookingAvailabilityScope(draft);
+  return {
+    ...(scope.durationMinutes != null ? { durationMinutes: scope.durationMinutes } : {}),
+    ...(scope.excludeMeetingIds?.length
+      ? { excludeMeetingIds: scope.excludeMeetingIds }
+      : {}),
+  };
+};
+
+const sameExcludeMeetingIds = (
+  left: string[] | undefined,
+  right: string[] | undefined,
+): boolean => {
+  const a = [...(left ?? [])].sort();
+  const b = [...(right ?? [])].sort();
+  if (a.length !== b.length) {
+    return false;
+  }
+  return a.every((id, index) => id === b[index]);
+};
+
+/** True when every presented slot spans exactly `expectedDuration` minutes. */
+const snapshotSlotsMatchDuration = (
+  availability: AvailabilityBookingTrust,
+  expectedDuration: number,
+): boolean => {
+  const days = availability.days;
+  if (days == null || days.length === 0) {
+    return false;
+  }
+  let sawSlot = false;
+  for (const day of days) {
+    for (const slot of day.slots) {
+      sawSlot = true;
+      if (visitSpanMinutes(slot.dateStart, slot.dateEnd) !== expectedDuration) {
+        return false;
+      }
+    }
+  }
+  return sawSlot;
+};
+
+/**
+ * Whether a checkpointed availability snapshot may be reused for this draft.
+ * Compatible serviceId (current rule), matching excludeMeetingIds, and a
+ * duration that matches either stepMinutes or the presented slot spans
+ * (legacy checkpoints stored start cadence in stepMinutes). Null availability
+ * is treated as matching (no snapshot).
+ */
+export const availabilityMatchesBooking = (
+  availability: AvailabilityBookingTrust | null | undefined,
+  draft: BookingDraft | null | undefined,
+): boolean => {
+  if (availability == null) {
+    return true;
+  }
+  const scope = bookingAvailabilityScope(draft);
+  if (
+    availability.serviceId != null
+    && scope.serviceId != null
+    && availability.serviceId !== scope.serviceId
+  ) {
+    return false;
+  }
+  if (!sameExcludeMeetingIds(availability.excludeMeetingIds, scope.excludeMeetingIds)) {
+    return false;
+  }
+  const expectedDuration = scope.durationMinutes ?? CLINIC_SLOT_MINUTES;
+  if (availability.stepMinutes === expectedDuration) {
+    return true;
+  }
+  return snapshotSlotsMatchDuration(availability, expectedDuration);
+};
 
 /** Structured fields read from a version-0 booking checkpoint. */
 export type BookingCheckpointLegacyState = {
@@ -1009,6 +1189,20 @@ export const reduceBookingDraft = (
         )
       ) {
         return draft;
+      }
+      if (event.command.action === "create" || event.command.action === "reschedule") {
+        const expectedDuration = bookingVisitDurationMinutes(draft);
+        const payloadDuration = visitSpanMinutes(
+          typeof payload.dateStart === "string" ? payload.dateStart : null,
+          typeof payload.dateEnd === "string" ? payload.dateEnd : null,
+        );
+        if (
+          expectedDuration != null
+          && payloadDuration != null
+          && payloadDuration !== expectedDuration
+        ) {
+          return draft;
+        }
       }
       return withVersion(draft, { ...draft, phase: "confirming", pendingCommand: event.command });
     }

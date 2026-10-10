@@ -1,3 +1,4 @@
+import type { BookingAvailabilityScope } from "../graph/booking-draft.js";
 import type { BookingScheduleRequest } from "../shared/booking-schedule.js";
 import {
   alignToAnchors,
@@ -15,7 +16,8 @@ type AvailabilityNormalizationInput = {
   offeredDayDate?: string | null;
   availabilityContext?: AvailabilityContext | null;
   availabilityCursor?: AvailabilityCursor | null;
-  serviceDurationMinutes?: number;
+  /** Draft-owned duration and excludeMeetingIds; always wins over model args. */
+  scope?: BookingAvailabilityScope;
   availabilityPagedThisTurn: boolean;
   anchors?: readonly string[];
 };
@@ -61,6 +63,8 @@ const directionFromPatient = (
  * Apply the runtime-owned availability direction and cursor to model arguments.
  * Calendar bounds come from the patient utterance (runtimeRequest) or a matched
  * snapshot day — never from model-invented dates or checkpoint direction alone.
+ * When a booking scope is provided, its duration and excludeMeetingIds replace
+ * whatever the model passed.
  */
 export const normalizeAvailabilityToolArgs = ({
   args: input,
@@ -68,7 +72,7 @@ export const normalizeAvailabilityToolArgs = ({
   offeredDayDate = null,
   availabilityContext,
   availabilityCursor,
-  serviceDurationMinutes,
+  scope,
   availabilityPagedThisTurn,
   anchors = [],
 }: AvailabilityNormalizationInput): AvailabilitySlotsToolArgs => {
@@ -137,8 +141,17 @@ export const normalizeAvailabilityToolArgs = ({
     delete args.beforeDate;
   }
 
-  if (serviceDurationMinutes != null) {
-    args.durationMinutes = serviceDurationMinutes;
+  if (scope) {
+    if (scope.durationMinutes != null) {
+      args.durationMinutes = scope.durationMinutes;
+    }
+    if (scope.excludeMeetingIds != null) {
+      if (scope.excludeMeetingIds.length > 0) {
+        args.excludeMeetingIds = [...scope.excludeMeetingIds];
+      } else {
+        delete args.excludeMeetingIds;
+      }
+    }
   }
 
   for (const key of ["date", "afterDate", "beforeDate", "startDate"] as const) {

@@ -179,7 +179,11 @@ describe("text while HITL pending", () => {
     );
     await handleGraphTextTurn(menuGraph, menuThread, "tg-1", "Головне меню");
     const menuSnap = await menuGraph.getState({ configurable: { thread_id: menuThread } });
-    expect(JSON.parse(String(menuSnap.values.result))).toEqual({ confirmed: false });
+    expect(JSON.parse(String(menuSnap.values.result))).toEqual({ left: true });
+    const menuTexts = (menuSnap.values.messages as Array<{ content?: unknown }>).map(
+      (message) => message.content,
+    );
+    expect(menuTexts).toContain("Головне меню");
   });
 
   it("maps NL affirm against open mutation_confirm to confirmed resume", async () => {
@@ -269,7 +273,7 @@ describe("text while HITL pending", () => {
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
   });
 
-  it("dispatches mutation_chat_other and resumes userReply when mutation_confirm is open", async () => {
+  it("resumes userReply with HumanMessage when mutation_confirm is open", async () => {
     const MutationState = Annotation.Root({
       result: Annotation<string>({
         reducer: (_left, right) => right,
@@ -355,12 +359,23 @@ describe("text while HITL pending", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "Яка адреса?");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ userReply: "Яка адреса?" });
+    // Adapter no longer patches session — graph owns decline/chat-other transitions.
     expect(snap.values.pendingInteraction).toMatchObject({ kind: "mutation_confirm" });
     expect(snap.values.bookingDraft).toMatchObject({
       selectedDate: "2026-10-27",
-      selectedSlot: null,
-      pendingCommand: null,
+      selectedSlot: {
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+        label: "11:00",
+      },
+      pendingCommand: {
+        action: "create",
+      },
     });
+    const texts = (snap.values.messages as Array<{ content?: unknown }>).map(
+      (message) => message.content,
+    );
+    expect(texts).toContain("Яка адреса?");
   });
 
   it("declines typed main-menu variants while mutation_confirm is open", async () => {
@@ -447,8 +462,9 @@ describe("text while HITL pending", () => {
 
     await handleGraphTextTurn(graph, threadId, "tg-1", "головне меню");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
-    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.pendingInteraction).toBeNull();
+    expect(JSON.parse(String(snap.values.result))).toEqual({ left: true });
+    // Adapter no longer patches session — pendingCommand stays for the tools-node resume.
+    expect(snap.values.pendingInteraction).toMatchObject({ kind: "mutation_confirm" });
     expect(snap.values.bookingDraft).toMatchObject({
       selectedDate: "2026-10-27",
       selectedSlot: {
@@ -456,8 +472,14 @@ describe("text while HITL pending", () => {
         dateEnd: "2026-10-27T11:30:00",
         label: "11:00",
       },
-      pendingCommand: null,
+      pendingCommand: {
+        action: "create",
+      },
     });
+    const texts = (snap.values.messages as Array<{ content?: unknown }>).map(
+      (message) => message.content,
+    );
+    expect(texts).toContain("головне меню");
   });
 });
 

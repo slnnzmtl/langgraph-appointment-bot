@@ -4,7 +4,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
@@ -263,9 +263,10 @@ const withServiceConfirmQuestion = (
 };
 
 export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
+  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate | Command => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
+      // Includes main-menu leave → Command({ goto: "supervisor" }).
       return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;

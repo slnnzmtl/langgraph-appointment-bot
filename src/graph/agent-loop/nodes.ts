@@ -54,6 +54,8 @@ import {
 import { buildCachedMessages, buildUncachedMessages } from "../gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
+  availabilityMatchesBooking,
+  bookingAvailabilityScope,
   createEmptyBookingDraft,
   reduceBookingDraft,
   type PendingBookingCommand,
@@ -127,7 +129,6 @@ import {
   meetingMutationIsHitlDecline,
   noteStepBlocksCreate,
   phoneCandidateCanBeLinked,
-  rescheduleAvailabilityArgsFromBookingContext,
   rescheduleTargetFromBookingContext,
   resetBookingNoteState,
   resolveContactIdentity,
@@ -1020,10 +1021,10 @@ export const createAgentToolsNode = (
             const selectedDay = availability?.days.find(
               (day) => day.date === selectedSlot.dateStart.slice(0, 10),
             );
-            const snapshotMatchesService = availability == null
-              || availability.serviceId == null
-              || availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id;
-            const selectedSlotStillAvailable = snapshotMatchesService
+            const selectedSlotStillAvailable = availabilityMatchesBooking(
+              availability,
+              state.bookingDraft,
+            )
               && (availability == null
                 || selectedDay == null
                 ? availability == null
@@ -1083,23 +1084,17 @@ export const createAgentToolsNode = (
               ? { kind: "exact" as const, date: state.bookingDraft.selectedDate }
               : null
           );
-          const rescheduleArgs = rescheduleAvailabilityArgsFromBookingContext(
-            state,
-            rawArgs as Record<string, unknown>,
-          );
           const dayPick = matchAvailabilityDay(
             lastPatientText(state),
             state.availabilityContext?.days ?? [],
           );
           const args = normalizeAvailabilityToolArgs({
-            args: (rescheduleArgs ?? rawArgs) as AvailabilitySlotsToolArgs,
+            args: rawArgs,
             runtimeRequest,
             offeredDayDate: dayPick?.date ?? null,
             availabilityContext: state.availabilityContext,
             availabilityCursor: state.availabilityCursor,
-            ...(state.bookingDraft?.serviceAcceptance?.service.durationMinutes != null
-              ? { serviceDurationMinutes: state.bookingDraft.serviceAcceptance.service.durationMinutes }
-              : {}),
+            scope: bookingAvailabilityScope(state.bookingDraft),
             availabilityPagedThisTurn,
             anchors: bookingDateAnchors(state),
           });
@@ -1440,10 +1435,10 @@ export const createAgentToolsNode = (
         const selectedDay = selectedDate == null
           ? undefined
           : bookingAvailability?.days.find((day) => day.date === selectedDate);
-        const snapshotMatchesService = bookingAvailability == null
-          || bookingAvailability.serviceId == null
-          || bookingAvailability.serviceId === bookingDraft?.serviceAcceptance?.service.id;
-        const selectedSlotStillAvailable = snapshotMatchesService
+        const selectedSlotStillAvailable = availabilityMatchesBooking(
+          bookingAvailability,
+          bookingDraft,
+        )
           && (selectedSlot == null
             || selectedDay?.slots.some((slot) =>
               slot.dateStart === selectedSlot.dateStart && slot.dateEnd === selectedSlot.dateEnd,

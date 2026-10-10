@@ -110,6 +110,34 @@ describe("create_meeting HITL interrupt", () => {
     });
   });
 
+  it("resume left:true skips MCP write and reports left", async () => {
+    await withTg(async () => {
+      const graph = buildGraph();
+      const config = { configurable: { thread_id: "hitl-leave" } };
+
+      await graph.invoke({ result: "" }, config);
+      const second = await graph.invoke(
+        new Command({ resume: { left: true } }),
+        config,
+      );
+      expect(calls.some((call) => call.name === "create_meeting")).toBe(false);
+      expect(JSON.parse(second.result)).toMatchObject({
+        cancelled: true,
+        left: true,
+      });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "booking_declined",
+          props: expect.objectContaining({
+            action: "create",
+            outcome: "declined",
+            reason: "main_menu",
+          }),
+        }),
+      );
+    });
+  });
+
   it("resume userReply returns awaitingConfirmation without MCP write", async () => {
     await withTg(async () => {
       const graph = buildGraph();
