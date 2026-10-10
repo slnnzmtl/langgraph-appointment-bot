@@ -5,7 +5,12 @@ import { loadConfig } from "./config.js";
 import { createClinicRuntime } from "./composition/clinic-runtime.js";
 import { SmokeAssertError } from "./smoke/assert.js";
 import { createCleanupRegistry, detectDeleteEntitySupport } from "./smoke/cleanup.js";
-import { assertWritesAllowed, loadSmokeEnv, smokeAssignedUserId } from "./smoke/env.js";
+import {
+  assertWritesAllowed,
+  loadSmokeEnv,
+  smokeAssignedUserId,
+  writeGuardPasses,
+} from "./smoke/env.js";
 import { scenariosForTiers } from "./smoke/scenarios/index.js";
 import type { ScenarioResult, SmokeTier } from "./smoke/types.js";
 
@@ -106,20 +111,29 @@ const main = async (): Promise<void> => {
     ),
   };
   console.log(`✓ Smoke assigned user ${config.assignedUserId}`);
+  // Probe delete_entity only for write scenarios after the write guard passes.
+  // Identity seed may still use writesAllowed when the guard passes without --write.
+  const writesAllowed = hasWriteScenarios
+    ? (assertWritesAllowed(env, config.espocrmMcpUrl), true)
+    : writeGuardPasses(env, config.espocrmMcpUrl);
   if (hasWriteScenarios) {
-    assertWritesAllowed(env, config.espocrmMcpUrl);
     console.log(
       "✓ Write smoke isolated: telegram ids 9998…, contacts named Smoke Tester, reminder seeds use [SMOKE] meeting names",
     );
   }
   applyTracingPrivacyDefaults();
   const runtime = await createClinicRuntime(config);
-  const supportsDeleteEntity = await detectDeleteEntitySupport(
-    runtime.getBootstrap().adapters.callTool,
-  );
-  console.log(
-    `✓ delete_entity ${supportsDeleteEntity ? "available" : "not available (soft-cancel + scrub contact phone/telegram)"}`,
-  );
+  let supportsDeleteEntity = false;
+  if (hasWriteScenarios && writesAllowed) {
+    supportsDeleteEntity = await detectDeleteEntitySupport(
+      runtime.getBootstrap().adapters.callTool,
+    );
+    console.log(
+      `✓ delete_entity ${supportsDeleteEntity ? "available" : "not available (soft-cancel + scrub contact phone/telegram)"}`,
+    );
+  } else {
+    console.log("✓ delete_entity probe skipped (no write scenarios selected)");
+  }
 
   const cleanup = createCleanupRegistry(runtime.getBootstrap().adapters.callTool, {
     supportsDeleteEntity,
@@ -162,6 +176,7 @@ const main = async (): Promise<void> => {
           callTool: runtime.getBootstrap().adapters.callTool,
           cleanup,
           supportsDeleteEntity,
+          writesAllowed,
           env,
         });
         const warnings = outcome?.warnings ?? [];
