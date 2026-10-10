@@ -169,6 +169,18 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
 
 const { createAgentLlmNode } = await import("../agent-loop.js");
 
+
+const faqCatalogAi = (
+  content: string,
+  action: "keep_catalog" | "offer_consultation" | "close_catalog" | "invalid" = "keep_catalog",
+): AIMessage => {
+  const tag = action === "invalid"
+    ? "<faq_catalog_action>do_something_else</faq_catalog_action>"
+    : `<faq_catalog_action>${action}</faq_catalog_action>`;
+  const body = content.trim().length > 0 ? `${content.trim()}\n${tag}` : tag;
+  return new AIMessage(body);
+};
+
 describe("formatBookingMeetingsContext", () => {
   it("returns an empty string when context is missing", () => {
     expect(formatBookingMeetingsContext(null)).toBe("");
@@ -418,6 +430,257 @@ describe("createAgentPrepareNode", () => {
     expect(update.servicesContext).toBeUndefined();
   });
 
+  it("opens FAQ catalog chips on Обрати іншу процедуру via partitioner in prepare", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async (input) => {
+        expect(input.query).toContain("напрями");
+        return [
+          {
+            label: "Ін'єкційні процедури",
+            serviceIds: ["svc-lip", "svc-botox"],
+          },
+          {
+            label: "Дерматологічні послуги та догляд",
+            serviceIds: ["svc-derm"],
+          },
+        ];
+      },
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Обрати іншу процедуру")],
+        servicesContext: {
+          list: [
+            { id: "svc-lip", name: "збільшення губ" },
+            { id: "svc-botox", name: "ботулінотерапія" },
+            { id: "svc-derm", name: "Видалення новоутворень" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: { id: "consult", name: "Консультація", source: "catalog" },
+          choices: [
+            { id: "yes", label: "Так" },
+            { id: "other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
+    expect(update.pendingInteraction).toMatchObject({ owner: "faq" });
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
+        : [],
+    ).toEqual([
+      "Ін'єкційні процедури",
+      "Видалення новоутворень",
+    ]);
+  });
+
+  it("does not open FAQ catalog on Послуги in prepare", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [
+        { label: "should-not-open", serviceIds: ["svc-1", "svc-2"] },
+      ],
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Послуги")],
+        servicesContext: {
+          list: [
+            { id: "svc-1", name: "Консультація" },
+            { id: "svc-2", name: "Botox" },
+          ],
+        },
+      }),
+    );
+    expect(update.pendingInteraction).toBeUndefined();
+  });
+
+  it("keeps Пілінг labels after a direction chip that was not that family", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [],
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Доглядові процедури")],
+        servicesContext: {
+          list: [
+            { id: "p1", name: "Пілінг поверхневий" },
+            { id: "p2", name: "Пілінг серединний" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          choices: [
+            {
+              id: "g0",
+              label: "Доглядові процедури",
+              serviceIds: ["p1", "p2"],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
+        : [],
+    ).toEqual(["Пілінг поверхневий", "Пілінг серединний"]);
+  });
+
+  it("strips Пілінг only after the patient chose Пілінг", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [],
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Пілінг")],
+        servicesContext: {
+          list: [
+            { id: "p1", name: "Пілінг поверхневий" },
+            { id: "p2", name: "Пілінг серединний" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          choices: [
+            {
+              id: "g0",
+              label: "Пілінг",
+              serviceIds: ["p1", "p2"],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
+        : [],
+    ).toEqual(["поверхневий", "серединний"]);
+  });
+
+  it("leaves unmatched mid-catalog text for the FAQ model (no phrase matcher)", async () => {
+    const prepare = createAgentPrepareNode("faq");
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("не знаю")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "Botox, Disport",
+          choices: [
+            { id: "z1", label: "1 зона", serviceIds: ["z1"] },
+            { id: "z2", label: "2 зони", serviceIds: ["z2"] },
+            { id: "ff", label: "Full Face", serviceIds: ["z1", "z2"] },
+          ],
+        },
+      }),
+    );
+
+    // Prepare only handles exact chip taps — «не знаю» reaches the model.
+    expect(prepared.pendingInteraction).toBeUndefined();
+  });
+
+  it("reopens FAQ catalog chips when patient types a brand after consultation offer", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [
+        { label: "1 зона", serviceIds: ["z1"] },
+        { label: "2 зони", serviceIds: ["z2"] },
+        { label: "FULL FACE", serviceIds: ["z1", "z2"] },
+      ],
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("botox")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я)" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    const preparedLabels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(preparedLabels.length).toBeGreaterThan(1);
+    expect(preparedLabels).not.toEqual([...BOOKING_OFFER_MENU]);
+
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("botox")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я)" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        pendingInteraction: prepared.pendingInteraction ?? null,
+        agentMessages: [
+          faqCatalogAi(
+            [
+              "Для Botox/Disport доступні варіанти за зонами:",
+              "• 1 зона (очі або міжбрів'я)",
+              "• 2 зони",
+              "",
+              "Яка зона вас цікавить?",
+            ].join("\n"),
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(preparedLabels);
+    expect(update.lastHandoff?.replyButtons).not.toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
+    expect(update.lastHandoff?.replyText).toContain("Для Botox/Disport доступні варіанти за зонами:");
+    expect(update.lastHandoff?.replyText).not.toContain("Підібрати вільний час на консультацію?");
+    expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
+  });
+
   it("passes full thread history including other agents' replies", async () => {
     const prepare = createAgentPrepareNode("booking");
     const faqReply = new AIMessage({
@@ -575,7 +838,7 @@ describe("createAgentPrepareNode", () => {
     },
   );
 
-  it("starts reschedule mode for a date answered from the visit-status handoff", async () => {
+  it("applies a date onto a supervisor-seeded reschedule draft", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
       clinicState({
@@ -583,11 +846,16 @@ describe("createAgentPrepareNode", () => {
           new AIMessage("Заплановані візити: консультація — 16 жовтня о 13:00"),
           new HumanMessage("23 жовтня"),
         ],
-        lastHandoff: {
-          agentId: "FINISH",
-          agentName: "supervisor",
-          status: "ok",
-          pendingAction: "reschedule",
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          mode: "reschedule",
+          phase: "date",
+          rescheduleTarget: {
+            id: "meeting-1",
+            name: "Консультація",
+            dateStart: "2026-10-16 13:00:00",
+            dateEnd: "2026-10-16 13:30:00",
+          },
         },
         bookingContext: {
           meetings: [
@@ -2557,6 +2825,13 @@ describe("routeAfterAgentLlm", () => {
         clinicState({
           messages: [new HumanMessage("Скасувати")],
           bookingContext: listedMeetings,
+          bookingDraft: {
+            ...createEmptyBookingDraft(),
+            pendingCommand: {
+              action: "cancel",
+              payload: { meetingId: "m-1", confirmMessage: "Скасувати цей візит?" },
+            },
+          },
           agentMessages: [new AIMessage("Запис скасовано")],
           stepCount: 1,
         }),
@@ -3264,6 +3539,7 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [
           new AIMessage(
             "Підібрати вільний час на консультацію?\n\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
@@ -3273,14 +3549,13 @@ describe("createAgentFinalizeNode", () => {
     );
 
     const stored = update.messages?.[0] as AIMessage;
-    expect(String(stored.content)).toBe("Підібрати вільний час на консультацію?");
     expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff).toMatchObject({
       agentId: "booking",
       status: "ok",
-      replyText: "Підібрати вільний час на консультацію?",
       replyButtons: [...BOOKING_OFFER_MENU],
     });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
@@ -3323,11 +3598,13 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
       }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
@@ -3336,6 +3613,7 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [
           new AIMessage(
             "Записати вас на консультацію?\n<reply_buttons>\nЗаписатись\nПослуги\n</reply_buttons>",
@@ -3344,8 +3622,9 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(String(update.messages?.[0]?.content)).toBe("Записати вас на консультацію?");
+    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("strips an empty reply_buttons trailer and omits DEFAULT MENU for mid-flow booking", () => {
@@ -3873,6 +4152,10 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("запиши на консультацію")],
+        servicesContext: {
+          list: [{ id: CONSULTATION_SERVICE_ID, name: "Консультація" }],
+        },
         agentMessages: [new AIMessage("Записати вас на консультацію?")],
       }),
     );
@@ -3880,10 +4163,11 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "faq",
       status: "ok",
-      replyText: "Записати вас на консультацію?",
       replyButtons: [...BOOKING_OFFER_MENU],
       yieldToSupervisor: true,
     });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.bookingDraft?.serviceAcceptance?.status).toBe("pending");
   });
 
   it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
@@ -3898,6 +4182,10 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("запиши на консультацію")],
+        servicesContext: {
+          list: [{ id: CONSULTATION_SERVICE_ID, name: "Консультація" }],
+        },
         agentMessages: [
           new AIMessage(
             "Записати вас на консультацію?\n<yield_to_supervisor/>\n<reply_buttons>\nТак\nОбрати іншу процедуру\n</reply_buttons>",
@@ -3907,15 +4195,15 @@ describe("createAgentFinalizeNode", () => {
     );
 
     const stored = update.messages?.[0] as AIMessage;
-    expect(String(stored.content)).toBe("Записати вас на консультацію?");
     expect(String(stored.content)).not.toContain("yield_to_supervisor");
+    expect(String(stored.content)).not.toContain("reply_buttons");
     expect(update.lastHandoff).toMatchObject({
       agentId: "faq",
       status: "ok",
-      replyText: "Записати вас на консультацію?",
-      replyButtons: ["Так", "Обрати іншу процедуру"],
+      replyButtons: [...BOOKING_OFFER_MENU],
       yieldToSupervisor: true,
     });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("strips a yield-only trailer and omits DEFAULT MENU for faq", () => {
@@ -3947,7 +4235,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("recovers catalog buttons when faq lists procedures without a trailer", () => {
+  it("does not open FAQ catalog chips from list_services alone in finalize", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -3960,19 +4248,77 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
+        servicesContext: {
+          list: [
+            { id: "svc-lip", name: "збільшення губ" },
+            { id: "svc-botox", name: "ботулінотерапія" },
+          ],
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              list: [
+                { id: "svc-lip", name: "збільшення губ" },
+                { id: "svc-botox", name: "ботулінотерапія" },
+              ],
+            }),
+            name: "list_services",
+            tool_call_id: "ls-1",
+          }),
+          new AIMessage("Ось доступні процедури."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction?.kind).not.toBe("service_candidate");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("attaches BOOKING OFFER on Послуги (not catalog chips) even with leftover mutation_confirm", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("Послуги")],
+        bookingContext: listedMeetings,
+        servicesContext: {
+          list: [
+            { id: "svc-lip", name: "збільшення губ" },
+            { id: "svc-botox", name: "ботулінотерапія" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "cancel",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
         agentMessages: [
           new AIMessage(
-            "В ін'єкційних процедурах є, наприклад:\n• збільшення губ\n• ботулінотерапія\n\nЯка процедура вас цікавить?",
+            "У нашій клініці доступні такі напрями:\n\n• Консультації\n\nЗаписати вас на консультацію?",
           ),
         ],
       }),
     );
 
-    expect(update.lastHandoff?.replyText).toContain("Яка процедура вас цікавить?");
-    expect(update.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.replyText).toContain("У нашій клініці доступні такі напрями");
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect(update.lastHandoff?.replyText).not.toContain("Записати вас на консультацію?");
+    expect(update.lastHandoff?.replyText?.trimStart().startsWith("•")).toBe(false);
   });
 
-  it("recovers dermatology family buttons on a second catalog browse", () => {
+  it("appends a consultation offer on Послуги when the model only asked which direction", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -3984,23 +4330,321 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("Послуги")],
         bookingContext: listedMeetings,
+        servicesContext: {
+          list: [
+            { id: "svc-lip", name: "збільшення губ" },
+            { id: "svc-botox", name: "ботулінотерапія" },
+          ],
+        },
         agentMessages: [
           new AIMessage(
-            "У напрямку дерматологічних послуг та догляду є, наприклад:\n• видалення новоутворень\n• пілінги\n• мезотерапія\n\nЯка саме процедура вас цікавить?",
+            "У нашій клініці доступні такі напрями:\n\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЯкий напрямок вам цікавий?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.replyText).toContain("У нашій клініці доступні такі напрями");
+    // Graph owns the only trailing question when service_confirm opens.
+    expect(update.lastHandoff?.replyText).not.toContain("Який напрямок вам цікавий?");
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect(
+      (update.lastHandoff?.replyText ?? "")
+        .split("Підібрати вільний час на консультацію?").length - 1,
+    ).toBe(1);
+    expect((update.lastHandoff?.replyText ?? "").match(/\?/g)?.length).toBe(1);
+  });
+
+  it("replaces divergent model FAQ catalog prose with structured-choice bullets", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Схуднення консультація", serviceIds: ["a", "b"] },
+      { id: "g1", label: "Загальні", serviceIds: ["c", "d"] },
+    ];
+    const modelProse = [
+      "Доступні такі варіанти:",
+      "",
+      "• Консультація первинна",
+      "• Консультація повторна",
+      "",
+      "Який варіант вам підходить?",
+    ].join("\n");
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingContext: listedMeetings,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "Консультації",
+          choices,
+        },
+        agentMessages: [faqCatalogAi(modelProse)],
+      }),
+    );
+
+    const expectedButtons = choices.map((c) => c.label);
+    expect(update.lastHandoff?.replyButtons).toEqual(expectedButtons);
+    expect(update.lastHandoff?.replyText).toBe(
+      [
+        "Доступні такі варіанти:",
+        "",
+        "• Схуднення консультація",
+        "• Загальні",
+        "",
+        "Який варіант вам підходить?",
+      ].join("\n"),
+    );
+    expect(update.lastHandoff?.replyText).not.toContain("Консультація первинна");
+    expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
+    expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
+  });
+
+  it("keep_catalog retains a sanitized model explanation ahead of structured bullets", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Neotiva", serviceIds: ["n"] },
+      { id: "g1", label: "Juvederm", serviceIds: ["j"] },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ціна губ",
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi(
+            "Філери для губ коштують від 4500 грн залежно від препарату.\n\n• Wrong bullet\n\nЯкий варіант вам підходить?",
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain(
+      "Філери для губ коштують від 4500 грн залежно від препарату.",
+    );
+    expect(update.lastHandoff?.replyText).toContain("• Neotiva");
+    expect(update.lastHandoff?.replyText).toContain("• Juvederm");
+    expect(update.lastHandoff?.replyText).not.toContain("Wrong bullet");
+    expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
+    expect(update.lastHandoff?.replyButtons).toEqual(["Neotiva", "Juvederm"]);
+  });
+
+  it("keep_catalog falls back to the graph intro when the model only asked a question", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Neotiva", serviceIds: ["n"] },
+      { id: "g1", label: "Juvederm", serviceIds: ["j"] },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "губи",
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi("Який препарат вас цікавить?", "keep_catalog"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Доступні такі варіанти:");
+    expect(update.lastHandoff?.replyText).not.toContain("Який препарат вас цікавить?");
+    expect(update.lastHandoff?.replyText).toContain("• Neotiva");
+    expect(update.lastHandoff?.replyButtons).toEqual(["Neotiva", "Juvederm"]);
+  });
+
+  it("keeps FAQ catalog chips when draft still has a pending serviceAcceptance", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("Обрати іншу процедуру")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "service",
+          serviceAcceptance: {
+            status: "pending",
+            service: {
+              id: "svc-peel",
+              name: "Пілінг поверхневий",
+              source: "catalog",
+            },
+          },
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "unasked" },
+        }),
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "Обрати іншу процедуру",
+          choices: [
+            { id: "g0", label: "Консультації та діагностика", serviceIds: ["svc-c"] },
+            { id: "g1", label: "Доглядові процедури", serviceIds: ["svc-p1", "svc-p2"] },
+          ],
+        },
+        agentMessages: [new AIMessage("Який варіант вам підходить?")],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "Консультації та діагностика",
+      "Доглядові процедури",
+    ]);
+    expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
+    expect(update.lastHandoff?.replyButtons).not.toEqual([...BOOKING_OFFER_MENU]);
+  });
+
+  it("attaches напрями chips after second Обрати іншу процедуру via prepare+finalize", async () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [
+        {
+          label: "Консультації та діагностика",
+          serviceIds: ["svc-c1", "svc-c2"],
+        },
+        {
+          label: "Доглядові процедури",
+          serviceIds: ["svc-p1", "svc-p2"],
+        },
+      ],
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Обрати іншу процедуру")],
+        servicesContext: {
+          list: [
+            { id: "svc-c1", name: "Консультація первинна" },
+            { id: "svc-c2", name: "Консультація повторна" },
+            { id: "svc-p1", name: "Пілінг поверхневий" },
+            { id: "svc-p2", name: "Пілінг серединний" },
+          ],
+        },
+        bookingDraft: canonicalBookingDraft({
+          phase: "service",
+          serviceAcceptance: {
+            status: "pending",
+            service: {
+              id: "svc-p1",
+              name: "Пілінг поверхневий",
+              source: "catalog",
+            },
+          },
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "unasked" },
+        }),
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: "svc-p1",
+            name: "Пілінг поверхневий",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("Обрати іншу процедуру")],
+        bookingDraft: prepared.bookingDraft ?? canonicalBookingDraft({
+          phase: "service",
+          serviceAcceptance: {
+            status: "pending",
+            service: {
+              id: "svc-p1",
+              name: "Пілінг поверхневий",
+              source: "catalog",
+            },
+          },
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "unasked" },
+        }),
+        pendingInteraction: prepared.pendingInteraction ?? null,
+        agentMessages: [
+          new AIMessage(
+            [
+              // Stale previous-step prose the model often reprints after choose_other.
+              "Для ботулінотерапії Nabota доступні такі зони:",
+              "• 1 зона",
+              "• 2 зони",
+              "• FULL FACE",
+              "",
+              "Яка зона вас цікавить?",
+                          ].join("\n"),
           ),
         ],
       }),
     );
 
     expect(update.lastHandoff?.replyButtons).toEqual([
-      "видалення новоутворень",
-      "пілінги",
-      "мезотерапія",
+      "Консультації та діагностика",
+      "Доглядові процедури",
     ]);
+    // Graph owns the body on choose_other so bullets match root chips.
+    expect(update.lastHandoff?.replyText).toBe(
+      "Доступні такі варіанти:\n\n• Консультації та діагностика\n• Доглядові процедури\n\nЯкий варіант вам підходить?",
+    );
+    expect(update.lastHandoff?.replyText).not.toContain("Nabota");
+    expect(update.lastHandoff?.replyText).not.toContain("зона");
   });
 
-  it("recovers numbered injection families and zone bullets without a trailer", () => {
+  it("keeps FAQ catalog choice ids when narrowing remaining CRM rows", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4013,41 +4657,97 @@ describe("createAgentFinalizeNode", () => {
     const families = finalize(
       clinicState({
         stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ін'єкції",
+          choices: [
+            { id: "g0", label: "збільшення губ", serviceIds: ["svc-lip"] },
+            { id: "g1", label: "ботулінотерапія", serviceIds: ["svc-b1", "svc-b2"] },
+          ],
+        },
         agentMessages: [
-          new AIMessage(
-            "В ін'єкційних процедурах є:\n1. збільшення губ\n2. ботулінотерапія\n\nЯка процедура вас цікавить?",
+          faqCatalogAi(
+            [
+              "В ін'єкційних є кілька процедур:",
+              "• збільшення губ",
+              "• ботулінотерапія",
+              "",
+              "Яка процедура вас цікавить?",
+            ].join("\n"),
+            "keep_catalog",
           ),
         ],
       }),
     );
     expect(families.lastHandoff?.replyButtons).toEqual(["збільшення губ", "ботулінотерапія"]);
+    expect(families.lastHandoff?.replyText).toContain("збільшення губ");
+    expect(families.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
+    expect(families.lastHandoff?.replyText).toContain("В ін'єкційних є кілька процедур:");
 
     const zones = finalize(
       clinicState({
         stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботулінотерапія",
+          choices: [
+            { id: "svc-b1", label: "1 зона", serviceIds: ["svc-b1"] },
+            { id: "svc-b2", label: "2 зони", serviceIds: ["svc-b2"] },
+          ],
+        },
         agentMessages: [
-          new AIMessage(
-            "Для ботулінотерапії є варіанти за зонами:\n• 1 зона\n• 2 зони\n\nЯкий варіант вам підходить?",
+          faqCatalogAi(
+            [
+              "Для ботулінотерапії є варіанти за зонами:",
+              "• 1 зона",
+              "• 2 зони",
+              "",
+              "Який варіант вам підходить?",
+            ].join("\n"),
+            "keep_catalog",
           ),
         ],
       }),
     );
     expect(zones.lastHandoff?.replyButtons).toEqual(["1 зона", "2 зони"]);
+    expect(zones.lastHandoff?.replyText).toContain("1 зона");
 
     const brands = finalize(
       clinicState({
         stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботулінотерапія 1 зона",
+          choices: [
+            { id: "svc-d", label: "Disport", serviceIds: ["svc-d"] },
+            { id: "svc-n", label: "Nabota", serviceIds: ["svc-n"] },
+            { id: "svc-b", label: "Botox", serviceIds: ["svc-b"] },
+          ],
+        },
         agentMessages: [
-          new AIMessage(
-            "Для ботулінотерапії (1 зона) є препарати:\n• Disport\n• Nabota\n• Botox\n\nЯкий препарат вас цікавить?",
+          faqCatalogAi(
+            [
+              "Є кілька препаратів:",
+              "• Disport",
+              "• Nabota",
+              "• Botox",
+              "",
+              "Який препарат обираєте?",
+            ].join("\n"),
+            "keep_catalog",
           ),
         ],
       }),
     );
     expect(brands.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota", "Botox"]);
+    expect(brands.lastHandoff?.replyText).toContain("Disport");
+    expect(brands.lastHandoff?.replyText).not.toContain("faq_catalog_action");
   });
 
-  it("recovers послуга catalog choice without a trailer", () => {
+  it("opens FAQ catalog choices for consultation service names from CRM", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4059,11 +4759,16 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
-        agentMessages: [
-          new AIMessage(
-            "Ось послуги напрямку:\n• Консультація дерматолога\n• Консультація косметолога\n\nЯка саме послуга вас цікавить?",
-          ),
-        ],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "консультації",
+          choices: [
+            { id: "svc-d", label: "Консультація дерматолога", serviceIds: ["svc-d"] },
+            { id: "svc-c", label: "Консультація косметолога", serviceIds: ["svc-c"] },
+          ],
+        },
+        agentMessages: [new AIMessage("Ось послуги напрямку.")],
       }),
     );
 
@@ -4085,6 +4790,10 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        messages: [new HumanMessage("запиши на консультацію")],
+        servicesContext: {
+          list: [{ id: CONSULTATION_SERVICE_ID, name: "Консультація" }],
+        },
         agentMessages: [
           new AIMessage(
             "У нашій клініці доступні такі напрями\n\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЗаписати вас на консультацію?",
@@ -4095,6 +4804,7 @@ describe("createAgentFinalizeNode", () => {
 
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
     expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", () => {
@@ -4105,6 +4815,7 @@ describe("createAgentFinalizeNode", () => {
         bookingNoteStatus: "unasked",
         availabilityContext: null,
         selectedSlot: null,
+        messages: [new HumanMessage("Записатись")],
         agentMessages: [
           new HumanMessage("Записатись"),
           new AIMessage(
@@ -4117,6 +4828,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
     expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
   it("DDD-54: booking omits DEFAULT MENU for non-offer mid-flow replies without a trailer", () => {
@@ -4134,7 +4846,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("prefers catalog bullets over an accidental leftover trailer", () => {
+  it("prefers open FAQ catalog interaction over an accidental leftover trailer", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4146,9 +4858,29 @@ describe("createAgentFinalizeNode", () => {
     const update = finalize(
       clinicState({
         stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "напрями",
+          choices: [
+            { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
+            { id: "g1", label: "Ін'єкційні процедури", serviceIds: ["b"] },
+          ],
+        },
         agentMessages: [
-          new AIMessage(
-            "Ось основні напрями:\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЯкий напрямок?\n<reply_buttons>\nIgnored\nLabels\n</reply_buttons>",
+          faqCatalogAi(
+            [
+              "Ось основні напрями",
+              "• Консультації та діагностика",
+              "• Ін'єкційні процедури",
+              "",
+              "Який саме напрямок вас цікавить?",
+              "<reply_buttons>",
+              "Ignored",
+              "Labels",
+              "</reply_buttons>",
+            ].join("\n"),
+            "keep_catalog",
           ),
         ],
       }),
@@ -4158,10 +4890,531 @@ describe("createAgentFinalizeNode", () => {
       "Консультації та діагностика",
       "Ін'єкційні процедури",
     ]);
+    expect(update.lastHandoff?.replyText).toContain("Ось основні напрями");
+    expect(update.lastHandoff?.replyText).toContain("• Консультації та діагностика");
+    expect(update.lastHandoff?.replyText).not.toContain("reply_buttons");
+    expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
     expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
+    expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
   });
 
-  it("harvests an accidental catalog trailer when bullets are missing", () => {
+  it("replaces a model catalog list with one structured list from choices", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
+      { id: "g1", label: "Ін'єкційна косметологія", serviceIds: ["b"] },
+      { id: "g2", label: "Дерматологія та видалення новоутворень", serviceIds: ["c"] },
+      { id: "g3", label: "Доглядові процедури", serviceIds: ["d"] },
+    ];
+    const modelBody = [
+      "• Консультації та діагностика",
+      "• Ін'єкційна косметологія",
+      "• Дерматологія та видалення новоутворень",
+      "• Доглядові процедури",
+      "",
+      "Який варіант вам підходить?",
+      "<faq_catalog_action>keep_catalog</faq_catalog_action>",
+    ].join("\n");
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "Обрати іншу процедуру",
+          choices,
+        },
+        agentMessages: [new AIMessage(modelBody)],
+      }),
+    );
+
+    const reply = update.lastHandoff?.replyText ?? "";
+    expect(reply.startsWith("Доступні такі варіанти:")).toBe(true);
+    for (const choice of choices) {
+      const bullet = `• ${choice.label}`;
+      expect(reply.split(bullet).length - 1).toBe(1);
+    }
+    expect(reply.split("Який варіант вам підходить?").length - 1).toBe(1);
+    expect(update.lastHandoff?.replyButtons).toEqual(choices.map((c) => c.label));
+    expect(reply).not.toContain("faq_catalog_action");
+    expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
+  });
+
+  it("falls back to the catalog template when the model reply is empty", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
+      { id: "g1", label: "Ін'єкційні процедури", serviceIds: ["b"] },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "Обрати іншу процедуру",
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi("", "keep_catalog"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(
+      "Доступні такі варіанти:\n\n• Консультації та діагностика\n• Ін'єкційні процедури\n\nЯкий варіант вам підходить?",
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual(choices.map((c) => c.label));
+  });
+
+  it("offer_consultation preserves model explanation and appends one consultation question", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const explanation =
+      "Для губ ми використовуємо кілька якісних препаратів — лікар під час консультації підбере той, що найкраще підійде саме вам 🌿";
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("який краще?")],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "збільшення губ",
+          choices: [
+            { id: "n", label: "Neotiva", serviceIds: ["n"] },
+            { id: "j", label: "Juvederm", serviceIds: ["j"] },
+          ],
+        },
+        agentMessages: [
+          faqCatalogAi(explanation, "offer_consultation"),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація" },
+    });
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.replyText).toContain(explanation);
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect(
+      (update.lastHandoff?.replyText ?? "")
+        .split("Підібрати вільний час на консультацію?").length - 1,
+    ).toBe(1);
+    expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
+  });
+
+  it("offer_consultation keeps mid-text questions and only strips a trailing yes/no", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const explanation =
+      "Що таке Disport? Це препарат для ботулінотерапії; дозування підбирає лікар.";
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("що таке Disport?")],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботулін",
+          choices: [
+            { id: "d", label: "Disport", serviceIds: ["d"] },
+            { id: "n", label: "Nabota", serviceIds: ["n"] },
+          ],
+        },
+        agentMessages: [
+          faqCatalogAi(
+            `${explanation}\n\nПідібрати вільний час на консультацію?`,
+            "offer_consultation",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain(explanation);
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect(
+      (update.lastHandoff?.replyText ?? "")
+        .split("Підібрати вільний час на консультацію?").length - 1,
+    ).toBe(1);
+  });
+
+  it("offer_consultation drops a trailing allergy question and keeps the intro prose", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const allergy = "Чи є у вас алергія на лідокаїн?";
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("який краще?")],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "губи",
+          choices: [
+            { id: "n", label: "Neotiva", serviceIds: ["n"] },
+            { id: "j", label: "Juvederm", serviceIds: ["j"] },
+          ],
+        },
+        agentMessages: [
+          faqCatalogAi(`Для губ є кілька препаратів.\n\n${allergy}`, "offer_consultation"),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toContain("Для губ є кілька препаратів.");
+    expect(update.lastHandoff?.replyText).not.toContain(allergy);
+    expect(update.lastHandoff?.replyText).toContain("Підібрати вільний час на консультацію?");
+    expect((update.lastHandoff?.replyText ?? "").match(/\?/g)?.length).toBe(1);
+  });
+
+  it("close_catalog clears chips and keeps hours/location answers", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const hours = "Ми працюємо щодня з 9:00 до 20:00.";
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("який у вас графік?")],
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "напрями",
+          choices: [
+            { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
+          ],
+        },
+        agentMessages: [
+          faqCatalogAi(hours, "close_catalog"),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toBe(hours);
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("preserves product/price/comparison answers while the catalog is open", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "d", label: "Disport", serviceIds: ["d"] },
+      { id: "n", label: "Nabota", serviceIds: ["n"] },
+    ];
+    const pending = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "ботулінотерапія",
+      choices,
+    };
+
+    const product = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("що таке Disport?")],
+        pendingInteraction: pending,
+        agentMessages: [
+          faqCatalogAi("Disport — препарат для ботулінотерапії; дозування підбирає лікар.", "offer_consultation"),
+        ],
+      }),
+    );
+    expect(product.lastHandoff?.replyText).toContain("Disport — препарат");
+    expect(product.lastHandoff?.replyText).not.toMatch(/^Доступні такі варіанти:/);
+    expect(product.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+
+    const price = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("скільки це коштує?")],
+        pendingInteraction: pending,
+        agentMessages: [
+          faqCatalogAi("Вартість залежить від препарату:\n• Disport — 4500 грн\n• Nabota — 4200 грн", "offer_consultation"),
+        ],
+      }),
+    );
+    expect(price.lastHandoff?.replyText).toContain("4500 грн");
+    expect(price.lastHandoff?.replyText).not.toMatch(/^Доступні такі варіанти:/);
+
+    const comparison = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("яка різниця між цими препаратами?")],
+        pendingInteraction: pending,
+        agentMessages: [
+          faqCatalogAi("Обидва препарати з групи ботулотоксину; різниця в одиницях і підборі під зону — це вирішує лікар.", "offer_consultation"),
+        ],
+      }),
+    );
+    expect(comparison.lastHandoff?.replyText).toContain("ботулотоксину");
+    expect(comparison.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+  });
+
+  it("keeps consultation service_confirm and BOOKING_OFFER_MENU on price follow-ups", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const priceAnswer =
+      "Вартість залежить від обраного препарату:\n• Neotiva — 8500 грн\n• Juvederm — 9200 грн";
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("а скільки це коштує?")],
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+        agentMessages: [new AIMessage(priceAnswer)],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(priceAnswer);
+    expect(update.lastHandoff?.replyText).not.toBe(
+      "Підібрати вільний час на консультацію?",
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.pendingInteraction).toBeUndefined();
+    expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
+  });
+
+  it("keeps procedure service_confirm and BOOKING_OFFER_MENU after Скільки коштує", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const priceAnswer =
+      "Вартість процедури «Лікування гіпергідрозу» — 8071 грн.\n\nБажаєте записатися на цю процедуру?";
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("Скільки коштує")],
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: "svc-hyper",
+            name: "Лікування гіпергідрозу",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+        agentMessages: [new AIMessage(priceAnswer)],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(priceAnswer);
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.pendingInteraction).toBeUndefined();
+    expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
+  });
+
+  it("keeps catalog chips on missing or invalid faq_catalog_action via deterministic body", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "a", label: "Disport", serviceIds: ["a"] },
+      { id: "b", label: "Nabota", serviceIds: ["b"] },
+    ];
+    const pending = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "бренди",
+      choices,
+    };
+    const expectedBody = [
+      "Доступні такі варіанти:",
+      "",
+      "• Disport",
+      "• Nabota",
+      "",
+      "Який варіант вам підходить?",
+    ].join("\n");
+
+    const missing = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: pending,
+        agentMessages: [new AIMessage("Коротке уточнення без action-тега.")],
+      }),
+    );
+    expect(missing.lastHandoff?.replyText).toBe(expectedBody);
+    expect(missing.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota"]);
+    expect(String(missing.messages?.[0]?.content)).not.toContain("faq_catalog_action");
+
+    const invalid = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: pending,
+        agentMessages: [
+          faqCatalogAi("Ще раз коротко.", "invalid"),
+        ],
+      }),
+    );
+    expect(invalid.lastHandoff?.replyText).toBe(expectedBody);
+    expect(invalid.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota"]);
+    expect(invalid.lastHandoff?.replyText).not.toContain("faq_catalog_action");
+    expect(String(invalid.messages?.[0]?.content)).not.toContain("faq_catalog_action");
+  });
+
+  it("shows displayLabel in prose while shortened label stays on the keyboard", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const longName =
+      "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я) дуже довга назва";
+    const choices = [
+      {
+        id: "z1",
+        label: "Ботулінотерапія Botox, Disport 1 зона…",
+        displayLabel: longName,
+        serviceIds: ["z1"],
+      },
+      {
+        id: "z2",
+        label: "2 зони",
+        serviceIds: ["z2"],
+      },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботокс",
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi(
+            "Модельна проза з іншими пунктами:\n• зовсім інше\n\nЯкий варіант?",
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "Ботулінотерапія Botox, Disport 1 зона…",
+      "2 зони",
+    ]);
+    expect(update.lastHandoff?.replyText).toContain(longName);
+    expect(update.lastHandoff?.replyText).toContain("• 2 зони");
+    expect(update.lastHandoff?.replyText).not.toContain("зовсім інше");
+    expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
+  });
+
+  it("preserves FAQ service_confirm prose when the model already confirmed the procedure", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        bookingContext: listedMeetings,
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: { id: "svc-peel", name: "Пілінг серединний", source: "catalog" },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+        agentMessages: [
+          new AIMessage(
+            "Чудово, обрано: Пілінг серединний. Бажаєте записатися на цю процедуру?",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.replyText).toBe(
+      "Чудово, обрано: Пілінг серединний. Бажаєте записатися на цю процедуру?",
+    );
+  });
+
+  it("strips an accidental catalog trailer when no FAQ catalog interaction is open", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -4181,8 +5434,10 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.lastHandoff?.replyButtons).toEqual(["Консультації", "Ін'єкційні процедури"]);
+    // Accidental trailers are stripped; chips only come from pendingInteraction.
     expect(String(update.messages?.[0]?.content)).toBe("Який напрямок?");
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+    expect(update.pendingInteraction ?? null).toBeNull();
   });
 
   it("does not attach buttons for faq location-only replies", () => {
@@ -4432,6 +5687,7 @@ describe("runtime-owned cancellation outcomes", () => {
   });
 
   it("routes a typed reschedule decline directly to deterministic finalization", () => {
+    // Adapter maps NL decline to { confirmed: false } → cancelled tool result.
     const state = clinicState({
       bookingContext: listedMeetings,
       bookingDraft: canonicalBookingDraft({
@@ -4451,9 +5707,8 @@ describe("runtime-owned cancellation outcomes", () => {
       agentMessages: [
         new ToolMessage({
           content: JSON.stringify({
-            awaitingConfirmation: true,
-            userReply: "ні",
-            draft: { command: { action: "reschedule", payload: {} } },
+            cancelled: true,
+            message: "Patient declined.",
           }),
           tool_call_id: "reschedule-1",
           name: "reschedule_meeting",
@@ -4574,9 +5829,8 @@ describe("runtime-owned cancellation outcomes", () => {
       agentMessages: [
         new ToolMessage({
           content: JSON.stringify({
-            awaitingConfirmation: true,
-            userReply: "Ні, дякую",
-            draft: { command: { action: "create", payload: {} } },
+            cancelled: true,
+            message: "Patient declined.",
           }),
           name: "create_meeting",
           tool_call_id: "create-1",
@@ -4826,10 +6080,15 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("starts a direct reschedule with a fresh nearest search", async () => {
     const prepare = createAgentPrepareNode("booking");
+    const rescheduleDraft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: listedMeetings.meetings[0]!,
+    });
     const seeded = await prepare(
       clinicState({
         messages: [new HumanMessage("Перенести")],
         bookingContext: listedMeetings,
+        bookingDraft: rescheduleDraft,
       }),
     );
     expect(seeded.bookingDraft).toMatchObject({
@@ -4865,6 +6124,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const base = clinicState({
       messages: [message],
       bookingContext: listedMeetings,
+      bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "reschedule_started",
+        meeting: listedMeetings.meetings[0]!,
+      }),
     });
     const prepare = createAgentPrepareNode("booking");
     const seeded = await prepare(base);
@@ -5041,6 +6304,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
       }),
     );
+    expect(offer.pendingInteraction?.kind).toBe("service_confirm");
     const prepare = createAgentPrepareNode("booking");
     const picked = await prepare(
       clinicState({
@@ -5050,6 +6314,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new HumanMessage("14:00"),
         ],
         bookingDraft: offer.bookingDraft,
+        pendingInteraction: offer.pendingInteraction,
         availabilityContext: snapshot,
       }),
     );
@@ -5194,7 +6459,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.pendingCommand).not.toHaveProperty("idempotencyKey");
   });
 
-  it("replays the frozen create command after a natural-language chat confirmation", async () => {
+  it("does not replay a frozen create from awaitingConfirmation (affirm uses confirmed resume)", async () => {
+    // NL affirm is classified in the adapter against mutation_confirm and
+    // resumes { confirmed: true }. awaitingConfirmation means chat-other only.
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const originalPayload = {
       name: "Видалення бородавки 1 шт - Test Patient",
@@ -5208,6 +6475,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const update = await commandPrepare(
       clinicState({
         messages: [new HumanMessage("Так, підтверджую!")],
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
         bookingDraft: {
           ...canonicalBookingDraft({ contactId: "c-1" }),
           phase: "confirming",
@@ -5237,13 +6512,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
 
-    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
-      ?? (update.agentMessages as AIMessage[]);
-    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
-      name: "create_meeting",
-      args: { ...originalPayload, confirmationGiven: true },
-    });
-    expect(messages.at(-1)?.tool_calls?.[0]?.args).not.toHaveProperty("parentId");
+    expect(update.agentMessages).toBeUndefined();
   });
 
   it("does not replay a pending mutation for a non-affirmative chat reply", async () => {
@@ -5270,6 +6539,102 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
 
     expect(update.agentMessages).toBeUndefined();
+  });
+
+  it("re-arms cancel HITL after cancel chat-other once the model answered", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const state = clinicState({
+      messages: [new HumanMessage("скільки коштує консультація")],
+      bookingContext: listedMeetings,
+      bookingDraft: {
+        ...createEmptyBookingDraft("create"),
+        phase: "confirming",
+        pendingCommand: null,
+      },
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "cancel",
+        choices: [
+          { id: "confirm", label: "✅" },
+          { id: "decline", label: "❌" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "скільки коштує консультація",
+          }),
+          name: "cancel_meeting",
+          tool_call_id: "cancel-1",
+        }),
+        new AIMessage("Вартість первинної консультації становить 300 грн."),
+      ],
+    });
+
+    expect(routeAfterAgentLlm(
+      state,
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    )).toBe("booking__command_prepare");
+
+    const update = await commandPrepare(state);
+    const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const lastAi = [...messages].reverse().find((message) => message instanceof AIMessage);
+    expect(lastAi).toBeInstanceOf(AIMessage);
+    expect(lastAi?.tool_calls?.[0]).toMatchObject({
+      name: "cancel_meeting",
+      args: expect.objectContaining({
+        meetingId: "m-1",
+        confirmMessage: expect.stringContaining("Скасувати"),
+      }),
+    });
+    expect(lastAi?.tool_calls?.[0]?.args).not.toHaveProperty("confirmationGiven");
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "mutation_confirm",
+      action: "cancel",
+    });
+    expect(update.lastHandoff?.replyText).toBe(
+      "Вартість первинної консультації становить 300 грн.",
+    );
+  });
+
+  it("does not re-arm create chat-other as a mutation", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      clinicState({
+        messages: [new HumanMessage("скільки коштує консультація")],
+        bookingContext: listedMeetings,
+        bookingDraft: {
+          ...canonicalBookingDraft(),
+          phase: "confirming",
+          pendingCommand: null,
+        },
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              awaitingConfirmation: true,
+              userReply: "скільки коштує консультація",
+            }),
+            name: "create_meeting",
+            tool_call_id: "create-1",
+          }),
+          new AIMessage("Вартість первинної консультації становить 300 грн."),
+        ],
+      }),
+    );
+    expect(update.agentMessages).toBeUndefined();
+    expect(update.lastHandoff).toBeUndefined();
   });
 
   it.each([undefined, true])(
@@ -5608,7 +6973,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("abandons a create draft after an explicit chat decline", () => {
-    const finalize = createAgentFinalizeNode(agent);
+    // Adapter maps NL decline to { confirmed: false } → cancelled tool result.
+    const finalize = createAgentMutationFinalizeNode(agent);
     const update = finalize(
       clinicState({
         bookingDraft: {
@@ -5618,16 +6984,16 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         },
         agentMessages: [
           new ToolMessage({
-            content: JSON.stringify({ awaitingConfirmation: true, userReply: "Ні, дякую" }),
+            content: JSON.stringify({ cancelled: true, message: "Patient declined." }),
             name: "create_meeting",
             tool_call_id: "create-1",
           }),
-          new AIMessage("Добре, запис не створено."),
         ],
       }),
     );
 
     expect(update.bookingDraft).toBeNull();
+    expect(update.lastHandoff?.replyText).toBe("Запис не було створено.");
   });
 
   it("invalidates a reschedule slot when chat confirmation remains unresolved", () => {
@@ -5738,53 +7104,56 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.pendingCancellationPurpose).toBeNull();
   });
 
-  it("dispatches cancel_meeting for replacement consent instead of replaying create_meeting", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
-    const update = await commandPrepare(
-      clinicState({
-        messages: [new HumanMessage("Так")],
-        bookingDraft: {
-          version: 7,
-          mode: "replace",
-          phase: "confirming",
-          serviceAcceptance: {
-            status: "accepted",
-            service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
-          },
-          availability: null,
-          selectedDate: "2026-10-17",
-          selectedSlot: {
-            dateStart: "2026-10-17T11:30:00",
-            dateEnd: "2026-10-17T12:00:00",
-            label: "11:30",
-          },
-          note: { status: "skipped" },
-          contactId: "c-1",
-          pendingCommand: null,
-          replacement: {
-            meeting: { id: "existing-1", name: "Existing visit" },
-            status: "offered",
-            originalCommand: {
-              action: "create",
-              payload: { serviceId: CONSULTATION_SERVICE_ID },
-              idempotencyKey: "create:replacement",
-              expiresAt: Date.now() + 60_000,
+  it.each(["Так", "Cancel"])(
+    "dispatches cancel_meeting for replacement consent (%s)",
+    async (consent) => {
+      const commandPrepare = createAgentCommandPrepareNode("booking");
+      const update = await commandPrepare(
+        clinicState({
+          messages: [new HumanMessage(consent)],
+          bookingDraft: {
+            version: 7,
+            mode: "replace",
+            phase: "confirming",
+            serviceAcceptance: {
+              status: "accepted",
+              service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+            },
+            availability: null,
+            selectedDate: "2026-10-17",
+            selectedSlot: {
+              dateStart: "2026-10-17T11:30:00",
+              dateEnd: "2026-10-17T12:00:00",
+              label: "11:30",
+            },
+            note: { status: "skipped" },
+            contactId: "c-1",
+            pendingCommand: null,
+            replacement: {
+              meeting: { id: "existing-1", name: "Existing visit" },
+              status: "offered",
+              originalCommand: {
+                action: "create",
+                payload: { serviceId: CONSULTATION_SERVICE_ID },
+                idempotencyKey: "create:replacement",
+                expiresAt: Date.now() + 60_000,
+              },
             },
           },
-        },
-        agentMessages: [new AIMessage("Бажаєте скасувати поточний візит?")],
-      }),
-    );
+          agentMessages: [new AIMessage("Бажаєте скасувати поточний візит?")],
+        }),
+      );
 
-    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
-      ?? (update.agentMessages as AIMessage[]);
-    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
-      name: "cancel_meeting",
-      args: { meetingId: "existing-1" },
-    });
-    expect(update.bookingDraft?.replacement?.status).toBe("cancelling");
-    expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
-  });
+      const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
+        ?? (update.agentMessages as AIMessage[]);
+      expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
+        name: "cancel_meeting",
+        args: { meetingId: "existing-1" },
+      });
+      expect(update.bookingDraft?.replacement?.status).toBe("cancelling");
+      expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
+    },
+  );
 
   it("dispatches direct cancellation from the authoritative single-visit list", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
@@ -5792,6 +7161,13 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       clinicState({
         messages: [new HumanMessage("Скасувати")],
         bookingContext: listedMeetings,
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          pendingCommand: {
+            action: "cancel",
+            payload: { meetingId: "m-1", confirmMessage: "Скасувати цей візит?" },
+          },
+        },
         agentMessages: [new AIMessage("Запис скасовано")],
       }),
     );
@@ -5802,13 +7178,36 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       name: "cancel_meeting",
       args: {
         meetingId: "m-1",
-        dateStart: "2026-08-17T11:00:00",
-        dateEnd: "2026-08-17T11:30:00",
-        confirmMessage: "Скасувати цей візит? Після підтвердження запис буде скасовано.",
       },
     });
     expect(update.bookingDraft?.pendingCommand?.action).toBe("cancel");
     expect(update.bookingDraft?.phase).toBe("confirming");
+  });
+
+  it.each([
+    "не скасовуйте",
+    "як скасувати пізніше?",
+    "я не хочу скасовувати",
+  ])("does not synthesize cancel_meeting for non-imperative cancel phrasing (%s)", async (utterance) => {
+    const state = clinicState({
+      messages: [new HumanMessage(utterance)],
+      bookingContext: listedMeetings,
+      agentMessages: [new HumanMessage(utterance), new AIMessage("Добре")],
+    });
+    expect(
+      routeAfterAgentLlm(
+        state,
+        5,
+        "booking__tools",
+        "booking__finalize",
+        "booking__command_prepare",
+      ),
+    ).not.toBe("booking__command_prepare");
+
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(state);
+    expect(update.pendingInteraction?.kind).not.toBe("mutation_confirm");
+    expect(update.bookingDraft?.pendingCommand?.action).not.toBe("cancel");
   });
 
   it("reuses the cancellation command for explicit chat confirmation", async () => {
@@ -5826,7 +7225,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           selectedSlot: null,
           note: { status: "unasked" },
           contactId: null,
-          pendingCommand: null,
+          pendingCommand: {
+            action: "cancel",
+            payload: { meetingId: "existing-1", confirmationGiven: true },
+          },
           replacement: {
             meeting: { id: "existing-1" },
             status: "cancelling",
@@ -7655,6 +9057,51 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(ai.tool_calls ?? []).toEqual([]);
   });
 
+  it("strips native tool_calls for tools not bound to the agent", async () => {
+    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers questions",
+      systemPrompt: "faq",
+      maxSteps: 8,
+    };
+    const readTool = tool(async () => "ok", {
+      name: "list_services",
+      description: "services",
+      schema: z.object({}),
+    });
+    const invoke = vi.fn(async () =>
+      new AIMessage({
+        content: "Ось каталог послуг.",
+        tool_calls: [
+          {
+            id: "stale_faq_catalog",
+            name: "faq_catalog_action",
+            args: { action: "keep_catalog" },
+            type: "tool_call",
+          },
+        ],
+      }),
+    );
+    const llm = createAgentLlmNode({
+      agent: faqAgent,
+      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
+      tools: [readTool],
+      formatSystemMetadata: () => "DYN",
+    });
+    const llmUpdate = await llm(
+      clinicState({
+        messages: [new HumanMessage("Послуги")],
+        agentMessages: [new HumanMessage("Послуги")],
+        next: "faq",
+      }),
+    );
+    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    expect(ai.tool_calls ?? []).toEqual([]);
+    expect(String(ai.content)).toBe("Ось каталог послуг.");
+  });
+
   it("injects present_availability_slots when DATE copy has no tool_calls", async () => {
     const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
     const llmUpdate = await llm(
@@ -7681,6 +9128,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         messages: [new HumanMessage("Перенести")],
         agentMessages: [new HumanMessage("Перенести")],
         bookingContext: listedMeetings,
+        bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "reschedule_started",
+          meeting: listedMeetings.meetings[0]!,
+        }),
         availabilityContext: null,
         next: "booking",
       }),

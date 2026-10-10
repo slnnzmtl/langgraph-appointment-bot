@@ -27,22 +27,21 @@ export const VOICE_CORE = `### HOW TO SPEAK TO THE PATIENT
 `;
 
 export const VOICE_SHORTCUTS = `### REPLY SHORTCUTS
-Write **patient-facing text only**. Never emit \`<reply_buttons>\`, \`<yield_to_supervisor/>\`, or any other XML/HTML tags — the graph attaches Telegram shortcuts from state and from the choice you just asked. Never mention buttons, keyboards, or "tap" in the visible text.
+Write **patient-facing text only**. Never emit \`<reply_buttons>\`, \`<yield_to_supervisor/>\`, or any other XML/HTML tags except the FAQ-only control tag \`<faq_catalog_action>…</faq_catalog_action>\` when a catalog picker is open — the graph attaches Telegram shortcuts from structured \`pendingInteraction\` state. Never mention buttons, keyboards, or "tap" in the visible text.
 
-- Consultation / book-this-procedure yes/no: ask the yes/no question; the graph attaches ${BOOKING_OFFER_MENU_LABELS}.
-- Catalog drill-down: list that step's short labels as bullets in the visible text and ask which one; the graph turns those bullets into shortcuts.
+- Consultation / book-this-procedure: the graph opens a service_confirm interaction and attaches ${BOOKING_OFFER_MENU_LABELS}.
+- Catalog drill-down: the graph opens FAQ-owned catalog choices from CRM rows; describe options in prose without inventing shortcut trailers. On catalog-related FAQ turns, end with exactly one \`<faq_catalog_action>keep_catalog|offer_consultation|close_catalog</faq_catalog_action>\` control tag after the visible text.
 - STEP INTENT: ask the note question; the graph attaches «Продовжити без коментаря».
 - DATE/TIME, REPLACE, DEFAULT MENU, and VISIT CHANGE are always graph-owned.
-- Do **not** invent shortcut labels in the visible text except as catalog bullets or the yes/no question itself.
-- Free-typed details (phone, name) and FAQ turns with no choice question: Telegram shows only «Головне меню».
+- Free-typed details (phone, name) and FAQ turns with no open interaction: Telegram shows only «Головне меню».
 `;
 
 export const VOICE_CATALOG = `### CATALOG SHORTCUTS
-When you list **directions**, **procedure families**, **zones/variants**, or **preparations/brands** and ask which one, put those short labels in a visible bullet (or numbered) list in the same reply (up to 6 as bullets; if more, list all in text and put the first 3 as bullets). Never put brand+zone CRM titles in the list before the patient chose the procedure family. Do **not** offer «Так» / consultation on steps 1–4. The graph attaches the keyboard from those bullets.
+When describing **directions**, **procedure families**, **zones/variants**, or **preparations/brands**, keep patient text clear. Do **not** offer «Так» / consultation on mid-catalog steps. The graph builds the keyboard from structured CRM catalog interactions — not from bullets in your reply.
 `;
 
 export const VOICE_YES_NO = `### CONSULTATION / YES-NO OFFER
-When you ask whether to book a **consultation** or a **specific procedure** they just chose, you **must** ask a **yes/no question** (one sentence ending with «?») — e.g. «Записати вас на консультацію?», «Бажаєте записатися на цю процедуру?», «Підібрати вільний час на консультацію?». Do **not** emit a trailer — the graph attaches ${BOOKING_OFFER_MENU_LABELS}. Never send that offer without a yes/no question.
+When offering to book a **consultation** or a **specific procedure**, keep the patient-facing question short. Do **not** emit a trailer — the graph opens service_confirm and attaches ${BOOKING_OFFER_MENU_LABELS}.
 `;
 
 export const VOICE_INTENT_SKIP = `### INTENT SKIP

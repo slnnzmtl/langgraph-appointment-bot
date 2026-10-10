@@ -16,6 +16,11 @@ const CONFIRM_BOOKING_INTERRUPT = "confirm_booking";
 export type OutboundReply = {
   text: string;
   reply_markup?: ReplyKeyboardMarkup;
+  /**
+   * Optional first Telegram message before `text` (e.g. FAQ/price answer before
+   * a re-armed cancel HITL card). Confirm interrupt alone would drop this.
+   */
+  prefixText?: string;
 };
 
 export const isConfirmBookingInterrupt = (value: unknown): boolean =>
@@ -219,16 +224,21 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     | { replyButtons?: unknown; replyText?: unknown }
     | undefined;
   const confirmDraft = getConfirmBookingDraft(record);
+  const handoffText =
+    typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
 
   if (confirmDraft) {
+    const confirmText = formatConfirmBookingCaption(confirmDraft);
+    const prefix = handoffText.length > 0
+      ? extractReplyButtons(handoffText).text.trim()
+      : "";
     return {
-      text: formatConfirmBookingCaption(confirmDraft),
+      text: confirmText,
       reply_markup: buildConfirmKeyboard(),
+      ...(prefix.length > 0 && prefix !== confirmText ? { prefixText: prefix } : {}),
     };
   }
 
-  const handoffText =
-    typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
   const visible = handoffText || lastVisibleAiText(record.messages) || "…";
   const stripped = extractReplyButtons(visible);
   const buttons = replyButtonLabels(handoff?.replyButtons);

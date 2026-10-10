@@ -4,10 +4,9 @@ import { z } from "zod";
 import { trackEvent, trackToolError } from "../analytics/track.js";
 import {
   CLINIC_SLOT_MINUTES,
-  CONTEXT_TAGS,
   MAX_AVAILABILITY_SEARCH_DAYS,
   OTHER_DATE_LABEL,
-  OTHER_DATE_LABEL_EN,
+  OTHER_DATE_LABEL_EN
 } from "../shared/clinic-constants.js";
 import { asJsonRecord, errorMessage } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";

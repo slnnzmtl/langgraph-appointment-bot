@@ -23,11 +23,11 @@ import {
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CHANGE_ACK_UK,
+  SERVICE_CANDIDATE_OTHER_LABEL_UK,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
   serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
-import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../service-resolution.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 import type { ResolveServiceChange } from "../booking-note-orchestrator.js";
 
@@ -937,10 +937,12 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
           replyButtons: ["Ботулінотерапія", "Консультація", RETURN_TO_BOOKING_LABEL_UK],
         },
         pendingInteraction: {
-          kind: "visit_note",
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "процедури",
           choices: [
-            { id: "skip", label: INTENT_SKIP_LABEL },
-            { id: "return_to_booking", label: RETURN_TO_BOOKING_LABEL_UK },
+            { id: "svc-b", label: "Ботулінотерапія", serviceIds: ["svc-b"] },
+            { id: "svc-c", label: "Консультація", serviceIds: ["svc-c"] },
           ],
         },
         bookingDraft: {
@@ -977,8 +979,9 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(supervisorInvoke).not.toHaveBeenCalled();
     expect(agentInvoke).toHaveBeenCalled();
     expect(result.lastHandoff?.agentId).toBe("faq");
-    expect(String(result.lastHandoff?.replyText ?? "")).toContain("Botox/Disport");
-    expect(result.pendingInteraction?.choices.some((c) => c.id === "return_to_booking")).toBe(true);
+    expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    expect(result.pendingInteraction?.owner).toBe("faq");
+    expect(String(result.lastHandoff?.replyText ?? "")).toContain("Ботулінотерапія");
     expect(result.bookingDraft?.phase).toBe("note");
   });
 
@@ -1073,7 +1076,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(result.lastHandoff?.replyButtons).toEqual(
       expect.arrayContaining(["11:30", "12:30", "13:30"]),
     );
-    expect(result.pendingInteraction).toBeNull();
+    expect(result.pendingInteraction?.kind).toBe("time_select");
     expect(result.bookingDraft?.selectedDate).toBe("2026-10-19");
   });
 
@@ -1322,19 +1325,22 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     });
     expect(result.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
 
+    // Adapter maps NL affirm to { confirmed: true } when mutation_confirm is open.
     const resumed = await runWithTelegramUserId("tg-42", () => graph.invoke(
       new Command({
-        resume: { userReply: "Так, підтверджую" },
-        update: { messages: [new HumanMessage("Так, підтверджую")] },
+        resume: { confirmed: true },
+        update: {
+          messages: [new HumanMessage("Так, підтверджую")],
+          pendingInteraction: null,
+        },
       }) as never,
       config,
     ));
 
     expect(modelInvoke).toHaveBeenCalledOnce();
-    expect(createInvoke).toHaveBeenCalledTimes(3);
+    expect(createInvoke).toHaveBeenCalledTimes(2);
     expect(createInvoke.mock.calls.at(-1)?.[0]).toMatchObject({
       contactId: "c-phone",
-      confirmationGiven: true,
     });
     expect(resumed.__interrupt__).toBeUndefined();
   });
@@ -1807,9 +1813,14 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
 
     const third = await invoke({ messages: [new HumanMessage("Так")] });
 
+    // After chat-other invalidates the slot, a later "Так" must not reuse the
+    // cleared confirmation path. Runtime recovers with a fresh TIME card.
     expect(writeInvoke).not.toHaveBeenCalled();
-    expect(third.__interrupt__).toHaveLength(1);
-    expect(third.__interrupt__?.[0]?.value).toMatchObject({ type: "confirm_booking" });
+    expect(third.__interrupt__).toBeUndefined();
+    expect(third.pendingInteraction?.kind).toBe("time_select");
+    expect(String(third.lastHandoff?.replyText ?? "")).toContain("Вільні години");
+    expect(third.lastHandoff?.replyButtons).toEqual(expect.arrayContaining(["11:00"]));
+    expect(modelInvoke).toHaveBeenCalledOnce();
   });
 
   it("ends a reschedule on typed no without another LLM or availability offer", async () => {
@@ -1950,7 +1961,11 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     });
     expect(first.__interrupt__).toHaveLength(1);
 
-    const second = await invoke(new Command({ resume: { userReply: "ні" } }));
+    // Adapter maps NL decline to { confirmed: false } when mutation_confirm is open.
+    const second = await invoke(new Command({
+      resume: { confirmed: false },
+      update: { pendingInteraction: null },
+    }));
 
     expect(modelInvoke).not.toHaveBeenCalled();
     expect(updateInvoke).not.toHaveBeenCalled();

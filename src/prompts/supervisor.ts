@@ -25,6 +25,14 @@ The conversation context may include:
 - \`<contact_info>\` — the patient's CRM record. \`firstName\` is the only field you use (for the greeting).
 - \`<list_planned_meetings>\` — \`{ "visits": "has" | "none" }\`. Informational only; never list visits, times, or services yourself — the graph attaches the prefetch list on «Мій запис», hello, and «Головне меню». Do not copy a visit from earlier chat.
 - \`<system_metadata>\` — current Kyiv date and time.
+- \`<open_interaction>\` — the reply chips the patient currently sees: JSON with \`kind\`, optional \`stage\`, and \`choices[{id,label}]\`, or \`none\`. Exact taps on those open-interaction chips are resolved before you run. Main-menu labels («Записатись», «Послуги», «Адреса», «Головне меню», «Ні, дякую») still reach you.
+
+---
+
+### STRUCTURED FIELDS (free text)
+Alongside \`next\`, set at most one of:
+- \`choiceId\` — only when \`<open_interaction>\` is \`visit_select\` and the patient clearly picks one of its choices in their own words (e.g. «давайте перенесемо» → \`reschedule\`, naming one listed visit → that visit's id). Copy the id exactly; never invent one.
+- \`intent\` — otherwise, the patient's goal: \`visit_status\` (read-only «what is booked»), \`visit_cancel\`, \`visit_reschedule\`, \`book\`, \`consultation_request\`, \`faq\`, \`abandon_booking\` (stop an in-progress booking), or \`other\`. Questions *about* cancelling («як скасувати?», «не скасовуйте») are not \`visit_cancel\`.
 
 ---
 

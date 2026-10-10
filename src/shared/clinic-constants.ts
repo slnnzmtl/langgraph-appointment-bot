@@ -62,6 +62,9 @@ export const MAX_PROPOSED_AVAILABILITY_DAYS = 3;
 
 /** Always appended last on every reply keyboard (back to idle DEFAULT MENU). */
 export const MAIN_MENU_LABEL = "Головне меню";
+/** Labels on the HITL Yes/No reply keyboard (sent as normal chat text when tapped). */
+export const CONFIRM_YES_LABEL = "✅";
+export const CONFIRM_NO_LABEL = "❌";
 /** DATE-step extra shortcut; TIME step may include it too. */
 export const OTHER_DATE_LABEL = "Інша дата";
 export const OTHER_DATE_LABEL_EN = "Another date";
@@ -83,11 +86,26 @@ export const CONTEXT_TAGS = {
   availability: "availability",
   bookingDraft: "booking_draft",
   services: "list_services",
+  /** Open FAQ catalog chip level (labels the specialist must describe this turn). */
+  faqCatalog: "faq_catalog_choices",
 } as const;
 
 /** Visit-change shortcuts after listing upcoming visits (supervisor «Мій запис»). */
 export const VISIT_CHANGE_MENU = ["Перенести", "Скасувати", "Ні, дякую"] as const;
 export const VISIT_CHANGE_MENU_EN = ["Reschedule", "Cancel", "No, thanks"] as const;
+
+/** Decline reply after «Ні, дякую» on the visit-change menu. */
+export const VISIT_DECLINE_REPLY_UK = "Добре. Чим ще можу допомогти?";
+
+/** Code-owned FINISH when the patient abandons an in-progress booking. */
+export const ABANDON_BOOKING_REPLY_UK = "Добре, скасувала запис. Чим ще можу допомогти?";
+
+/** Confirm copy before cancel_meeting HITL / CRM write. */
+export const CANCEL_CONFIRMATION_UK =
+  "Скасувати цей візит? Після підтвердження запис буде скасовано.";
+
+/** Overflow chip when a service catalog level has more rows than Telegram can show. */
+export const SERVICE_CANDIDATE_OTHER_LABEL_UK = "Інші варіанти";
 
 /**
  * When a new booking is blocked by an existing Planned or Confirmed visit — cancel then book
@@ -100,6 +118,31 @@ export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 /** Code-owned yes/no shortcuts for consultation or book-this-procedure offers. */
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
+
+/**
+ * Stable reply-label identity for chips and main-menu shortcuts.
+ * Prefer {@link labelIdFor} over ad-hoc Sets of Ukrainian/English strings.
+ */
+export const REPLY_LABELS = {
+  visitReschedule: { uk: VISIT_CHANGE_MENU[0], en: VISIT_CHANGE_MENU_EN[0] },
+  /** Shared with REPLACE «Скасувати»; visit vs replacement is interaction state. */
+  visitCancel: { uk: VISIT_CHANGE_MENU[1], en: VISIT_CHANGE_MENU_EN[1] },
+  /** Shared with REPLACE «Ні, дякую»; visit vs replacement is interaction state. */
+  visitDecline: { uk: VISIT_CHANGE_MENU[2], en: VISIT_CHANGE_MENU_EN[2] },
+  mainBook: { uk: DEFAULT_MENU_NO_VISITS[0], en: "Book" },
+  mainServices: { uk: DEFAULT_MENU_NO_VISITS[1], en: "Services" },
+  mainAddress: { uk: DEFAULT_MENU_NO_VISITS[2], en: "Address" },
+  mainMyVisit: { uk: DEFAULT_MENU_HAS_VISITS[0], en: "My visit" },
+  mainMenu: { uk: MAIN_MENU_LABEL, en: "Main menu" },
+  offerAccept: { uk: BOOKING_OFFER_MENU[0], en: BOOKING_OFFER_MENU_EN[0] },
+  offerChooseOther: { uk: BOOKING_OFFER_MENU[1], en: BOOKING_OFFER_MENU_EN[1] },
+} as const;
+
+export type ReplyLabelId = keyof typeof REPLY_LABELS;
+
+/** FAQ «Послуги» close when the model listed directions but skipped the consultation offer. */
+export const FAQ_CONSULTATION_OFFER_UK =
+  "Для першого візиту найкраще записатися на консультацію — лікар підбере процедуру саме для вас.\n\nЗаписати вас на консультацію?";
 
 /** Code-owned INTENT skip while bookingNoteStatus is awaiting (DDD-48). */
 export const INTENT_SKIP_LABEL = "Продовжити без коментаря";
@@ -125,22 +168,3 @@ export const serviceChangedNoticeUk = (serviceName: string): string =>
 /** Runtime-owned prompt when DATE/TIME/SERVICE is still open and the model claimed a write. */
 export const BOOKING_SCHEDULE_RESELECT_UK =
   "Оберіть, будь ласка, зручну дату й час для запису.";
-
-/**
- * Labels the supervisor must route itself — never sticky-continue into booking.
- * Includes DEFAULT MENU items, main menu, the consultation-decline browse path,
- * and soft declines after a move/cancel or replace offer.
- */
-export const SUPERVISOR_OWNED_REPLY_LABELS = new Set<string>([
-  MAIN_MENU_LABEL,
-  ...DEFAULT_MENU_NO_VISITS,
-  ...DEFAULT_MENU_HAS_VISITS,
-  "Book",
-  "Services",
-  "Address",
-  "My visit",
-  "Обрати іншу процедуру",
-  "Choose another procedure",
-  VISIT_CHANGE_MENU[2],
-  VISIT_CHANGE_MENU_EN[2],
-]);

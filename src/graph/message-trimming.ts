@@ -5,10 +5,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import {
-  DEFAULT_MESSAGE_HISTORY_MAX_TOKENS,
-  getMessageHistoryMaxTokens,
-} from "../shared/message-budget.js";
+import { getMessageHistoryMaxTokens } from "../shared/message-budget.js";
 import { extractMessageTextContent } from "../shared/message-content.js";
 
 export {

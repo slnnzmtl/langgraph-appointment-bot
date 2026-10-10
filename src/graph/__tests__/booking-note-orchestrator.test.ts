@@ -19,10 +19,12 @@ import {
   createBookingNoteOrchestratorNode,
   defaultServiceOrNoteChoices,
   orchestrateBookingNoteTurn,
-  renderBookingInteractionMessage,
-  replyButtonsForInteraction,
   type ResolveServiceChange,
 } from "../booking-note-orchestrator.js";
+import {
+  renderBookingInteractionMessage,
+  replyButtonsForInteraction,
+} from "../booking-interaction-render.js";
 import type { ClassifyNoteTurn } from "../booking-note-turn.js";
 import {
   openVisitNoteInteraction,
@@ -665,6 +667,21 @@ describe("renderBookingInteractionMessage", () => {
         { id: "svc-b", label: "шия", serviceIds: ["svc-b"] },
       ],
     })).toEqual(["обличчя", "шия"]);
+  });
+
+  it("does not use a separate FAQ catalog body when rendering service_candidate", () => {
+    const message = renderBookingInteractionMessage({
+      kind: "service_candidate",
+      owner: "faq",
+      utterance: "ботокс",
+      choices: [
+        { id: "svc-a", label: "обличчя", serviceIds: ["svc-a"] },
+        { id: "svc-b", label: "шия", serviceIds: ["svc-b"] },
+      ],
+    });
+    const body = String(message.content);
+    expect(body).toContain(SERVICE_CHANGE_ACK_UK);
+    expect(body).not.toContain("послугу зі списку");
   });
 
   it("narrows a multi-id group then applies the last singleton without FAQ handoff", async () => {

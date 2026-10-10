@@ -1,16 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { setTrackEventForTests } from "../../analytics/track.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.js";
 import {
-  SERVICE_CANDIDATE_OTHER_LABEL_UK,
   SERVICE_CANDIDATE_PARTITION_INSTRUCTION,
   SERVICE_CANDIDATE_SELECTOR_INSTRUCTION,
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
   fetchCompleteServiceCatalog,
+  partitionRemainingServiceChoices,
   resolveServiceChange,
   type ServiceCatalogRow,
 } from "../service-resolution.js";
 import type { ILLMConnector } from "../types.js";
+import { buildFaqCatalogChoices } from "../faq-catalog.js";
 
 const rows: ServiceCatalogRow[] = [
   { id: "svc-consult", name: "Консультація", duration: 30, description: "Primary visit" },
@@ -262,6 +265,36 @@ describe("resolveServiceChange", () => {
       },
     );
     expect(result).toEqual({ type: "service_unresolved" });
+  });
+
+  it("returns unresolved and emits tool_error when selectCandidates rejects", async () => {
+    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+    try {
+      const result = await resolveServiceChange(
+        { type: "resolve_service", utterance: "ботокс" },
+        {
+          fetchCatalog: listServices,
+          selectCandidates: async () => {
+            throw new Error("model unavailable");
+          },
+        },
+      );
+      expect(result).toEqual({ type: "service_unresolved" });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "tool_error",
+          props: expect.objectContaining({
+            tool: "select_service_candidates",
+            error_message: expect.stringContaining("model unavailable"),
+          }),
+        }),
+      );
+    } finally {
+      setTrackEventForTests(null);
+    }
   });
 
   it("falls back to per-id CRM chips when groups are missing for multiple ids", async () => {
@@ -556,5 +589,102 @@ describe("resolveServiceChange", () => {
       },
       accepted: true,
     });
+  });
+});
+
+describe("partitionRemainingServiceChoices", () => {
+  it("returns shrinking partition groups as InteractionChoice chips", async () => {
+    const choices = await partitionRemainingServiceChoices({
+      rows,
+      utterance: "Обрати іншу процедуру",
+      partitionCandidates: async () => [
+        { label: "Консультація", serviceIds: ["svc-consult"] },
+        { label: "Ботокс", serviceIds: ["svc-botox", "svc-botox-face", "svc-botox-neck"] },
+      ],
+    });
+    expect(choices).toEqual([
+      {
+        id: "svc-consult",
+        label: "Консультація",
+        serviceIds: ["svc-consult"],
+      },
+      {
+        id: "g1",
+        label: "Ботокс",
+        serviceIds: ["svc-botox", "svc-botox-face", "svc-botox-neck"],
+      },
+    ]);
+  });
+
+  it("returns empty when partition does not shrink (caller uses CRM fallback)", async () => {
+    const choices = await partitionRemainingServiceChoices({
+      rows: [rows[2]!, rows[3]!],
+      utterance: "ботулінотерапія",
+      partitionCandidates: async () => [
+        {
+          label: "ботулінотерапія",
+          serviceIds: ["svc-botox-face", "svc-botox-neck"],
+        },
+      ],
+    });
+    expect(choices).toEqual([]);
+  });
+
+  it("returns empty and emits tool_error when the partitioner rejects", async () => {
+    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+    try {
+      const choices = await partitionRemainingServiceChoices({
+        rows,
+        utterance: "Обрати іншу процедуру",
+        partitionCandidates: async () => {
+          throw new Error("network down");
+        },
+      });
+      expect(choices).toEqual([]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "tool_error",
+          props: expect.objectContaining({
+            tool: "partition_service_candidates",
+            error_message: expect.stringContaining("network down"),
+          }),
+        }),
+      );
+    } finally {
+      setTrackEventForTests(null);
+    }
+  });
+});
+
+describe("buildFaqCatalogChoices overflow", () => {
+  it("parks services after the first page under Інші варіанти", () => {
+    const services = Array.from({ length: 9 }, (_, index) => ({
+      id: `svc-${index + 1}`,
+      name: `Service ${index + 1}`,
+    }));
+    const choices = buildFaqCatalogChoices(services);
+    expect(choices).toHaveLength(8);
+    expect(choices.slice(0, 7).map((c) => c.id)).toEqual([
+      "svc-1", "svc-2", "svc-3", "svc-4", "svc-5", "svc-6", "svc-7",
+    ]);
+    expect(choices[7]).toEqual({
+      id: "faq_other",
+      label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+      serviceIds: ["svc-8", "svc-9"],
+    });
+  });
+
+  it("returns all rows when eight or fewer", () => {
+    const services = Array.from({ length: 8 }, (_, index) => ({
+      id: `svc-${index + 1}`,
+      name: `Service ${index + 1}`,
+    }));
+    const choices = buildFaqCatalogChoices(services);
+    expect(choices).toHaveLength(8);
+    expect(choices.every((c) => c.serviceIds?.length === 1)).toBe(true);
+    expect(choices.some((c) => c.label === SERVICE_CANDIDATE_OTHER_LABEL_UK)).toBe(false);
   });
 });

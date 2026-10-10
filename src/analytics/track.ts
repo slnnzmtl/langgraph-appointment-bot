@@ -28,6 +28,8 @@ export const TIER1_EVENTS = [
   "contact_incomplete_blocked",
   "tool_error",
   "reply_menu_filled",
+  "faq_offer_question_dropped",
+  "supervisor_routing_decision",
   "reminder_sent",
   "reminder_approved",
   "reminder_declined",

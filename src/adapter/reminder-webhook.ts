@@ -11,7 +11,8 @@ import {
   kyivLocalIsoToUtcMs,
   normalizeLocalIsoDatetime,
 } from "../tools/availability-slots.js";
-import { buildConfirmKeyboard, buildDefaultMenuKeyboard, classifyConfirmReply, formatForTelegram, MAIN_MENU_LABEL } from "./telegram-ui.js";
+import { classifyConfirmReply } from "../shared/confirm-reply.js";
+import { buildConfirmKeyboard, buildDefaultMenuKeyboard, formatForTelegram, MAIN_MENU_LABEL } from "./telegram-ui.js";
 
 export const REMINDER_WEBHOOK_PATH = "/webhooks/tomorrow-reminder";
 export const MAX_REMINDER_BODY_BYTES = 64 * 1024;
@@ -206,12 +207,11 @@ export const takeReminderConfirm = (
     pendingReminderConfirms.delete(telegramId);
     return null;
   }
-  const trimmed = text.trim();
-  if (trimmed === MAIN_MENU_LABEL) {
+  const decision = classifyConfirmReply(text);
+  if (decision.kind === "leave") {
     pendingReminderConfirms.delete(telegramId);
     return null;
   }
-  const decision = classifyConfirmReply(trimmed);
   if (decision.kind === "chat") {
     // Drop expired siblings; keep still-future ids for a later tap.
     pendingReminderConfirms.set(telegramId, { meetings: stillFuture });

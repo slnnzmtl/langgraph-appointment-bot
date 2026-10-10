@@ -13,6 +13,7 @@ import {
   upgradeBookingCheckpoint,
   type BookingCheckpointLegacyState,
 } from "../composition/booking-checkpoint.js";
+import { resumeConfirmBookingHitl } from "../composition/booking-hitl.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
@@ -33,7 +34,6 @@ import {
   buildDefaultMenuKeyboard,
   classifyConfirmReply,
   formatForTelegram,
-  MAIN_MENU_LABEL,
 } from "./telegram-ui.js";
 import {
   buildStartHistoryText,
@@ -324,29 +324,25 @@ export const handleGraphTextTurn = async (
             config,
           );
         }
-        const decision = classifyConfirmReply(text);
-        if (decision.kind === "confirmed") {
-          return graph.invoke(
-            new Command({
-              resume: { confirmed: true },
-              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
-            }) as never,
-            config,
-          );
-        }
-        if (decision.kind === "declined") {
-          return graph.invoke(
-            new Command({
-              resume: { confirmed: false },
-              ...(Object.keys(bookingUpdate).length > 0 ? { update: bookingUpdate } : {}),
-            }) as never,
-            config,
-          );
-        }
+        const channelValues = (
+          snapshot.values as {
+            bookingDraft?: unknown;
+            pendingInteraction?: unknown;
+          } | undefined
+        ) ?? {};
+        const hitl = resumeConfirmBookingHitl({
+          text,
+          bookingDraft: channelValues.bookingDraft,
+          pendingInteraction: channelValues.pendingInteraction,
+          bookingUpdate,
+        });
+        const update = "userReply" in hitl.resume
+          ? { messages: [new HumanMessage(text)], ...hitl.update }
+          : hitl.update;
         return graph.invoke(
           new Command({
-            resume: { userReply: text },
-            update: { messages: [new HumanMessage(text)], ...bookingUpdate },
+            resume: hitl.resume,
+            update,
           }) as never,
           config,
         );
@@ -359,6 +355,12 @@ export const handleGraphTextTurn = async (
   );
 
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {
+  const prefix = outbound.prefixText?.trim();
+  if (prefix != null && prefix.length > 0) {
+    await ctx.reply(formatForTelegram(prefix), {
+      parse_mode: "HTML",
+    });
+  }
   await ctx.reply(formatForTelegram(outbound.text), {
     parse_mode: "HTML",
     ...(outbound.reply_markup ? { reply_markup: outbound.reply_markup } : {}),
@@ -483,8 +485,7 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     const threadId = String(chatId);
     const confirmTap = classifyConfirmReply(text);
     const isReminderConfirmTap =
-      confirmTap.kind === "confirmed" ||
-      (confirmTap.kind === "declined" && text.replace(/\uFE0F|\uFE0E/g, "") !== MAIN_MENU_LABEL);
+      confirmTap.kind === "confirmed" || confirmTap.kind === "declined";
     if (
       isReminderConfirmTap
       && !(await withCheckpointThreadRetry(checkpointer, threadId, async () => {

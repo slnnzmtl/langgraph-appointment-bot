@@ -568,6 +568,13 @@ describe("createReminderWebhookHandler", () => {
     expect(takeReminderConfirm("99", CONFIRM_YES_LABEL)).toBeNull();
   });
 
+  it("clears pending on normalized main menu without Not Held; later ✅ does not confirm", () => {
+    const startMs = Date.parse("2026-08-24T11:00:00+03:00");
+    setReminderConfirmPending("menu-variant", [{ id: "meet-1", utcMs: startMs }]);
+    expect(takeReminderConfirm("menu-variant", "головне меню", startMs - 60_000)).toBeNull();
+    expect(takeReminderConfirm("menu-variant", CONFIRM_YES_LABEL, startMs - 60_000)).toBeNull();
+  });
+
   it("keeps HITL pending until visit start (hour-before tap still works)", () => {
     const startMs = Date.parse("2026-08-23T16:00:00+03:00");
     const sentAt = Date.parse("2026-08-23T14:00:00+03:00");

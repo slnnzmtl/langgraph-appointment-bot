@@ -1,10 +1,14 @@
 import {
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
   MAIN_MENU_LABEL,
   defaultMenuLabels,
 } from "../shared/clinic-constants.js";
 import { unescapeModelLineBreaks } from "../shared/message-content.js";
 
 export {
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   MAIN_MENU_LABEL,
@@ -14,10 +18,10 @@ export {
 } from "../shared/clinic-constants.js";
 
 export { extractReplyButtons, type ExtractedReplyButtons } from "../shared/message-content.js";
-
-/** Labels on the HITL Yes/No reply keyboard (sent as normal chat text when tapped). */
-export const CONFIRM_YES_LABEL = "✅";
-export const CONFIRM_NO_LABEL = "❌";
+export {
+  classifyConfirmReply,
+  type ConfirmReplyDecision,
+} from "../shared/confirm-reply.js";
 
 export type KeyboardButton = {
   text: string;
@@ -27,23 +31,6 @@ export type ReplyKeyboardMarkup = {
   keyboard: KeyboardButton[][];
   resize_keyboard?: boolean;
   one_time_keyboard?: boolean;
-};
-
-export type ConfirmReplyDecision =
-  | { kind: "confirmed" }
-  | { kind: "declined" }
-  | { kind: "chat" };
-
-/** Map HITL reply-keyboard taps (or free text) while a confirm card is pending. */
-export const classifyConfirmReply = (text: string): ConfirmReplyDecision => {
-  const trimmed = text.trim().replace(/\uFE0F|\uFE0E/g, "");
-  if (trimmed === CONFIRM_YES_LABEL) {
-    return { kind: "confirmed" };
-  }
-  if (trimmed === CONFIRM_NO_LABEL || trimmed === MAIN_MENU_LABEL) {
-    return { kind: "declined" };
-  }
-  return { kind: "chat" };
 };
 
 /** Append «Головне меню» last when missing (adapter-owned; the model need not emit it). */

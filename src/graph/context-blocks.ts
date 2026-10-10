@@ -213,3 +213,28 @@ export const formatServicesContext = (
   }
   return block(CONTEXT_TAGS.services, ctx);
 };
+
+/**
+ * Open FAQ catalog chips — write one short contextual intro only; the graph
+ * renders option bullets, descriptions, and Telegram chips from this state.
+ */
+export const formatFaqCatalogChoicesContext = (
+  choices: ReadonlyArray<{
+    label: string;
+    displayLabel?: string;
+    serviceIds?: readonly string[];
+  }> | null | undefined,
+): string => {
+  if (choices == null || choices.length === 0) {
+    return "";
+  }
+  return block(
+    CONTEXT_TAGS.faqCatalog,
+    {
+      choices: choices.map((choice) => ({
+        label: choice.displayLabel ?? choice.label,
+        remaining: choice.serviceIds?.length ?? 0,
+      })),
+    },
+  );
+};

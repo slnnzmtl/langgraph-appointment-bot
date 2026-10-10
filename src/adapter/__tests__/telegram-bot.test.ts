@@ -181,6 +181,284 @@ describe("text while HITL pending", () => {
     const menuSnap = await menuGraph.getState({ configurable: { thread_id: menuThread } });
     expect(JSON.parse(String(menuSnap.values.result))).toEqual({ confirmed: false });
   });
+
+  it("maps NL affirm against open mutation_confirm to confirmed resume", async () => {
+    const MutationState = Annotation.Root({
+      result: Annotation<string>({
+        reducer: (_left, right) => right,
+        default: () => "",
+      }),
+      messages: Annotation<unknown[]>({
+        reducer: (left: unknown[], right: unknown | unknown[]) =>
+          left.concat(Array.isArray(right) ? right : [right]),
+        default: () => [],
+      }),
+      bookingDraft: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      pendingInteraction: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      bookingSchemaVersion: Annotation<number>({
+        reducer: (_left, right) => right,
+        default: () => 1,
+      }),
+    });
+    const graph = new StateGraph(MutationState)
+      .addNode("ask", async () => {
+        const decision = interrupt({
+          type: "confirm_booking",
+          draft: { confirmMessage: "Confirm?" },
+        });
+        return { result: JSON.stringify(decision) };
+      })
+      .addEdge(START, "ask")
+      .addEdge("ask", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+    const threadId = "text-hitl-mutation-nl-affirm";
+    await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 1,
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", name: "Процедура", source: "catalog" },
+          },
+          selectedDate: "2026-10-27",
+          selectedSlot: {
+            dateStart: "2026-10-27T11:00:00",
+            dateEnd: "2026-10-27T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "c-1",
+              dateStart: "2026-10-27T11:00:00",
+              dateEnd: "2026-10-27T11:30:00",
+            },
+          },
+          replacement: null,
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "Так, підтверджую");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
+  });
+
+  it("dispatches mutation_chat_other and resumes userReply when mutation_confirm is open", async () => {
+    const MutationState = Annotation.Root({
+      result: Annotation<string>({
+        reducer: (_left, right) => right,
+        default: () => "",
+      }),
+      messages: Annotation<unknown[]>({
+        reducer: (left: unknown[], right: unknown | unknown[]) =>
+          left.concat(Array.isArray(right) ? right : [right]),
+        default: () => [],
+      }),
+      bookingDraft: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      pendingInteraction: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      bookingSchemaVersion: Annotation<number>({
+        reducer: (_left, right) => right,
+        default: () => 1,
+      }),
+    });
+    const graph = new StateGraph(MutationState)
+      .addNode("ask", async () => {
+        const decision = interrupt({
+          type: "confirm_booking",
+          draft: { confirmMessage: "Confirm?" },
+        });
+        return { result: JSON.stringify(decision) };
+      })
+      .addEdge(START, "ask")
+      .addEdge("ask", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+    const threadId = "text-hitl-mutation-chat-other";
+    const first = await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 1,
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", name: "Процедура", source: "catalog" },
+          },
+          selectedDate: "2026-10-27",
+          selectedSlot: {
+            dateStart: "2026-10-27T11:00:00",
+            dateEnd: "2026-10-27T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "c-1",
+              dateStart: "2026-10-27T11:00:00",
+              dateEnd: "2026-10-27T11:30:00",
+            },
+          },
+          replacement: null,
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+    expect(first.__interrupt__).toBeDefined();
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "Яка адреса?");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ userReply: "Яка адреса?" });
+    expect(snap.values.pendingInteraction).toMatchObject({ kind: "mutation_confirm" });
+    expect(snap.values.bookingDraft).toMatchObject({
+      selectedDate: "2026-10-27",
+      selectedSlot: null,
+      pendingCommand: null,
+    });
+  });
+
+  it("declines typed main-menu variants while mutation_confirm is open", async () => {
+    const MutationState = Annotation.Root({
+      result: Annotation<string>({
+        reducer: (_left, right) => right,
+        default: () => "",
+      }),
+      messages: Annotation<unknown[]>({
+        reducer: (left: unknown[], right: unknown | unknown[]) =>
+          left.concat(Array.isArray(right) ? right : [right]),
+        default: () => [],
+      }),
+      bookingDraft: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      pendingInteraction: Annotation<unknown>({
+        reducer: (left, right) => (right === undefined ? left : right),
+        default: () => null,
+      }),
+      bookingSchemaVersion: Annotation<number>({
+        reducer: (_left, right) => right,
+        default: () => 1,
+      }),
+    });
+    const graph = new StateGraph(MutationState)
+      .addNode("ask", async () => {
+        const decision = interrupt({
+          type: "confirm_booking",
+          draft: { confirmMessage: "Confirm?" },
+        });
+        return { result: JSON.stringify(decision) };
+      })
+      .addEdge(START, "ask")
+      .addEdge("ask", END)
+      .compile({ checkpointer: new MemorySaver() });
+
+    const threadId = "text-hitl-mutation-main-menu-variant";
+    await graph.invoke(
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 1,
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "confirming",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", name: "Процедура", source: "catalog" },
+          },
+          selectedDate: "2026-10-27",
+          selectedSlot: {
+            dateStart: "2026-10-27T11:00:00",
+            dateEnd: "2026-10-27T11:30:00",
+            label: "11:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: "c-1",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              contactId: "c-1",
+              dateStart: "2026-10-27T11:00:00",
+              dateEnd: "2026-10-27T11:30:00",
+            },
+          },
+          replacement: null,
+        },
+      },
+      { configurable: { thread_id: threadId } },
+    );
+
+    await handleGraphTextTurn(graph, threadId, "tg-1", "головне меню");
+    const snap = await graph.getState({ configurable: { thread_id: threadId } });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
+    expect(snap.values.pendingInteraction).toBeNull();
+    expect(snap.values.bookingDraft).toMatchObject({
+      selectedDate: "2026-10-27",
+      selectedSlot: {
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+        label: "11:00",
+      },
+      pendingCommand: null,
+    });
+  });
 });
 
 describe("booking schema upgrade on text turn", () => {
