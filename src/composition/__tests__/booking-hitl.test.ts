@@ -1,3 +1,4 @@
+import { HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
 import { resumeConfirmBookingHitl } from "../booking-hitl.js";
@@ -41,70 +42,56 @@ const mutationConfirm = {
 };
 
 describe("resumeConfirmBookingHitl", () => {
-  it("maps ✅ / ❌ / exact Головне меню to confirmed resume", () => {
+  it("maps ✅ / ❌ to confirmed resume without session patching", () => {
     expect(
       resumeConfirmBookingHitl({
         text: "✅",
         bookingDraft: confirmingDraft,
         pendingInteraction: mutationConfirm,
-      }).resume,
-    ).toEqual({ confirmed: true });
+      }),
+    ).toEqual({
+      resume: { confirmed: true },
+      update: {},
+    });
 
     const declined = resumeConfirmBookingHitl({
       text: "❌",
       bookingDraft: confirmingDraft,
       pendingInteraction: mutationConfirm,
+      bookingUpdate: { bookingSchemaVersion: 1 },
     });
     expect(declined.resume).toEqual({ confirmed: false });
-    expect(declined.update.pendingInteraction).toBeNull();
-    expect(declined.update.bookingDraft).toMatchObject({
-      selectedSlot: confirmingDraft.selectedSlot,
-      pendingCommand: null,
-    });
-
-    const menu = resumeConfirmBookingHitl({
-      text: "Головне меню",
-      bookingDraft: confirmingDraft,
-      pendingInteraction: mutationConfirm,
-    });
-    expect(menu.resume).toEqual({ confirmed: false });
-    expect(menu.update.pendingInteraction).toBeNull();
+    expect(declined.update).toEqual({ bookingSchemaVersion: 1 });
   });
 
-  it("declines typed main-menu variants without clearing the selected slot", () => {
-    for (const text of ["головне меню", "MAIN MENU", "main menu"]) {
+  it("maps Головне меню and typed variants to left with a HumanMessage", () => {
+    for (const text of ["Головне меню", "головне меню", "MAIN MENU", "main menu"]) {
       const result = resumeConfirmBookingHitl({
         text,
         bookingDraft: confirmingDraft,
         pendingInteraction: mutationConfirm,
         bookingUpdate: { bookingSchemaVersion: 1 },
       });
-      expect(result.resume).toEqual({ confirmed: false });
-      expect(result.update).toMatchObject({
-        bookingSchemaVersion: 1,
-        pendingInteraction: null,
-        bookingDraft: {
-          selectedDate: "2026-10-27",
-          selectedSlot: confirmingDraft.selectedSlot,
-          pendingCommand: null,
-        },
-      });
+      expect(result.resume).toEqual({ left: true });
+      expect(result.update.bookingSchemaVersion).toBe(1);
+      expect(result.update.bookingDraft).toBeUndefined();
+      expect(result.update.pendingInteraction).toBeUndefined();
+      expect(result.update.messages).toEqual([new HumanMessage(text)]);
     }
   });
 
-  it("dispatches mutation_chat_other for free text while mutation_confirm is open", () => {
+  it("resumes free text as userReply with a HumanMessage while mutation_confirm is open", () => {
     const result = resumeConfirmBookingHitl({
       text: "Яка адреса?",
       bookingDraft: confirmingDraft,
       pendingInteraction: mutationConfirm,
+      bookingUpdate: { bookingSchemaVersion: 1 },
     });
     expect(result.resume).toEqual({ userReply: "Яка адреса?" });
-    expect(result.update.pendingInteraction).toMatchObject({ kind: "mutation_confirm" });
-    expect(result.update.bookingDraft).toMatchObject({
-      selectedDate: "2026-10-27",
-      selectedSlot: null,
-      pendingCommand: null,
-    });
+    expect(result.update.bookingSchemaVersion).toBe(1);
+    expect(result.update.bookingDraft).toBeUndefined();
+    expect(result.update.pendingInteraction).toBeUndefined();
+    expect(result.update.messages).toEqual([new HumanMessage("Яка адреса?")]);
   });
 
   it("maps NL affirm / decline when mutation_confirm is open", () => {

@@ -185,7 +185,13 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         ),
       )
       .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
-      .addNode(mutationFinalize, createAgentMutationFinalizeNode(agent))
+      .addNode(
+        mutationFinalize,
+        createAgentMutationFinalizeNode(agent),
+        // Plain updates follow the static edge to END; main-menu leave Command
+        // hands control back to the supervisor's existing greeting path.
+        { ends: [END, "supervisor"] },
+      )
       .addNode(
         llm,
         createAgentLlmNode({
@@ -205,7 +211,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         }),
       )
       .addNode(toolsNode, createAgentToolsNode(tools, agent.id))
-      .addNode(finalize, createAgentFinalizeNode(agent));
+      .addNode(
+        finalize,
+        createAgentFinalizeNode(agent),
+        // Safety-net path may return the same abandon Command as mutationFinalize.
+        { ends: [END, "supervisor"] },
+      );
 
     if (isBooking) {
       const classify = options.classifyNoteTurn

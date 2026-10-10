@@ -281,8 +281,9 @@ const runGraphExclusive = async (
   );
 
 /**
- * Text turn: when a confirm card is pending, resume HITL — ✅/❌ reply-keyboard taps map to
- * `{ confirmed }`, any other text goes through as `{ userReply }` so the specialist can re-call.
+ * Text turn: when a confirm card is pending, resume HITL — ✅/❌ map to `{ confirmed }`,
+ * main-menu to `{ left: true }` (with HumanMessage), other text to `{ userReply }`
+ * (with HumanMessage). Session transitions happen in the graph after the tool outcome.
  * Version-0 booking checkpoints are upgraded here once (invoke input or Command.update).
  */
 export const handleGraphTextTurn = async (
@@ -348,13 +349,10 @@ export const handleGraphTextTurn = async (
           pendingInteraction: channelValues.pendingInteraction,
           bookingUpdate,
         });
-        const update = "userReply" in hitl.resume
-          ? { messages: [new HumanMessage(text)], ...hitl.update }
-          : hitl.update;
         return graph.invoke(
           new Command({
             resume: hitl.resume,
-            update,
+            update: hitl.update,
           }) as never,
           config,
         );
