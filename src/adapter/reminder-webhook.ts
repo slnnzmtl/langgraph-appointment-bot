@@ -4,6 +4,7 @@ import type { Telegraf } from "telegraf";
 import { z } from "zod";
 
 import { trackEvent } from "../analytics/track.js";
+import type { McpCallTool } from "../shared/mcp.js";
 import {
   addCalendarDays,
   formatKyivDateTimeLabel,
@@ -12,7 +13,7 @@ import {
   normalizeLocalIsoDatetime,
 } from "../tools/availability-slots.js";
 import { classifyConfirmReply } from "../shared/confirm-reply.js";
-import { buildConfirmKeyboard, buildDefaultMenuKeyboard, formatForTelegram, MAIN_MENU_LABEL } from "./telegram-ui.js";
+import { buildConfirmKeyboard, buildDefaultMenuKeyboard, formatForTelegram } from "./telegram-ui.js";
 
 export const REMINDER_WEBHOOK_PATH = "/webhooks/tomorrow-reminder";
 export const MAX_REMINDER_BODY_BYTES = 64 * 1024;
@@ -222,6 +223,57 @@ export const takeReminderConfirm = (
     meetingIds: stillFuture.map((meeting) => meeting.id),
     meetings: stillFuture,
     status: decision.kind === "confirmed" ? "Confirmed" : "Not Held",
+  };
+};
+
+export type ApplyReminderDecisionResult =
+  | { kind: "none" }
+  | {
+      kind: "updated";
+      status: ReminderConfirmStatus;
+      meetingIds: string[];
+    }
+  | {
+      kind: "crm_error";
+      meetings: ReminderPendingMeeting[];
+    };
+
+/**
+ * Apply a pending reminder ✅/❌ decision to CRM (shared by Telegram adapter and smoke).
+ * On CRM failure, re-arms the pending confirm so the patient can retry.
+ */
+export const applyReminderDecision = async (
+  callTool: McpCallTool,
+  telegramUserId: string,
+  text: string,
+): Promise<ApplyReminderDecisionResult> => {
+  const decision = takeReminderConfirm(telegramUserId, text);
+  if (!decision) {
+    return { kind: "none" };
+  }
+  try {
+    for (const meetingId of decision.meetingIds) {
+      await callTool("update_meeting", {
+        meetingId,
+        status: decision.status,
+      });
+    }
+  } catch (error: unknown) {
+    console.error("Reminder confirm CRM update failed:", error);
+    setReminderConfirmPending(telegramUserId, decision.meetings);
+    return { kind: "crm_error", meetings: decision.meetings };
+  }
+  const confirmed = decision.status === "Confirmed";
+  trackEvent(confirmed ? "reminder_approved" : "reminder_declined", {
+    outcome: "success",
+    telegram_user_id: telegramUserId,
+    meeting_count: decision.meetingIds.length,
+    meeting_ids: decision.meetingIds,
+  });
+  return {
+    kind: "updated",
+    status: decision.status,
+    meetingIds: decision.meetingIds,
   };
 };
 

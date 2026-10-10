@@ -104,6 +104,44 @@ describe("meeting-tools availability", () => {
     expect(parsed.slots.some((s) => s.label === "14:30")).toBe(true);
   });
 
+  it("present_availability_slots drops past wall-clock slots when date is today", async () => {
+    // 11:13 Kyiv (EEST = UTC+3) on a Monday that matches crmCalendar weekdays.
+    vi.setSystemTime(new Date("2026-08-10T08:13:00Z"));
+    const dayCalendar = {
+      ...crmCalendar,
+      calendars: [
+        {
+          ...crmCalendar.calendars[0],
+          timeRanges: [["09:00", "15:00"]],
+        },
+      ],
+    };
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return dayCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({ date: "2026-08-10" });
+    const parsed = JSON.parse(raw as string) as {
+      slots: Array<{ label: string }>;
+      slot_count?: number;
+    };
+    const labels = parsed.slots.map((s) => s.label);
+    expect(labels).not.toContain("09:00");
+    expect(labels).not.toContain("09:30");
+    expect(labels).not.toContain("10:00");
+    expect(labels).not.toContain("10:30");
+    expect(labels).not.toContain("11:00");
+    expect(labels[0]).toBe("11:30");
+    expect(labels).toContain("14:30");
+  });
+
   it("present_availability_slots applies Non-working reserved time from get_working_time ranges", async () => {
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });

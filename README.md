@@ -73,7 +73,8 @@ cp .env.example .env
 # set TELEGRAM_BOT_TOKEN to launch the bot
 # production Docker also requires CLINIC_* / CONSULTATION_SERVICE_ID (see Docker section)
 # optional: WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder (Docker-internal :8080)
-# optional: SMOKE_KNOWN_TELEGRAM_ID for --identity known path
+# optional: SMOKE_KNOWN_TELEGRAM_ID for `--identity` known path (no CRM create without SMOKE_ALLOW_WRITES)
+# optional: SMOKE_ALLOW_WRITES=1 for `pnpm smoke -- --write` (refused when NODE_ENV=production)
 # optional LangSmith: LANGSMITH_TRACING=true LANGSMITH_API_KEY= LANGSMITH_PROJECT=clinic-appointment-bot
 ```
 
@@ -124,11 +125,19 @@ pnpm test:all  # app + llm-gemini package tests
 pnpm depcruise  # dependency rules (cycles, orphans, missing deps)
 pnpm depcruise:graph  # write dependency-graph.mmd (Mermaid)
 pnpm depcruise:graph:svg  # write dependency-graph.svg (needs Graphviz `dot`)
-pnpm smoke   # bootstrap + live MCP HTTP (`ESPOCRM_MCP_URL`)
-pnpm smoke -- --invoke    # FAQ routing via Gemini
-pnpm smoke -- --identity  # known vs unknown telegram_id booking smoke
+pnpm smoke   # deterministic: bootstrap + consultation-switch (live MCP HTTP)
+pnpm smoke -- --invoke    # + FAQ / menu / identity scenarios via Gemini
+pnpm smoke -- --identity  # alias for --only=identity
+pnpm smoke -- --write     # live booking lifecycle (SMOKE_ALLOW_WRITES=1; refused in production)
+# Write smoke uses 9998… telegram ids, Smoke Tester contacts, unused phones; requires SMOKE_ASSIGNED_USER_ID.
+# Meetings are assigned to SMOKE_ASSIGNED_USER_ID (not ESPOCRM_ASSIGNED_USER_ID). Reminder-webhook seeds use [SMOKE] names.
+# It never uses SMOKE_KNOWN_TELEGRAM_ID. Pre-clean/update refuse non-smoke contacts.
+pnpm smoke -- --all       # deterministic + invoke + write
+pnpm smoke -- --only=faq-hours,book-new-contact
 pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is set
 ```
+
+Smoke drives the real graph through `handleGraphTextTurn` (same path as Telegram). Hard asserts cover graph state and MCP calls; reply text is soft. Write scenarios create Contacts/Meetings under dedicated smoke telegram ids and soft-cancel (or `delete_entity` when available) in cleanup.
 
 ## Layout
 

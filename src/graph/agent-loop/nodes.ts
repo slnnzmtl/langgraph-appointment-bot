@@ -36,6 +36,7 @@ import {
   resolveBookingScheduleRequest,
 } from "../booking-schedule.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../tools/contact-tools.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import { trackEvent, trackToolError } from "../../analytics/track.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
@@ -56,6 +57,7 @@ import {
   type PendingBookingCommand,
   type BookingDraft,
 } from "../booking-draft.js";
+import { cancelCommandFromStoredPayload } from "../cancel-command.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
@@ -154,6 +156,8 @@ export type CreateAgentLoopOptions = {
 
 export type CreateAgentPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
+  /** Fetch the CRM catalog when «Обрати іншу процедуру» arrives before any list_services. */
+  loadServices?: () => Promise<ServicesContext | null>;
 };
 
 export const createAgentPrepareNode = (
@@ -299,12 +303,25 @@ export const createAgentPrepareNode = (
         }
       }
       // Browse open: «Обрати іншу процедуру» (not «Послуги») — partition all CRM ids.
+      let browseServices = state.servicesContext?.list ?? [];
       if (
         !handledCatalogChoice
         && FAQ_CATALOG_SHORTCUT_LABELS.has(patientText)
-        && (state.servicesContext?.list.length ?? 0) > 0
+        && browseServices.length === 0
+        && options?.loadServices != null
       ) {
-        const services = state.servicesContext!.list;
+        const loaded = await options.loadServices().catch(() => null);
+        if (loaded != null && loaded.list.length > 0) {
+          update.servicesContext = loaded;
+          browseServices = loaded.list;
+        }
+      }
+      if (
+        !handledCatalogChoice
+        && FAQ_CATALOG_SHORTCUT_LABELS.has(patientText)
+        && browseServices.length > 0
+      ) {
+        const services = browseServices;
         const choices = await resolveFaqCatalogChoices({
           services,
           utterance: patientText,
@@ -1129,19 +1146,31 @@ export const createAgentToolsNode = (
         const record = asJsonRecord(extractMessageTextContent(message.content).trim());
         const draft = asJsonRecord(record?.draft);
         const command = asJsonRecord(draft?.command);
+        const payload = asJsonRecord(command?.payload);
         if (
           record?.awaitingConfirmation !== true
           || (command?.action !== "create"
             && command?.action !== "reschedule"
             && command?.action !== "replace"
             && command?.action !== "cancel")
-          || !asJsonRecord(command.payload)
+          || payload == null
         ) {
           return null;
         }
+        if (command?.action === "cancel") {
+          // draft.command.payload is the CRM write, not cancel_meeting args.
+          const displayName = typeof draft?.name === "string" ? draft.name : undefined;
+          const displayStart = typeof draft?.dateStart === "string" ? draft.dateStart : undefined;
+          const displayEnd = typeof draft?.dateEnd === "string" ? draft.dateEnd : undefined;
+          return cancelCommandFromStoredPayload(payload, {
+            ...(displayName ? { name: displayName } : {}),
+            ...(displayStart ? { dateStart: displayStart } : {}),
+            ...(displayEnd ? { dateEnd: displayEnd } : {}),
+          });
+        }
         return {
           action: command.action,
-          payload: asJsonRecord(command.payload)!,
+          payload,
         } satisfies PendingBookingCommand;
       })
       .find((command): command is PendingBookingCommand => command != null);

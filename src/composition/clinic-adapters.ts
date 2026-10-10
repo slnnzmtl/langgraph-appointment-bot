@@ -1,3 +1,5 @@
+import { getConfig } from "@langchain/langgraph";
+
 import type { AppConfig } from "../config.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { withNormalizedClinicPhones } from "../shared/phone.js";
@@ -16,6 +18,16 @@ type TextContent = {
 
 /** Align with EspoCRM MCP `REQUEST_TIMEOUT` (default 30s). */
 const MCP_HTTP_TIMEOUT_MS = 30_000;
+
+/** LangGraph thread_id when inside a graph turn; omit outside. */
+const threadIdFromRuntime = (): string | undefined => {
+  try {
+    const value = getConfig()?.configurable?.thread_id;
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 const parseToolResponse = (response: unknown): unknown => {
   const content = (response as { content?: TextContent[] }).content;
@@ -89,12 +101,14 @@ export const setupClinicAdapters = async (config: AppConfig): Promise<ClinicAdap
     const timer = setTimeout(() => controller.abort(), MCP_HTTP_TIMEOUT_MS);
     let response: Response;
     try {
+      const threadId = threadIdFromRuntime();
       response = await fetch(`${origin}/tools/${encodeURIComponent(name)}`, {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
           espocrm_api_key: config.espocrmApiKey,
+          ...(threadId ? { "x-thread-id": threadId } : {}),
         },
         body: JSON.stringify(args),
         signal: controller.signal,

@@ -1,313 +1,217 @@
 import "dotenv/config";
-import { randomUUID } from "node:crypto";
-
-import { HumanMessage } from "@langchain/core/messages";
 
 import { applyTracingPrivacyDefaults } from "./analytics/track.js";
 import { loadConfig } from "./config.js";
-import type { ClinicAdapters } from "./composition/clinic-adapters.js";
-import { createClinicRuntime, type ClinicRuntime } from "./composition/clinic-runtime.js";
-import { bookingAgent, faqAgent } from "./composition/agents.js";
-import type { McpCallTool } from "./shared/mcp.js";
-import { runConsultationSwitchSmoke } from "./smoke/consultation-switch.js";
-import { runWithTelegramUserId } from "./tools/telegram-user-context.js";
+import { createClinicRuntime } from "./composition/clinic-runtime.js";
+import { SmokeAssertError } from "./smoke/assert.js";
+import { createCleanupRegistry, detectDeleteEntitySupport } from "./smoke/cleanup.js";
+import { assertWritesAllowed, loadSmokeEnv, smokeAssignedUserId } from "./smoke/env.js";
+import { scenariosForTiers } from "./smoke/scenarios/index.js";
+import type { ScenarioResult, SmokeTier } from "./smoke/types.js";
 
-const EXPECTED_AGENT_IDS = ["faq", "booking"] as const;
-
-const FAQ_TOOL_NAMES = ["list_services", "get_service", "get_working_time"] as const;
-const BOOKING_EXTRA_TOOL_NAMES = [
-  "find_contact_by_phone",
-  "create_contact",
-  "link_telegram_to_contact",
-  "update_contact",
-  "present_availability_slots",
-  "create_meeting",
-  "list_planned_meetings",
-  "cancel_meeting",
-  "reschedule_meeting",
-] as const;
-
-type CallRecord = { name: string; args: Record<string, unknown> };
-
-const lastAiText = (messages: Array<{ content?: unknown }>): string => {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const content = messages[i]?.content;
-    if (typeof content === "string" && content.trim()) {
-      return content;
-    }
-  }
-  return "";
+type CliFlags = {
+  invoke: boolean;
+  write: boolean;
+  all: boolean;
+  identity: boolean;
+  only: Set<string>;
 };
 
-/** English uses \\b; Cyrillic cannot (JS \\w is ASCII-only), so match Ukrainian stems bare. */
-const softPhoneHeuristic = (text: string): boolean =>
-  /(?:\bphone\b|телефон|номер)/i.test(text);
-
-const installCallToolRecorder = (
-  adapters: ClinicAdapters,
-): { calls: CallRecord[]; restore: () => void } => {
-  const calls: CallRecord[] = [];
-  const original = adapters.callTool;
-  const wrapped: McpCallTool = async (name, args) => {
-    calls.push({ name, args });
-    return original(name, args);
-  };
-  adapters.callTool = wrapped;
-  return {
-    calls,
-    restore: () => {
-      adapters.callTool = original;
-    },
-  };
-};
-
-const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
-  const bootstrap = runtime.getBootstrap();
-  const agentIds = bootstrap.agents.map((agent) => agent.id).sort();
-  const expected = [...EXPECTED_AGENT_IDS].sort();
-
-  if (agentIds.join(",") !== expected.join(",")) {
-    throw new Error(
-      `Expected agents [${expected.join(", ")}], got [${agentIds.join(", ")}]`,
-    );
-  }
-
-  console.log("✓ Runtime bootstrapped");
-  console.log(
-    "✓ Agents:",
-    bootstrap.agents.map((agent) => agent.id).join(", "),
-  );
-
-  const faqRuntime = bootstrap.agents.find((agent) => agent.id === "faq");
-  const bookingRuntime = bootstrap.agents.find((agent) => agent.id === "booking");
-  if (faqRuntime?.systemPrompt !== faqAgent.systemPrompt) {
-    throw new Error("faq systemPrompt in runtime does not match src/composition/agents.ts");
-  }
-  if (bookingRuntime?.systemPrompt !== bookingAgent.systemPrompt) {
-    throw new Error("booking systemPrompt in runtime does not match src/composition/agents.ts");
-  }
-  console.log("✓ Agent prompts loaded from build-time agents.ts");
-
-  const faqTools = (bootstrap.agentTools.faq ?? []).map((tool) => tool.name).sort();
-  const bookingTools = (bootstrap.agentTools.booking ?? []).map((tool) => tool.name).sort();
-  const expectedFaq = [...FAQ_TOOL_NAMES].sort();
-  const expectedBooking = [...FAQ_TOOL_NAMES, ...BOOKING_EXTRA_TOOL_NAMES].sort();
-
-  if (faqTools.join(",") !== expectedFaq.join(",")) {
-    throw new Error(`FAQ tools mismatch: got [${faqTools.join(", ")}]`);
-  }
-  if (bookingTools.join(",") !== expectedBooking.join(",")) {
-    throw new Error(`Booking tools mismatch: got [${bookingTools.join(", ")}]`);
-  }
-  console.log("✓ Agent tool wiring:", {
-    faq: faqTools.join("|"),
-    booking: bookingTools.join("|"),
-  });
-
-  if (!runtime.getCheckpointer()) {
-    throw new Error("Expected checkpointer from createClinicRuntime");
-  }
-  console.log("✓ Checkpointer attached (SqliteSaver)");
-  console.log("✓ EspoCRM MCP adapters connected (HTTP)");
-};
-
-const shortTelegramId = (prefixDigit: string): string =>
-  `${prefixDigit}${Date.now().toString().slice(-9)}`;
-
-const contactHits = (search: unknown): unknown[] => {
-  if (!search || typeof search !== "object") {
-    return [];
-  }
-  const record = search as { contacts?: unknown; list?: unknown };
-  if (Array.isArray(record.contacts)) {
-    return record.contacts;
-  }
-  if (Array.isArray(record.list)) {
-    return record.list;
-  }
-  return [];
-};
-
-const ensureKnownContact = async (
-  callTool: McpCallTool,
-  telegramId: string,
-): Promise<void> => {
-  const search = await callTool("search_contacts", { cTelegram: telegramId, limit: 5 });
-  if (contactHits(search).length > 0) {
-    console.log(`✓ Known contact already exists for cTelegram=${telegramId}`);
-    return;
-  }
-
-  await callTool("create_contact", {
-    firstName: "Smoke",
-    lastName: "Known",
-    cTelegram: telegramId,
-    skipDuplicateCheck: true,
-  });
-  console.log(`✓ Created known contact for cTelegram=${telegramId}`);
-};
-
-const invokeBooking = async (
-  graph: ReturnType<ClinicRuntime["getGraph"]>,
-  telegramId: string,
-  threadId: string,
-  utterance: string,
-): Promise<{ reply: string; recursionHit: boolean }> =>
-  runWithTelegramUserId(telegramId, async () => {
-    try {
-      const result = await graph.invoke(
-        { messages: [new HumanMessage(utterance)] },
-        {
-          configurable: { thread_id: threadId },
-          recursionLimit: 40,
-          runName: "clinic-turn",
-          tags: ["smoke"],
-          metadata: {
-            telegram_user_id: telegramId,
-            chat_id: threadId,
-            source: "smoke",
-          },
-        },
-      );
-      return {
-        reply: lastAiText(result.messages as Array<{ content?: unknown }>),
-        recursionHit: false,
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("Recursion limit")) {
-        return { reply: "", recursionHit: true };
+const parseFlags = (argv: string[]): CliFlags => {
+  const only = new Set<string>();
+  let invoke = false;
+  let write = false;
+  let all = false;
+  let identity = false;
+  for (const arg of argv) {
+    if (arg === "--invoke") {
+      invoke = true;
+    } else if (arg === "--write") {
+      write = true;
+    } else if (arg === "--all") {
+      all = true;
+    } else if (arg === "--identity") {
+      identity = true;
+    } else if (arg.startsWith("--only=")) {
+      for (const name of arg.slice("--only=".length).split(",")) {
+        const trimmed = name.trim();
+        if (trimmed) {
+          only.add(trimmed);
+        }
       }
-      throw error;
     }
-  });
-
-const assertFirstTelegramSearch = (
-  label: string,
-  calls: CallRecord[],
-  telegramId: string,
-): void => {
-  const first = calls[0];
-  if (!first || first.name !== "search_contacts") {
-    throw new Error(
-      `${label}: expected first MCP call search_contacts, got ${first?.name ?? "none"} (calls=${calls.map((c) => c.name).join(",") || "none"})`,
-    );
   }
-  if (first.args.cTelegram !== telegramId) {
-    throw new Error(
-      `${label}: expected cTelegram=${telegramId}, got ${String(first.args.cTelegram)}`,
-    );
+  if (identity) {
+    only.add("identity");
+    invoke = true;
   }
+  return { invoke, write, all, identity, only };
 };
 
-const runIdentitySmoke = async (runtime: ClinicRuntime): Promise<void> => {
-  const bootstrap = runtime.getBootstrap();
-  const graph = runtime.getGraph();
-  const { calls, restore } = installCallToolRecorder(bootstrap.adapters);
-
-  try {
-    const knownId = process.env.SMOKE_KNOWN_TELEGRAM_ID?.trim() || shortTelegramId("9");
-    await ensureKnownContact(bootstrap.adapters.callTool, knownId);
-
-    calls.length = 0;
-    const known = await invokeBooking(
-      graph,
-      knownId,
-      `smoke-identity-known-${randomUUID().slice(0, 8)}`,
-      "I want to book an appointment. Start by looking up my contact.",
-    );
-    assertFirstTelegramSearch("Known path", calls, knownId);
-    if (calls.some((call) => call.name === "create_contact")) {
-      throw new Error("Known path: must not call create_contact on first turn");
-    }
-    console.log("✓ Known path hard asserts (search_contacts + no create_contact)");
-    if (known.recursionHit) {
-      console.warn("⚠ Soft: known path hit recursion limit after identity tools ran");
-    }
-    if (known.reply && softPhoneHeuristic(known.reply)) {
-      console.warn(
-        "⚠ Soft: known-path reply mentions phone — expected skip contact questions:",
-        known.reply.slice(0, 200),
-      );
-    } else if (known.reply) {
-      console.log("✓ Soft: known-path reply does not ask for phone");
-    }
-
-    calls.length = 0;
-    const unknownId = shortTelegramId("8");
-    const unknown = await invokeBooking(
-      graph,
-      unknownId,
-      `smoke-identity-unknown-${randomUUID().slice(0, 8)}`,
-      "I want to book an appointment. Start by looking up my contact.",
-    );
-    assertFirstTelegramSearch("Unknown path", calls, unknownId);
-    if (calls.some((call) => call.name === "create_contact")) {
-      throw new Error(
-        "Unknown path: must not call create_contact before phone/name are provided",
-      );
-    }
-    console.log("✓ Unknown path hard asserts (search_contacts + no create_contact)");
-    if (unknown.recursionHit) {
-      console.warn("⚠ Soft: unknown path hit recursion limit after identity tools ran");
-    }
-    if (unknown.reply && softPhoneHeuristic(unknown.reply)) {
-      console.log("✓ Soft: unknown-path reply asks for phone");
-    } else if (unknown.reply) {
-      console.warn(
-        "⚠ Soft: unknown-path reply did not clearly ask for phone:",
-        unknown.reply.slice(0, 200),
-      );
-    }
-  } finally {
-    restore();
+const resolveTiers = (flags: CliFlags): SmokeTier[] => {
+  if (flags.all || flags.only.size > 0) {
+    return ["deterministic", "invoke", "write"];
   }
+  const tiers: SmokeTier[] = ["deterministic"];
+  if (flags.invoke || flags.identity) {
+    tiers.push("invoke");
+  }
+  if (flags.write) {
+    tiers.push("write");
+  }
+  return tiers;
+};
+
+const pad = (value: string, width: number): string =>
+  value.length >= width ? value : `${value}${" ".repeat(width - value.length)}`;
+
+const printSummary = (results: ScenarioResult[]): void => {
+  console.log("\n=== Smoke summary ===");
+  console.log(
+    `${pad("scenario", 24)} ${pad("tier", 14)} ${pad("status", 8)} ${pad("turns", 6)} ${pad("ms", 8)} warnings`,
+  );
+  for (const result of results) {
+    console.log(
+      `${pad(result.name, 24)} ${pad(result.tier, 14)} ${pad(result.status, 8)} ${pad(String(result.turns), 6)} ${pad(String(result.durationMs), 8)} ${result.warnings.length}${result.error ? ` — ${result.error}` : ""}`,
+    );
+  }
+  const failed = results.filter((result) => result.status === "fail").length;
+  const warned = results.filter((result) => result.status === "warn").length;
+  const passed = results.filter((result) => result.status === "pass").length;
+  const skipped = results.filter((result) => result.status === "skip").length;
+  console.log(
+    `\npass=${passed} warn=${warned} fail=${failed} skip=${skipped} total=${results.length}`,
+  );
 };
 
 const main = async (): Promise<void> => {
-  const config = loadConfig();
+  const flags = parseFlags(process.argv.slice(2));
+  const env = loadSmokeEnv();
+  const tiers = resolveTiers(flags);
+
+  const scenarios = scenariosForTiers(
+    tiers,
+    flags.only.size > 0 ? flags.only : undefined,
+  );
+
+  if (scenarios.length === 0) {
+    throw new Error("No smoke scenarios matched the selected flags");
+  }
+
+  const hasWriteScenarios = scenarios.some((scenario) => scenario.tier === "write");
+  const config = {
+    ...loadConfig(),
+    assignedUserId: smokeAssignedUserId(
+      hasWriteScenarios ? { requireExplicit: true } : undefined,
+    ),
+  };
+  console.log(`✓ Smoke assigned user ${config.assignedUserId}`);
+  if (hasWriteScenarios) {
+    assertWritesAllowed(env, config.espocrmMcpUrl);
+    console.log(
+      "✓ Write smoke isolated: telegram ids 9998…, contacts named Smoke Tester, reminder seeds use [SMOKE] meeting names",
+    );
+  }
   applyTracingPrivacyDefaults();
-  const shouldInvoke = process.argv.includes("--invoke");
-  const shouldIdentity = process.argv.includes("--identity");
-
   const runtime = await createClinicRuntime(config);
+  const supportsDeleteEntity = await detectDeleteEntitySupport(
+    runtime.getBootstrap().adapters.callTool,
+  );
+  console.log(
+    `✓ delete_entity ${supportsDeleteEntity ? "available" : "not available (soft-cancel + scrub contact phone/telegram)"}`,
+  );
+
+  const cleanup = createCleanupRegistry(runtime.getBootstrap().adapters.callTool, {
+    supportsDeleteEntity,
+  });
+
+  console.log(
+    `Running ${scenarios.length} scenario(s): ${scenarios.map((s) => s.name).join(", ")}`,
+  );
+
+  const results: ScenarioResult[] = [];
+  let interrupted = false;
+
+  const onSignal = (): void => {
+    interrupted = true;
+    console.warn("\n⚠ Interrupt — running cleanup…");
+  };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+
   try {
-    await assertBootstrap(runtime);
-    await runConsultationSwitchSmoke();
+    for (const scenario of scenarios) {
+      if (interrupted) {
+        results.push({
+          name: scenario.name,
+          tier: scenario.tier,
+          status: "skip",
+          turns: 0,
+          durationMs: 0,
+          warnings: [],
+          error: "interrupted",
+        });
+        continue;
+      }
 
-    if (!shouldInvoke && !shouldIdentity) {
-      console.log("Skip LLM invoke (pass --invoke or --identity).");
-      return;
-    }
-
-    if (shouldInvoke) {
-      const graph = runtime.getGraph();
-      const result = await graph.invoke(
-        { messages: [new HumanMessage("What are your clinic hours?")] },
-        {
-          configurable: { thread_id: `smoke-faq-${randomUUID().slice(0, 8)}` },
-          runName: "clinic-turn",
-          tags: ["smoke"],
-          metadata: {
-            telegram_user_id: "smoke-faq",
-            chat_id: "smoke-faq",
-            source: "smoke",
-          },
-        },
-      );
-
-      const content = lastAiText(result.messages as Array<{ content?: unknown }>);
-      console.log("✓ Graph invoke completed (--invoke)");
-      console.log("Last reply:", content.slice(0, 500));
-    }
-
-    if (shouldIdentity) {
-      await runIdentitySmoke(runtime);
-      console.log("✓ Identity smoke completed (--identity)");
+      const started = Date.now();
+      console.log(`\n--- ${scenario.name} (${scenario.tier}) ---`);
+      try {
+        const outcome = await scenario.run({
+          runtime,
+          callTool: runtime.getBootstrap().adapters.callTool,
+          cleanup,
+          supportsDeleteEntity,
+          env,
+        });
+        const warnings = outcome?.warnings ?? [];
+        results.push({
+          name: scenario.name,
+          tier: scenario.tier,
+          status: warnings.length > 0 ? "warn" : "pass",
+          turns: outcome?.turns ?? 0,
+          durationMs: Date.now() - started,
+          warnings,
+        });
+        console.log(
+          `✓ ${scenario.name} ${warnings.length > 0 ? `(${warnings.length} soft warning(s))` : "passed"}`,
+        );
+      } catch (error: unknown) {
+        const message =
+          error instanceof SmokeAssertError || error instanceof Error
+            ? error.message
+            : String(error);
+        console.error(`✗ ${scenario.name}:`, message);
+        results.push({
+          name: scenario.name,
+          tier: scenario.tier,
+          status: "fail",
+          turns: 0,
+          durationMs: Date.now() - started,
+          warnings: [],
+          error: message,
+        });
+      }
     }
   } finally {
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    try {
+      await cleanup.run();
+      console.log("✓ CleanupRegistry completed");
+    } catch (error: unknown) {
+      console.warn(
+        "⚠ CleanupRegistry failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
     await runtime.shutdownAdapters();
     console.log("✓ shutdownAdapters completed");
+  }
+
+  printSummary(results);
+  if (results.some((result) => result.status === "fail") || interrupted) {
+    process.exitCode = 1;
   }
 };
 

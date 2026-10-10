@@ -7,6 +7,7 @@ import {
 } from "../../analytics/track.js";
 import { kyivCalendarDate } from "../../composition/clinic-datetime.js";
 import {
+  applyReminderDecision,
   clearReminderConfirmsForTests,
   createReminderWebhookHandler,
   formatReminderMessage,
@@ -656,5 +657,63 @@ describe("createReminderWebhookHandler", () => {
     });
     expect(response.status).toBe(404);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("applyReminderDecision", () => {
+  afterEach(() => {
+    clearReminderConfirmsForTests();
+    setTrackEventForTests(null);
+  });
+
+  it("returns none when no pending confirm", async () => {
+    const callTool = vi.fn();
+    await expect(applyReminderDecision(callTool, "1", CONFIRM_YES_LABEL)).resolves.toEqual({
+      kind: "none",
+    });
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("updates CRM and tracks on ✅", async () => {
+    const events: Captured[] = [];
+    setTrackEventForTests((name, props) => {
+      events.push({ name, props });
+    });
+    const startMs = Date.now() + 60 * 60 * 1000;
+    setReminderConfirmPending("u-1", [{ id: "meet-a", utcMs: startMs }]);
+    const callTool = vi.fn().mockResolvedValue({ ok: true });
+
+    await expect(applyReminderDecision(callTool, "u-1", CONFIRM_YES_LABEL)).resolves.toEqual({
+      kind: "updated",
+      status: "Confirmed",
+      meetingIds: ["meet-a"],
+    });
+    expect(callTool).toHaveBeenCalledWith("update_meeting", {
+      meetingId: "meet-a",
+      status: "Confirmed",
+    });
+    expect(events.some((event) => event.name === "reminder_approved")).toBe(true);
+    // Consumed — second tap is none.
+    await expect(applyReminderDecision(callTool, "u-1", CONFIRM_YES_LABEL)).resolves.toEqual({
+      kind: "none",
+    });
+  });
+
+  it("re-arms pending on CRM failure", async () => {
+    const startMs = Date.now() + 60 * 60 * 1000;
+    setReminderConfirmPending("u-2", [{ id: "meet-b", utcMs: startMs }]);
+    const callTool = vi.fn().mockRejectedValue(new Error("crm down"));
+
+    await expect(applyReminderDecision(callTool, "u-2", CONFIRM_NO_LABEL)).resolves.toEqual({
+      kind: "crm_error",
+      meetings: [{ id: "meet-b", utcMs: startMs }],
+    });
+    // Pending re-armed — retry can succeed.
+    callTool.mockResolvedValue({ ok: true });
+    await expect(applyReminderDecision(callTool, "u-2", CONFIRM_NO_LABEL)).resolves.toEqual({
+      kind: "updated",
+      status: "Not Held",
+      meetingIds: ["meet-b"],
+    });
   });
 });

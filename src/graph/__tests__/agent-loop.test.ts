@@ -479,6 +479,43 @@ describe("createAgentPrepareNode", () => {
     ]);
   });
 
+  it("loads the catalog before opening chips when Обрати іншу процедуру is the first catalog touch", async () => {
+    const loadServices = vi.fn(async () => ({
+      list: [
+        { id: "svc-lip", name: "збільшення губ" },
+        { id: "svc-derm", name: "Видалення новоутворень" },
+      ],
+    }));
+    const prepare = createAgentPrepareNode("faq", {
+      loadServices,
+      partitionCandidates: async () => [
+        { label: "Ін'єкційні процедури", serviceIds: ["svc-lip"] },
+        { label: "Дерматологія", serviceIds: ["svc-derm"] },
+      ],
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Обрати іншу процедуру")],
+        servicesContext: null,
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: { id: "consult", name: "Консультація", source: "catalog" },
+          choices: [
+            { id: "yes", label: "Так" },
+            { id: "other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(loadServices).toHaveBeenCalledTimes(1);
+    expect(update.servicesContext?.list).toHaveLength(2);
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+    });
+  });
+
   it("does not open FAQ catalog on Послуги in prepare", async () => {
     const prepare = createAgentPrepareNode("faq", {
       partitionCandidates: async () => [
@@ -3524,6 +3561,222 @@ describe("createAgentFinalizeNode", () => {
 
     expect(update.lastHandoff?.replyText).toBe(PATIENT_FALLBACK_MESSAGE);
     expect(update.contactContext).toBeUndefined();
+  });
+
+  it("advances unresolved contact_field from phone to firstName after a valid phone", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("+380501112233")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "phoneNumber",
+          choices: [],
+        },
+        agentMessages: [
+          new HumanMessage("+380501112233"),
+          new AIMessage("Дякую, записала номер."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+    expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше ім’я.");
+  });
+
+  it("stays on firstName when the patient asks a question instead of a name", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("а скільки коштує?")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "firstName",
+          choices: [],
+        },
+        agentMessages: [
+          new HumanMessage("а скільки коштує?"),
+          new AIMessage("Спочатку ім’я, будь ласка."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+  });
+
+  it("stays on lastName when the patient asks a question instead of a surname", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("навіщо вам прізвище?")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          choices: [],
+        },
+        agentMessages: [
+          new HumanMessage("навіщо вам прізвище?"),
+          new AIMessage("Для запису в клініку."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+  });
+
+  it("advances unresolved contact_field from firstName to lastName after a name", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("Smoke")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "firstName",
+          choices: [],
+        },
+        agentMessages: [
+          new HumanMessage("Smoke"),
+          new AIMessage("Дякую."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+    expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше прізвище.");
+  });
+
+  it("clears contact_field after lastName so create_contact can run", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("Tester")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          choices: [],
+        },
+        agentMessages: [
+          new HumanMessage("Tester"),
+          new AIMessage("Дякую, створю контакт."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toBeNull();
+  });
+
+  it("clears create mutation_confirm and invalidates the slot after awaitingConfirmation chat-other", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        contactContext: ownedContactContext(),
+        bookingDraft: canonicalBookingDraft({
+          phase: "confirming",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              contactId: "contact-1",
+              serviceId: "svc-1",
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+            },
+          },
+        }),
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              awaitingConfirmation: true,
+              userReply: "зачекайте секунду",
+            }),
+            name: "create_meeting",
+            tool_call_id: "create-aside-1",
+          }),
+          new AIMessage("Добре, зачекаю."),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.bookingDraft?.selectedSlot).toBeNull();
+    expect(update.bookingDraft?.pendingCommand).toBeNull();
+  });
+
+  it("keeps ✅/❌ after cancel chat-other instead of a stale visit menu", () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = finalize(
+      clinicState({
+        bookingContext: listedMeetings,
+        bookingDraft: {
+          ...createEmptyBookingDraft("create"),
+          phase: "confirming",
+          pendingCommand: null,
+        },
+        pendingInteraction: {
+          kind: "visit_select",
+          stage: "action",
+          meetings: [{ id: "m-1", name: "Консультація", dateStart: "2026-08-17T11:00:00" }],
+          choices: [
+            { id: "reschedule", label: "Перенести" },
+            { id: "cancel", label: "Скасувати" },
+            { id: "decline", label: "Ні, дякую" },
+          ],
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              awaitingConfirmation: true,
+              userReply: "Скільки коштує консультація?",
+            }),
+            name: "cancel_meeting",
+            tool_call_id: "cancel-aside-1",
+          }),
+          new AIMessage("Вартість первинної консультації становить 300 грн."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyButtons).toEqual(["✅", "❌"]);
+    expect(update.lastHandoff?.replyText).toContain("300");
   });
 
   const agent: ClinicAgentDefinition = {
@@ -6601,6 +6854,195 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
   });
 
+  it("re-arms cancel HITL from awaitingConfirmation draft when bookingContext is empty", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const state = clinicState({
+      messages: [new HumanMessage("Скільки коштує консультація?")],
+      bookingContext: null,
+      bookingDraft: {
+        ...createEmptyBookingDraft("create"),
+        phase: "confirming",
+        pendingCommand: null,
+      },
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "cancel",
+        choices: [
+          { id: "confirm", label: "✅" },
+          { id: "decline", label: "❌" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "Скільки коштує консультація?",
+            draft: {
+              confirmMessage: "Скасувати цей візит?",
+              command: {
+                action: "cancel",
+                payload: { meetingId: "m-frozen", status: "Not Held" },
+              },
+            },
+          }),
+          name: "cancel_meeting",
+          tool_call_id: "cancel-frozen-1",
+        }),
+        new AIMessage("Вартість первинної консультації становить 300 грн."),
+      ],
+    });
+
+    expect(routeAfterAgentLlm(
+      state,
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    )).toBe("booking__command_prepare");
+
+    const update = await commandPrepare(state);
+    const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const lastAi = [...messages].reverse().find((message) => message instanceof AIMessage);
+    expect(lastAi?.tool_calls?.[0]).toMatchObject({
+      name: "cancel_meeting",
+      args: expect.objectContaining({ meetingId: "m-frozen" }),
+    });
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "mutation_confirm",
+      action: "cancel",
+    });
+  });
+
+  it("re-arms cancel HITL when pendingCommand is the CRM write payload", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const state = clinicState({
+      messages: [new HumanMessage("Скільки коштує консультація?")],
+      bookingContext: listedMeetings,
+      bookingDraft: {
+        ...createEmptyBookingDraft("create"),
+        phase: "confirming",
+        pendingCommand: {
+          action: "cancel",
+          payload: { meetingId: "m-crm", status: "Not Held" },
+        },
+      },
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "cancel",
+        choices: [
+          { id: "confirm", label: "✅" },
+          { id: "decline", label: "❌" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "Скільки коштує консультація?",
+            draft: {
+              confirmMessage: "Скасувати цей візит?",
+              name: "Консультація",
+              dateStart: "2026-10-10T13:30:00",
+              dateEnd: "2026-10-10T14:00:00",
+              command: {
+                action: "cancel",
+                payload: { meetingId: "m-crm", status: "Not Held" },
+              },
+            },
+          }),
+          name: "cancel_meeting",
+          tool_call_id: "cancel-crm-1",
+        }),
+        new AIMessage("Вартість первинної консультації становить 300 грн."),
+      ],
+    });
+
+    const update = await commandPrepare(state);
+    const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const lastAi = [...messages].reverse().find((message) => message instanceof AIMessage);
+    const args = lastAi?.tool_calls?.[0]?.args as Record<string, unknown> | undefined;
+    expect(lastAi?.tool_calls?.[0]?.name).toBe("cancel_meeting");
+    expect(args).toMatchObject({
+      meetingId: "m-crm",
+      confirmMessage: expect.stringContaining("Скасувати"),
+    });
+    expect(args).not.toHaveProperty("status");
+    expect(update.bookingDraft?.pendingCommand?.payload).not.toHaveProperty("status");
+    expect(update.bookingDraft?.pendingCommand?.payload).toMatchObject({
+      meetingId: "m-crm",
+      confirmMessage: expect.stringContaining("Скасувати"),
+    });
+  });
+
+  it("re-arms cancel HITL when visit_select is still open after cancel chat-other", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const state = clinicState({
+      messages: [new HumanMessage("Скільки коштує консультація?")],
+      bookingContext: null,
+      bookingDraft: {
+        ...createEmptyBookingDraft("create"),
+        phase: "confirming",
+        pendingCommand: null,
+      },
+      pendingInteraction: {
+        kind: "visit_select",
+        stage: "action",
+        meetings: [{ id: "m-visit", name: "Візит", dateStart: "2026-08-17T11:00:00" }],
+        choices: [
+          { id: "reschedule", label: "Перенести" },
+          { id: "cancel", label: "Скасувати" },
+          { id: "decline", label: "Ні, дякую" },
+        ],
+      },
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "cancel-visit-1",
+            name: "cancel_meeting",
+            args: { meetingId: "m-visit", confirmMessage: "Скасувати?" },
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "Скільки коштує консультація?",
+            draft: {
+              command: {
+                action: "cancel",
+                payload: { meetingId: "m-visit", status: "Not Held" },
+              },
+            },
+          }),
+          name: "cancel_meeting",
+          tool_call_id: "cancel-visit-1",
+        }),
+        new AIMessage("Вартість первинної консультації — 300 грн."),
+      ],
+    });
+
+    expect(routeAfterAgentLlm(
+      state,
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    )).toBe("booking__command_prepare");
+
+    const update = await commandPrepare(state);
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "mutation_confirm",
+      action: "cancel",
+    });
+    const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const lastAi = [...messages].reverse().find((message) => message instanceof AIMessage);
+    expect(lastAi?.tool_calls?.[0]).toMatchObject({
+      name: "cancel_meeting",
+      args: expect.objectContaining({ meetingId: "m-visit" }),
+    });
+  });
+
   it("does not re-arm create chat-other as a mutation", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
@@ -7421,6 +7863,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("checkpoints the selected day before resolving its time", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-01T09:00:00Z"));
+    try {
     const multiDaySnapshot: AvailabilityContext = {
       days: [
         {
@@ -7473,6 +7918,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     }));
     expect(timeUpdate.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-09T13:30:00");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks a multi-day booking mutation until a validated slot exists", async () => {

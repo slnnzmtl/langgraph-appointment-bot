@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@langchain/langgraph", () => ({
+  getConfig: vi.fn(),
+}));
+
+import { getConfig } from "@langchain/langgraph";
+
 import { setupClinicAdapters } from "../clinic-adapters.js";
 
 const adapterConfig = {
@@ -16,9 +22,11 @@ const adapterConfig = {
 describe("clinic-adapters", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.mocked(getConfig).mockReset();
   });
 
   it("posts tool calls to /tools and parses text content", async () => {
+    vi.mocked(getConfig).mockReturnValue({ configurable: {} } as never);
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/health")) {
@@ -32,6 +40,7 @@ describe("clinic-adapters", () => {
         "Content-Type": "application/json",
         espocrm_api_key: "mcp-key",
       });
+      expect(init?.headers).not.toHaveProperty("x-thread-id");
       expect(JSON.parse(String(init?.body))).toEqual({ entityType: "cService", limit: 50 });
       return new Response(
         JSON.stringify({
@@ -50,6 +59,37 @@ describe("clinic-adapters", () => {
     await expect(adapters.callTool("search_entity", { entityType: "cService", limit: 50 })).resolves.toEqual({
       total: 1,
       list: [{ id: "svc-1" }],
+    });
+  });
+
+  it("sends x-thread-id when LangGraph thread_id is set", async () => {
+    vi.mocked(getConfig).mockReturnValue({
+      configurable: { thread_id: "tg-chat-42" },
+    } as never);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/health")) {
+        return new Response(JSON.stringify({ status: "healthy" }), { status: 200 });
+      }
+      expect(init?.headers).toMatchObject({
+        espocrm_api_key: "mcp-key",
+        "x-thread-id": "tg-chat-42",
+      });
+      return new Response(
+        JSON.stringify({
+          content: [{ type: "text", text: JSON.stringify({ ok: true }) }],
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapters = await setupClinicAdapters({
+      ...adapterConfig,
+      espocrmMcpUrl: "http://127.0.0.1:3000",
+    });
+
+    await expect(adapters.callTool("search_entity", { entityType: "cService" })).resolves.toEqual({
+      ok: true,
     });
   });
 

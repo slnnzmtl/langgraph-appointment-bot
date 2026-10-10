@@ -16,6 +16,7 @@ import {
   excludeMeetingsById,
   extractMeetingsFromSearchResult,
   fallbackClinicTimeRanges,
+  filterSlotsAfterNow,
   findNextAvailableSlots,
   findPreviousAvailableSlots,
   formatKyivDayLabel,
@@ -583,7 +584,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
             ...reserved,
           ];
           const timeRanges = resolveRangesForDay(working, input.date);
-          const slots = omitSlotsAtStarts(
+          let slots = omitSlotsAtStarts(
             computeFreeSlots({
               day: input.date,
               meetings,
@@ -593,6 +594,9 @@ export const createPresentAvailabilitySlotsTool = (options: {
             }),
             omitDateStarts,
           );
+          if (input.date === todayKyiv) {
+            slots = filterSlotsAfterNow(slots, new Date());
+          }
           trackEvent("availability_presented", {
             outcome: "success",
             date: input.date,

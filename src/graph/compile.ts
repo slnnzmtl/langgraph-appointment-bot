@@ -16,6 +16,7 @@ import {
   normalizeContactLookupResult,
 } from "../tools/index.js";
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
+import { normalizeListServicesResult } from "../tools/service-tools.js";
 import {
   createAgentFinalizeNode,
   createAgentMutationFinalizeNode,
@@ -153,13 +154,25 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const interactionRender = interactionRenderNodeName(agent.id);
     const isBooking = agent.id === BOOKING_AGENT_ID;
 
+    const listServicesTool = agent.id === FAQ_AGENT_ID
+      ? tools.find((entry) => entry.name === "list_services")
+      : undefined;
+    const loadServices = listServicesTool != null
+      ? async () => normalizeListServicesResult(String(await listServicesTool.invoke({})))
+      : undefined;
+
     graph = graph
       .addNode(
         prepare,
         createAgentPrepareNode(
           agent.id,
-          agent.id === FAQ_AGENT_ID && faqPartitionCandidates != null
-            ? { partitionCandidates: faqPartitionCandidates }
+          agent.id === FAQ_AGENT_ID
+            ? {
+                ...(faqPartitionCandidates != null
+                  ? { partitionCandidates: faqPartitionCandidates }
+                  : {}),
+                ...(loadServices != null ? { loadServices } : {}),
+              }
             : undefined,
         ),
       )
