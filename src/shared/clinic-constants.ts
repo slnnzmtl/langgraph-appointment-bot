@@ -168,3 +168,21 @@ export const serviceChangedNoticeUk = (serviceName: string): string =>
 /** Runtime-owned prompt when DATE/TIME/SERVICE is still open and the model claimed a write. */
 export const BOOKING_SCHEDULE_RESELECT_UK =
   "Оберіть, будь ласка, зручну дату й час для запису.";
+
+/** Runtime-owned line while HITL ✅/❌ is open and model prose must not claim an outcome. */
+export const BOOKING_AWAITING_CONFIRM_UK = "Запис ще не підтверджено.";
+
+/**
+ * Runtime-owned Already-booked backstop body (visit label optional).
+ * Graph attaches REPLACE menu («Скасувати», «Ні, дякую»).
+ */
+export const alreadyBookedReplaceReplyUk = (visitLabel?: string): string => {
+  const visitLine = visitLabel != null && visitLabel.length > 0
+    ? `У вас вже є запланований візит: ${visitLabel}.`
+    : "У вас вже є запланований візит.";
+  return (
+    `${visitLine}\n\n`
+    + "На жаль, ми не можемо забронювати нову процедуру, поки у вас є активний запис. "
+    + "Бажаєте скасувати поточний візит і записати нову?"
+  );
+};

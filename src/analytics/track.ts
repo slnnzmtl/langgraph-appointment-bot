@@ -29,6 +29,7 @@ export const TIER1_EVENTS = [
   "tool_error",
   "reply_menu_filled",
   "faq_offer_question_dropped",
+  "false_success_claim",
   "supervisor_routing_decision",
   "reminder_sent",
   "reminder_approved",
@@ -147,6 +148,8 @@ export const finishTrackedWrite = (
   options?: {
     skip?: (record: Record<string, unknown>) => boolean;
     requireEntityId?: boolean;
+    /** Defaults to jsonEntityId; meeting writes pass committedMeetingEntityId. */
+    resolveEntityId?: (raw: string) => string | undefined;
   },
 ): string => {
   const record = asJsonRecord(raw);
@@ -158,7 +161,7 @@ export const finishTrackedWrite = (
     trackToolError(tool, err);
     return raw;
   }
-  const entityId = jsonEntityId(raw);
+  const entityId = (options?.resolveEntityId ?? jsonEntityId)(raw);
   if (options?.requireEntityId && !entityId) {
     trackToolError(tool, "Mutation response did not include an entity id");
     return raw;

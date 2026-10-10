@@ -2,7 +2,7 @@ import { tool, type StructuredToolInterface } from "@langchain/core/tools";
 import { z } from "zod";
 
 import { finishTrackedWrite, trackEvent, type Tier1EventName } from "../analytics/track.js";
-import { asJsonRecord } from "../shared/json-record.js";
+import { asJsonRecord, committedMeetingEntityId } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { normalizeLocalIsoDatetime } from "./availability-slots.js";
 import {
@@ -110,6 +110,7 @@ const finishMeetingMutation = (
     {
       skip: skipHitlPending,
       requireEntityId: true,
+      resolveEntityId: committedMeetingEntityId,
     },
   );
 

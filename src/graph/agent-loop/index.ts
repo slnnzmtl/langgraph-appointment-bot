@@ -4,6 +4,7 @@ export {
   type MeetingMutationOutcome,
   advanceBookingNoteStep,
   availabilityOfferFromToolTurn,
+  bookingOutcomeRiskState,
   captureAvailabilityFromMessages,
   captureLatestToolContext,
   captureServicesFromMessages,

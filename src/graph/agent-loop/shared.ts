@@ -38,7 +38,7 @@ import {
   VISIT_CHANGE_MENU,
   VISIT_CHANGE_MENU_EN,
 } from "../../shared/clinic-constants.js";
-import { asJsonRecord } from "../../shared/json-record.js";
+import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
 import {
   extractMessageTextContent,
   extractRawMessageText,
@@ -187,20 +187,42 @@ export const classifyMeetingMutationToolMessage = (
   if (typeof record.error === "string") {
     return BLOCKED_MEETING_ERRORS.has(record.error) ? "blocked" : "failed";
   }
-  const entityId = typeof record.id === "string" && record.id.length > 0
-    ? record.id
-    : typeof record.meetingId === "string" && record.meetingId.length > 0
-      ? record.meetingId
-      : null;
-  if (entityId != null) {
-    return "committed";
-  }
-  return "failed";
+  return committedMeetingEntityId(body) != null ? "committed" : "failed";
 };
 
 export const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
   MEETING_MUTATION_TOOLS.has(message.name ?? "")
   && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
+
+/**
+ * True when model prose must not ship: a non-committed meeting write this turn,
+ * draft past slot selection (details/confirming), or an open ✅/❌ confirm.
+ * Service/date/time/note stay covered by schedule reselect and interaction render.
+ */
+export const bookingOutcomeRiskState = (state: ClinicState): boolean => {
+  const messages = state.agentMessages ?? [];
+  for (const message of messages) {
+    if (!(message instanceof ToolMessage)) {
+      continue;
+    }
+    const outcome = classifyMeetingMutationToolMessage(message);
+    if (
+      outcome === "failed"
+      || outcome === "blocked"
+      || outcome === "declined"
+      || outcome === "pending_confirmation"
+    ) {
+      return true;
+    }
+  }
+  const draft = state.bookingDraft;
+  if (draft != null) {
+    if (draft.phase === "details" || draft.phase === "confirming" || draft.pendingCommand != null) {
+      return true;
+    }
+  }
+  return state.pendingInteraction?.kind === "mutation_confirm";
+};
 
 export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage | null => {
   for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
