@@ -18,11 +18,10 @@ import { PATIENT_FALLBACK_MESSAGE } from "../shared/clinic-constants.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { runWithTelegramUserId } from "../tools/telegram-user-context.js";
 import {
+  applyReminderDecision,
   REMINDER_CONFIRMED_ACK,
   REMINDER_DECLINED_ACK,
   REMINDER_STALE_CONFIRM,
-  setReminderConfirmPending,
-  takeReminderConfirm,
 } from "./reminder-webhook.js";
 import {
   interpretInvokeResult,
@@ -221,7 +220,7 @@ const isEmptyCheckpointSnapshot = (values: unknown): values is Record<string, ne
   && Object.keys(values).length === 0;
 
 /** True when the thread is paused on create/cancel/reschedule HITL Yes/No. */
-const hasPendingConfirmBooking = (
+export const hasPendingConfirmBooking = (
   tasks: unknown,
 ): boolean => {
   if (!Array.isArray(tasks)) {
@@ -241,15 +240,26 @@ const hasPendingConfirmBooking = (
   return false;
 };
 
-const graphInvokeConfig = (threadId: string, telegramUserId: string) => ({
+export type GraphTextTurnOptions = {
+  /** LangSmith / LangChain tags (default `["telegram"]`). */
+  tags?: string[];
+  /** Run metadata.source (default `"telegram"`). */
+  source?: string;
+};
+
+const graphInvokeConfig = (
+  threadId: string,
+  telegramUserId: string,
+  options?: GraphTextTurnOptions,
+) => ({
   configurable: { thread_id: threadId },
   recursionLimit: GRAPH_RECURSION_LIMIT,
   runName: "clinic-turn",
-  tags: ["telegram"],
+  tags: options?.tags ?? ["telegram"],
   metadata: {
     telegram_user_id: telegramUserId,
     chat_id: threadId,
-    source: "telegram",
+    source: options?.source ?? "telegram",
   },
 });
 
@@ -261,10 +271,11 @@ const runGraphExclusive = async (
   threadId: string,
   telegramUserId: string,
   run: (config: GraphInvokeConfig) => Promise<unknown>,
+  options?: GraphTextTurnOptions,
 ): Promise<OutboundReply> =>
   runWithTelegramUserId(telegramUserId, () =>
     runExclusiveForThread(threadId, async () => {
-      const result = await run(graphInvokeConfig(threadId, telegramUserId));
+      const result = await run(graphInvokeConfig(threadId, telegramUserId, options));
       return interpretInvokeResult(result);
     }),
   );
@@ -280,6 +291,7 @@ export const handleGraphTextTurn = async (
   telegramUserId: string,
   text: string,
   checkpointer?: ThreadCheckpointer,
+  options?: GraphTextTurnOptions,
 ): Promise<OutboundReply> =>
   runGraphExclusive(graph, threadId, telegramUserId, async (config) =>
     withCheckpointThreadRetry(checkpointer, threadId, async () => {
@@ -352,6 +364,7 @@ export const handleGraphTextTurn = async (
         config,
       );
     }),
+  options,
   );
 
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {
@@ -445,33 +458,21 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
     }
 
     const telegramUserId = String(fromId);
-    const reminderDecision = takeReminderConfirm(telegramUserId, text);
-    if (reminderDecision) {
-      const { adapters } = runtime.getBootstrap();
-      const callTool = adapters.callTool as McpCallTool;
-      try {
-        for (const meetingId of reminderDecision.meetingIds) {
-          await callTool("update_meeting", {
-            meetingId,
-            status: reminderDecision.status,
-          });
-        }
-      } catch (error: unknown) {
-        console.error("Reminder confirm CRM update failed:", error);
-        setReminderConfirmPending(telegramUserId, reminderDecision.meetings);
-        await ctx.reply(formatForTelegram("Вибачте, не вдалося оновити візит. Спробуйте ще раз."), {
-          parse_mode: "HTML",
-          reply_markup: buildConfirmKeyboard(),
-        });
-        return;
-      }
-      const confirmed = reminderDecision.status === "Confirmed";
-      trackEvent(confirmed ? "reminder_approved" : "reminder_declined", {
-        outcome: "success",
-        telegram_user_id: telegramUserId,
-        meeting_count: reminderDecision.meetingIds.length,
-        meeting_ids: reminderDecision.meetingIds,
+    const { adapters } = runtime.getBootstrap();
+    const reminderResult = await applyReminderDecision(
+      adapters.callTool as McpCallTool,
+      telegramUserId,
+      text,
+    );
+    if (reminderResult.kind === "crm_error") {
+      await ctx.reply(formatForTelegram("Вибачте, не вдалося оновити візит. Спробуйте ще раз."), {
+        parse_mode: "HTML",
+        reply_markup: buildConfirmKeyboard(),
       });
+      return;
+    }
+    if (reminderResult.kind === "updated") {
+      const confirmed = reminderResult.status === "Confirmed";
       await ctx.reply(
         formatForTelegram(confirmed ? REMINDER_CONFIRMED_ACK : REMINDER_DECLINED_ACK),
         {

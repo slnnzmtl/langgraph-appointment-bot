@@ -18,6 +18,8 @@ import {
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_REPLACE_MENU,
   BOOKING_SCHEDULE_RESELECT_UK,
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
   CONSULTATION_SERVICE_ID,
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
@@ -28,6 +30,7 @@ import {
   extractReplyButtons,
   matchesReplyLabel,
 } from "../../shared/message-content.js";
+import { normalizeClinicPhone } from "../../shared/phone.js";
 import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { reduceBookingDraft } from "../booking-draft.js";
@@ -81,30 +84,48 @@ import {
   terminalMeetingMutationOutcome,
 } from "./shared.js";
 
+/** True when the create draft is past service / slot / note and ready for identity. */
+const bookingDetailsReady = (state: ClinicState): boolean => {
+  const draft = state.bookingDraft;
+  return draft?.mode === "create"
+    && draft.serviceAcceptance?.status === "accepted"
+    && draft.selectedSlot != null
+    && (draft.note.status === "skipped" || draft.note.status === "answered");
+};
+
 /** Runtime-owned contact ladder once service, slot, and note are complete. */
 const bookingDetailsInteraction = (
   state: ClinicState,
 ): { replyText: string; interaction: PendingInteraction } | null => {
-  const draft = state.bookingDraft;
-  if (
-    draft?.mode !== "create"
-    || draft.serviceAcceptance?.status !== "accepted"
-    || draft.selectedSlot == null
-    || (draft.note.status !== "skipped" && draft.note.status !== "answered")
-  ) {
+  if (!bookingDetailsReady(state)) {
     return null;
   }
-  if (state.pendingInteraction?.kind === "contact_field") {
-    return {
-      replyText: String(renderBookingInteractionMessage(state.pendingInteraction).content),
-      interaction: state.pendingInteraction,
-    };
-  }
+  const draft = state.bookingDraft!;
   const identity = resolveContactIdentity(state.contactContext, draft.contactId);
   let field: "phoneNumber" | "firstName" | "lastName" | null = null;
   let occupied = false;
   if (identity.kind === "unresolved") {
-    field = "phoneNumber";
+    const open =
+      state.pendingInteraction?.kind === "contact_field"
+        ? state.pendingInteraction
+        : null;
+    const collected = open?.collected;
+    const latest = lastPatientText(state);
+    const latestPhone = normalizeClinicPhone(latest);
+    if (open?.field === "firstName") {
+      // Prepare stores accepted names on collected; asides leave the field open.
+      field = collected?.firstName ? "lastName" : "firstName";
+    } else if (open?.field === "lastName") {
+      if (collected?.lastName) {
+        // All three values are ready — release the field for create_contact.
+        return null;
+      }
+      field = "lastName";
+    } else if (latestPhone != null) {
+      field = "firstName";
+    } else {
+      field = "phoneNumber";
+    }
   } else if (identity.kind === "phone_candidate") {
     if (phoneCandidateHasLinkableRow(identity)) {
       return {
@@ -278,6 +299,13 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       replyText = detailsStep.replyText;
       replyButtons = replyButtonsForInteraction(detailsStep.interaction);
       contactFieldUpdate = { pendingInteraction: detailsStep.interaction };
+    } else if (
+      agent.id === BOOKING_AGENT_ID
+      && bookingDetailsReady(state)
+      && state.pendingInteraction?.kind === "contact_field"
+    ) {
+      // Ladder finished (or owned contact is complete) — clear so create_contact can run.
+      contactFieldUpdate = { pendingInteraction: null };
     }
     const clearOccupiedPhoneCandidate = detailsStep?.replyText === BOOKING_PHONE_OCCUPIED_UK
       ? { contactContext: null }
@@ -510,11 +538,23 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           && (classifyMeetingMutationToolMessage(message) === "committed"
             || meetingMutationIsHitlDecline(message)),
       );
+      const cancelChatOther = chatOther
+        && agentMessages.some(
+          (message) =>
+            message instanceof ToolMessage
+            && message.name === "cancel_meeting"
+            && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
+        );
       if (idle) {
         replyButtons = [
           ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
         ];
         trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+      } else if (cancelChatOther) {
+        // Prefer ✅/❌ over a stale visit menu when cancel HITL chat-other
+        // reaches finalize instead of command_prepare re-arm.
+        replyButtons = [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL];
+        trackEvent("reply_menu_filled", { menu: "mutation_confirm", reason: "cancel_chat_other" });
       } else if (
         state.pendingInteraction != null
         && isBookingOwnedInteraction(state.pendingInteraction)

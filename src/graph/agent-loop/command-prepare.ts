@@ -11,6 +11,7 @@ import { alignToAnchors, type AvailabilitySlotsToolArgs } from "../../tools/avai
 import { kyivToday } from "../../tools/availability-slots.js";
 import { resolveBookingScheduleRequest } from "../booking-schedule.js";
 import { contactMissingFields } from "../../tools/contact-tools.js";
+import { asJsonRecord } from "../../shared/json-record.js";
 import { extractMessageTextContent, extractReplyButtons } from "../../shared/message-content.js";
 import type {
   CancellationPurpose,
@@ -24,6 +25,8 @@ import {
 } from "../booking-draft.js";
 import {
   cancelCommandForSingleVisit,
+  cancelCommandFromMeeting,
+  cancelCommandFromStoredPayload,
   cancelConfirmationMessage,
 } from "../cancel-command.js";
 import { closedBookingSessionUpdate, reduceBookingSession } from "../booking-session.js";
@@ -152,18 +155,76 @@ export const hasPendingConfirmationChatOther = (state: ClinicState): boolean => 
 };
 
 /**
+ * Rebuild a cancel command from the awaitingConfirmation cancel_meeting result
+ * (draft.command frozen at HITL), or from the tool_call args that produced it.
+ */
+export const cancelCommandFromAwaitingConfirmation = (
+  state: ClinicState,
+): PendingBookingCommand | null => {
+  const latest = latestMeetingMutationToolMessage(state.agentMessages ?? []);
+  if (
+    latest == null
+    || latest.name !== "cancel_meeting"
+    || classifyMeetingMutationToolMessage(latest) !== "pending_confirmation"
+  ) {
+    return null;
+  }
+  const record = asJsonRecord(extractMessageTextContent(latest.content));
+  const draft = asJsonRecord(record?.draft);
+  const command = asJsonRecord(draft?.command);
+  const fromDraft = asJsonRecord(command?.payload);
+  if (typeof fromDraft?.meetingId === "string" && fromDraft.meetingId.trim().length > 0) {
+    return cancelCommandFromMeeting({
+      id: fromDraft.meetingId.trim(),
+      ...(typeof fromDraft.name === "string" ? { name: fromDraft.name } : {}),
+      ...(typeof fromDraft.dateStart === "string" ? { dateStart: fromDraft.dateStart } : {}),
+      ...(typeof fromDraft.dateEnd === "string" ? { dateEnd: fromDraft.dateEnd } : {}),
+    });
+  }
+  const callId = latest.tool_call_id;
+  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = state.agentMessages?.[index];
+    if (!(message instanceof AIMessage)) {
+      continue;
+    }
+    const call = message.tool_calls?.find((entry) => entry.id === callId);
+    if (call == null || call.name !== "cancel_meeting") {
+      continue;
+    }
+    const args = asJsonRecord(call.args);
+    if (typeof args?.meetingId === "string" && args.meetingId.trim().length > 0) {
+      return cancelCommandFromMeeting({
+        id: args.meetingId.trim(),
+        ...(typeof args.name === "string" ? { name: args.name } : {}),
+        ...(typeof args.dateStart === "string" ? { dateStart: args.dateStart } : {}),
+        ...(typeof args.dateEnd === "string" ? { dateEnd: args.dateEnd } : {}),
+      });
+    }
+  }
+  return null;
+};
+
+/**
  * Cancel HITL chat-other: after the model answers the unmatched ask, re-arm a
  * fresh cancel_meeting HITL (confirmationGiven false). Create/reschedule
  * chat-other stays slot-invalidate only. The awaitingConfirmation cancel_meeting
  * already ran this turn — that is expected.
+ *
+ * Meeting id comes from bookingContext, a seeded pendingCommand, or the frozen
+ * awaitingConfirmation draft — so re-arm still works when prefetch context is empty.
  */
 export const shouldRearmCancelAfterChatOther = (state: ClinicState): boolean => {
   if (!hasPendingConfirmationChatOther(state)) {
     return false;
   }
+  const latest = latestMeetingMutationToolMessage(state.agentMessages ?? []);
+  if (latest?.name !== "cancel_meeting") {
+    return false;
+  }
+  // Create/reschedule confirm cards must not re-arm as cancel.
   if (
-    state.pendingInteraction?.kind !== "mutation_confirm"
-    || state.pendingInteraction.action !== "cancel"
+    state.pendingInteraction?.kind === "mutation_confirm"
+    && state.pendingInteraction.action !== "cancel"
   ) {
     return false;
   }
@@ -175,23 +236,24 @@ export const shouldRearmCancelAfterChatOther = (state: ClinicState): boolean => 
   ) {
     return false;
   }
-  return (state.bookingContext?.meetings.length ?? 0) === 1;
+  return cancelCommandFromPlannedVisit(state) != null;
 };
 
 /**
- * Build cancel payload from the single planned visit, or a cancel command the
- * supervisor already seeded after a multi-visit meeting pick.
+ * Build cancel payload from the single planned visit, a seeded cancel command,
+ * or the frozen awaitingConfirmation cancel_meeting draft.
  */
 const cancelCommandFromPlannedVisit = (
   state: ClinicState,
 ): PendingBookingCommand | null => {
-  if (
-    state.bookingDraft?.pendingCommand?.action === "cancel"
-    && typeof state.bookingDraft.pendingCommand.payload.meetingId === "string"
-  ) {
-    return state.bookingDraft.pendingCommand;
+  if (state.bookingDraft?.pendingCommand?.action === "cancel") {
+    const rebuilt = cancelCommandFromStoredPayload(state.bookingDraft.pendingCommand.payload);
+    if (rebuilt != null) {
+      return rebuilt;
+    }
   }
-  return cancelCommandForSingleVisit(state.bookingContext);
+  return cancelCommandForSingleVisit(state.bookingContext)
+    ?? cancelCommandFromAwaitingConfirmation(state);
 };
 
 /** Last specialist AI text on this turn (strip trailers); empty if none. */

@@ -104,6 +104,44 @@ describe("meeting-tools availability", () => {
     expect(parsed.slots.some((s) => s.label === "14:30")).toBe(true);
   });
 
+  it("present_availability_slots drops past wall-clock slots when date is today", async () => {
+    // 11:13 Kyiv (EEST = UTC+3) on a Monday that matches crmCalendar weekdays.
+    vi.setSystemTime(new Date("2026-08-10T08:13:00Z"));
+    const dayCalendar = {
+      ...crmCalendar,
+      calendars: [
+        {
+          ...crmCalendar.calendars[0],
+          timeRanges: [["09:00", "15:00"]],
+        },
+      ],
+    };
+    const callTool = async (name: string) => {
+      if (name === "get_working_time") {
+        return dayCalendar;
+      }
+      if (name === "search_meetings") {
+        return { meetings: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = presentAvailability(callTool);
+    const raw = await tool.invoke({ date: "2026-08-10" });
+    const parsed = JSON.parse(raw as string) as {
+      slots: Array<{ label: string }>;
+      slot_count?: number;
+    };
+    const labels = parsed.slots.map((s) => s.label);
+    expect(labels).not.toContain("09:00");
+    expect(labels).not.toContain("09:30");
+    expect(labels).not.toContain("10:00");
+    expect(labels).not.toContain("10:30");
+    expect(labels).not.toContain("11:00");
+    expect(labels[0]).toBe("11:30");
+    expect(labels).toContain("14:30");
+  });
+
   it("present_availability_slots applies Non-working reserved time from get_working_time ranges", async () => {
     const callTool = async (name: string, args: Record<string, unknown>) => {
       calls.push({ name, args });
@@ -871,6 +909,110 @@ describe("tryAvailabilityCacheHit", () => {
   it("does not reuse snapshots created without the start-interval marker", () => {
     const legacySnapshot = { ...snapshot, startIntervalMinutes: undefined };
     expect(tryAvailabilityCacheHit(legacySnapshot, { durationMinutes: 30 })).toBeNull();
+  });
+
+  it("drops past slots from a cached day for today", () => {
+    const now = new Date("2026-09-10T07:00:00Z"); // 10:00 Kyiv (UTC+3)
+    const todaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-09-10",
+          dayLabel: "сьогодні",
+          slots: [
+            {
+              id: "s-0900",
+              label: "09:00",
+              dateStart: "2026-09-10T09:00:00",
+              dateEnd: "2026-09-10T09:30:00",
+            },
+            {
+              id: "s-1100",
+              label: "11:00",
+              dateStart: "2026-09-10T11:00:00",
+              dateEnd: "2026-09-10T11:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      startIntervalMinutes: 30,
+    };
+    const hit = tryAvailabilityCacheHit(
+      todaySnapshot,
+      { date: "2026-09-10", durationMinutes: 30 },
+      now,
+    );
+    expect(hit?.kind).toBe("day_slots");
+    const parsed = JSON.parse(hit!.json) as { slots: Array<{ label: string }> };
+    expect(parsed.slots.map((slot) => slot.label)).toEqual(["11:00"]);
+  });
+
+  it("misses the cache when every cached slot for today is already past", () => {
+    const now = new Date("2026-09-10T10:00:00Z"); // 13:00 Kyiv
+    const todaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-09-10",
+          slots: [
+            {
+              id: "s-0900",
+              label: "09:00",
+              dateStart: "2026-09-10T09:00:00",
+              dateEnd: "2026-09-10T09:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      startIntervalMinutes: 30,
+    };
+    expect(
+      tryAvailabilityCacheHit(
+        todaySnapshot,
+        { date: "2026-09-10", durationMinutes: 30 },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops an empty today from a cached DATE list", () => {
+    const now = new Date("2026-09-10T10:00:00Z"); // 13:00 Kyiv
+    const hit = tryAvailabilityCacheHit(
+      {
+        days: [
+          {
+            date: "2026-09-10",
+            slots: [
+              {
+                id: "s-0900",
+                label: "09:00",
+                dateStart: "2026-09-10T09:00:00",
+                dateEnd: "2026-09-10T09:30:00",
+              },
+            ],
+          },
+          {
+            date: "2026-09-11",
+            slots: [
+              {
+                id: "s-1100",
+                label: "11:00",
+                dateStart: "2026-09-11T11:00:00",
+                dateEnd: "2026-09-11T11:30:00",
+              },
+            ],
+          },
+        ],
+        stepMinutes: 30,
+        startIntervalMinutes: 30,
+        searchDirection: "nearest",
+      },
+      { direction: "nearest", durationMinutes: 30 },
+      now,
+    );
+    expect(hit?.kind).toBe("date_list");
+    const parsed = JSON.parse(hit!.json) as { days: Array<{ date: string }> };
+    expect(parsed.days.map((day) => day.date)).toEqual(["2026-09-11"]);
   });
 });
 

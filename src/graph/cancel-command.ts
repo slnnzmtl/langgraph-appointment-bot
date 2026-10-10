@@ -39,6 +39,36 @@ export const cancelCommandFromMeeting = (
 };
 
 /**
+ * Turn a stored cancel command into tool args. The awaitingConfirmation draft
+ * freezes the CRM write (`{ meetingId, status: "Not Held" }`), which is not a
+ * valid `cancel_meeting` call — it has no confirmMessage.
+ */
+export const cancelCommandFromStoredPayload = (
+  payload: Record<string, unknown>,
+  display: { name?: string; dateStart?: string; dateEnd?: string } = {},
+): PendingBookingCommand | null => {
+  const meetingId = payload.meetingId;
+  if (typeof meetingId !== "string" || meetingId.trim().length === 0) {
+    return null;
+  }
+  const name = typeof payload.name === "string" && payload.name.trim().length > 0
+    ? payload.name
+    : display.name;
+  const dateStart = typeof payload.dateStart === "string" && payload.dateStart.length > 0
+    ? payload.dateStart
+    : display.dateStart;
+  const dateEnd = typeof payload.dateEnd === "string" && payload.dateEnd.length > 0
+    ? payload.dateEnd
+    : display.dateEnd;
+  return cancelCommandFromMeeting({
+    id: meetingId.trim(),
+    ...(name ? { name } : {}),
+    ...(dateStart ? { dateStart } : {}),
+    ...(dateEnd ? { dateEnd } : {}),
+  });
+};
+
+/**
  * Cancel the single planned visit when the list has exactly one meeting.
  * Used by supervisor seeding and booking command preparation.
  */

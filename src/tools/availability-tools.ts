@@ -16,6 +16,7 @@ import {
   excludeMeetingsById,
   extractMeetingsFromSearchResult,
   fallbackClinicTimeRanges,
+  filterSlotsAfterNow,
   findNextAvailableSlots,
   findPreviousAvailableSlots,
   formatKyivDayLabel,
@@ -351,9 +352,26 @@ export type AvailabilitySlotsToolArgs = z.infer<typeof presentAvailabilitySlotsA
  * When the request matches the checkpointed snapshot, return the same JSON shape as a
  * CRM present_availability_slots success (no search_meetings). Null = cache miss.
  */
+/** Drop past slots from today's cached day; return null when the day becomes empty. */
+const filterCachedDayAgainstNow = (
+  day: AvailabilityContext["days"][number],
+  todayKyiv: string,
+  now: Date,
+): AvailabilityContext["days"][number] | null => {
+  if (day.date !== todayKyiv) {
+    return day;
+  }
+  const slots = filterSlotsAfterNow(day.slots, now);
+  if (slots.length === 0) {
+    return null;
+  }
+  return { ...day, slots };
+};
+
 export const tryAvailabilityCacheHit = (
   ctx: AvailabilityContext | null | undefined,
   input: AvailabilitySlotsToolArgs,
+  now: Date = new Date(),
 ): { json: string; kind: "date_list" | "day_slots" } | null => {
   if (!ctx || (ctx.days.length === 0 && !availabilityQueryFromContext(ctx))) {
     return null;
@@ -385,6 +403,7 @@ export const tryAvailabilityCacheHit = (
     ...(ctx.excludeMeetingIds?.length ? { excludeMeetingIds: ctx.excludeMeetingIds } : {}),
     cacheHit: true as const,
   };
+  const todayKyiv = kyivToday(now);
 
   if (input.date) {
     const query = availabilityQueryFromContext(ctx);
@@ -401,12 +420,16 @@ export const tryAvailabilityCacheHit = (
     if (!day) {
       return null;
     }
+    const filtered = filterCachedDayAgainstNow(day, todayKyiv, now);
+    if (filtered == null) {
+      return null;
+    }
     return {
       kind: "day_slots",
       json: JSON.stringify({
-        slots: day.slots,
-        date: day.date,
-        ...(day.dayLabel ? { dayLabel: day.dayLabel } : {}),
+        slots: filtered.slots,
+        date: filtered.date,
+        ...(filtered.dayLabel ? { dayLabel: filtered.dayLabel } : {}),
         ...(query ? { query } : {}),
         ...shared,
       }),
@@ -421,10 +444,24 @@ export const tryAvailabilityCacheHit = (
     return null;
   }
 
+  const days: AvailabilityContext["days"] = [];
+  for (const day of ctx.days) {
+    const filtered = filterCachedDayAgainstNow(day, todayKyiv, now);
+    if (filtered != null) {
+      days.push(filtered);
+    }
+  }
+  // Empty directional snapshots (no days) are still valid cache hits — they
+  // mean the search window was exhausted. Only miss when we dropped today's
+  // last remaining day and nothing else is left.
+  if (days.length === 0 && ctx.days.length > 0) {
+    return null;
+  }
+
   return {
     kind: "date_list",
     json: JSON.stringify({
-      days: ctx.days,
+      days,
       ...shared,
       ...(ctx.truncated ? { truncated: true } : {}),
       ...(availabilityQueryFromContext(ctx)
@@ -583,7 +620,7 @@ export const createPresentAvailabilitySlotsTool = (options: {
             ...reserved,
           ];
           const timeRanges = resolveRangesForDay(working, input.date);
-          const slots = omitSlotsAtStarts(
+          let slots = omitSlotsAtStarts(
             computeFreeSlots({
               day: input.date,
               meetings,
@@ -593,6 +630,9 @@ export const createPresentAvailabilitySlotsTool = (options: {
             }),
             omitDateStarts,
           );
+          if (input.date === todayKyiv) {
+            slots = filterSlotsAfterNow(slots, new Date());
+          }
           trackEvent("availability_presented", {
             outcome: "success",
             date: input.date,
