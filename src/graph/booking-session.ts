@@ -126,11 +126,18 @@ export type VisitSelectInteraction = {
   choices: InteractionChoice[];
 };
 
+export type ContactFieldCollected = {
+  firstName?: string;
+  lastName?: string;
+};
+
 export type ContactFieldInteraction = {
   kind: "contact_field";
   field: "phoneNumber" | "firstName" | "lastName";
   /** Occupied-phone copy stays open until a different number succeeds. */
   occupied?: boolean;
+  /** Names accepted by the contact-name classifier this session. */
+  collected?: ContactFieldCollected;
   choices: InteractionChoice[];
 };
 
@@ -305,10 +312,12 @@ export type BookingSessionEffect =
 export const openContactFieldInteraction = (
   field: ContactFieldInteraction["field"],
   occupied = false,
+  collected?: ContactFieldCollected,
 ): ContactFieldInteraction => ({
   kind: "contact_field",
   field,
   occupied,
+  ...(collected != null && Object.keys(collected).length > 0 ? { collected } : {}),
   choices: [],
 });
 
@@ -392,6 +401,11 @@ export type BookingSessionEvent =
       type: "contact_field_required";
       field: ContactFieldInteraction["field"];
       occupied?: boolean;
+    }
+  | {
+      type: "contact_name_submitted";
+      field: "firstName" | "lastName";
+      value: string;
     }
   | {
       type: "mutation_confirm_opened";
@@ -916,12 +930,42 @@ export const reduceBookingSession = (
       });
     }
     case "contact_field_required": {
+      const prevCollected = interaction?.kind === "contact_field"
+        ? interaction.collected
+        : undefined;
       return noEffect({
         bookingDraft: draft,
         pendingInteraction: openContactFieldInteraction(
           event.field,
           event.occupied === true,
+          prevCollected,
         ),
+      });
+    }
+    case "contact_name_submitted": {
+      if (interaction?.kind !== "contact_field") {
+        return noEffect(current);
+      }
+      if (interaction.field !== event.field) {
+        return noEffect(current);
+      }
+      const value = event.value.trim();
+      if (value.length === 0) {
+        return noEffect(current);
+      }
+      const collected: ContactFieldCollected = {
+        ...(interaction.collected ?? {}),
+        [event.field]: value,
+      };
+      if (event.field === "firstName") {
+        return noEffect({
+          bookingDraft: draft,
+          pendingInteraction: openContactFieldInteraction("lastName", false, collected),
+        });
+      }
+      return noEffect({
+        bookingDraft: draft,
+        pendingInteraction: openContactFieldInteraction("lastName", false, collected),
       });
     }
     case "mutation_confirm_opened": {

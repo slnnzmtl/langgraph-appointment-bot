@@ -3591,11 +3591,11 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше ім’я.");
   });
 
-  it("stays on firstName when the patient asks a question instead of a name", () => {
+  it("stays on firstName when collected has no firstName (aside)", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
-        messages: [new HumanMessage("а скільки коштує?")],
+        messages: [new HumanMessage("скільки коштує")],
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
@@ -3606,7 +3606,7 @@ describe("createAgentFinalizeNode", () => {
           choices: [],
         },
         agentMessages: [
-          new HumanMessage("а скільки коштує?"),
+          new HumanMessage("скільки коштує"),
           new AIMessage("Спочатку ім’я, будь ласка."),
         ],
       }),
@@ -3618,11 +3618,11 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("stays on lastName when the patient asks a question instead of a surname", () => {
+  it("stays on lastName when collected has no lastName (aside)", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
-        messages: [new HumanMessage("навіщо вам прізвище?")],
+        messages: [new HumanMessage("добрий день")],
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
@@ -3630,10 +3630,11 @@ describe("createAgentFinalizeNode", () => {
         pendingInteraction: {
           kind: "contact_field",
           field: "lastName",
+          collected: { firstName: "Олена" },
           choices: [],
         },
         agentMessages: [
-          new HumanMessage("навіщо вам прізвище?"),
+          new HumanMessage("добрий день"),
           new AIMessage("Для запису в клініку."),
         ],
       }),
@@ -3642,10 +3643,11 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",
       field: "lastName",
+      collected: { firstName: "Олена" },
     });
   });
 
-  it("advances unresolved contact_field from firstName to lastName after a name", () => {
+  it("advances unresolved contact_field from firstName to lastName after collected firstName", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -3657,6 +3659,7 @@ describe("createAgentFinalizeNode", () => {
         pendingInteraction: {
           kind: "contact_field",
           field: "firstName",
+          collected: { firstName: "Smoke" },
           choices: [],
         },
         agentMessages: [
@@ -3669,11 +3672,12 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",
       field: "lastName",
+      collected: { firstName: "Smoke" },
     });
     expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше прізвище.");
   });
 
-  it("clears contact_field after lastName so create_contact can run", () => {
+  it("clears contact_field after collected lastName so create_contact can run", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
       clinicState({
@@ -3685,6 +3689,7 @@ describe("createAgentFinalizeNode", () => {
         pendingInteraction: {
           kind: "contact_field",
           field: "lastName",
+          collected: { firstName: "Smoke", lastName: "Tester" },
           choices: [],
         },
         agentMessages: [
@@ -3695,6 +3700,82 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.pendingInteraction).toBeNull();
+  });
+
+  it("prepare stores a classified firstName and advances to lastName", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      classifyContactName: async () => ({ kind: "name", value: "Олена" }),
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Олена")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "firstName",
+          choices: [],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+      collected: { firstName: "Олена" },
+    });
+  });
+
+  it("prepare leaves firstName open when the classifier returns aside", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      classifyContactName: async () => ({ kind: "aside" }),
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("скільки коштує")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "firstName",
+          choices: [],
+        },
+      }),
+    );
+
+    // Aside does not patch pendingInteraction — the open firstName field stays.
+    expect(update.pendingInteraction).toBeUndefined();
+  });
+
+  it("prepare stores classified lastName on collected", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      classifyContactName: async () => ({ kind: "name", value: "Коваль" }),
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Коваль")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          collected: { firstName: "Олена" },
+          choices: [],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+      collected: { firstName: "Олена", lastName: "Коваль" },
+    });
   });
 
   it("clears create mutation_confirm and invalidates the slot after awaitingConfirmation chat-other", () => {

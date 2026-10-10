@@ -174,10 +174,22 @@ export const formatAvailabilityContext = (
 /** Booking: durable state projection used to keep the model aligned with runtime facts. */
 export const formatBookingDraftContext = (
   draft: BookingDraft | null | undefined,
+  collectedContactName?: { firstName?: string; lastName?: string } | null,
 ): string => {
   if (!draft) {
     return "";
   }
+  const collected = collectedContactName != null
+    && (collectedContactName.firstName != null || collectedContactName.lastName != null)
+    ? {
+        ...(collectedContactName.firstName != null
+          ? { firstName: collectedContactName.firstName }
+          : {}),
+        ...(collectedContactName.lastName != null
+          ? { lastName: collectedContactName.lastName }
+          : {}),
+      }
+    : null;
   return block(CONTEXT_TAGS.bookingDraft, {
     mode: draft.mode,
     phase: draft.phase,
@@ -202,6 +214,7 @@ export const formatBookingDraftContext = (
         }
       : null,
     note: { status: draft.note.status, ...(draft.note.value ? { value: draft.note.value } : {}) },
+    ...(collected != null ? { collectedContactName: collected } : {}),
   });
 };
 

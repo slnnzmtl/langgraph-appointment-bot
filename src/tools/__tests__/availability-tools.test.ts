@@ -910,6 +910,110 @@ describe("tryAvailabilityCacheHit", () => {
     const legacySnapshot = { ...snapshot, startIntervalMinutes: undefined };
     expect(tryAvailabilityCacheHit(legacySnapshot, { durationMinutes: 30 })).toBeNull();
   });
+
+  it("drops past slots from a cached day for today", () => {
+    const now = new Date("2026-09-10T07:00:00Z"); // 10:00 Kyiv (UTC+3)
+    const todaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-09-10",
+          dayLabel: "сьогодні",
+          slots: [
+            {
+              id: "s-0900",
+              label: "09:00",
+              dateStart: "2026-09-10T09:00:00",
+              dateEnd: "2026-09-10T09:30:00",
+            },
+            {
+              id: "s-1100",
+              label: "11:00",
+              dateStart: "2026-09-10T11:00:00",
+              dateEnd: "2026-09-10T11:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      startIntervalMinutes: 30,
+    };
+    const hit = tryAvailabilityCacheHit(
+      todaySnapshot,
+      { date: "2026-09-10", durationMinutes: 30 },
+      now,
+    );
+    expect(hit?.kind).toBe("day_slots");
+    const parsed = JSON.parse(hit!.json) as { slots: Array<{ label: string }> };
+    expect(parsed.slots.map((slot) => slot.label)).toEqual(["11:00"]);
+  });
+
+  it("misses the cache when every cached slot for today is already past", () => {
+    const now = new Date("2026-09-10T10:00:00Z"); // 13:00 Kyiv
+    const todaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-09-10",
+          slots: [
+            {
+              id: "s-0900",
+              label: "09:00",
+              dateStart: "2026-09-10T09:00:00",
+              dateEnd: "2026-09-10T09:30:00",
+            },
+          ],
+        },
+      ],
+      stepMinutes: 30,
+      startIntervalMinutes: 30,
+    };
+    expect(
+      tryAvailabilityCacheHit(
+        todaySnapshot,
+        { date: "2026-09-10", durationMinutes: 30 },
+        now,
+      ),
+    ).toBeNull();
+  });
+
+  it("drops an empty today from a cached DATE list", () => {
+    const now = new Date("2026-09-10T10:00:00Z"); // 13:00 Kyiv
+    const hit = tryAvailabilityCacheHit(
+      {
+        days: [
+          {
+            date: "2026-09-10",
+            slots: [
+              {
+                id: "s-0900",
+                label: "09:00",
+                dateStart: "2026-09-10T09:00:00",
+                dateEnd: "2026-09-10T09:30:00",
+              },
+            ],
+          },
+          {
+            date: "2026-09-11",
+            slots: [
+              {
+                id: "s-1100",
+                label: "11:00",
+                dateStart: "2026-09-11T11:00:00",
+                dateEnd: "2026-09-11T11:30:00",
+              },
+            ],
+          },
+        ],
+        stepMinutes: 30,
+        startIntervalMinutes: 30,
+        searchDirection: "nearest",
+      },
+      { direction: "nearest", durationMinutes: 30 },
+      now,
+    );
+    expect(hit?.kind).toBe("date_list");
+    const parsed = JSON.parse(hit!.json) as { days: Array<{ date: string }> };
+    expect(parsed.days.map((day) => day.date)).toEqual(["2026-09-11"]);
+  });
 });
 
 describe("present_availability_slots excludeMeetingIds echo", () => {

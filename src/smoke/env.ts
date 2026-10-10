@@ -99,6 +99,20 @@ export const isLocalMcpUrl = (mcpUrl: string): boolean => {
   }
 };
 
+/** Non-throwing form of the write guard (used to decide whether probing delete_entity is safe). */
+export const writeGuardPasses = (env: SmokeEnv, mcpUrl: string): boolean => {
+  if (env.nodeEnv === "production") {
+    return false;
+  }
+  if (!env.allowWrites) {
+    return false;
+  }
+  if (!isLocalMcpUrl(mcpUrl) && !env.allowRemoteCrm) {
+    return false;
+  }
+  return true;
+};
+
 export const assertWritesAllowed = (env: SmokeEnv, mcpUrl: string): void => {
   if (env.nodeEnv === "production") {
     throw new Error("Smoke --write refuses to run when NODE_ENV=production");

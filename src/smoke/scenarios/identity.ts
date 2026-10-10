@@ -7,7 +7,8 @@ import { ensureSmokeContact, findContactByTelegram } from "../crm.js";
 import { isIsolatedSmokeTelegramId, writeTelegramId } from "../env.js";
 import { installCallToolRecorder } from "../harness.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
-import type { SoftWarning, SmokeScenario } from "../types.js";
+import type { CleanupRegistryLike, SmokeEnv, SoftWarning, SmokeScenario } from "../types.js";
+import type { McpCallTool } from "../../shared/mcp.js";
 
 const softPhoneHeuristic = (text: string): boolean =>
   /(?:\bphone\b|телефон|номер)/i.test(text);
@@ -22,6 +23,42 @@ const lastAiText = (messages: Array<{ content?: unknown }>): string => {
   return "";
 };
 
+/**
+ * Look up (or optionally seed) the known-path contact. Never tracks a pre-existing
+ * contact for cleanup — only contacts created in this call are tracked.
+ */
+export const prepareIdentityKnownContact = async (options: {
+  callTool: McpCallTool;
+  cleanup: CleanupRegistryLike;
+  knownId: string;
+  env: SmokeEnv;
+  writesAllowed: boolean;
+}): Promise<void> => {
+  const { callTool, cleanup, knownId, env, writesAllowed } = options;
+  const existing = await findContactByTelegram(callTool, knownId);
+  if (existing) {
+    return;
+  }
+  // SMOKE_KNOWN_TELEGRAM_ID is documented as read-only — never create on it.
+  if (env.knownTelegramId != null && env.knownTelegramId === knownId) {
+    throw new Error(
+      "identity: SMOKE_KNOWN_TELEGRAM_ID has no Contact — set it to an existing Contact (read-only; will not create)",
+    );
+  }
+  if (!isIsolatedSmokeTelegramId(knownId)) {
+    throw new Error(
+      "identity: SMOKE_KNOWN_TELEGRAM_ID is not a 9998… smoke id and has no Contact — refusing to create a Contact on a real telegram id",
+    );
+  }
+  if (!writesAllowed) {
+    throw new Error(
+      "identity: generated smoke telegram id has no Contact — set SMOKE_KNOWN_TELEGRAM_ID to an existing Contact, or enable write smoke (SMOKE_ALLOW_WRITES=1) to seed Smoke Tester",
+    );
+  }
+  const contact = await ensureSmokeContact(callTool, knownId);
+  cleanup.trackContact(contact.id);
+};
+
 export const identityScenario: SmokeScenario = {
   name: "identity",
   tier: "invoke",
@@ -33,26 +70,13 @@ export const identityScenario: SmokeScenario = {
 
     try {
       const knownId = ctx.env.knownTelegramId ?? ctx.env.telegramIdA;
-      if (isIsolatedSmokeTelegramId(knownId)) {
-        const existing = await findContactByTelegram(ctx.callTool, knownId);
-        if (existing) {
-          ctx.cleanup.trackContact(existing.id);
-        } else if (ctx.env.allowWrites) {
-          const contact = await ensureSmokeContact(ctx.callTool, knownId);
-          ctx.cleanup.trackContact(contact.id);
-        } else {
-          throw new Error(
-            "identity: known smoke telegram id has no Contact — set SMOKE_KNOWN_TELEGRAM_ID to an existing Contact, or SMOKE_ALLOW_WRITES=1 to seed Smoke Tester",
-          );
-        }
-      } else {
-        const existing = await findContactByTelegram(ctx.callTool, knownId);
-        if (!existing) {
-          throw new Error(
-            "identity: SMOKE_KNOWN_TELEGRAM_ID is not a 9998… smoke id and has no Contact — refusing to create a Contact on a real telegram id",
-          );
-        }
-      }
+      await prepareIdentityKnownContact({
+        callTool: ctx.callTool,
+        cleanup: ctx.cleanup,
+        knownId,
+        env: ctx.env,
+        writesAllowed: ctx.writesAllowed,
+      });
 
       drain();
       const known = await runWithTelegramUserId(knownId, async () => {

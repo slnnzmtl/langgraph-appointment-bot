@@ -44,6 +44,8 @@ export type ScenarioContext = {
   callTool: McpCallTool;
   cleanup: CleanupRegistryLike;
   supportsDeleteEntity: boolean;
+  /** True when SMOKE_ALLOW_WRITES and the production/remote CRM guards pass. */
+  writesAllowed: boolean;
   env: SmokeEnv;
 };
 

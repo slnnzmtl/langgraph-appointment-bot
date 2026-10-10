@@ -9,6 +9,7 @@ import {
   DEFAULT_SMOKE_ASSIGNED_USER_ID,
   smokeAssignedUserId,
   uniqueSmokePhone,
+  writeGuardPasses,
   writeTelegramId,
 } from "../env.js";
 import type { SmokeEnv } from "../types.js";
@@ -90,5 +91,19 @@ describe("write-smoke isolation", () => {
         "https://espocrm.example.com",
       ),
     ).not.toThrow();
+  });
+
+  it("writeGuardPasses is false for production, remote CRM, and missing flag", () => {
+    expect(writeGuardPasses(baseEnv({ nodeEnv: "production" }), "http://127.0.0.1:3000")).toBe(
+      false,
+    );
+    expect(writeGuardPasses(baseEnv({ allowWrites: false }), "http://127.0.0.1:3000")).toBe(
+      false,
+    );
+    expect(writeGuardPasses(baseEnv(), "https://espocrm.example.com")).toBe(false);
+    expect(writeGuardPasses(baseEnv(), "http://127.0.0.1:3000")).toBe(true);
+    expect(
+      writeGuardPasses(baseEnv({ allowRemoteCrm: true }), "https://espocrm.example.com"),
+    ).toBe(true);
   });
 });

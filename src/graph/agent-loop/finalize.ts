@@ -30,7 +30,6 @@ import {
   extractReplyButtons,
   matchesReplyLabel,
 } from "../../shared/message-content.js";
-import { looksLikeContactNameAnswer } from "./contact-name-answer.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -108,16 +107,17 @@ const bookingDetailsInteraction = (
   if (identity.kind === "unresolved") {
     const open =
       state.pendingInteraction?.kind === "contact_field"
-        ? state.pendingInteraction.field
+        ? state.pendingInteraction
         : null;
+    const collected = open?.collected;
     const latest = lastPatientText(state);
     const latestPhone = normalizeClinicPhone(latest);
-    if (open === "firstName") {
-      // Same turn that opened firstName still has the phone as latest — stay.
-      field = looksLikeContactNameAnswer(latest) ? "lastName" : "firstName";
-    } else if (open === "lastName") {
-      if (looksLikeContactNameAnswer(latest)) {
-        // All three values are in the thread — release the field for create_contact.
+    if (open?.field === "firstName") {
+      // Prepare stores accepted names on collected; asides leave the field open.
+      field = collected?.firstName ? "lastName" : "firstName";
+    } else if (open?.field === "lastName") {
+      if (collected?.lastName) {
+        // All three values are ready — release the field for create_contact.
         return null;
       }
       field = "lastName";

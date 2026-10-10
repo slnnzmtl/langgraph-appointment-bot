@@ -37,6 +37,7 @@ import {
 } from "../booking-schedule.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../tools/contact-tools.js";
 import type { ServicesContext } from "../../tools/service-tools.js";
+import type { ClassifyContactNameTurn } from "../contact-name-classifier.js";
 import { trackEvent, trackToolError } from "../../analytics/track.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
@@ -158,6 +159,8 @@ export type CreateAgentPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
   /** Fetch the CRM catalog when «Обрати іншу процедуру» arrives before any list_services. */
   loadServices?: () => Promise<ServicesContext | null>;
+  /** Classify first/last name replies while contact_field is open (booking). */
+  classifyContactName?: ClassifyContactNameTurn;
 };
 
 export const createAgentPrepareNode = (
@@ -493,6 +496,38 @@ export const createAgentPrepareNode = (
           contactId,
         });
       }
+      if (
+        options?.classifyContactName
+        && pendingInteraction?.kind === "contact_field"
+        && (pendingInteraction.field === "firstName" || pendingInteraction.field === "lastName")
+      ) {
+        const patientText = lastPatientText(state).trim();
+        if (
+          patientText.length > 0
+          && normalizeClinicPhone(patientText) == null
+        ) {
+          const classified = await options.classifyContactName({
+            patientText,
+            field: pendingInteraction.field,
+          });
+          if (classified.kind === "name") {
+            const session = reduceBookingSession(
+              {
+                bookingDraft: bookingDraft ?? null,
+                pendingInteraction,
+              },
+              {
+                type: "contact_name_submitted",
+                field: pendingInteraction.field,
+                value: classified.value,
+              },
+            );
+            bookingDraft = session.bookingDraft;
+            pendingInteraction = session.pendingInteraction;
+            update.pendingInteraction = pendingInteraction;
+          }
+        }
+      }
       if (bookingDraft) {
         update.bookingDraft = bookingDraft;
       }
@@ -579,7 +614,14 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     // Full days[] lives in the slots tool result / checkpoint — do not also bill Gemini for it.
     // BookingDraft is the single compact projection of the selected slot.
     if (agent.id === BOOKING_AGENT_ID) {
-      dynamicParts.push(formatBookingDraftContext(state.bookingDraft));
+      dynamicParts.push(
+        formatBookingDraftContext(
+          state.bookingDraft,
+          state.pendingInteraction?.kind === "contact_field"
+            ? state.pendingInteraction.collected ?? null
+            : null,
+        ),
+      );
     }
     if (
       (agent.id === FAQ_AGENT_ID || agent.id === BOOKING_AGENT_ID)
@@ -772,12 +814,24 @@ export const createAgentToolsNode = (
           if (call.name === "create_contact" || call.name === "update_contact") {
             const args = call.args ?? {};
             const nameFields = ["firstName", "lastName"] as const;
+            const collected = state.pendingInteraction?.kind === "contact_field"
+              ? state.pendingInteraction.collected
+              : undefined;
+            const matchesCollected = (
+              field: "firstName" | "lastName",
+              raw: string,
+            ): boolean => {
+              const accepted = collected?.[field];
+              return typeof accepted === "string"
+                && accepted.trim().toLocaleLowerCase() === raw.trim().toLocaleLowerCase();
+            };
             const invented = nameFields.find((field) => {
               const raw = args[field];
               return (
                 typeof raw === "string"
                 && raw.trim() !== ""
                 && !humanProvidedName(state.messages ?? [], raw)
+                && !matchesCollected(field, raw)
               );
             });
             if (invented) {
