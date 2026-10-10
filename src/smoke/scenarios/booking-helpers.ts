@@ -98,31 +98,72 @@ export const prepareFreshContact = async (
   return { contactId: contact.id, phone: phoneNumber };
 };
 
+export type DriveUntilMutationConfirmOptions = {
+  phone: string;
+  firstName?: string;
+  lastName?: string;
+  maxTurns?: number;
+  noteText?: string;
+  /** When false, throw on occupied phone instead of rotating (default true). */
+  rotateOccupiedPhone?: boolean;
+  /** When set, assert mutation_confirm.action matches after HITL opens. */
+  expectAction?: "create" | "cancel" | "reschedule";
+};
+
+const assertExpectAction = (
+  label: string,
+  snap: TurnResult,
+  expectAction?: "create" | "cancel" | "reschedule",
+): void => {
+  if (expectAction == null) {
+    return;
+  }
+  const interaction = snap.state.pendingInteraction;
+  if (interaction?.kind !== "mutation_confirm") {
+    throw new SmokeAssertError(
+      `${label}: expected mutation_confirm action=${expectAction}, got ${interaction?.kind ?? "null"}`,
+    );
+  }
+  if (interaction.action !== expectAction) {
+    throw new SmokeAssertError(
+      `${label}: expected mutation_confirm action=${expectAction}, got ${interaction.action}`,
+    );
+  }
+};
+
 /** Drive until mutation HITL is open; does not tap ✅/❌. */
 export const driveUntilMutationConfirm = async (
   bundle: BookingSessionBundle,
-  options: { phone: string; firstName?: string; lastName?: string; maxTurns?: number },
+  options: DriveUntilMutationConfirmOptions,
 ): Promise<TurnResult[]> => {
   const { session } = bundle;
   const turns: TurnResult[] = [];
   const maxTurns = options.maxTurns ?? 14;
+  const rotateOccupiedPhone = options.rotateOccupiedPhone !== false;
   const autopilotOpts = {
     phone: options.phone,
     firstName: options.firstName ?? SMOKE_CONTACT_NAME.firstName,
     lastName: options.lastName ?? SMOKE_CONTACT_NAME.lastName,
     decision: "confirm" as const,
+    ...(options.noteText !== undefined ? { noteText: options.noteText } : {}),
   };
   let lastContactField: string | null = null;
   let sameContactFieldTurns = 0;
   let lastSlotLabel: string | null = null;
   let sameSlotTurns = 0;
 
+  const finish = async (collected: TurnResult[]): Promise<TurnResult[]> => {
+    const snap = await session.snapshot();
+    assertExpectAction(session.scenario, snap, options.expectAction);
+    return collected;
+  };
+
   for (let i = 0; i < maxTurns; i += 1) {
     const snap = await session.snapshot();
     // LangGraph interrupt must be open — mutation_confirm in state without
     // pendingConfirm means ✅ would be a normal message, not HITL resume.
     if (snap.pendingConfirm) {
-      return turns;
+      return finish(turns);
     }
     const interaction = snap.state.pendingInteraction;
     if (interaction?.kind === "contact_field") {
@@ -135,6 +176,11 @@ export const driveUntilMutationConfirm = async (
       // Only rotate when CRM says the number is occupied — a repeated
       // phoneNumber prompt is the normal unresolved-contact ladder.
       if (interaction.field === "phoneNumber" && interaction.occupied) {
+        if (!rotateOccupiedPhone) {
+          throw new SmokeAssertError(
+            `${session.scenario}: contact_field phoneNumber occupied with rotateOccupiedPhone=false`,
+          );
+        }
         autopilotOpts.phone = uniqueSmokePhone();
       }
       if (sameContactFieldTurns >= 6) {
@@ -155,7 +201,7 @@ export const driveUntilMutationConfirm = async (
       const turn = await session.say("інший вільний час, будь ласка");
       turns.push(turn);
       if (turn.pendingConfirm) {
-        return turns;
+        return finish(turns);
       }
       continue;
     }
@@ -183,7 +229,7 @@ export const driveUntilMutationConfirm = async (
         lastSlotLabel = LATER_DATE_LABEL;
         sameSlotTurns = 0;
         if (turn.pendingConfirm) {
-          return turns;
+          return finish(turns);
         }
         continue;
       }
@@ -195,7 +241,7 @@ export const driveUntilMutationConfirm = async (
       const turn = await session.say("продовжимо запис");
       turns.push(turn);
       if (turn.pendingConfirm) {
-        return turns;
+        return finish(turns);
       }
       continue;
     }
@@ -205,13 +251,19 @@ export const driveUntilMutationConfirm = async (
       "time_select",
       "visit_note",
     ]);
+    // Typed noteText is free text, not a keyboard chip.
+    const typingNote =
+      interaction?.kind === "visit_note"
+      && options.noteText?.trim()
+      && next === options.noteText.trim();
     if (
       interaction
       && chipKinds.has(interaction.kind)
       && !snap.buttons.includes(next)
+      && !typingNote
     ) {
       throw new SmokeAssertError(
-        `${session.scenario}: keyboard-only step ${interaction.kind} needs "${next}" on keyboard [${snap.buttons.join(" | ") || "none"}]`,
+        `${session.scenario}: autopilot chip "${next}" missing from keyboard [${snap.buttons.join(" | ") || "none"}] (pending=${interaction.kind})`,
       );
     }
     const turn = snap.buttons.includes(next)
@@ -219,13 +271,13 @@ export const driveUntilMutationConfirm = async (
       : await session.say(next);
     turns.push(turn);
     if (turn.pendingConfirm) {
-      return turns;
+      return finish(turns);
     }
   }
 
   const finalSnap = await session.snapshot();
   if (finalSnap.pendingConfirm) {
-    return turns;
+    return finish(turns);
   }
   throw new SmokeAssertError(
     `${session.scenario}: never reached HITL interrupt (pendingInteraction=${finalSnap.state.pendingInteraction?.kind ?? "null"})`,
@@ -269,6 +321,8 @@ export const runBookFlow = async (
     decision: "confirm" | "decline";
     firstName?: string;
     lastName?: string;
+    noteText?: string;
+    rotateOccupiedPhone?: boolean;
   },
 ): Promise<{
   turns: TurnResult[];
@@ -289,6 +343,10 @@ export const runBookFlow = async (
     maxTurns: 16,
     ...(options.firstName !== undefined ? { firstName: options.firstName } : {}),
     ...(options.lastName !== undefined ? { lastName: options.lastName } : {}),
+    ...(options.noteText !== undefined ? { noteText: options.noteText } : {}),
+    ...(options.rotateOccupiedPhone !== undefined
+      ? { rotateOccupiedPhone: options.rotateOccupiedPhone }
+      : {}),
   });
   const last =
     options.decision === "confirm"

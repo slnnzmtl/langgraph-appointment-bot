@@ -41,7 +41,7 @@ import type { ClassifyContactNameTurn } from "../contact-name-classifier.js";
 import { trackEvent, trackToolError } from "../../analytics/track.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { extractMessageTextContent } from "../../shared/message-content.js";
+import { extractMessageTextContent, labelIdFor } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import {
   formatBookingMeetingsContext,
@@ -54,6 +54,7 @@ import {
 import { buildCachedMessages, buildUncachedMessages } from "../gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
+  createEmptyBookingDraft,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -84,6 +85,7 @@ import {
   normalizeMeetingMutationArgs,
   shouldRearmCancelAfterChatOther,
 } from "./command-prepare.js";
+import { existingVisitBlocksNewBooking } from "./replacement-flow.js";
 
 import {
   BOOKING_SLOT_REQUIRED_UK,
@@ -112,6 +114,7 @@ import {
   captureLatestToolContext,
   captureServicesFromMessages,
   classifyMeetingMutationToolMessage,
+  consultationService,
   createContactPhoneMatchesOccupiedCandidate,
   crmWriteDirtiesPrefetch,
   humanProvidedName,
@@ -527,6 +530,60 @@ export const createAgentPrepareNode = (
             update.pendingInteraction = pendingInteraction;
           }
         }
+      }
+      const blockingState: ClinicState = {
+        ...state,
+        bookingDraft: bookingDraft ?? null,
+        pendingInteraction,
+      };
+      if (existingVisitBlocksNewBooking(blockingState)) {
+        const meeting = state.bookingContext?.meetings[0];
+        if (meeting != null) {
+          bookingDraft = reduceBookingDraft(
+            bookingDraft ?? createEmptyBookingDraft(),
+            {
+              type: "existing_booking_detected",
+              meeting: {
+                id: meeting.id,
+                name: meeting.name,
+                dateStart: meeting.dateStart,
+                dateEnd: meeting.dateEnd,
+              },
+            },
+          );
+        }
+      } else if (
+        labelIdFor(lastPatientText(state)) === "mainBook"
+        && (
+          bookingDraft == null
+          || (
+            bookingDraft.mode === "create"
+            && bookingDraft.replacement == null
+            && bookingDraft.pendingCommand == null
+            && bookingDraft.serviceAcceptance == null
+            && bookingDraft.selectedSlot == null
+            && bookingDraft.selectedDate == null
+          )
+        )
+        && pendingInteraction?.kind !== "service_confirm"
+        && pendingInteraction?.kind !== "visit_select"
+        && pendingInteraction?.kind !== "mutation_confirm"
+      ) {
+        // Fresh «Записатись»: open consultation offer without the LLM, so a
+        // prior declined create in history cannot replay create_meeting.
+        const session = reduceBookingSession(
+          {
+            bookingDraft: bookingDraft ?? null,
+            pendingInteraction: pendingInteraction ?? null,
+          },
+          {
+            type: "service_offered",
+            service: consultationService("catalog"),
+          },
+        );
+        bookingDraft = session.bookingDraft;
+        pendingInteraction = session.pendingInteraction;
+        update.pendingInteraction = pendingInteraction;
       }
       if (bookingDraft) {
         update.bookingDraft = bookingDraft;
@@ -1274,9 +1331,43 @@ export const createAgentToolsNode = (
       const cancelOnlyCommitted =
         committed.length > 0 && committed.every((message) => message.name === "cancel_meeting");
       if (cancelCommitted && state.bookingDraft?.replacement?.status === "cancelling") {
-        update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+        const hadOriginal =
+          state.bookingDraft.replacement.originalCommand?.action === "create"
+          || state.bookingDraft.replacement.originalCommand?.action === "reschedule";
+        const completed = reduceBookingDraft(state.bookingDraft, {
           type: "cancel_existing_completed",
         });
+        update.bookingDraft = completed;
+        // HITL card is done; do not leave mutation_confirm stuck for the continue path.
+        update.pendingInteraction = null;
+        const cancelledId = state.bookingDraft.replacement.meeting.id;
+        if (state.bookingContext != null && cancelledId.length > 0) {
+          // Prefetch is dirty but not refreshed mid-turn — drop the cancelled
+          // visit so the continue LLM/prepare does not re-offer REPLACE.
+          update.bookingContext = {
+            ...state.bookingContext,
+            meetings: state.bookingContext.meetings.filter(
+              (meeting) => meeting.id !== cancelledId,
+            ),
+          };
+        }
+        // Pre-slot REPLACE: no frozen create — open the consultation offer so
+        // finalize can continue the booking without an empty LLM turn.
+        if (
+          !hadOriginal
+          && completed != null
+          && completed.serviceAcceptance?.status !== "accepted"
+        ) {
+          const session = reduceBookingSession(
+            { bookingDraft: completed, pendingInteraction: null },
+            {
+              type: "service_offered",
+              service: consultationService("catalog"),
+            },
+          );
+          update.bookingDraft = session.bookingDraft;
+          update.pendingInteraction = session.pendingInteraction;
+        }
       } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
         Object.assign(update, closedBookingSessionUpdate());
       } else if (!cancelOnlyCommitted) {
@@ -1537,9 +1628,30 @@ export const routeAfterAgentPrepare = (
   llmName: string,
   commandPrepareName?: string,
   noteOrchestratorName?: string,
+  finalizeName?: string,
 ): string => {
   if (noteOrchestratorName && state.noteOrchQueued) {
     return noteOrchestratorName;
+  }
+  // Graph-owned REPLACE: skip the LLM and render visit_select / replacement.
+  if (
+    finalizeName
+    && state.bookingDraft?.replacement?.status === "offered"
+    && !(
+      state.pendingInteraction?.kind === "visit_select"
+      && state.pendingInteraction.stage === "replacement"
+    )
+  ) {
+    return finalizeName;
+  }
+  // Fresh «Записатись» consultation offer opened in prepare — skip the LLM.
+  if (
+    finalizeName
+    && labelIdFor(lastPatientText(state)) === "mainBook"
+    && state.pendingInteraction?.kind === "service_confirm"
+    && state.bookingDraft?.serviceAcceptance?.status === "pending"
+  ) {
+    return finalizeName;
   }
   return commandPrepareName && bookingTurnNeedsCommandPreparation(state)
     ? commandPrepareName
@@ -1553,6 +1665,7 @@ export const routeAfterAgentTools = (
   mutationFinalizeName?: string,
   commandPrepareName?: string,
   noteOrchestratorName?: string,
+  finalizeName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
@@ -1568,6 +1681,21 @@ export const routeAfterAgentTools = (
 
   if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
     return commandPrepareName;
+  }
+
+  // REPLACE cancel with no frozen create: finalize renders the next booking step.
+  if (
+    finalizeName
+    && state.pendingCancellationPurpose === "replacement"
+    && state.bookingDraft?.mode === "create"
+    && state.bookingDraft.replacement == null
+    && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+    && (
+      state.pendingInteraction?.kind === "service_confirm"
+      || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+    )
+  ) {
+    return finalizeName;
   }
 
   if (

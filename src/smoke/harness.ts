@@ -94,6 +94,7 @@ const readStateSnapshot = async (
     lastHandoff?: ClinicHandoff | null;
     contactContext?: unknown;
     bookingContext?: unknown;
+    availabilityContext?: SmokeStateSnapshot["availabilityContext"];
   };
   return {
     state: {
@@ -102,6 +103,7 @@ const readStateSnapshot = async (
       lastHandoff: values.lastHandoff ?? null,
       contactContext: values.contactContext ?? null,
       bookingContext: values.bookingContext ?? null,
+      availabilityContext: values.availabilityContext ?? null,
     },
     pendingConfirm: hasPendingConfirmBooking(snapshot.tasks),
   };
@@ -128,6 +130,7 @@ export type SmokeSession = {
     lastName?: string;
     decision: AutopilotDecision;
     maxTurns?: number;
+    noteText?: string;
   }) => Promise<{ turns: TurnResult[]; last: TurnResult }>;
   snapshot: () => Promise<TurnResult>;
 };
@@ -189,6 +192,7 @@ export const createSmokeSession = (
     lastName?: string;
     decision: AutopilotDecision;
     maxTurns?: number;
+    noteText?: string;
   }): Promise<{ turns: TurnResult[]; last: TurnResult }> => {
     const maxTurns = opts.maxTurns ?? 12;
     const autopilotOpts: AutopilotOptions = {
@@ -196,6 +200,7 @@ export const createSmokeSession = (
       firstName: opts.firstName,
       ...(opts.lastName !== undefined ? { lastName: opts.lastName } : {}),
       decision: opts.decision,
+      ...(opts.noteText !== undefined ? { noteText: opts.noteText } : {}),
     };
     const collected: TurnResult[] = [];
     let last = await readStateSnapshot(graph, threadId).then(({ state, pendingConfirm }) => ({

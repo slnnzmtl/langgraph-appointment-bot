@@ -3,6 +3,7 @@ import type { BookingDraft } from "../graph/booking-draft.js";
 import type { PendingInteraction } from "../graph/booking-session.js";
 import type { ClinicHandoff } from "../graph/types.js";
 import type { McpCallTool } from "../shared/mcp.js";
+import type { AvailabilityContext } from "../tools/availability-tools.js";
 
 export type SmokeTier = "deterministic" | "invoke" | "write";
 
@@ -22,6 +23,7 @@ export type SmokeStateSnapshot = {
   lastHandoff: ClinicHandoff | null;
   contactContext: unknown;
   bookingContext: unknown;
+  availabilityContext: AvailabilityContext | null;
 };
 
 export type SoftWarning = {

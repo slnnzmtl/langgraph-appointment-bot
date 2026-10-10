@@ -16,6 +16,8 @@ export type AutopilotOptions = {
   firstName: string;
   lastName?: string;
   decision: AutopilotDecision;
+  /** When set, typed as the visit-note answer instead of tapping skip. */
+  noteText?: string;
 };
 
 export type AutopilotState = {
@@ -91,6 +93,9 @@ export const nextAutopilotInput = (
       return options.lastName ?? "Smoke";
     }
     case "visit_note": {
+      if (options.noteText?.trim()) {
+        return options.noteText.trim();
+      }
       const skip = interaction.choices.find((choice) => choice.id === "skip");
       return skip?.label ?? INTENT_SKIP_LABEL;
     }

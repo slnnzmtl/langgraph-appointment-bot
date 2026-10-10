@@ -413,6 +413,38 @@ describe("BookingDraft reducer", () => {
     expect(declined).toBeNull();
   });
 
+  it("clears replacement after cancel when there is no originalCommand to replay", () => {
+    const withService = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Консультація", source: "catalog" },
+      accepted: true,
+    });
+    const offered = reduceBookingDraft(withService, {
+      type: "existing_booking_detected",
+      meeting: { id: "existing-1", name: "Existing visit" },
+    });
+    expect(offered.replacement?.status).toBe("offered");
+    expect(offered.replacement?.originalCommand).toBeUndefined();
+    expect(offered.serviceAcceptance?.status).toBe("accepted");
+
+    const cancelling = reduceBookingDraft(offered, {
+      type: "cancel_existing_requested",
+      command: {
+        action: "cancel",
+        payload: { meetingId: "existing-1" },
+      },
+    });
+    const continued = reduceBookingDraft(cancelling, {
+      type: "cancel_existing_completed",
+    });
+
+    expect(continued.replacement).toBeNull();
+    expect(continued.mode).toBe("create");
+    expect(continued.pendingCommand).toBeNull();
+    expect(continued.serviceAcceptance?.status).toBe("accepted");
+    expect(continued.phase).toBe("date");
+  });
+
   it("does not invent Consultation from projections alone", () => {
     const upgraded = upgradeBookingCheckpoint({
       bookingSchemaVersion: 0,

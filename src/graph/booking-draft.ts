@@ -1045,7 +1045,22 @@ export const reduceBookingDraft = (
           ? { ...draft.replacement, status: "cancelling" }
           : null,
       });
-    case "cancel_existing_completed":
+    case "cancel_existing_completed": {
+      // Pre-slot REPLACE (graph offered before create_meeting) has no frozen
+      // originalCommand — clear replacement and continue a normal create draft.
+      const original = draft.replacement?.originalCommand;
+      if (original == null || (original.action !== "create" && original.action !== "reschedule")) {
+        const cleared = {
+          ...draft,
+          mode: "create" as const,
+          pendingCommand: null,
+          replacement: null,
+        };
+        return withVersion(draft, {
+          ...cleared,
+          phase: bookingDraftPhase(cleared),
+        });
+      }
       return withVersion(draft, {
         ...draft,
         mode: "create",
@@ -1055,6 +1070,7 @@ export const reduceBookingDraft = (
           ? { ...draft.replacement, status: "create_pending" }
           : null,
       });
+    }
     case "cancel_existing_declined":
       // The existing appointment is still active; never leave a ready create
       // draft behind or the graph will immediately replay Already booked.

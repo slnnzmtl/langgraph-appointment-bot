@@ -543,6 +543,31 @@ const serviceChangeNearestAvailabilityRequest = (
   };
 };
 
+/** After REPLACE cancel with an accepted service but no frozen create, offer dates. */
+const replacementCancelNearestAvailabilityRequest = (
+  state: ClinicState,
+): AvailabilitySlotsToolArgs | null => {
+  const draft = state.bookingDraft;
+  if (
+    state.pendingCancellationPurpose !== "replacement"
+    || draft?.mode !== "create"
+    || draft.replacement != null
+    || draft.serviceAcceptance?.status !== "accepted"
+    || draft.selectedDate != null
+    || draft.selectedSlot != null
+    || !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return null;
+  }
+  const durationMinutes = draft.serviceAcceptance.service.durationMinutes;
+  return {
+    direction: "nearest",
+    forceRefresh: true,
+    ...(durationMinutes != null ? { durationMinutes } : {}),
+  };
+};
+
 const availabilityRequestFromBookingDraft = (
   state: ClinicState,
 ): AvailabilitySlotsToolArgs | null => {
@@ -629,6 +654,9 @@ export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean 
   if (serviceChangeNearestAvailabilityRequest(state) != null) {
     return true;
   }
+  if (replacementCancelNearestAvailabilityRequest(state) != null) {
+    return true;
+  }
   if (nearestRescheduleAvailabilityRequest(state) != null) {
     return true;
   }
@@ -660,6 +688,9 @@ export const bookingCommandContinuesAfterTools = (state: ClinicState): boolean =
     return false;
   }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
+    return true;
+  }
+  if (replacementCancelNearestAvailabilityRequest(state) != null) {
     return true;
   }
   const contactResolvedThisTurn = resolveContactIdentity(state.contactContext).kind === "owned"
@@ -878,6 +909,17 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         state.agentMessages ?? [],
         `booking_service_change_nearest_${state.bookingDraft?.version ?? 0}`,
         serviceChangeNearestRequest,
+      );
+    }
+    const replacementCancelNearestRequest = replacementCancelNearestAvailabilityRequest(state);
+    if (replacementCancelNearestRequest) {
+      // Keep pendingCancellationPurpose as "replacement" until finalize renders
+      // the date menu — clearing it here makes the post-slots route treat the
+      // cancel as a terminal direct cancel ("Запис скасовано." + default menu).
+      return availabilitySlotsAgentMessagesUpdate(
+        state.agentMessages ?? [],
+        `booking_replace_nearest_${state.bookingDraft?.version ?? 0}`,
+        replacementCancelNearestRequest,
       );
     }
     const availabilityRequest = availabilityRequestFromBookingDraft(state);

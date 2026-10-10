@@ -267,11 +267,14 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             llm,
             isBooking ? commandPrepare : undefined,
             isBooking ? noteOrch : undefined,
+            isBooking ? finalize : undefined,
           ),
         {
           [llm]: llm,
           [commandPrepare]: commandPrepare,
-          ...(isBooking ? { [noteOrch]: noteOrch } : {}),
+          ...(isBooking
+            ? { [noteOrch]: noteOrch, [finalize]: finalize }
+            : {}),
         },
       )
       .addConditionalEdges(
@@ -301,13 +304,16 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             isBooking ? mutationFinalize : undefined,
             isBooking ? commandPrepare : undefined,
             isBooking ? noteOrch : undefined,
+            isBooking ? finalize : undefined,
           ),
         {
           [llm]: llm,
           [toolsNode]: toolsNode,
           [mutationFinalize]: mutationFinalize,
           [commandPrepare]: commandPrepare,
-          ...(isBooking ? { [noteOrch]: noteOrch } : {}),
+          ...(isBooking
+            ? { [noteOrch]: noteOrch, [finalize]: finalize }
+            : {}),
         },
       )
       .addEdge(finalize, END);

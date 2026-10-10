@@ -1,13 +1,16 @@
 import {
+  BOOKING_OFFER_MENU,
   BOOKING_REPLACE_MENU,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
+  CONSULTATION_SERVICE_ID,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   MAIN_MENU_LABEL,
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
+import { normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import {
   expectButtons,
@@ -18,9 +21,12 @@ import {
 } from "../assert.js";
 import {
   allocateUnusedSmokePhone,
+  findContactByTelegram,
   getMeeting,
+  getMeetingServiceIds,
   listPlannedMeetingIds,
   preCleanTelegramContact,
+  seedPhoneOnlyContact,
 } from "../crm.js";
 import {
   writeTelegramId,
@@ -41,8 +47,20 @@ import {
   resolveCreatedMeetingId,
   runBookFlow,
 } from "./booking-helpers.js";
+import { drillToProcedureOffer, openBookingOffer } from "./offer-helpers.js";
 
 const PRICE_HINT = /грн|\d/i;
+const VISIT_NOTE_TEXT = "Турбує сухість шкіри на обличчі";
+
+const hhmmFromLocalIso = (dateStart: string): string | null => {
+  const match = /T(\d{2}:\d{2})/.exec(dateStart);
+  return match?.[1] ?? null;
+};
+
+const dayFromLocalIso = (dateStart: string): string | null => {
+  const day = dateStart.split("T")[0];
+  return day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+};
 
 export const bookNewContactScenario: SmokeScenario = {
   name: "book-new-contact",
@@ -57,6 +75,7 @@ export const bookNewContactScenario: SmokeScenario = {
       const flow = await runBookFlow(bundle, {
         phone,
         decision: "confirm",
+        noteText: VISIT_NOTE_TEXT,
         ...SMOKE_CONTACT_NAME,
       });
       if (flow.sawContactBeforeSlot) {
@@ -75,15 +94,43 @@ export const bookNewContactScenario: SmokeScenario = {
           "book-new-contact: expected create_contact after slot for a new telegram id",
         );
       }
+      const noteAnswered = flow.turns.some(
+        (turn) => turn.state.bookingDraft?.note.status === "answered",
+      );
+      if (!noteAnswered) {
+        throw new SmokeAssertError(
+          "book-new-contact: expected bookingDraft.note.status=answered after typed visit note",
+        );
+      }
+      const createCall = flow.allCalls.find((call) => call.name === "create_meeting");
+      const descriptionArg = createCall?.args.description;
+      if (typeof descriptionArg !== "string" || !descriptionArg.trim()) {
+        throw new SmokeAssertError(
+          "book-new-contact: create_meeting args missing non-empty description",
+        );
+      }
+      soft(
+        bundle.warnings,
+        "book-new-contact description missing сух hint",
+        /сух/i.test(descriptionArg),
+        descriptionArg.slice(0, 200),
+      );
       const contactId = await contactIdOrThrow(ctx, telegramId);
       ctx.cleanup.trackContact(contactId);
       const meetingId = await resolveCreatedMeetingId(ctx, contactId, flow.allCalls);
       await assertMeetingPlanned(ctx, meetingId, contactId);
+      const meeting = await getMeeting(ctx.callTool, meetingId);
+      const storedDescription = meeting.description;
+      if (typeof storedDescription !== "string" || !storedDescription.trim()) {
+        throw new SmokeAssertError(
+          `book-new-contact: meeting ${meetingId} description empty`,
+        );
+      }
       expectButtons("book-new-contact post-book menu", flow.last.buttons, [
         DEFAULT_MENU_HAS_VISITS[0],
         MAIN_MENU_LABEL,
       ]);
-      console.log("✓ book-new-contact: meeting", meetingId);
+      console.log("✓ book-new-contact: meeting", meetingId, "with visit note");
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
       bundle.restore();
@@ -116,7 +163,31 @@ export const bookDeclineScenario: SmokeScenario = {
         ...DEFAULT_MENU_NO_VISITS,
         MAIN_MENU_LABEL,
       ]);
-      console.log("✓ book-decline: no create_meeting, DEFAULT MENU");
+
+      await bundle.session.say("Записатись");
+      await driveUntilMutationConfirm(bundle, {
+        phone,
+        ...SMOKE_CONTACT_NAME,
+        expectAction: "create",
+      });
+      const leave = await bundle.session.say(MAIN_MENU_LABEL);
+      assertNoCreateMeeting("book-decline main-menu", leave.calls);
+      if (leave.pendingConfirm) {
+        throw new SmokeAssertError(
+          "book-decline: pendingConfirm still open after Головне меню",
+        );
+      }
+      const afterLeave = await listPlannedMeetingIds(ctx.callTool, contactId);
+      if (afterLeave.length !== before.length) {
+        throw new SmokeAssertError(
+          `book-decline: Planned meetings changed after Головне меню ${before.length} → ${afterLeave.length}`,
+        );
+      }
+      expectButtons("book-decline after main menu", leave.buttons, [
+        ...DEFAULT_MENU_NO_VISITS,
+        MAIN_MENU_LABEL,
+      ]);
+      console.log("✓ book-decline: ❌ and Головне меню wrote nothing");
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
       bundle.restore();
@@ -194,27 +265,307 @@ export const doubleBookGuardScenario: SmokeScenario = {
       }
 
       const second = await bundle.session.say("Записатись");
-      // Do not autopilot ✅ — that can confirm REPLACE cancel and wipe the visit.
-      if (second.state.pendingInteraction?.kind === "service_confirm") {
-        await bundle.session.tap("Так");
+      if (
+        second.state.pendingInteraction?.kind !== "visit_select"
+        || second.state.pendingInteraction.stage !== "replacement"
+      ) {
+        throw new SmokeAssertError(
+          `double-book-guard: expected visit_select/replacement after Записатись, got ${second.state.pendingInteraction?.kind ?? "null"}/${second.state.pendingInteraction?.kind === "visit_select" ? second.state.pendingInteraction.stage : "n/a"}`,
+        );
       }
+      expectButtons("double-book-guard REPLACE", second.buttons, [...BOOKING_REPLACE_MENU]);
+      expectNoButtons("double-book-guard REPLACE", second.buttons, ["Перенести"]);
+      assertNoCreateMeeting("double-book-guard REPLACE turn", second.calls);
 
+      await bundle.session.tap("Ні, дякую");
       const planned = await listPlannedMeetingIds(ctx.callTool, contactId);
       if (planned.length !== 1) {
         throw new SmokeAssertError(
-          `double-book-guard: expected exactly 1 Planned meeting, got ${planned.length}`,
+          `double-book-guard: expected exactly 1 Planned meeting after decline, got ${planned.length}`,
         );
       }
-      const snap = await bundle.session.snapshot();
-      if (snap.state.pendingInteraction?.kind === "visit_select"
-        && snap.state.pendingInteraction.stage === "replacement") {
-        expectButtons("double-book-guard REPLACE", snap.buttons, [...BOOKING_REPLACE_MENU]);
-        expectNoButtons("double-book-guard REPLACE", snap.buttons, ["Перенести"]);
+      console.log("✓ double-book-guard: REPLACE then decline, still one Planned meeting");
+      return { warnings: bundle.warnings, turns: bundle.session.turns };
+    } finally {
+      bundle.restore();
+    }
+  },
+};
+
+export const replaceRebookScenario: SmokeScenario = {
+  name: "replace-rebook",
+  tier: "write",
+  run: async (ctx) => {
+    const telegramId = writeTelegramId("d");
+    const { contactId, phone } = await prepareFreshContact(ctx, telegramId);
+    const bundle = openBookingSession(ctx, "replace-rebook", telegramId);
+    try {
+      const first = await runBookFlow(bundle, {
+        phone,
+        decision: "confirm",
+        ...SMOKE_CONTACT_NAME,
+      });
+      const oldId = await resolveCreatedMeetingId(ctx, contactId, first.allCalls);
+
+      const replaceTurn = await bundle.session.say("Записатись");
+      if (
+        replaceTurn.state.pendingInteraction?.kind !== "visit_select"
+        || replaceTurn.state.pendingInteraction.stage !== "replacement"
+      ) {
+        throw new SmokeAssertError(
+          `replace-rebook: expected visit_select/replacement after Записатись, got ${replaceTurn.state.pendingInteraction?.kind ?? "null"}/${replaceTurn.state.pendingInteraction?.kind === "visit_select" ? replaceTurn.state.pendingInteraction.stage : "n/a"}`,
+        );
       }
-      if (second.buttons.includes("Скасувати") && second.buttons.includes("Ні, дякую")) {
-        expectNoButtons("double-book-guard second", second.buttons, ["Перенести"]);
+      expectButtons("replace-rebook REPLACE", replaceTurn.buttons, [...BOOKING_REPLACE_MENU]);
+      expectNoButtons("replace-rebook REPLACE", replaceTurn.buttons, ["Перенести"]);
+      assertNoCreateMeeting("replace-rebook REPLACE turn", replaceTurn.calls);
+
+      const cancelTap = await bundle.session.tap("Скасувати");
+      if (!cancelTap.pendingConfirm) {
+        await driveUntilMutationConfirm(bundle, {
+          phone,
+          ...SMOKE_CONTACT_NAME,
+          expectAction: "cancel",
+          maxTurns: 6,
+        });
       }
-      console.log("✓ double-book-guard: still one Planned meeting");
+      const atCancel = await bundle.session.snapshot();
+      if (
+        atCancel.state.pendingInteraction?.kind !== "mutation_confirm"
+        || atCancel.state.pendingInteraction.action !== "cancel"
+      ) {
+        throw new SmokeAssertError(
+          `replace-rebook: expected cancel HITL for ${oldId}, got ${atCancel.state.pendingInteraction?.kind ?? "null"}`,
+        );
+      }
+      const cancelConfirmed = await confirmOpenHitl(bundle);
+      const oldAfterCancel = await getMeeting(ctx.callTool, oldId);
+      if (oldAfterCancel.status !== "Not Held") {
+        throw new SmokeAssertError(
+          `replace-rebook: expected old meeting Not Held, got ${String(oldAfterCancel.status)}`,
+        );
+      }
+
+      const driveCreate = await driveUntilMutationConfirm(bundle, {
+        phone,
+        ...SMOKE_CONTACT_NAME,
+        expectAction: "create",
+        maxTurns: 14,
+      });
+      const selectedSlot = (await bundle.session.snapshot()).state.bookingDraft?.selectedSlot;
+      if (selectedSlot?.dateStart == null) {
+        throw new SmokeAssertError("replace-rebook: missing selectedSlot.dateStart before create");
+      }
+      const created = await confirmOpenHitl(bundle);
+      const allPostReplace = [
+        ...cancelTap.calls,
+        ...cancelConfirmed.calls,
+        ...driveCreate.flatMap((turn) => turn.calls),
+        ...created.calls,
+      ];
+      assertCreateMeetingOnce("replace-rebook create", allPostReplace);
+
+      const newId = await resolveCreatedMeetingId(ctx, contactId, allPostReplace);
+      if (newId === oldId) {
+        throw new SmokeAssertError(
+          `replace-rebook: expected a new meeting id, got same ${oldId}`,
+        );
+      }
+      const planned = await listPlannedMeetingIds(ctx.callTool, contactId);
+      if (planned.length !== 1 || planned[0] !== newId) {
+        throw new SmokeAssertError(
+          `replace-rebook: expected Planned=[${newId}], got [${planned.join(",")}]`,
+        );
+      }
+      const newMeeting = await getMeeting(ctx.callTool, newId);
+      const meetingStart = normalizeLocalIsoDatetime(String(newMeeting.dateStart));
+      const slotStart = normalizeLocalIsoDatetime(selectedSlot.dateStart);
+      if (meetingStart !== slotStart) {
+        throw new SmokeAssertError(
+          `replace-rebook: new dateStart ${meetingStart} !== slot ${slotStart}`,
+        );
+      }
+      expectButtons("replace-rebook post menu", created.buttons, [
+        DEFAULT_MENU_HAS_VISITS[0],
+        MAIN_MENU_LABEL,
+      ]);
+      console.log("✓ replace-rebook: cancelled", oldId, "booked", newId);
+      return { warnings: bundle.warnings, turns: bundle.session.turns };
+    } finally {
+      bundle.restore();
+    }
+  },
+};
+
+/**
+ * Accepted non-consultation procedure → REPLACE → cancel confirm must continue
+ * into date/time for that same service (not "Запис скасовано." + default menu).
+ */
+export const replaceProcedureScenario: SmokeScenario = {
+  name: "replace-procedure",
+  tier: "write",
+  run: async (ctx) => {
+    const telegramId = writeTelegramId("e");
+    const { contactId, phone } = await prepareFreshContact(ctx, telegramId);
+    const bundle = openBookingSession(ctx, "replace-procedure", telegramId);
+    try {
+      const first = await runBookFlow(bundle, {
+        phone,
+        decision: "confirm",
+        ...SMOKE_CONTACT_NAME,
+      });
+      const oldId = await resolveCreatedMeetingId(ctx, contactId, first.allCalls);
+
+      // Do not use openBookingOffer («Записатись»): with a visit on file that
+      // opens REPLACE before any service is chosen. Mirror the live catalog path.
+      const hasOfferKeyboard = (buttons: string[]): boolean =>
+        buttons.includes(BOOKING_OFFER_MENU[0]) && buttons.includes(BOOKING_OFFER_MENU[1]);
+      let servicesTurn = await bundle.session.say("Послуги");
+      for (let i = 0; i < 4 && !hasOfferKeyboard(servicesTurn.buttons); i += 1) {
+        servicesTurn = await bundle.session.say("Послуги");
+      }
+      if (!hasOfferKeyboard(servicesTurn.buttons)) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected BOOKING OFFER after Послуги, got [${servicesTurn.buttons.join(" | ") || "none"}]`,
+        );
+      }
+
+      const offer = await drillToProcedureOffer(bundle.session, "replace-procedure");
+      const interaction = offer.state.pendingInteraction;
+      if (interaction?.kind !== "service_confirm") {
+        throw new SmokeAssertError(
+          `replace-procedure: expected service_confirm, got ${interaction?.kind ?? "null"}`,
+        );
+      }
+      const service = interaction.service;
+      if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected non-consultation service id, got ${service.id}`,
+        );
+      }
+
+      const acceptTurn = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      if (
+        acceptTurn.state.pendingInteraction?.kind !== "visit_select"
+        || acceptTurn.state.pendingInteraction.stage !== "replacement"
+      ) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected visit_select/replacement after Так, got ${acceptTurn.state.pendingInteraction?.kind ?? "null"}/${acceptTurn.state.pendingInteraction?.kind === "visit_select" ? acceptTurn.state.pendingInteraction.stage : "n/a"}`,
+        );
+      }
+      expectButtons("replace-procedure REPLACE", acceptTurn.buttons, [...BOOKING_REPLACE_MENU]);
+      assertNoCreateMeeting("replace-procedure REPLACE turn", acceptTurn.calls);
+
+      const cancelTap = await bundle.session.tap("Скасувати");
+      if (!cancelTap.pendingConfirm) {
+        await driveUntilMutationConfirm(bundle, {
+          phone,
+          ...SMOKE_CONTACT_NAME,
+          expectAction: "cancel",
+          maxTurns: 6,
+        });
+      }
+      const atCancel = await bundle.session.snapshot();
+      if (
+        atCancel.state.pendingInteraction?.kind !== "mutation_confirm"
+        || atCancel.state.pendingInteraction.action !== "cancel"
+      ) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected cancel HITL for ${oldId}, got ${atCancel.state.pendingInteraction?.kind ?? "null"}`,
+        );
+      }
+
+      const cancelConfirmed = await confirmOpenHitl(bundle);
+      const oldAfterCancel = await getMeeting(ctx.callTool, oldId);
+      if (oldAfterCancel.status !== "Not Held") {
+        throw new SmokeAssertError(
+          `replace-procedure: expected old meeting Not Held, got ${String(oldAfterCancel.status)}`,
+        );
+      }
+      if (cancelConfirmed.reply.trim() === "Запис скасовано.") {
+        throw new SmokeAssertError(
+          "replace-procedure: cancel closed the booking with terminal «Запис скасовано.»",
+        );
+      }
+      const idleDefault =
+        cancelConfirmed.buttons.includes(DEFAULT_MENU_NO_VISITS[0])
+        && cancelConfirmed.buttons.includes(DEFAULT_MENU_NO_VISITS[1])
+        && cancelConfirmed.buttons.includes(DEFAULT_MENU_NO_VISITS[2]);
+      const idleHasVisit =
+        cancelConfirmed.buttons.includes(DEFAULT_MENU_HAS_VISITS[0])
+        && cancelConfirmed.buttons.includes(DEFAULT_MENU_HAS_VISITS[1]);
+      if (idleDefault || idleHasVisit) {
+        throw new SmokeAssertError(
+          `replace-procedure: cancel showed idle default menu [${cancelConfirmed.buttons.join(" | ")}]`,
+        );
+      }
+      const pendingKind = cancelConfirmed.state.pendingInteraction?.kind;
+      if (pendingKind !== "date_select" && pendingKind !== "time_select") {
+        throw new SmokeAssertError(
+          `replace-procedure: expected date_select/time_select after cancel, got ${pendingKind ?? "null"}`,
+        );
+      }
+      const acceptedId = cancelConfirmed.state.bookingDraft?.serviceAcceptance?.service.id;
+      if (acceptedId !== service.id) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected accepted service ${service.id} after cancel, got ${acceptedId ?? "null"}`,
+        );
+      }
+      if (cancelConfirmed.state.bookingDraft?.replacement != null) {
+        throw new SmokeAssertError(
+          "replace-procedure: bookingDraft.replacement still set after cancel confirm",
+        );
+      }
+
+      const driveCreate = await driveUntilMutationConfirm(bundle, {
+        phone,
+        ...SMOKE_CONTACT_NAME,
+        expectAction: "create",
+        maxTurns: 14,
+      });
+      const created = await confirmOpenHitl(bundle);
+      const allPostReplace = [
+        ...cancelTap.calls,
+        ...cancelConfirmed.calls,
+        ...driveCreate.flatMap((turn) => turn.calls),
+        ...created.calls,
+      ];
+      assertCreateMeetingOnce("replace-procedure create", allPostReplace);
+      const createCall = allPostReplace.find((call) => call.name === "create_meeting");
+      const serviceIds = createCall?.args.cServicesIds;
+      const firstServiceId = Array.isArray(serviceIds) ? serviceIds[0] : undefined;
+      if (firstServiceId !== service.id) {
+        throw new SmokeAssertError(
+          `replace-procedure: create_meeting cServicesIds[0]=${String(firstServiceId)}, expected ${service.id}`,
+        );
+      }
+
+      const newId = await resolveCreatedMeetingId(ctx, contactId, allPostReplace);
+      if (newId === oldId) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected a new meeting id, got same ${oldId}`,
+        );
+      }
+      const planned = await listPlannedMeetingIds(ctx.callTool, contactId);
+      if (planned.length !== 1 || planned[0] !== newId) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected Planned=[${newId}], got [${planned.join(",")}]`,
+        );
+      }
+      const crmServices = await getMeetingServiceIds(ctx.callTool, newId);
+      if (!crmServices.includes(service.id)) {
+        throw new SmokeAssertError(
+          `replace-procedure: CRM meeting services ${JSON.stringify(crmServices)} missing ${service.id}`,
+        );
+      }
+      console.log(
+        "✓ replace-procedure: cancelled",
+        oldId,
+        "booked",
+        newId,
+        "service",
+        service.id,
+      );
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
       bundle.restore();
@@ -238,7 +589,54 @@ export const rescheduleScenario: SmokeScenario = {
       const meetingId = await resolveCreatedMeetingId(ctx, contactId, booked.allCalls);
       const before = await assertMeetingPlanned(ctx, meetingId, contactId);
       const oldStart = String(before.dateStart);
+      const oldDay = dayFromLocalIso(oldStart);
+      const oldHhmm = hhmmFromLocalIso(oldStart);
 
+      const myVisitDecline = await bundle.session.say("Мій запис");
+      expectButtons("reschedule visit menu decline", myVisitDecline.buttons, [
+        ...VISIT_CHANGE_MENU,
+      ]);
+      await bundle.session.tap("Перенести");
+      const declineDrive = await driveUntilMutationConfirm(bundle, {
+        phone,
+        ...SMOKE_CONTACT_NAME,
+        expectAction: "reschedule",
+        maxTurns: 12,
+      });
+      const excluded = declineDrive.some((turn) =>
+        (turn.state.availabilityContext?.excludeMeetingIds ?? []).includes(meetingId),
+      );
+      if (!excluded) {
+        throw new SmokeAssertError(
+          `reschedule: expected availabilityContext.excludeMeetingIds to include ${meetingId}`,
+        );
+      }
+      for (const turn of declineDrive) {
+        const interaction = turn.state.pendingInteraction;
+        if (interaction?.kind !== "time_select" || oldDay == null || oldHhmm == null) {
+          continue;
+        }
+        if (interaction.date !== oldDay) {
+          continue;
+        }
+        const labels = interaction.choices.map((choice) => choice.label);
+        if (labels.includes(oldHhmm)) {
+          throw new SmokeAssertError(
+            `reschedule: old start ${oldHhmm} still offered on ${oldDay}`,
+          );
+        }
+      }
+      const declined = await declineOpenHitl(bundle);
+      expectNotCalled("reschedule decline", declined.calls, "update_meeting");
+      const still = await getMeeting(ctx.callTool, meetingId);
+      if (String(still.dateStart) !== oldStart) {
+        throw new SmokeAssertError(
+          `reschedule: dateStart changed after ❌ (${oldStart} → ${String(still.dateStart)})`,
+        );
+      }
+
+      // Decline can leave booking mid-slot; reset then re-open visit change.
+      await bundle.session.say(MAIN_MENU_LABEL);
       const myVisit = await bundle.session.say("Мій запис");
       expectButtons("reschedule visit menu", myVisit.buttons, [...VISIT_CHANGE_MENU]);
 
@@ -262,7 +660,7 @@ export const rescheduleScenario: SmokeScenario = {
           `reschedule: dateStart unchanged (${oldStart})`,
         );
       }
-      console.log("✓ reschedule:", oldStart, "→", newStart);
+      console.log("✓ reschedule: declined then moved", oldStart, "→", newStart);
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
       bundle.restore();
@@ -373,7 +771,202 @@ export const cancelHitlFaqScenario: SmokeScenario = {
       }
 
       await declineOpenHitl(bundle);
-      console.log("✓ cancel-hitl-faq: price aside re-showed cancel ✅/❌, then ❌ kept visit");
+
+      const myVisitAgain = await bundle.session.say("Мій запис");
+      expectButtons("cancel-hitl-faq visit menu again", myVisitAgain.buttons, [
+        ...VISIT_CHANGE_MENU,
+      ]);
+      const cancelAgain = await bundle.session.tap("Скасувати");
+      if (!cancelAgain.pendingConfirm) {
+        await driveUntilMutationConfirm(bundle, {
+          phone,
+          ...SMOKE_CONTACT_NAME,
+          expectAction: "cancel",
+          maxTurns: 6,
+        });
+      }
+      const leave = await bundle.session.say(MAIN_MENU_LABEL);
+      const notHeldUpdates = leave.calls.filter(
+        (call) =>
+          call.name === "update_meeting"
+          && (call.args as { status?: string }).status === "Not Held",
+      );
+      if (notHeldUpdates.length > 0) {
+        throw new SmokeAssertError(
+          "cancel-hitl-faq: Головне меню wrote Not Held",
+        );
+      }
+      if (leave.pendingConfirm) {
+        throw new SmokeAssertError(
+          "cancel-hitl-faq: pendingConfirm still open after Головне меню",
+        );
+      }
+      const kept = await getMeeting(ctx.callTool, meetingId);
+      if (kept.status !== "Planned" && kept.status !== "Confirmed") {
+        throw new SmokeAssertError(
+          `cancel-hitl-faq: expected Planned/Confirmed after Головне меню, got ${String(kept.status)}`,
+        );
+      }
+      console.log("✓ cancel-hitl-faq: FAQ aside + ❌ + Головне меню kept visit");
+      return { warnings: bundle.warnings, turns: bundle.session.turns };
+    } finally {
+      bundle.restore();
+    }
+  },
+};
+
+export const contactLinkScenario: SmokeScenario = {
+  name: "contact-link",
+  tier: "write",
+  run: async (ctx) => {
+    const telegramId = writeTelegramId("e");
+    await preCleanTelegramContact(ctx.callTool, telegramId);
+    const phone = await allocateUnusedSmokePhone(ctx.callTool);
+    const seededId = await seedPhoneOnlyContact(ctx.callTool, phone);
+    ctx.cleanup.trackContact(seededId);
+
+    const bundle = openBookingSession(ctx, "contact-link", telegramId);
+    try {
+      const flow = await runBookFlow(bundle, {
+        phone,
+        decision: "confirm",
+        rotateOccupiedPhone: false,
+        ...SMOKE_CONTACT_NAME,
+      });
+      if (flow.allCalls.some((call) => call.name === "create_contact")) {
+        throw new SmokeAssertError(
+          "contact-link: create_contact must not run when phone matches existing Contact",
+        );
+      }
+      const linked = flow.allCalls.some((call) => {
+        if (call.name !== "update_entity") {
+          return false;
+        }
+        const args = call.args as {
+          entityId?: string;
+          data?: { cTelegram?: string };
+        };
+        return args.entityId === seededId && args.data?.cTelegram === telegramId;
+      });
+      if (!linked) {
+        throw new SmokeAssertError(
+          `contact-link: expected update_entity cTelegram=${telegramId} on Contact ${seededId}`,
+        );
+      }
+      const found = await findContactByTelegram(ctx.callTool, telegramId);
+      if (!found || found.id !== seededId) {
+        throw new SmokeAssertError(
+          `contact-link: expected telegram ${telegramId} → Contact ${seededId}, got ${found?.id ?? "none"}`,
+        );
+      }
+      const meetingId = await resolveCreatedMeetingId(ctx, seededId, flow.allCalls);
+      await assertMeetingPlanned(ctx, meetingId, seededId);
+
+      const phoneTurn = flow.turns.find(
+        (turn) =>
+          turn.state.pendingInteraction?.kind === "contact_field"
+          && turn.state.pendingInteraction.field === "phoneNumber",
+      );
+      // Soft: reply after submitting phone should not re-ask for phone.
+      const afterPhoneIdx = phoneTurn
+        ? flow.turns.indexOf(phoneTurn) + 1
+        : -1;
+      if (afterPhoneIdx >= 0 && afterPhoneIdx < flow.turns.length) {
+        const afterPhone = flow.turns[afterPhoneIdx]!;
+        soft(
+          bundle.warnings,
+          "contact-link reply re-asked for phone after match",
+          !/(?:телефон|номер|phone)/i.test(afterPhone.reply)
+            || afterPhone.state.pendingInteraction?.kind !== "contact_field"
+            || afterPhone.state.pendingInteraction.field !== "phoneNumber",
+          afterPhone.reply.slice(0, 200),
+        );
+      }
+      console.log("✓ contact-link: linked", seededId, "meeting", meetingId);
+      return { warnings: bundle.warnings, turns: bundle.session.turns };
+    } finally {
+      bundle.restore();
+    }
+  },
+};
+
+export const bookProcedureScenario: SmokeScenario = {
+  name: "book-procedure",
+  tier: "write",
+  run: async (ctx) => {
+    const telegramId = writeTelegramId("f");
+    const { contactId, phone } = await prepareFreshContact(ctx, telegramId);
+    const bundle = openBookingSession(ctx, "book-procedure", telegramId);
+    try {
+      await openBookingOffer(bundle.session, "book-procedure");
+      const offer = await drillToProcedureOffer(bundle.session, "book-procedure");
+      const interaction = offer.state.pendingInteraction;
+      if (interaction?.kind !== "service_confirm") {
+        throw new SmokeAssertError(
+          `book-procedure: expected service_confirm, got ${interaction?.kind ?? "null"}`,
+        );
+      }
+      const service = interaction.service;
+      if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
+        throw new SmokeAssertError(
+          `book-procedure: expected non-consultation service id, got ${service.id}`,
+        );
+      }
+
+      await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      await driveUntilMutationConfirm(bundle, {
+        phone,
+        ...SMOKE_CONTACT_NAME,
+        expectAction: "create",
+      });
+      const confirmed = await confirmOpenHitl(bundle);
+      assertCreateMeetingOnce("book-procedure", confirmed.calls);
+      const createCall = confirmed.calls.find((call) => call.name === "create_meeting");
+      const serviceIds = createCall?.args.cServicesIds;
+      const firstServiceId = Array.isArray(serviceIds) ? serviceIds[0] : undefined;
+      if (firstServiceId !== service.id) {
+        throw new SmokeAssertError(
+          `book-procedure: create_meeting cServicesIds[0]=${String(firstServiceId)}, expected ${service.id}`,
+        );
+      }
+      if (firstServiceId === CONSULTATION_SERVICE_ID) {
+        throw new SmokeAssertError(
+          "book-procedure: create_meeting used consultation service id",
+        );
+      }
+      const meetingId = await resolveCreatedMeetingId(ctx, contactId, confirmed.calls);
+      const meeting = await assertMeetingPlanned(ctx, meetingId, contactId);
+      const crmServices = await getMeetingServiceIds(ctx.callTool, meetingId);
+      if (crmServices.length === 0) {
+        throw new SmokeAssertError(
+          `book-procedure: CRM meeting ${meetingId} has no linked cServicesIds (create wrote serviceId=${service.id})`,
+        );
+      }
+      if (!crmServices.includes(service.id)) {
+        throw new SmokeAssertError(
+          `book-procedure: CRM meeting services ${JSON.stringify(crmServices)} missing ${service.id}`,
+        );
+      }
+      const dateStart = String(meeting.dateStart ?? "");
+      const dateEnd = String(meeting.dateEnd ?? "");
+      const durationMinutes =
+        typeof service.durationMinutes === "number"
+        && Number.isFinite(service.durationMinutes)
+          ? service.durationMinutes
+          : null;
+      if (durationMinutes != null && dateStart.includes("T") && dateEnd.includes("T")) {
+        const startMs = Date.parse(dateStart);
+        const endMs = Date.parse(dateEnd);
+        if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
+          soft(
+            bundle.warnings,
+            "book-procedure duration matches service",
+            Math.round((endMs - startMs) / 60_000) === durationMinutes,
+            `expected ${durationMinutes}m got ${Math.round((endMs - startMs) / 60_000)}m`,
+          );
+        }
+      }
+      console.log("✓ book-procedure: service", service.id, "meeting", meetingId);
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
       bundle.restore();

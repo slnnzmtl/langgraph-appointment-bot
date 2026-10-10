@@ -8,6 +8,31 @@ import {
 
 import { lastPatientText } from "./shared.js";
 
+/**
+ * True when a new create booking must pause for REPLACE before the LLM runs:
+ * an upcoming Planned/Confirmed visit is already in bookingContext.
+ */
+export const existingVisitBlocksNewBooking = (state: ClinicState): boolean => {
+  const draft = state.bookingDraft;
+  if (draft != null && draft.mode !== "create") {
+    return false;
+  }
+  if (draft?.replacement != null) {
+    return false;
+  }
+  if (draft?.pendingCommand != null) {
+    return false;
+  }
+  const interaction = state.pendingInteraction;
+  if (
+    interaction?.kind === "visit_select"
+    || interaction?.kind === "mutation_confirm"
+  ) {
+    return false;
+  }
+  return (state.bookingContext?.meetings.length ?? 0) > 0;
+};
+
 export const replacementActionForTurn = (
   state: ClinicState,
 ): "cancel" | "decline" | null => {

@@ -151,6 +151,18 @@ describe("nextAutopilotInput", () => {
       nextAutopilotInput(
         {
           pendingInteraction: {
+            kind: "visit_note",
+            choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+          },
+        },
+        { ...base, noteText: "Турбує сухість шкіри на обличчі" },
+      ),
+    ).toBe("Турбує сухість шкіри на обличчі");
+
+    expect(
+      nextAutopilotInput(
+        {
+          pendingInteraction: {
             kind: "mutation_confirm",
             action: "create",
             choices: [

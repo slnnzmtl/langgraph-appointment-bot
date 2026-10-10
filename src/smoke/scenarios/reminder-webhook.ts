@@ -14,6 +14,7 @@ import {
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   CONSULTATION_SERVICE_ID,
+  DEFAULT_MENU_HAS_VISITS,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import type { McpCallTool } from "../../shared/mcp.js";
@@ -372,7 +373,125 @@ export const reminderWebhookScenario: SmokeScenario = {
           `reminder-webhook: expected Not Held, got ${String(notHeld.status)}`,
         );
       }
-      console.log("✓ reminder-webhook: 401, HITL ✅ Confirmed, ❌ Not Held");
+
+      sent.length = 0;
+      const confirmedNotify = await fetch(`${baseUrl}${REMINDER_WEBHOOK_PATH}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Webhook-Secret": secret,
+        },
+        body: JSON.stringify({
+          telegramId,
+          meetings: [
+            {
+              id: meetingConfirm,
+              name: `${SMOKE_MEETING_NAME_PREFIX} reminder confirm`,
+              dateStart: confirmSlot.dateStart,
+              status: "Confirmed",
+            },
+          ],
+        }),
+      });
+      const confirmedNotifyBody = (await confirmedNotify.json()) as {
+        ok?: boolean;
+        hitl?: boolean;
+      };
+      if (
+        !confirmedNotify.ok
+        || confirmedNotifyBody.ok !== true
+        || confirmedNotifyBody.hitl !== false
+      ) {
+        throw new SmokeAssertError(
+          `reminder-webhook: Confirmed notify expected {ok:true,hitl:false}, got ${confirmedNotify.status} ${JSON.stringify(confirmedNotifyBody)}`,
+        );
+      }
+      const confirmedLabels =
+        (
+          sent[0]?.reply_markup as { keyboard?: Array<Array<{ text?: string }>> } | undefined
+        )?.keyboard?.flat().map((button) => button.text ?? "") ?? [];
+      if (
+        confirmedLabels.includes(CONFIRM_YES_LABEL)
+        || confirmedLabels.includes(CONFIRM_NO_LABEL)
+      ) {
+        throw new SmokeAssertError(
+          `reminder-webhook: Confirmed notify must not show ✅/❌, got [${confirmedLabels.join("|")}]`,
+        );
+      }
+      if (!confirmedLabels.includes(DEFAULT_MENU_HAS_VISITS[0])) {
+        throw new SmokeAssertError(
+          `reminder-webhook: Confirmed notify missing ${DEFAULT_MENU_HAS_VISITS[0]}, got [${confirmedLabels.join("|")}]`,
+        );
+      }
+      const staleConfirm = await applyReminderDecision(
+        ctx.callTool,
+        telegramId,
+        CONFIRM_YES_LABEL,
+      );
+      if (staleConfirm.kind !== "none") {
+        throw new SmokeAssertError(
+          `reminder-webhook: expected none after Confirmed notify, got ${JSON.stringify(staleConfirm)}`,
+        );
+      }
+      const stillConfirmed = await getMeeting(ctx.callTool, meetingConfirm);
+      if (stillConfirmed.status !== "Confirmed") {
+        throw new SmokeAssertError(
+          `reminder-webhook: Confirmed status changed after notify-only, got ${String(stillConfirmed.status)}`,
+        );
+      }
+
+      sent.length = 0;
+      const missingId = await fetch(`${baseUrl}${REMINDER_WEBHOOK_PATH}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Webhook-Secret": secret,
+        },
+        body: JSON.stringify({
+          telegramId,
+          meetings: [
+            {
+              name: `${SMOKE_MEETING_NAME_PREFIX} reminder no-id`,
+              dateStart: confirmSlot.dateStart,
+              status: "Planned",
+            },
+          ],
+        }),
+      });
+      const missingIdBody = (await missingId.json()) as {
+        ok?: boolean;
+        hitl?: boolean;
+      };
+      if (!missingId.ok || missingIdBody.ok !== true || missingIdBody.hitl !== false) {
+        throw new SmokeAssertError(
+          `reminder-webhook: missing id expected {ok:true,hitl:false}, got ${missingId.status} ${JSON.stringify(missingIdBody)}`,
+        );
+      }
+      const missingLabels =
+        (
+          sent[0]?.reply_markup as { keyboard?: Array<Array<{ text?: string }>> } | undefined
+        )?.keyboard?.flat().map((button) => button.text ?? "") ?? [];
+      if (
+        missingLabels.includes(CONFIRM_YES_LABEL)
+        || missingLabels.includes(CONFIRM_NO_LABEL)
+      ) {
+        throw new SmokeAssertError(
+          `reminder-webhook: missing-id notify must not show ✅/❌, got [${missingLabels.join("|")}]`,
+        );
+      }
+      const missingDecision = await applyReminderDecision(
+        ctx.callTool,
+        telegramId,
+        CONFIRM_YES_LABEL,
+      );
+      if (missingDecision.kind !== "none") {
+        throw new SmokeAssertError(
+          `reminder-webhook: expected none after missing-id notify, got ${JSON.stringify(missingDecision)}`,
+        );
+      }
+      console.log(
+        "✓ reminder-webhook: 401, HITL ✅/❌, Confirmed notify-only, missing-id notify-only",
+      );
     } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

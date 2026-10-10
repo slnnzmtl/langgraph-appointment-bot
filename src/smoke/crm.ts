@@ -110,6 +110,29 @@ export const ensureSmokeContact = async (
   return { id, cTelegram: telegramId };
 };
 
+/**
+ * Create a Smoke Tester Contact with a phone but no cTelegram.
+ * Phone must come from allocateUnusedSmokePhone so a real patient number is never used.
+ */
+export const seedPhoneOnlyContact = async (
+  callTool: McpCallTool,
+  phoneNumber: string,
+): Promise<string> => {
+  const created = await callTool("create_contact", {
+    firstName: SMOKE_CONTACT_NAME.firstName,
+    lastName: SMOKE_CONTACT_NAME.lastName,
+    phoneNumber,
+    skipDuplicateCheck: true,
+  });
+  const id = entityIdFromResult(created);
+  if (!id) {
+    throw new Error(
+      `seedPhoneOnlyContact: create_contact returned no id for phone ${phoneNumber}`,
+    );
+  }
+  return id;
+};
+
 /** Soft-cancel all upcoming Planned/Confirmed meetings for a contact (pre-clean). */
 export const cancelUpcomingMeetingsForContact = async (
   callTool: McpCallTool,
@@ -181,6 +204,57 @@ export const getMeeting = async (
     throw new Error(`getMeeting: empty result for ${meetingId}`);
   }
   return record;
+};
+
+const serviceIdsFromMeetingRecord = (record: Record<string, unknown>): string[] => {
+  const ids: string[] = [];
+  const pushId = (value: unknown) => {
+    if (typeof value === "string" && value.length > 0) {
+      ids.push(value);
+    } else if (value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string") {
+      ids.push((value as { id: string }).id);
+    }
+  };
+  for (const key of ["cServicesIds", "cServices", "cServicesNames", "cServicesMulti", "cServicesMultiIds"] as const) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        pushId(entry);
+      }
+    } else {
+      pushId(value);
+    }
+  }
+  return [...new Set(ids)];
+};
+
+/**
+ * Read linked cService ids for a Meeting. Prefers search_entity + select
+ * (plain get_entity often omits link fields).
+ */
+export const getMeetingServiceIds = async (
+  callTool: McpCallTool,
+  meetingId: string,
+): Promise<string[]> => {
+  try {
+    const searched = await callTool("search_entity", {
+      entityType: "Meeting",
+      filters: { id: meetingId },
+      select: ["id", "cServicesIds", "cServicesNames", "cServices"],
+      limit: 1,
+    });
+    const row = listFromSearch(searched)[0];
+    if (row) {
+      const fromSearch = serviceIdsFromMeetingRecord(row);
+      if (fromSearch.length > 0) {
+        return fromSearch;
+      }
+    }
+  } catch {
+    // Fall through to get_entity.
+  }
+  const meeting = await getMeeting(callTool, meetingId);
+  return serviceIdsFromMeetingRecord(meeting);
 };
 
 export const listPlannedMeetingIds = async (
