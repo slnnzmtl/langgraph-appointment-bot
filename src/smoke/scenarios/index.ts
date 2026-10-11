@@ -21,6 +21,7 @@ import { consultationSwitchScenario } from "./consultation-switch.js";
 import {
   faqCatalogScenario,
   faqChooseOtherScenario,
+  faqFamilyFreeTextScenario,
   faqHoursScenario,
   faqPriceScenario,
   offerPriceScenario,
@@ -36,6 +37,7 @@ export const ALL_SCENARIOS: SmokeScenario[] = [
   faqCatalogScenario,
   faqPriceScenario,
   faqChooseOtherScenario,
+  faqFamilyFreeTextScenario,
   offerPriceScenario,
   supervisorMenuScenario,
   identityScenario,

@@ -1041,9 +1041,10 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     );
 
     // Sticky FAQ must win over the preserved booking interaction; supervisor
-    // would otherwise send the patient to Booking.
+    // would otherwise send the patient to Booking. Prepare→finalize skips the LLM
+    // when catalog chips are opened deterministically.
     expect(supervisorInvoke).not.toHaveBeenCalled();
-    expect(agentInvoke).toHaveBeenCalled();
+    expect(agentInvoke).not.toHaveBeenCalled();
     expect(result.lastHandoff?.agentId).toBe("faq");
     expect(result.pendingInteraction?.kind).toBe("service_candidate");
     expect(result.pendingInteraction?.owner).toBe("faq");

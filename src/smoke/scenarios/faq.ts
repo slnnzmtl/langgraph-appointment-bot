@@ -1,5 +1,6 @@
 import {
   BOOKING_OFFER_MENU,
+  MAIN_MENU_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
@@ -20,7 +21,10 @@ import {
 import type { SoftWarning, SmokeScenario } from "../types.js";
 import {
   drillToProcedureOffer,
+  expectFamilyCatalogTurn,
+  loadCatalogServiceRows,
   openBookingOffer,
+  pickFamilyFreeText,
 } from "./offer-helpers.js";
 
 const WRITE_TOOLS = [
@@ -266,6 +270,78 @@ export const faqChooseOtherScenario: SmokeScenario = {
       const returned = await returnToBookingOffer(session, "faq-choose-other");
       expectButtons("faq-choose-other return", returned.buttons, [...BOOKING_OFFER_MENU]);
       console.log("✓ faq-choose-other: catalog → compare → return to BOOKING OFFER");
+    }),
+};
+
+/**
+ * Free-text «ботокс» on an open FAQ catalog (and «запиши на ботокс» from the
+ * main menu) must open brand chips via the LLM selector — not stale root chips
+ * or a Так / Обрати keyboard.
+ */
+export const faqFamilyFreeTextScenario: SmokeScenario = {
+  name: "faq-family-free-text",
+  tier: "invoke",
+  run: async (ctx) =>
+    withSession(ctx, "faq-family-free-text", ctx.env.telegramIdA, async (session, warnings) => {
+      const catalogRows = await loadCatalogServiceRows(ctx.callTool, "faq-family-free-text");
+      const family = pickFamilyFreeText(catalogRows, "faq-family-free-text");
+
+      await openBookingOffer(session, "faq-family-free-text");
+      const catalog = await session.tap(BOOKING_OFFER_MENU[1]);
+      const root = catalog.state.pendingInteraction;
+      expectInteraction("faq-family-free-text catalog", root?.kind, "service_candidate");
+      if (root?.kind !== "service_candidate" || root.owner !== "faq") {
+        throw new SmokeAssertError(
+          `faq-family-free-text: expected faq service_candidate after choose-other, got ${root?.kind ?? "null"}`,
+        );
+      }
+      const rootChoiceIds = root.choices.map((choice) => choice.id);
+
+      const botox = await session.say(family.text);
+      expectFamilyCatalogTurn("faq-family-free-text ботокс", botox, {
+        familyIds: family.familyIds,
+        rootChoiceIds,
+      });
+      const narrowedIds =
+        botox.state.pendingInteraction?.kind === "service_candidate"
+          ? botox.state.pendingInteraction.choices.map((choice) => choice.id).join(",")
+          : "";
+
+      const disport = await session.say("що таке Disport?");
+      expectNotCalled("faq-family-free-text Disport", disport.calls, [...WRITE_TOOLS]);
+      if (disport.buttons.includes(BOOKING_OFFER_MENU[0])) {
+        throw new SmokeAssertError(
+          "faq-family-free-text: «що таке Disport?» opened BOOKING OFFER Так",
+        );
+      }
+      const afterQuestionIds =
+        disport.state.pendingInteraction?.kind === "service_candidate"
+          ? disport.state.pendingInteraction.choices.map((choice) => choice.id).join(",")
+          : "";
+      if (afterQuestionIds !== narrowedIds) {
+        soft(
+          warnings,
+          "faq-family-free-text Disport answer changed catalog choice ids",
+          false,
+          `${narrowedIds || "none"} → ${afterQuestionIds || "none"}`,
+        );
+      }
+
+      await session.say(MAIN_MENU_LABEL);
+      const bookBotox = await session.say(`запиши на ${family.text}`);
+      expectFamilyCatalogTurn("faq-family-free-text запиши на ботокс", bookBotox, {
+        familyIds: family.familyIds,
+      });
+      console.log(
+        "✓ faq-family-free-text: catalog → ботокс chips",
+        botox.state.pendingInteraction?.kind === "service_candidate"
+          ? botox.state.pendingInteraction.choices.length
+          : 0,
+        "→ запиши chips",
+        bookBotox.state.pendingInteraction?.kind === "service_candidate"
+          ? bookBotox.state.pendingInteraction.choices.length
+          : 0,
+      );
     }),
 };
 

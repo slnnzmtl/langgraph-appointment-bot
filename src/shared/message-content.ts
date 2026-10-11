@@ -273,33 +273,6 @@ export const requestsConsultation = (text: string): boolean => {
 };
 
 /**
- * Stems of CRM service names for loose Ukrainian-declension matching
- * («ботулінотерапія» / «ботулінотерапію» both match the stem «ботулінотерапі»).
- * Short and consultation tokens are skipped — they are not browse signals.
- */
-const catalogNameStems = (names: string[]): string[] => {
-  const stems = new Set<string>();
-  for (const name of names) {
-    for (const token of name.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
-      if (token.length < 7 || MENTIONS_CONSULTATION.test(token)) {
-        continue;
-      }
-      stems.add(token.length > 7 ? token.slice(0, token.length - 2) : token);
-    }
-  }
-  return [...stems];
-};
-
-/** True when the text names a procedure/family from the CRM catalog. */
-export const mentionsCatalogProcedure = (text: string, names: string[]): boolean => {
-  const normalized = text.trim().toLowerCase();
-  if (normalized.length === 0) {
-    return false;
-  }
-  return catalogNameStems(names).some((stem) => normalized.includes(stem));
-};
-
-/**
  * Defensive strip of accidental yield / `<reply_buttons>` tags so they never reach Telegram.
  * Labels are not the markup channel — the graph writes `lastHandoff.replyButtons`.
  */

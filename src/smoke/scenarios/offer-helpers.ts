@@ -11,8 +11,19 @@ import {
   SERVICES_CONTEXT_MAX_ROWS,
   type ServicesContext,
 } from "../../tools/service-tools.js";
-import { SmokeAssertError } from "../assert.js";
+import { expectNotCalled, SmokeAssertError } from "../assert.js";
 import type { SmokeSession, TurnResult } from "../harness.js";
+
+const WRITE_TOOLS = [
+  "create_meeting",
+  "update_meeting",
+  "create_contact",
+  "cancel_meeting",
+  "reschedule_meeting",
+] as const;
+
+/** CRM rows in the botulinum therapy family (live catalog naming). */
+const BOTULINUM_FAMILY_LABEL = "ботулінотерап";
 
 export const isConsultationName = (name: string): boolean =>
   /консультац/i.test(name.trim());
@@ -80,6 +91,109 @@ export const pickUniqueNamedProcedure = (
   throw new SmokeAssertError(
     `${label}: no unique matchingCatalogRows token among ${nonConsult.length} non-consultation services`,
   );
+};
+
+export type FamilyFreeTextPick = {
+  text: "ботокс";
+  familyIds: string[];
+};
+
+/**
+ * Live botulinum family for free-text «ботокс» smoke coverage. Requires ≥2 CRM
+ * rows. Lexical may already hit brand titles containing «ботокс»; otherwise the
+ * LLM selector path must resolve the family.
+ */
+export const pickFamilyFreeText = (
+  services: ServicesContext["list"],
+  label: string,
+): FamilyFreeTextPick => {
+  const familyIds = services
+    .filter((row) => normalizeReplyLabel(row.name).includes(BOTULINUM_FAMILY_LABEL))
+    .map((row) => row.id);
+  if (familyIds.length < 2) {
+    throw new SmokeAssertError(
+      `${label}: need ≥2 botulinum catalog rows for «ботокс» free-text, got ${familyIds.length}`,
+    );
+  }
+  const familySet = new Set(familyIds);
+  const lexical = matchingCatalogRows("ботокс", services);
+  const lexicalOutsideFamily = lexical.filter((row) => !familySet.has(row.id));
+  if (lexicalOutsideFamily.length > 0) {
+    throw new SmokeAssertError(
+      `${label}: matchingCatalogRows(«ботокс») hit non-family rows ${lexicalOutsideFamily.map((r) => r.name).join(" | ")}`,
+    );
+  }
+  return { text: "ботокс", familyIds };
+};
+
+/** Assert a turn opened narrowed FAQ family chips (not root, not Так/Обрати). */
+export const expectFamilyCatalogTurn = (
+  label: string,
+  turn: TurnResult,
+  options: {
+    familyIds: readonly string[];
+    rootChoiceIds?: readonly string[];
+  },
+): void => {
+  const pending = turn.state.pendingInteraction;
+  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
+    throw new SmokeAssertError(
+      `${label}: expected faq service_candidate, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
+    );
+  }
+  if (pending.choices.length < 2) {
+    throw new SmokeAssertError(
+      `${label}: expected ≥2 family choices, got ${pending.choices.length}`,
+    );
+  }
+  const familySet = new Set(options.familyIds);
+  for (const choice of pending.choices) {
+    for (const id of choice.serviceIds ?? []) {
+      if (!familySet.has(id)) {
+        throw new SmokeAssertError(
+          `${label}: choice «${choice.label}» includes non-family id ${id}`,
+        );
+      }
+    }
+    if (!turn.buttons.includes(choice.label)) {
+      throw new SmokeAssertError(
+        `${label}: button missing for choice «${choice.label}» (buttons=[${turn.buttons.join(" | ")}])`,
+      );
+    }
+  }
+  if (options.rootChoiceIds != null) {
+    const rootSet = new Set(options.rootChoiceIds);
+    const sameAsRoot =
+      pending.choices.length === options.rootChoiceIds.length
+      && pending.choices.every((choice) => rootSet.has(choice.id));
+    if (sameAsRoot) {
+      throw new SmokeAssertError(
+        `${label}: choices still match root catalog ids [${options.rootChoiceIds.join(",")}]`,
+      );
+    }
+  }
+  if (turn.buttons.includes(BOOKING_OFFER_MENU[0])) {
+    throw new SmokeAssertError(
+      `${label}: unexpected «${BOOKING_OFFER_MENU[0]}» on family catalog keyboard`,
+    );
+  }
+  // Brand-level guide (Botox/Disport or Nabota), not only «Корекція ботокс» / «Мезоботокс».
+  const brandNeedles = ["disport", "nabota"];
+  const hasBrandChip = turn.buttons.some((button) => {
+    const normalized = normalizeReplyLabel(button);
+    return brandNeedles.some((needle) => normalized.includes(needle));
+  });
+  if (!hasBrandChip) {
+    throw new SmokeAssertError(
+      `${label}: expected a Disport/Nabota brand chip, got [${turn.buttons.join(" | ")}]`,
+    );
+  }
+  if (turn.state.bookingDraft?.serviceAcceptance != null) {
+    throw new SmokeAssertError(
+      `${label}: must not guess serviceAcceptance (${turn.state.bookingDraft.serviceAcceptance.service.id})`,
+    );
+  }
+  expectNotCalled(label, turn.calls, [...WRITE_TOOLS]);
 };
 
 /** Load cService rows the same way list_services does (for smoke procedure picks). */

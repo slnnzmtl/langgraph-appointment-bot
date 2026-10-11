@@ -316,8 +316,8 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           },
         };
       }
-      // Prepare opened a booking-owned menu without an LLM turn (REPLACE cancel
-      // continue, or fresh «Записатись» consultation offer).
+      // Prepare/tools opened a booking-owned menu without an LLM turn (REPLACE
+      // cancel continue into catalog, book-intent family chips, or «Записатись»).
       if (
         agent.id === BOOKING_AGENT_ID
         && state.pendingInteraction != null
@@ -325,23 +325,34 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         && (
           state.pendingCancellationPurpose === "replacement"
           || state.pendingInteraction.kind === "service_confirm"
+          || (
+            state.pendingInteraction.kind === "service_candidate"
+            && state.pendingInteraction.owner === "faq"
+          )
         )
       ) {
-        const body = String(
-          renderBookingInteractionMessage(state.pendingInteraction).content,
-        );
+        const interaction = state.pendingInteraction;
+        const isFaqCatalog =
+          interaction.kind === "service_candidate"
+          && interaction.owner === "faq";
+        const body = isFaqCatalog
+          ? renderFaqCatalogReply(
+              interaction.choices,
+              state.servicesContext?.list ?? [],
+            )
+          : String(renderBookingInteractionMessage(interaction).content);
         const replyText =
           state.pendingCancellationPurpose === "replacement"
             ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${body}`
             : body;
-        const replyButtons = replyButtonsForInteraction(state.pendingInteraction);
+        const replyButtons = replyButtonsForInteraction(interaction);
         return {
           ...cleared,
           ...confirmationCleanup,
           ...(state.pendingCancellationPurpose === "replacement"
             ? { pendingCancellationPurpose: null }
             : {}),
-          pendingInteraction: state.pendingInteraction,
+          pendingInteraction: interaction,
           messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
           lastHandoff: {
             agentId: agent.id,
@@ -397,6 +408,50 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
             replyButtons: [OTHER_DATE_LABEL, MAIN_MENU_LABEL],
           },
         };
+      }
+      // Prepare opened FAQ catalog or a catalog offer without an LLM turn.
+      if (agent.id === FAQ_AGENT_ID && state.pendingInteraction != null) {
+        const interaction = state.pendingInteraction;
+        if (
+          interaction.kind === "service_candidate"
+          && interaction.owner === "faq"
+        ) {
+          const replyText = renderFaqCatalogReply(
+            interaction.choices,
+            state.servicesContext?.list ?? [],
+          );
+          const replyButtons = replyButtonsForInteraction(interaction);
+          return {
+            ...cleared,
+            ...confirmationCleanup,
+            pendingInteraction: interaction,
+            messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
+            lastHandoff: {
+              agentId: agent.id,
+              agentName: agent.name,
+              status: "ok",
+              replyText,
+              replyButtons,
+            },
+          };
+        }
+        if (interaction.kind === "service_confirm") {
+          const replyText = String(renderBookingInteractionMessage(interaction).content);
+          const replyButtons = replyButtonsForInteraction(interaction);
+          return {
+            ...cleared,
+            ...confirmationCleanup,
+            pendingInteraction: interaction,
+            messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
+            lastHandoff: {
+              agentId: agent.id,
+              agentName: agent.name,
+              status: "ok",
+              replyText,
+              replyButtons,
+            },
+          };
+        }
       }
       return {
         ...cleared,

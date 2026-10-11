@@ -43,6 +43,7 @@ import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record
 import {
   extractMessageTextContent,
   extractRawMessageText,
+  isSupervisorOwnedLabel,
   labelIdFor,
   matchesReplyLabel,
   normalizeReplyLabel,
@@ -80,7 +81,10 @@ import {
 import { buildFaqCatalogChoices, shortenFaqChoiceLabels } from "../faq-catalog.js";
 import {
   partitionRemainingServiceChoices,
+  safeSelect,
+  interactionChoicesFromSelectorGroups,
   type PartitionServiceCandidates,
+  type SelectServiceCandidates,
 } from "../service-resolution.js";
 
 /** CRM writes that invalidate checkpointed contact/meetings prefetch. */
@@ -691,7 +695,7 @@ const utteranceMatchesCatalogName = (
 
 /**
  * CRM rows whose names match free-text (brand/family/full title). Shared by
- * offeredServiceForTurn (first hit) and post-offer catalog resume (all ids).
+ * offeredServiceForTurn (unique hit only) and catalog free-text narrowing.
  */
 export const matchingCatalogRows = (
   text: string,
@@ -710,14 +714,109 @@ export const matchingCatalogRows = (
   });
 };
 
+export type CatalogFreeTextResult =
+  | { kind: "none" }
+  | { kind: "one"; row: ServicesContext["list"][number] }
+  | {
+    kind: "many";
+    ids: string[];
+    groups?: Array<{ label: string; serviceIds: string[] }>;
+  };
+
+/**
+ * Whole-family selector override: include every brand/zone in the procedure
+ * family and return one guide level — not only titles that contain the word.
+ */
+export const CATALOG_FAMILY_SELECTOR_QUERY =
+  "Include every CRM row in that procedure family (all brands and zones), "
+  + "including titles that do not contain the patient's word. "
+  + "Group exactly one guide level (brand or zone), the same level as tapping that family.";
+
+/**
+ * Narrow free-text to a procedure-family catalog level. Exact CRM name → one
+ * offer; otherwise the LLM selector expands slang («ботокс») to the full
+ * family. Lexical substring hits alone must not skip the selector.
+ */
+export const resolveCatalogFreeText = async (input: {
+  text: string;
+  rows: ServicesContext["list"];
+  selectCandidates?: SelectServiceCandidates;
+}): Promise<CatalogFreeTextResult> => {
+  const trimmed = input.text.trim();
+  if (
+    trimmed.length === 0
+    || trimmed.includes("?")
+    || labelIdFor(trimmed) != null
+    || isSupervisorOwnedLabel(trimmed)
+    || isFaqCatalogBrowseShortcut(trimmed)
+    || matchesReplyLabel(trimmed, FAQ_SERVICES_GUIDE_LABELS)
+  ) {
+    return { kind: "none" };
+  }
+  const normalized = normalizeCatalogUtterance(trimmed);
+  if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
+    return { kind: "none" };
+  }
+  if (input.rows.length === 0) {
+    return { kind: "none" };
+  }
+
+  const lexical = matchingCatalogRows(trimmed, input.rows);
+  if (lexical.length === 1) {
+    const row = lexical[0]!;
+    // Exact CRM title only — substring/stem hits fall through to the family selector.
+    if (normalizeReplyLabel(row.name) === normalized) {
+      return { kind: "one", row };
+    }
+  }
+
+  const allowlist = new Map(input.rows.map((row) => [row.id, row]));
+  if (input.selectCandidates != null) {
+    const selection = await safeSelect(input.selectCandidates, {
+      utterance: normalized,
+      query: CATALOG_FAMILY_SELECTOR_QUERY,
+      candidates: input.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        ...(row.description != null ? { description: row.description } : {}),
+      })),
+    });
+    const ids = [...new Set(
+      (selection?.serviceIds ?? []).filter((id) => allowlist.has(id)),
+    )];
+    if (ids.length === 1) {
+      return { kind: "one", row: allowlist.get(ids[0]!)! };
+    }
+    if (ids.length > 1) {
+      return {
+        kind: "many",
+        ids,
+        ...(selection?.groups != null ? { groups: selection.groups } : {}),
+      };
+    }
+  }
+
+  // One lexical hit → offer that CRM row; several hits need the selector above.
+  if (lexical.length === 1) {
+    return { kind: "one", row: lexical[0]! };
+  }
+  return { kind: "none" };
+};
+
 const catalogServiceForText = (
   text: string,
   state: ClinicState,
 ): { id: string; name: string; durationMinutes?: number; source: "catalog" } | null => {
-  const service = matchingCatalogRows(text, state.servicesContext?.list ?? [])[0];
-  if (service == null) {
+  const normalized = normalizeCatalogUtterance(text);
+  if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
     return null;
   }
+  const rows = state.servicesContext?.list ?? [];
+  const exact = rows.filter((row) => normalizeReplyLabel(row.name) === normalized);
+  if (exact.length !== 1) {
+    return null;
+  }
+  const service = exact[0]!;
   return {
     id: service.id,
     name: service.name,
@@ -1379,8 +1478,24 @@ export const resolveFaqCatalogChoices = async (input: {
   utterance: string;
   query?: string;
   selectedLabel?: string;
+  groups?: Array<{ label: string; serviceIds: string[] }>;
   partitionCandidates?: PartitionServiceCandidates;
 }): Promise<InteractionChoice[]> => {
+  const fromSelectorGroups = input.remainingIds != null && input.groups != null
+    ? interactionChoicesFromSelectorGroups(
+      input.services,
+      input.remainingIds,
+      input.groups,
+    )
+    : [];
+  if (fromSelectorGroups.length > 0) {
+    return shortenFaqChoiceLabels(
+      fromSelectorGroups,
+      input.selectedLabel != null && input.selectedLabel.length > 0
+        ? { selectedLabel: input.selectedLabel }
+        : undefined,
+    );
+  }
   const partitioned = await partitionRemainingServiceChoices({
     rows: input.services,
     ...(input.remainingIds != null ? { remainingIds: input.remainingIds } : {}),

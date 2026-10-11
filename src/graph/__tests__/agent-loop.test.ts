@@ -79,6 +79,7 @@ import {
 } from "../booking-draft.js";
 import type { BookingDraft } from "../booking-draft.js";
 import { reduceBookingSession } from "../booking-session.js";
+import { offeredServiceForTurn } from "../agent-loop/shared.js";
 import type { ClinicAgentDefinition } from "../types.js";
 
 const listedMeetings: BookingContext = {
@@ -687,7 +688,7 @@ describe("createAgentPrepareNode", () => {
     maxSteps: 8,
   };
 
-  it("accepts a unique named procedure before REPLACE so cancel continues to dates", async () => {
+  it("does not guess a named procedure into the draft when REPLACE opens", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
       clinicState({
@@ -707,14 +708,7 @@ describe("createAgentPrepareNode", () => {
     );
 
     expect(update.bookingDraft?.replacement?.status).toBe("offered");
-    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-      status: "accepted",
-      service: {
-        id: "svc-collagen",
-        name: "Колагеностимуляція Полімолочна кислота",
-        durationMinutes: 60,
-      },
-    });
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
 
     const finalize = createAgentFinalizeNode(bookingAgent);
     const rendered = finalize(
@@ -935,7 +929,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.pendingInteraction).toBeNull();
   });
 
-  it("committed replacement cancel without originalCommand clears replacement", async () => {
+  it("committed replacement cancel without originalCommand opens FAQ catalog", async () => {
     const cancelTool = tool(
       async () => JSON.stringify({
         success: true,
@@ -959,10 +953,18 @@ describe("createAgentPrepareNode", () => {
         payload: { meetingId: "m-1" },
       },
     });
+    const servicesContext = {
+      list: [
+        { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+        { id: "svc-peel", name: "Пілінг поверхневий" },
+        { id: "svc-lip", name: "збільшення губ" },
+      ],
+    };
     const update = await createAgentToolsNode([cancelTool], "booking")(
       clinicState({
         bookingContext: listedMeetings,
         bookingDraft: cancelling,
+        servicesContext,
         pendingCancellationPurpose: "replacement",
         pendingInteraction: {
           kind: "mutation_confirm",
@@ -989,7 +991,16 @@ describe("createAgentPrepareNode", () => {
     expect(update.bookingDraft?.replacement).toBeNull();
     expect(update.bookingDraft?.mode).toBe("create");
     expect(update.bookingDraft?.pendingCommand).toBeNull();
-    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      consultationDeclined: true,
+    });
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.length
+        : 0,
+    ).toBeGreaterThan(0);
     expect(update.bookingContext?.meetings).toEqual([]);
     expect(
       routeAfterAgentTools(
@@ -1007,6 +1018,21 @@ describe("createAgentPrepareNode", () => {
         "booking__finalize",
       ),
     ).toBe("booking__finalize");
+
+    const finalize = createAgentFinalizeNode(bookingAgent);
+    const rendered = finalize(
+      clinicState({
+        bookingDraft: update.bookingDraft,
+        pendingInteraction: update.pendingInteraction,
+        servicesContext,
+        pendingCancellationPurpose: "replacement",
+        agentMessages: update.agentMessages as never,
+      }),
+    );
+    expect(rendered.lastHandoff?.replyText).toMatch(/^Запис скасовано\./);
+    expect(rendered.lastHandoff?.replyText).toContain("•");
+    expect(rendered.lastHandoff?.replyButtons?.length).toBeGreaterThan(0);
+    expect(rendered.lastHandoff?.replyButtons).not.toContain("Так");
   });
 
   it("requests nearest slots after replacement cancel with accepted service and keeps purpose", async () => {
@@ -1582,12 +1608,379 @@ describe("createAgentPrepareNode", () => {
       }),
     );
 
-    // Prepare only handles exact chip taps — «не знаю» reaches the model.
+    // Questions / hedge text stay model-owned — catalog unchanged.
     expect(prepared.pendingInteraction).toBeUndefined();
+  });
+
+  it("opens Ботулінотерапія brand chips for «ботокс» despite lexical «ботокс» titles", async () => {
+    const familyIds = ["corr", "meso", "z1", "z2", "n1", "n2"] as const;
+    let selectCalls = 0;
+    let selectCandidateCount = 0;
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async (input) => {
+        selectCalls += 1;
+        selectCandidateCount = input.candidates.length;
+        return {
+          serviceIds: [...familyIds],
+          groups: [
+            { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+            { label: "Nabota", serviceIds: ["n1", "n2"] },
+            { label: "Інше", serviceIds: ["corr", "meso"] },
+          ],
+        };
+      },
+    });
+    const services = {
+      list: [
+        { id: "c1", name: "Консультація первинна" },
+        { id: "corr", name: "Корекція ботокс" },
+        { id: "meso", name: "Мезоботокс" },
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+        { id: "p1", name: "Пілінг поверхневий" },
+      ],
+    };
+    const rootChoices = [
+      {
+        id: "g0",
+        label: "Консультації та діагностика",
+        serviceIds: ["c1"],
+      },
+      {
+        id: "g1",
+        label: "Ін'єкційна косметологія",
+        serviceIds: ["corr", "meso", "z1", "z2", "n1", "n2"],
+      },
+      {
+        id: "g2",
+        label: "Доглядові процедури",
+        serviceIds: ["p1"],
+      },
+    ];
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ботокс")],
+        servicesContext: services,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          consultationDeclined: true,
+          choices: rootChoices,
+        },
+      }),
+    );
+
+    expect(selectCalls).toBe(1);
+    expect(selectCandidateCount).toBe(services.list.length);
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    const narrowed =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction
+        : null;
+    expect(narrowed?.owner).toBe("faq");
+    expect(narrowed?.consultationDeclined).toBe(true);
+    const labels = narrowed?.choices.map((c) => c.label) ?? [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
+    expect(labels).not.toContain("Корекція ботокс");
+    expect(labels).not.toContain("Мезоботокс");
+    expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
+
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("ботокс")],
+        servicesContext: services,
+        pendingInteraction: prepared.pendingInteraction ?? null,
+        agentMessages: [
+          faqCatalogAi(
+            "В ін'єкційній косметології доступні такі варіанти ботулінотерапії:",
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual(labels);
+    expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
+  });
+
+  it("expands already-narrow «ботокс» chips via full-catalog selector", async () => {
+    let selectCandidateIds: string[] = [];
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async (input) => {
+        selectCandidateIds = input.candidates.map((row) => row.id);
+        return {
+          serviceIds: ["corr", "meso", "z1", "z2", "n1", "n2"],
+          groups: [
+            { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+            { label: "Nabota", serviceIds: ["n1", "n2"] },
+            { label: "Інше", serviceIds: ["corr", "meso"] },
+          ],
+        };
+      },
+    });
+    const services = {
+      list: [
+        { id: "corr", name: "Корекція ботокс" },
+        { id: "meso", name: "Мезоботокс" },
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+      ],
+    };
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ботулінотерапія")],
+        servicesContext: services,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботокс",
+          consultationDeclined: true,
+          choices: [
+            { id: "corr", label: "Корекція ботокс", serviceIds: ["corr"] },
+            { id: "meso", label: "Мезоботокс", serviceIds: ["meso"] },
+          ],
+        },
+      }),
+    );
+    expect(selectCandidateIds).toEqual(["corr", "meso", "z1", "z2", "n1", "n2"]);
+    const labels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
+    expect(labels).not.toEqual(["Корекція ботокс", "Мезоботокс"]);
+  });
+
+  it("offers exact CRM name without calling selectCandidates", async () => {
+    let selectCalls = 0;
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => {
+        selectCalls += 1;
+        return { serviceIds: ["z1", "n1"] };
+      },
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Корекція ботокс")],
+        servicesContext: {
+          list: [
+            { id: "corr", name: "Корекція ботокс" },
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          consultationDeclined: true,
+          choices: [
+            { id: "g0", label: "Ін'єкційна", serviceIds: ["corr", "z1", "n1"] },
+          ],
+        },
+      }),
+    );
+    expect(selectCalls).toBe(0);
+    expect(prepared.pendingInteraction?.kind).toBe("service_confirm");
+    expect(
+      prepared.pendingInteraction?.kind === "service_confirm"
+        ? prepared.pendingInteraction.service.id
+        : null,
+    ).toBe("corr");
+  });
+
+  it("narrows open service_confirm on Cyrillic «ботокс» via selectCandidates", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2", "n1", "n2"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+        ],
+      }),
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ботокс")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+            { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    const labels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
+    expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
+  });
+
+  it("does not call selectCandidates for «що таке Disport?» on open catalog", async () => {
+    let selectCalls = 0;
+    const root = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "catalog",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Ін'єкційна косметологія", serviceIds: ["z1", "n1"] },
+      ],
+    };
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => {
+        selectCalls += 1;
+        return { serviceIds: ["z1", "n1"] };
+      },
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("що таке Disport?")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        pendingInteraction: root,
+      }),
+    );
+    expect(selectCalls).toBe(0);
+    expect(prepared.pendingInteraction).toBeUndefined();
+  });
+
+  it("opens FAQ family chips from booking prepare on «запиши на ботокс»", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2", "n1", "n2"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+        ],
+      }),
+    });
+    const services = {
+      list: [
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+      ],
+    };
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: services,
+      }),
+    );
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    expect(
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.owner
+        : null,
+    ).toBe("faq");
+    expect(
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.consultationDeclined
+        : null,
+    ).toBe(true);
+    expect(prepared.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+
+    const merged = clinicState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      servicesContext: services,
+      pendingInteraction: prepared.pendingInteraction ?? null,
+      bookingDraft: prepared.bookingDraft ?? null,
+      agentMessages: [],
+    });
+    expect(
+      routeAfterAgentPrepare(
+        merged,
+        "booking__llm",
+        "booking__command_prepare",
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Books",
+      systemPrompt: "booking",
+      maxSteps: 6,
+    };
+    const finalize = createAgentFinalizeNode(bookingAgent);
+    const update = finalize(merged);
+    const labels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(update.lastHandoff?.replyButtons).toEqual(labels);
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
+    expect(update.lastHandoff?.replyButtons).not.toContain(BOOKING_OFFER_MENU[0]);
+    expect(update.lastHandoff?.replyText).toContain("•");
+    expect(update.lastHandoff?.replyText).not.toContain("Запис скасовано.");
+  });
+
+  it("offeredServiceForTurn returns null when several rows match lexically", () => {
+    const offered = offeredServiceForTurn(
+      clinicState({
+        messages: [new HumanMessage("botox")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+      }),
+      "faq",
+      [],
+    );
+    expect(offered).toBeNull();
   });
 
   it("reopens FAQ catalog chips when patient types a brand after consultation offer", async () => {
     const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2"],
+        groups: [
+          { label: "1 зона", serviceIds: ["z1"] },
+          { label: "2 зони", serviceIds: ["z2"] },
+        ],
+      }),
       partitionCandidates: async () => [
         { label: "1 зона", serviceIds: ["z1"] },
         { label: "2 зони", serviceIds: ["z2"] },

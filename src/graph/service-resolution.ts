@@ -191,7 +191,7 @@ type SelectInput = Parameters<SelectServiceCandidates>[0];
 type SelectResult = Awaited<ReturnType<SelectServiceCandidates>>;
 
 /** Run selectCandidates; on failure log and return undefined so callers fall back. */
-const safeSelect = async (
+export const safeSelect = async (
   selectCandidates: SelectServiceCandidates,
   input: SelectInput,
 ): Promise<SelectResult | undefined> => {
@@ -361,6 +361,41 @@ const choicesFromGroups = (
       serviceIds,
     };
   });
+
+/**
+ * Sanitize selector/partition groups against selected ids. Returns the groups
+ * when they strictly shrink the set; otherwise undefined (caller falls back).
+ */
+const shrinkingCandidateGroups = (
+  rows: ServiceCatalogRow[],
+  selectedIds: readonly string[],
+  groups: Array<{ label: string; serviceIds: string[] }> | undefined,
+): Array<{ label: string; serviceIds: string[] }> | undefined => {
+  if (groups == null || groups.length === 0 || selectedIds.length === 0) {
+    return undefined;
+  }
+  const allowlist = new Map(rows.map((row) => [row.id, row]));
+  const ids = selectedIds.filter((id) => allowlist.has(id));
+  const sanitized = sanitizeGroups(groups, allowlist, new Set(ids));
+  if (!groupsStrictlyShrink(ids, sanitized)) {
+    return undefined;
+  }
+  return sanitized;
+};
+
+/** FAQ chips from selector groups when they strictly shrink the selected id set. */
+export const interactionChoicesFromSelectorGroups = (
+  rows: ServiceCatalogRow[],
+  selectedIds: readonly string[],
+  groups: Array<{ label: string; serviceIds: string[] }> | undefined,
+): InteractionChoice[] => {
+  const shrunk = shrinkingCandidateGroups(rows, selectedIds, groups);
+  if (shrunk == null) {
+    return [];
+  }
+  const allowlist = new Map(rows.map((row) => [row.id, row]));
+  return choicesFromGroups(shrunk, allowlist);
+};
 
 const perIdChoices = (
   selectedIds: string[],

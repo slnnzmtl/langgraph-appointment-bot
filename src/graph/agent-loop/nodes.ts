@@ -36,12 +36,19 @@ import {
   resolveBookingScheduleRequest,
 } from "../booking-schedule.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../tools/contact-tools.js";
-import type { ServicesContext } from "../../tools/service-tools.js";
+import {
+  normalizeListServicesResult,
+  type ServicesContext,
+} from "../../tools/service-tools.js";
 import type { ClassifyContactNameTurn } from "../contact-name-classifier.js";
 import { trackEvent, trackToolError } from "../../analytics/track.js";
 import { PATIENT_FALLBACK_MESSAGE } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { extractMessageTextContent, labelIdFor } from "../../shared/message-content.js";
+import {
+  extractMessageTextContent,
+  labelIdFor,
+  normalizeReplyLabel,
+} from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import {
   formatBookingMeetingsContext,
@@ -61,6 +68,7 @@ import {
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
+  type BookingService,
 } from "../booking-draft.js";
 import { cancelCommandFromStoredPayload } from "../cancel-command.js";
 import {
@@ -70,6 +78,7 @@ import {
   openVisitNoteInteraction,
   reduceBookingSession,
   repairInvalidScheduleInteraction,
+  type PendingInteraction,
 } from "../booking-session.js";
 import { restorePendingInteraction } from "../booking-interaction-restore.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
@@ -77,6 +86,7 @@ import { renderBookingInteractionMessage } from "../booking-interaction-render.j
 import {
   FAQ_ROOT_PARTITION_QUERY,
   type PartitionServiceCandidates,
+  type SelectServiceCandidates,
 } from "../service-resolution.js";
 import { tagModelFailureMessage } from "../sub-agent-messages.js";
 
@@ -127,19 +137,76 @@ import {
   latestCreateMeetingError,
   matchAvailabilityDay,
   matchingCatalogRows,
+  normalizeCatalogUtterance,
   meetingMutationClearsAvailability,
   meetingMutationIsHitlDecline,
   noteStepBlocksCreate,
   phoneCandidateCanBeLinked,
   rescheduleTargetFromBookingContext,
   resetBookingNoteState,
+  resolveCatalogFreeText,
   resolveContactIdentity,
   resolveFaqCatalogChoices,
   terminalMeetingMutationOutcome,
   toolRanThisTurn,
+  type CatalogFreeTextResult,
 } from "./shared.js";
 
 import { coerceAvailabilityToolCalls } from "./tool-call-coercion.js";
+
+const catalogRowToBookingService = (
+  row: ServicesContext["list"][number],
+): BookingService => ({
+  id: row.id,
+  name: row.name,
+  ...(row.duration != null ? { durationMinutes: row.duration } : {}),
+  source: "catalog",
+});
+
+/** Apply resolveCatalogFreeText output to booking session (offer or FAQ chips). */
+const applyCatalogFreeTextResolution = async (input: {
+  resolved: CatalogFreeTextResult;
+  services: ServicesContext["list"];
+  utterance: string;
+  selectedLabel: string;
+  session: {
+    bookingDraft: BookingDraft | null;
+    pendingInteraction: PendingInteraction | null;
+  };
+  consultationDeclined?: boolean;
+  partitionCandidates?: PartitionServiceCandidates;
+}): Promise<ReturnType<typeof reduceBookingSession> | null> => {
+  const { resolved } = input;
+  if (resolved.kind === "one") {
+    return reduceBookingSession(input.session, {
+      type: "service_offered",
+      service: catalogRowToBookingService(resolved.row),
+    });
+  }
+  if (resolved.kind !== "many") {
+    return null;
+  }
+  const choices = await resolveFaqCatalogChoices({
+    services: input.services,
+    remainingIds: resolved.ids,
+    utterance: input.utterance,
+    ...(resolved.groups != null ? { groups: resolved.groups } : {}),
+    ...(input.selectedLabel.length > 0 ? { selectedLabel: input.selectedLabel } : {}),
+    ...(input.partitionCandidates != null
+      ? { partitionCandidates: input.partitionCandidates }
+      : {}),
+  });
+  if (choices.length === 0) {
+    return null;
+  }
+  return reduceBookingSession(input.session, {
+    type: "service_candidates_opened",
+    utterance: input.utterance,
+    owner: "faq",
+    ...(input.consultationDeclined === true ? { consultationDeclined: true } : {}),
+    choices,
+  });
+};
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 
@@ -163,6 +230,8 @@ export type CreateAgentLoopOptions = {
 
 export type CreateAgentPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
+  /** LLM catalog filter for free-text slang («ботокс») that lexical matching misses. */
+  selectCandidates?: SelectServiceCandidates;
   /** Fetch the CRM catalog when «Обрати іншу процедуру» arrives before any list_services. */
   loadServices?: () => Promise<ServicesContext | null>;
   /** Classify first/last name replies while contact_field is open (booking). */
@@ -242,63 +311,69 @@ export const createAgentPrepareNode = (
             );
             update.pendingInteraction = session.pendingInteraction;
           }
+        } else {
+          // Free-text on open catalog («ботокс»): whole-family selector on full list.
+          const services = state.servicesContext?.list ?? [];
+          const resolved = await resolveCatalogFreeText({
+            text: patientText,
+            rows: services,
+            ...(options?.selectCandidates != null
+              ? { selectCandidates: options.selectCandidates }
+              : {}),
+          });
+          const session = await applyCatalogFreeTextResolution({
+            resolved,
+            services,
+            utterance: patientText,
+            selectedLabel: patientText,
+            session: {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: interaction,
+            },
+            ...(interaction.consultationDeclined === true
+              ? { consultationDeclined: true }
+              : {}),
+            ...(options?.partitionCandidates != null
+              ? { partitionCandidates: options.partitionCandidates }
+              : {}),
+          });
+          if (session != null) {
+            handledCatalogChoice = true;
+            update.bookingDraft = session.bookingDraft;
+            update.pendingInteraction = session.pendingInteraction;
+          }
+          // Zero rows / questions / «не знаю» reach the FAQ model with the open catalog.
         }
-        // Unmatched text (comparisons, «який краще?», «не знаю», prices, …)
-        // reaches the FAQ model with the open catalog context.
       } else if (interaction?.kind === "service_confirm") {
-        // Free-text brand/family pick after offer_consultation (e.g. «botox»)
+        // Free-text brand/family pick after offer_consultation (e.g. «ботокс»)
         // must reopen catalog chips — otherwise Так/Обрати stays stuck.
         const offerMatch = interpretInteractionReply(interaction, patientText);
         if (offerMatch.kind !== "choice") {
           const services = state.servicesContext?.list ?? [];
-          const matchingRows = matchingCatalogRows(patientText, services);
-          if (matchingRows.length === 1) {
-            const row = matchingRows[0]!;
+          const resolved = await resolveCatalogFreeText({
+            text: patientText,
+            rows: services,
+            ...(options?.selectCandidates != null
+              ? { selectCandidates: options.selectCandidates }
+              : {}),
+          });
+          const session = await applyCatalogFreeTextResolution({
+            resolved,
+            services,
+            utterance: patientText,
+            selectedLabel: patientText,
+            session: {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: interaction,
+            },
+            ...(options?.partitionCandidates != null
+              ? { partitionCandidates: options.partitionCandidates }
+              : {}),
+          });
+          if (session != null) {
             handledCatalogChoice = true;
-            const session = reduceBookingSession(
-              {
-                bookingDraft: state.bookingDraft ?? null,
-                pendingInteraction: interaction,
-              },
-              {
-                type: "service_offered",
-                service: {
-                  id: row.id,
-                  name: row.name,
-                  ...(row.duration != null ? { durationMinutes: row.duration } : {}),
-                  source: "catalog",
-                },
-              },
-            );
             update.bookingDraft = session.bookingDraft;
             update.pendingInteraction = session.pendingInteraction;
-          } else if (matchingRows.length > 1) {
-            const matchingIds = matchingRows.map((row) => row.id);
-            const choices = await resolveFaqCatalogChoices({
-              services,
-              remainingIds: matchingIds,
-              utterance: patientText,
-              selectedLabel: patientText,
-              ...(options?.partitionCandidates != null
-                ? { partitionCandidates: options.partitionCandidates }
-                : {}),
-            });
-            if (choices.length > 0) {
-              handledCatalogChoice = true;
-              const session = reduceBookingSession(
-                {
-                  bookingDraft: state.bookingDraft ?? null,
-                  pendingInteraction: interaction,
-                },
-                {
-                  type: "service_candidates_opened",
-                  utterance: patientText,
-                  owner: "faq",
-                  choices,
-                },
-              );
-              update.pendingInteraction = session.pendingInteraction;
-            }
           }
         }
       } else if (interaction?.kind === "catalog_detour") {
@@ -675,6 +750,52 @@ export const createAgentPrepareNode = (
         bookingDraft = session.bookingDraft;
         pendingInteraction = session.pendingInteraction;
         update.pendingInteraction = pendingInteraction;
+      } else if (
+        pendingInteraction == null
+        && (bookingDraft == null || bookingDraft.serviceAcceptance == null)
+        && bookingDraft?.replacement == null
+        && bookingDraft?.pendingCommand == null
+      ) {
+        // Book-intent naming a procedure family («запиши на ботокс») → FAQ chips.
+        const bookText = lastPatientText(state).trim();
+        if (bookText.length > 0) {
+          let services = state.servicesContext?.list ?? [];
+          if (services.length === 0 && options?.loadServices != null) {
+            const loaded = await options.loadServices().catch(() => null);
+            if (loaded != null && loaded.list.length > 0) {
+              update.servicesContext = loaded;
+              services = loaded.list;
+            }
+          }
+          if (services.length > 0) {
+            const resolved = await resolveCatalogFreeText({
+              text: bookText,
+              rows: services,
+              ...(options?.selectCandidates != null
+                ? { selectCandidates: options.selectCandidates }
+                : {}),
+            });
+            const session = await applyCatalogFreeTextResolution({
+              resolved,
+              services,
+              utterance: bookText,
+              selectedLabel: normalizeCatalogUtterance(bookText),
+              session: {
+                bookingDraft: bookingDraft ?? null,
+                pendingInteraction: null,
+              },
+              consultationDeclined: true,
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+            });
+            if (session != null) {
+              bookingDraft = session.bookingDraft;
+              pendingInteraction = session.pendingInteraction;
+              update.pendingInteraction = pendingInteraction;
+            }
+          }
+        }
       }
       if (bookingDraft) {
         update.bookingDraft = bookingDraft;
@@ -837,11 +958,17 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
   };
 };
 
+export type CreateAgentToolsOptions = {
+  partitionCandidates?: PartitionServiceCandidates;
+};
+
 export const createAgentToolsNode = (
   tools: StructuredToolInterface[],
   agentId?: string,
+  options?: CreateAgentToolsOptions,
 ) => {
   const toolNode = new ToolNode(tools);
+  const listServicesTool = tools.find((entry) => entry.name === "list_services");
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
     const agentMessages = state.agentMessages ?? [];
@@ -1451,22 +1578,48 @@ export const createAgentToolsNode = (
             ),
           };
         }
-        // Pre-slot REPLACE: no frozen create — open the consultation offer so
-        // finalize can continue the booking without an empty LLM turn.
+        // Pre-slot REPLACE with no accepted service — open the FAQ catalog guide
+        // (same as «Обрати іншу процедуру») instead of guessing consultation.
         if (
           !hadOriginal
           && completed != null
           && completed.serviceAcceptance?.status !== "accepted"
         ) {
-          const session = reduceBookingSession(
-            { bookingDraft: completed, pendingInteraction: null },
-            {
-              type: "service_offered",
-              service: consultationService("catalog"),
-            },
-          );
-          update.bookingDraft = session.bookingDraft;
-          update.pendingInteraction = session.pendingInteraction;
+          let services = state.servicesContext?.list ?? [];
+          if (services.length === 0 && listServicesTool != null) {
+            const loaded = await listServicesTool.invoke({}).catch(() => null);
+            const normalized = loaded != null
+              ? normalizeListServicesResult(String(loaded))
+              : null;
+            if (normalized != null && normalized.list.length > 0) {
+              update.servicesContext = normalized;
+              services = normalized.list;
+            }
+          }
+          if (services.length > 0) {
+            const choices = await resolveFaqCatalogChoices({
+              services,
+              utterance: "catalog",
+              query: FAQ_ROOT_PARTITION_QUERY,
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+            });
+            if (choices.length > 0) {
+              const session = reduceBookingSession(
+                { bookingDraft: completed, pendingInteraction: null },
+                {
+                  type: "service_candidates_opened",
+                  utterance: "catalog",
+                  owner: "faq",
+                  consultationDeclined: true,
+                  choices,
+                },
+              );
+              update.bookingDraft = session.bookingDraft;
+              update.pendingInteraction = session.pendingInteraction;
+            }
+          }
         }
       } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
         Object.assign(update, closedBookingSessionUpdate());
@@ -1753,6 +1906,26 @@ export const routeAfterAgentPrepare = (
   ) {
     return finalizeName;
   }
+  // Book-intent family chips or unique-service offer opened in prepare — skip LLM.
+  if (
+    finalizeName
+    && state.pendingInteraction?.kind === "service_candidate"
+    && state.pendingInteraction.owner === "faq"
+  ) {
+    return finalizeName;
+  }
+  if (
+    finalizeName
+    && state.pendingInteraction?.kind === "service_confirm"
+    && state.bookingDraft?.serviceAcceptance?.status === "pending"
+  ) {
+    const bookText = lastPatientText(state);
+    if (
+      normalizeCatalogUtterance(bookText) !== normalizeReplyLabel(bookText)
+    ) {
+      return finalizeName;
+    }
+  }
   return commandPrepareName && bookingTurnNeedsCommandPreparation(state)
     ? commandPrepareName
     : llmName;
@@ -1783,7 +1956,8 @@ export const routeAfterAgentTools = (
     return commandPrepareName;
   }
 
-  // REPLACE cancel with no frozen create: finalize renders the next booking step.
+  // REPLACE cancel with no frozen create: finalize renders the next booking step
+  // (FAQ catalog guide, consultation offer, or date/time after accepted service).
   if (
     finalizeName
     && state.pendingCancellationPurpose === "replacement"
@@ -1792,6 +1966,10 @@ export const routeAfterAgentTools = (
     && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
     && (
       state.pendingInteraction?.kind === "service_confirm"
+      || (
+        state.pendingInteraction?.kind === "service_candidate"
+        && state.pendingInteraction.owner === "faq"
+      )
       || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
     )
   ) {
