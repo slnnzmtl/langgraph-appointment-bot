@@ -1,5 +1,6 @@
 import type { SmokeScenario, SmokeTier } from "../types.js";
 import { bootstrapScenario } from "./bootstrap.js";
+import { bookingFreeTextTypedSlotScenario } from "./booking-invoke.js";
 import {
   bookDeclineScenario,
   bookNewContactScenario,
@@ -37,6 +38,7 @@ export const ALL_SCENARIOS: SmokeScenario[] = [
   offerPriceScenario,
   supervisorMenuScenario,
   identityScenario,
+  bookingFreeTextTypedSlotScenario,
   bookDeclineScenario,
   bookNewContactScenario,
   contactLinkScenario,

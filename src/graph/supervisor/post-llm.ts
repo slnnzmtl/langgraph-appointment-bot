@@ -1,7 +1,14 @@
 import { isSupervisorOwnedLabel, labelIdFor } from "../../shared/message-content.js";
 import {
+  bookingOfferLabels,
+  inferConversationLocaleFromText,
+} from "../../shared/conversation-locale.js";
+import {
   closedBookingSessionUpdate,
+  consultationService,
+  isBookingOwnedInteraction,
   openVisitMeetingInteraction,
+  reduceBookingSession,
 } from "../booking-session.js";
 import {
   renderBookingInteractionMessage,
@@ -28,6 +35,21 @@ import {
   buildVisitStatusMenuUpdate,
   visitSelectMeetingsFromContext,
 } from "./visit-status.js";
+
+const draftBlocksFreshBookOffer = (
+  draft: SupervisorTurnContext["workingDraft"],
+): boolean =>
+  draft != null
+  && (
+    draft.serviceAcceptance != null
+    || draft.selectedSlot != null
+    || draft.selectedDate != null
+    || draft.pendingCommand != null
+    || draft.replacement != null
+    || draft.note.status === "answered"
+    || draft.note.status === "awaiting"
+    || draft.mode === "reschedule"
+  );
 
 type PostLlmRule = (
   ctx: SupervisorTurnContext,
@@ -98,6 +120,57 @@ const multiVisitPicker: PostLlmRule = (ctx, decision) => {
   };
 };
 
+/**
+ * Fresh generic `book` with no planned visit and no active draft: FINISH with a
+ * canonical consultation service_confirm. Exact «Записатись» stays in booking prepare.
+ */
+const freshGenericBookOffer: PostLlmRule = (ctx, decision) => {
+  if (decision.intent !== "book") {
+    return null;
+  }
+  if (labelIdFor(ctx.lastHumanLine) === "mainBook") {
+    return null;
+  }
+  if ((ctx.bookingContext?.meetings.length ?? 0) > 0) {
+    return null;
+  }
+  if (draftBlocksFreshBookOffer(ctx.workingDraft)) {
+    return null;
+  }
+  if (isBookingOwnedInteraction(ctx.state.pendingInteraction)) {
+    return null;
+  }
+  const locale = inferConversationLocaleFromText(ctx.lastHumanText);
+  const labels = bookingOfferLabels(locale);
+  const session = reduceBookingSession(
+    {
+      bookingDraft: ctx.workingDraft ?? null,
+      pendingInteraction: ctx.state.pendingInteraction ?? null,
+    },
+    {
+      type: "service_offered",
+      service: consultationService("catalog"),
+      acceptLabel: labels.acceptLabel,
+      chooseOtherLabel: labels.chooseOtherLabel,
+    },
+  );
+  if (session.pendingInteraction?.kind !== "service_confirm") {
+    return null;
+  }
+  return {
+    path: "llm_book_offer",
+    update: supervisorFinishReply(
+      {
+        ...ctx.prefetchUpdate,
+        bookingDraft: session.bookingDraft,
+      },
+      String(renderBookingInteractionMessage(session.pendingInteraction).content),
+      replyButtonsForInteraction(session.pendingInteraction),
+      session.pendingInteraction,
+    ),
+  };
+};
+
 const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
   let routed = resolveRoutingDecision(decision, ctx.state, enabledIds, ctx.bookingContext);
   const intentSpecialist = specialistForSupervisorIntent(decision.intent);
@@ -151,6 +224,7 @@ export const POST_LLM_RULES: readonly PostLlmRule[] = [
   modelAbandon,
   modelStatus,
   multiVisitPicker,
+  freshGenericBookOffer,
   intentOverride,
 ];
 

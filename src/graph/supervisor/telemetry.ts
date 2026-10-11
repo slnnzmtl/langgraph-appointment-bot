@@ -13,6 +13,7 @@ export type SupervisorRoutingPath =
   | "llm_choice"
   | "llm_status"
   | "llm_picker"
+  | "llm_book_offer"
   | "llm_intent_override"
   | "llm_abandon"
   | "routing_failure";

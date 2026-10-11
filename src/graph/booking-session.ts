@@ -3,11 +3,13 @@ import {
   BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
+  CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   VISIT_CHANGE_MENU,
 } from "../shared/clinic-constants.js";
 import {
+  bookingDraftCanPresentAvailability,
   reduceBookingDraft,
   upgradeBookingDraftCheckpoint,
   type BookingCheckpointLegacyState,
@@ -16,6 +18,16 @@ import {
   type BookingService,
 } from "./booking-draft.js";
 import { cancelCommandFromMeeting } from "./cancel-command.js";
+
+export const consultationService = (source: "catalog" | "direct"): {
+  id: string;
+  name: string;
+  source: "catalog" | "direct";
+} => ({
+  id: CONSULTATION_SERVICE_ID,
+  name: "Консультація",
+  source,
+});
 
 export type InteractionChoice = {
   id: string;
@@ -494,6 +506,119 @@ const clearInteractionAfterSlotDrop = (
   return interaction;
 };
 
+/** Drop DATE/TIME cards that cannot legally be presented. */
+const clearScheduleSelectInteraction = (
+  interaction: PendingInteraction | null,
+): PendingInteraction | null => {
+  if (interaction?.kind === "date_select" || interaction?.kind === "time_select") {
+    return null;
+  }
+  return interaction;
+};
+
+export type BookingInvariantReason =
+  | "availability_without_service"
+  | "date_interaction_without_draft"
+  | "time_interaction_without_selected_date";
+
+export type ScheduleInteractionRepair = {
+  bookingDraft: BookingDraft | null;
+  pendingInteraction: PendingInteraction | null;
+  clearAvailability: boolean;
+  reason: BookingInvariantReason;
+};
+
+/**
+ * Mode-specific repair when DATE/TIME is open but the draft cannot support it.
+ * Returns null when the pending schedule interaction is legal.
+ */
+export const repairInvalidScheduleInteraction = (
+  draft: BookingDraft | null | undefined,
+  interaction: PendingInteraction | null | undefined,
+  meetings: VisitSelectMeeting[] = [],
+): ScheduleInteractionRepair | null => {
+  if (interaction?.kind !== "date_select" && interaction?.kind !== "time_select") {
+    return null;
+  }
+  const current = draft ?? null;
+
+  if (current?.mode === "reschedule") {
+    const targetId = current.rescheduleTarget?.id?.trim() ?? "";
+    if (targetId.length === 0) {
+      return {
+        bookingDraft: null,
+        pendingInteraction: meetings.length > 0
+          ? openVisitActionMenuInteraction(meetings)
+          : null,
+        clearAvailability: true,
+        reason: "availability_without_service",
+      };
+    }
+    if (
+      interaction.kind === "time_select"
+      && (current.selectedDate == null || current.selectedDate !== interaction.date)
+    ) {
+      const cleared = reduceBookingDraft(current, {
+        type: "slot_invalidated",
+        keepDate: false,
+      }) ?? current;
+      return {
+        bookingDraft: cleared,
+        pendingInteraction: null,
+        clearAvailability: true,
+        reason: "time_interaction_without_selected_date",
+      };
+    }
+    if (!bookingDraftCanPresentAvailability(current)) {
+      return {
+        bookingDraft: null,
+        pendingInteraction: meetings.length > 0
+          ? openVisitActionMenuInteraction(meetings)
+          : null,
+        clearAvailability: true,
+        reason: "availability_without_service",
+      };
+    }
+    return null;
+  }
+
+  if (!bookingDraftCanPresentAvailability(current)) {
+    const offered = reduceBookingSession(
+      { bookingDraft: current, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: consultationService("catalog"),
+      },
+    );
+    return {
+      bookingDraft: offered.bookingDraft,
+      pendingInteraction: offered.pendingInteraction,
+      clearAvailability: true,
+      reason: interaction.kind === "date_select"
+        ? "date_interaction_without_draft"
+        : "availability_without_service",
+    };
+  }
+
+  if (
+    interaction.kind === "time_select"
+    && (current!.selectedDate == null || current!.selectedDate !== interaction.date)
+  ) {
+    const cleared = reduceBookingDraft(current, {
+      type: "slot_invalidated",
+      keepDate: false,
+    }) ?? current;
+    return {
+      bookingDraft: cleared,
+      pendingInteraction: null,
+      clearAvailability: true,
+      reason: "time_interaction_without_selected_date",
+    };
+  }
+
+  return null;
+};
+
 /**
  * Sole transition that updates the booking draft and booking-owned pendingInteraction
  * together. Callers dispatch events; they do not construct visit_note themselves.
@@ -521,8 +646,16 @@ export const reduceBookingSession = (
         type: "slot_selected",
         slot: event.slot,
       });
-      if (nextDraft == null) {
-        return noEffect(current);
+      if (
+        nextDraft == null
+        || nextDraft.selectedSlot?.dateStart !== event.slot.dateStart
+      ) {
+        return {
+          bookingDraft: draft ?? null,
+          pendingInteraction: clearScheduleSelectInteraction(interaction),
+          clearAvailability: true,
+          effect: null,
+        };
       }
       const noteWasUnasked = (draft?.note.status ?? "unasked") === "unasked";
       const noteNowAwaiting = nextDraft.note.status === "awaiting";
@@ -542,6 +675,14 @@ export const reduceBookingSession = (
         type: "date_selected",
         date: event.date,
       });
+      if (nextDraft == null || nextDraft.selectedDate !== event.date) {
+        return {
+          bookingDraft: draft ?? null,
+          pendingInteraction: clearScheduleSelectInteraction(interaction),
+          clearAvailability: true,
+          effect: null,
+        };
+      }
       return noEffect({
         bookingDraft: nextDraft,
         pendingInteraction: clearInteractionAfterSlotDrop(draft, interaction, nextDraft),
@@ -918,6 +1059,14 @@ export const reduceBookingSession = (
       });
     }
     case "availability_presented": {
+      if (!bookingDraftCanPresentAvailability(draft)) {
+        return {
+          bookingDraft: draft ?? null,
+          pendingInteraction: clearScheduleSelectInteraction(interaction),
+          clearAvailability: true,
+          effect: null,
+        };
+      }
       return noEffect({
         bookingDraft: draft,
         pendingInteraction: event.interaction,

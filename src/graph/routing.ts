@@ -77,7 +77,7 @@ export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
       .enum(SUPERVISOR_INTENT_VALUES)
       .optional()
       .describe(
-        "Patient intent for free text. visit_status = read-only «what is booked»; visit_cancel / visit_reschedule = change a visit; abandon_booking = leave an in-progress booking without a slot; consultation_request = wants consultation; book = new booking; faq = clinic info browse. Omit when delegating via next only.",
+        "Patient intent for free text. visit_status = read-only «what is booked»; visit_cancel / visit_reschedule = change a visit; abandon_booking = leave an in-progress booking without a slot; book = generic new booking with no named service; consultation_request = explicitly wants consultation; faq = clinic info browse or booking language that names a procedure/family. Omit when delegating via next only.",
       ),
     choiceId: z
       .string()

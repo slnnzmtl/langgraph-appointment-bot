@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  bookingDraftCanPresentAvailability,
   createEmptyBookingDraft,
   reduceBookingDraft,
 } from "../booking-draft.js";
@@ -10,9 +11,10 @@ import {
   interpretInteractionReply,
   isBookingOwnedInteraction,
   reduceBookingSession,
+  repairInvalidScheduleInteraction,
   type PendingInteraction,
 } from "../booking-session.js";
-import { INTENT_SKIP_LABEL } from "../../shared/clinic-constants.js";
+import { CONSULTATION_SERVICE_ID, INTENT_SKIP_LABEL } from "../../shared/clinic-constants.js";
 
 const selectedSlot = {
   dateStart: "2026-10-17T11:30:00",
@@ -782,6 +784,134 @@ describe("mutation_chat_other", () => {
     expect(other.bookingDraft?.selectedSlot).toBeNull();
     expect(other.bookingDraft?.selectedDate).toBe(selectedSlot.dateStart.slice(0, 10));
     expect(other.bookingDraft?.pendingCommand).toBeNull();
+  });
+});
+
+describe("bookingDraftCanPresentAvailability", () => {
+  it("requires an accepted create service id or a reschedule target id", () => {
+    expect(bookingDraftCanPresentAvailability(null)).toBe(false);
+    expect(bookingDraftCanPresentAvailability(createEmptyBookingDraft())).toBe(false);
+    const pending = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", name: "A", source: "catalog" },
+      accepted: false,
+    });
+    expect(bookingDraftCanPresentAvailability(pending)).toBe(false);
+    expect(bookingDraftCanPresentAvailability(acceptedWithDate())).toBe(true);
+    const reschedule = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: { id: "m-1", name: "Visit" },
+    });
+    expect(bookingDraftCanPresentAvailability(reschedule)).toBe(true);
+    const bareReschedule = {
+      ...createEmptyBookingDraft(),
+      mode: "reschedule" as const,
+      rescheduleTarget: null,
+    };
+    expect(bookingDraftCanPresentAvailability(bareReschedule)).toBe(false);
+  });
+
+  it("rejects replace mode even with an accepted service", () => {
+    const replace = reduceBookingDraft(acceptedWithDate(), {
+      type: "existing_booking_detected",
+      meeting: { id: "m-existing", name: "Existing visit" },
+    });
+    expect(replace.mode).toBe("replace");
+    expect(replace.serviceAcceptance?.status).toBe("accepted");
+    expect(bookingDraftCanPresentAvailability(replace)).toBe(false);
+  });
+});
+
+describe("availability and schedule fail-closed", () => {
+  const dateSelect = {
+    kind: "date_select" as const,
+    snapshot: {
+      snapshotId: "snap-1",
+      days: [{
+        date: "2026-10-13",
+        displayLabel: "13 жовтня",
+        slotSummaries: ["11:00"],
+        slots: [],
+      }],
+    },
+    choices: [{ id: "2026-10-13", label: "13 жовтня" }],
+  };
+
+  it("rejects availability_presented without a valid booking draft", () => {
+    const result = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      { type: "availability_presented", interaction: dateSelect },
+    );
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.clearAvailability).toBe(true);
+  });
+
+  it("fails closed when date_selected has a null draft", () => {
+    const result = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: dateSelect },
+      { type: "date_selected", date: "2026-10-13" },
+    );
+    expect(result.bookingDraft).toBeNull();
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.clearAvailability).toBe(true);
+  });
+
+  it("fails closed when slot_selected has a null draft", () => {
+    const result = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: {
+        kind: "time_select",
+        date: "2026-10-13",
+        snapshot: dateSelect.snapshot,
+        choices: [{ id: "slot-11", label: "11:00" }],
+      } },
+      { type: "slot_selected", slot: {
+        dateStart: "2026-10-13T11:00:00",
+        dateEnd: "2026-10-13T11:30:00",
+        label: "11:00",
+      } },
+    );
+    expect(result.bookingDraft).toBeNull();
+    expect(result.pendingInteraction).toBeNull();
+    expect(result.clearAvailability).toBe(true);
+  });
+
+  it("repairs DATE/TIME without an accepted create service to consultation offer", () => {
+    const repair = repairInvalidScheduleInteraction(null, dateSelect);
+    expect(repair?.reason).toBe("date_interaction_without_draft");
+    expect(repair?.clearAvailability).toBe(true);
+    expect(repair?.pendingInteraction?.kind).toBe("service_confirm");
+    expect(repair?.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+  });
+
+  it("repairs invalid TIME with an accepted service by clearing date and availability", () => {
+    const repair = repairInvalidScheduleInteraction(
+      acceptedWithDate(),
+      {
+        kind: "time_select",
+        date: "2026-10-99",
+        snapshot: dateSelect.snapshot,
+        choices: [{ id: "slot-11", label: "11:00" }],
+      },
+    );
+    expect(repair?.reason).toBe("time_interaction_without_selected_date");
+    expect(repair?.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(repair?.bookingDraft?.selectedDate).toBeNull();
+    expect(repair?.pendingInteraction).toBeNull();
+    expect(repair?.clearAvailability).toBe(true);
+  });
+
+  it("closes a reschedule draft without a target and reopens visit selection", () => {
+    const repair = repairInvalidScheduleInteraction(
+      { ...createEmptyBookingDraft(), mode: "reschedule", rescheduleTarget: null },
+      dateSelect,
+      [{ id: "m-1", name: "Visit", dateStart: "2026-10-20 11:00:00" }],
+    );
+    expect(repair?.bookingDraft).toBeNull();
+    expect(repair?.pendingInteraction?.kind).toBe("visit_select");
+    expect(repair?.clearAvailability).toBe(true);
   });
 });
 

@@ -54,6 +54,7 @@ import {
 import { buildCachedMessages, buildUncachedMessages } from "../gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
+  bookingDraftCanPresentAvailability,
   createEmptyBookingDraft,
   reduceBookingDraft,
   type PendingBookingCommand,
@@ -62,9 +63,11 @@ import {
 import { cancelCommandFromStoredPayload } from "../cancel-command.js";
 import {
   closedBookingSessionUpdate,
+  consultationService,
   interpretInteractionReply,
   openVisitNoteInteraction,
   reduceBookingSession,
+  repairInvalidScheduleInteraction,
 } from "../booking-session.js";
 import { restorePendingInteraction } from "../booking-interaction-restore.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
@@ -114,7 +117,6 @@ import {
   captureLatestToolContext,
   captureServicesFromMessages,
   classifyMeetingMutationToolMessage,
-  consultationService,
   createContactPhoneMatchesOccupiedCandidate,
   crmWriteDirtiesPrefetch,
   humanProvidedName,
@@ -354,10 +356,39 @@ export const createAgentPrepareNode = (
       }
     }
     if (agentId === BOOKING_AGENT_ID) {
+      const scheduleRepair = repairInvalidScheduleInteraction(
+        state.bookingDraft,
+        state.pendingInteraction,
+        state.bookingContext?.meetings ?? [],
+      );
+      if (scheduleRepair != null) {
+        trackEvent("booking_invariant_violation", { reason: scheduleRepair.reason });
+        update.bookingDraft = scheduleRepair.bookingDraft;
+        update.pendingInteraction = scheduleRepair.pendingInteraction;
+        if (scheduleRepair.clearAvailability) {
+          update.availabilityContext = null;
+          update.availabilityCursor = null;
+        }
+      }
+      // Intentional null from scheduleRepair must not fall through ?? to the
+      // corrupt checkpoint. Undefined on update means "leave state as-is".
+      type Pending = typeof state.pendingInteraction;
+      const draftForRestore = scheduleRepair != null
+        ? scheduleRepair.bookingDraft
+        : (update.bookingDraft !== undefined
+          ? (update.bookingDraft as BookingDraft | null)
+          : state.bookingDraft);
+      const pendingForRestore: Pending = scheduleRepair != null
+        ? scheduleRepair.pendingInteraction
+        : (update.pendingInteraction !== undefined
+          ? (update.pendingInteraction as Pending)
+          : state.pendingInteraction);
       const restoredInteraction = restorePendingInteraction({
-        bookingDraft: state.bookingDraft,
-        pendingInteraction: state.pendingInteraction,
-        availabilityContext: state.availabilityContext,
+        bookingDraft: draftForRestore,
+        pendingInteraction: pendingForRestore,
+        availabilityContext: scheduleRepair?.clearAvailability
+          ? null
+          : state.availabilityContext,
         contactContext: state.contactContext,
         bookingContext: state.bookingContext,
         lastHandoff: state.lastHandoff,
@@ -365,7 +396,7 @@ export const createAgentPrepareNode = (
       });
       if (
         restoredInteraction != null
-        && state.pendingInteraction == null
+        && pendingForRestore == null
       ) {
         update.pendingInteraction = restoredInteraction;
       }
@@ -374,33 +405,48 @@ export const createAgentPrepareNode = (
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
-      const effectivePending =
-        (update.pendingInteraction as typeof state.pendingInteraction | undefined)
-        ?? state.pendingInteraction;
+      const effectivePending: Pending = update.pendingInteraction !== undefined
+        ? (update.pendingInteraction as Pending)
+        : state.pendingInteraction;
+      const repairedBase: ClinicState = {
+        ...state,
+        bookingDraft: draftForRestore ?? null,
+        pendingInteraction: effectivePending ?? null,
+        ...(scheduleRepair?.clearAvailability
+          ? { availabilityContext: null, availabilityCursor: null }
+          : {}),
+      };
       // Reschedule is seeded by the supervisor (pending_reschedule / chip / sticky).
       // Prepare only fills a missing target on an already-reschedule draft.
-      const rescheduleTarget = state.bookingDraft?.mode === "reschedule"
-        ? rescheduleTargetFromBookingContext(state)
+      const rescheduleTarget = repairedBase.bookingDraft?.mode === "reschedule"
+        ? rescheduleTargetFromBookingContext(repairedBase)
         : null;
       const startedReschedule =
-        state.bookingDraft?.mode === "reschedule"
-        && state.bookingDraft.rescheduleTarget == null
+        repairedBase.bookingDraft?.mode === "reschedule"
+        && repairedBase.bookingDraft.rescheduleTarget == null
         && rescheduleTarget != null
-          ? reduceBookingDraft(state.bookingDraft, {
+          ? reduceBookingDraft(repairedBase.bookingDraft, {
               type: "reschedule_started",
               meeting: rescheduleTarget,
             })
           : undefined;
       const rescheduleState = {
         ...(startedReschedule
-          ? { ...state, bookingDraft: startedReschedule }
-          : state),
-        pendingInteraction: effectivePending ?? state.pendingInteraction ?? null,
+          ? { ...repairedBase, bookingDraft: startedReschedule }
+          : repairedBase),
+        pendingInteraction: effectivePending ?? repairedBase.pendingInteraction ?? null,
       };
       // Orch ownership is inbound-only so a slot pick that opens visit_note
       // this turn still reaches the booking LLM. Skip utterance-driven draft
       // mutations when the orch already owns the turn.
-      const queueNoteOrch = bookingTurnNeedsNoteOrchestrator(rescheduleState);
+      // After clearing an illegal DATE/TIME card (+ availability), do not hand
+      // the turn to note orch solely because phase is still date/time — the
+      // booking LLM must re-offer slots.
+      const queueNoteOrch = scheduleRepair != null
+        && scheduleRepair.pendingInteraction == null
+        && scheduleRepair.clearAvailability
+        ? false
+        : bookingTurnNeedsNoteOrchestrator(rescheduleState);
       update.noteOrchQueued = queueNoteOrch;
       let bookingDraft: BookingDraft | null | undefined =
         rescheduleState.bookingDraft ?? undefined;
@@ -1069,6 +1115,21 @@ export const createAgentToolsNode = (
         }
 
         if (call.name === "present_availability_slots") {
+          if (!bookingDraftCanPresentAvailability(state.bookingDraft)) {
+            trackToolError(call.name, "Availability requires accepted service");
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: "Availability requires accepted service",
+                  hint:
+                    "Accept a service (or bind a reschedule target) before presenting availability.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: "present_availability_slots",
+              }),
+            );
+            continue;
+          }
           // Own paging cursors from checkpoint — the model chooses semantic direction,
           // but must not invent calendar boundaries.
           const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;

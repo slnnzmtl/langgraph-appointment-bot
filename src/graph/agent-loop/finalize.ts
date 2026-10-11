@@ -44,7 +44,9 @@ import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { reduceBookingDraft } from "../booking-draft.js";
 import { meetingServiceLabel } from "../context-blocks.js";
+import { bookingDraftCanPresentAvailability } from "../booking-draft.js";
 import {
+  consultationService,
   isBookingOwnedInteraction,
   openVisitNoteInteraction,
   openVisitReplacementInteraction,
@@ -85,7 +87,6 @@ import {
   availabilityRecoveryOffer,
   bookingOutcomeRiskState,
   classifyMeetingMutationToolMessage,
-  consultationService,
   createMeetingAlreadyBooked,
   lastPatientText,
   latestCreateMeetingError,
@@ -479,7 +480,10 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       && !alreadyBooked;
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
     const slotOffer =
-      agent.id === BOOKING_AGENT_ID && !alreadyBooked && !createCommitted
+      agent.id === BOOKING_AGENT_ID
+      && !alreadyBooked
+      && !createCommitted
+      && bookingDraftCanPresentAvailability(state.bookingDraft)
         ? resolveAvailabilityOffer(
             agentMessages,
             state.availabilityContext,
@@ -880,16 +884,22 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
       trackEvent("reply_menu_filled", { menu: "service_confirm", reason: "pending_interaction" });
     }
 
+    const availabilityPresented = availabilityInteraction != null
+      ? reduceBookingSession(
+          {
+            bookingDraft: state.bookingDraft ?? null,
+            pendingInteraction: state.pendingInteraction ?? null,
+          },
+          { type: "availability_presented", interaction: availabilityInteraction },
+        )
+      : null;
     const availabilityInteractionUpdate: ClinicStateUpdate =
-      availabilityInteraction != null
+      availabilityPresented != null
         ? {
-            pendingInteraction: reduceBookingSession(
-              {
-                bookingDraft: state.bookingDraft ?? null,
-                pendingInteraction: state.pendingInteraction ?? null,
-              },
-              { type: "availability_presented", interaction: availabilityInteraction },
-            ).pendingInteraction,
+            pendingInteraction: availabilityPresented.pendingInteraction,
+            ...(availabilityPresented.clearAvailability
+              ? { availabilityContext: null, availabilityCursor: null }
+              : {}),
           }
         : {};
     const bookingDraftOfferUpdate = serviceOfferUpdate;

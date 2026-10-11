@@ -1977,4 +1977,163 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     expect(updateInvoke).not.toHaveBeenCalled();
     expect(third.__interrupt__).toBeUndefined();
   });
+
+  it("seeds canonical service_confirm from generic book and typed slots advance without a classifier", async () => {
+    const classifyNoteTurn = vi.fn(async () => ({ kind: "unresolved" as const }));
+    const availabilityInvoke = vi.fn(async (input: Record<string, unknown>) => {
+      if (input.direction === "nearest" || input.direction == null) {
+        return JSON.stringify({
+          days: [
+            {
+              date: "2026-10-13",
+              dayLabel: "13 жовтня (вівторок)",
+              slots: [{
+                id: "slot-13-11",
+                label: "11:00",
+                dateStart: "2026-10-13T11:00:00",
+                dateEnd: "2026-10-13T11:30:00",
+              }],
+            },
+            {
+              date: "2026-10-14",
+              dayLabel: "14 жовтня (середа)",
+              slots: [{
+                id: "slot-14-11",
+                label: "11:00",
+                dateStart: "2026-10-14T11:00:00",
+                dateEnd: "2026-10-14T11:30:00",
+              }],
+            },
+          ],
+          stepMinutes: 30,
+          serviceId: CONSULTATION_SERVICE_ID,
+          query: {
+            kind: "nearest",
+            rangeFrom: "2026-10-11",
+            rangeThrough: "2026-10-25",
+            coverageComplete: true,
+          },
+        });
+      }
+      return JSON.stringify({
+        date: String(input.date ?? "2026-10-13"),
+        slots: [{
+          id: "slot-13-11",
+          label: "11:00",
+          dateStart: "2026-10-13T11:00:00",
+          dateEnd: "2026-10-13T11:30:00",
+        }],
+        stepMinutes: 30,
+        serviceId: CONSULTATION_SERVICE_ID,
+        query: {
+          kind: "exact",
+          date: String(input.date ?? "2026-10-13"),
+          rangeFrom: String(input.date ?? "2026-10-13"),
+          rangeThrough: String(input.date ?? "2026-10-13"),
+          coverageComplete: true,
+        },
+      });
+    });
+    const modelInvoke = vi.fn(async () => {
+      if (modelInvoke.mock.calls.length <= 1) {
+        return new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "slots-1",
+            name: "present_availability_slots",
+            args: { direction: "nearest" },
+            type: "tool_call",
+          }],
+        });
+      }
+      return new AIMessage("Оберіть зручний день.");
+    });
+    const presentAvailability = tool(availabilityInvoke, {
+      name: "present_availability_slots",
+      description: "availability",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        date: z.string().optional(),
+        durationMinutes: z.number().optional(),
+        forceRefresh: z.boolean().optional(),
+      }),
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [presentAvailability] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking", intent: "book" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+      classifyNoteTurn,
+    });
+    const config = { configurable: { thread_id: "generic-book-typed-slot" } };
+    const invoke = (input: unknown) =>
+      runWithTelegramUserId("tg-generic-book", () => graph.invoke(input as never, config));
+
+    const opened = await invoke({
+      messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
+      bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+    });
+    expect(opened.next ?? "FINISH").toBe("FINISH");
+    expect(opened.pendingInteraction?.kind).toBe("service_confirm");
+    expect(opened.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+    expect(modelInvoke).not.toHaveBeenCalled();
+    expect(availabilityInvoke).not.toHaveBeenCalled();
+
+    const accepted = await invoke({ messages: [new HumanMessage("Так")] });
+    expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(modelInvoke).toHaveBeenCalled();
+    expect(availabilityInvoke).toHaveBeenCalled();
+    expect(accepted.bookingDraft).not.toBeNull();
+    expect(
+      accepted.pendingInteraction?.kind === "date_select"
+      || accepted.pendingInteraction?.kind === "time_select",
+    ).toBe(true);
+
+    const dated = await invoke({ messages: [new HumanMessage("13 жовтня")] });
+    expect(dated.bookingDraft?.selectedDate).toBe("2026-10-13");
+    expect(dated.pendingInteraction?.kind).toBe("time_select");
+    if (dated.pendingInteraction?.kind === "time_select") {
+      expect(dated.pendingInteraction.date).toBe("2026-10-13");
+    }
+
+    const classifyCallsBeforeSlot = classifyNoteTurn.mock.calls.length;
+    const slotted = await invoke({ messages: [new HumanMessage("11:00")] });
+    expect(slotted.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-13T11:00:00");
+    expect(slotted.pendingInteraction?.kind).toBe("visit_note");
+    expect(String(slotted.messages.at(-1)?.content)).toBe(BOOKING_NOTE_QUESTION_UK);
+    expect(String(slotted.messages.at(-1)?.content)).not.toContain("Вільні години");
+    expect(classifyNoteTurn.mock.calls.length).toBe(classifyCallsBeforeSlot);
+
+    // Bare-hour guard on a fresh thread: "11" must stay TIME, not become 2026-10-11.
+    const configBare = { configurable: { thread_id: "generic-book-bare-11" } };
+    const invokeBare = (input: unknown) =>
+      runWithTelegramUserId("tg-generic-book-bare", () => graph.invoke(input as never, configBare));
+    await invokeBare({
+      messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
+      bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+    });
+    await invokeBare({ messages: [new HumanMessage("Так")] });
+    await invokeBare({ messages: [new HumanMessage("13 жовтня")] });
+    availabilityInvoke.mockClear();
+    const bare = await invokeBare({ messages: [new HumanMessage("11")] });
+    expect(bare.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-13T11:00:00");
+    expect(
+      availabilityInvoke.mock.calls.some(
+        ([args]) => (args as { direction?: string; date?: string }).direction === "exact"
+          && (args as { date?: string }).date === "2026-10-11",
+      ),
+    ).toBe(false);
+  });
 });

@@ -2,12 +2,18 @@ import { AIMessage } from "@langchain/core/messages";
 
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU_EN,
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
+  CONSULTATION_SERVICE_ID,
   EARLIER_DATE_LABEL,
   LATER_DATE_LABEL,
   OTHER_DATE_LABEL,
   SERVICE_CHANGE_ACK_UK,
+  SERVICE_CONFIRM_CONSULTATION_EN,
+  SERVICE_CONFIRM_CONSULTATION_UK,
+  SERVICE_CONFIRM_PROCEDURE_EN,
+  SERVICE_CONFIRM_PROCEDURE_UK,
 } from "../shared/clinic-constants.js";
 import {
   availabilityQueryFromContext,
@@ -96,11 +102,15 @@ const timeSelectBody = (interaction: TimeSelectInteraction): string => {
 };
 
 const serviceConfirmBody = (interaction: PendingInteraction & { kind: "service_confirm" }): string => {
-  const name = interaction.service.name ?? interaction.service.id;
-  if (name.toLowerCase().includes("консультац")) {
-    return "Підібрати вільний час на консультацію?";
+  const acceptLabel = interaction.choices.find((choice) => choice.id === "accept")?.label;
+  const english = acceptLabel === BOOKING_OFFER_MENU_EN[0];
+  if (interaction.service.id === CONSULTATION_SERVICE_ID) {
+    return english ? SERVICE_CONFIRM_CONSULTATION_EN : SERVICE_CONFIRM_CONSULTATION_UK;
   }
-  return `Чудово, обрано: ${name}. Бажаєте записатися на цю процедуру?`;
+  const name = interaction.service.name ?? interaction.service.id;
+  return english
+    ? SERVICE_CONFIRM_PROCEDURE_EN(name)
+    : SERVICE_CONFIRM_PROCEDURE_UK(name);
 };
 
 const clarificationBody = (interaction: PendingInteraction): string => {
