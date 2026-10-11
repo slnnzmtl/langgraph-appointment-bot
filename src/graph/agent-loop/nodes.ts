@@ -98,7 +98,7 @@ import {
   CONTACT_OWNERSHIP_REQUIRED_ERROR,
   CREATE_CONSULTATION_REQUIRED_ERROR,
   CREATE_NOTE_REQUIRED_ERROR,
-  FAQ_CATALOG_SHORTCUT_LABELS,
+  isFaqCatalogBrowseShortcut,
   MEETING_MUTATION_TOOLS,
   NAME_NOT_PROVIDED_ERROR,
   PHONE_GROUNDED_TOOLS,
@@ -234,6 +234,9 @@ export const createAgentPrepareNode = (
                 type: "service_candidates_opened",
                 utterance: interaction.utterance,
                 owner: "faq",
+                ...(interaction.consultationDeclined === true
+                  ? { consultationDeclined: true }
+                  : {}),
                 choices,
               },
             );
@@ -311,11 +314,12 @@ export const createAgentPrepareNode = (
           update.pendingInteraction = session.pendingInteraction;
         }
       }
-      // Browse open: «Обрати іншу процедуру» (not «Послуги») — partition all CRM ids.
+      // Browse open: «Обрати іншу процедуру» / bare «Ні» (not «Послуги») — root partition.
       let browseServices = state.servicesContext?.list ?? [];
+      const browseShortcut = isFaqCatalogBrowseShortcut(patientText);
       if (
         !handledCatalogChoice
-        && FAQ_CATALOG_SHORTCUT_LABELS.has(patientText)
+        && browseShortcut
         && browseServices.length === 0
         && options?.loadServices != null
       ) {
@@ -327,7 +331,7 @@ export const createAgentPrepareNode = (
       }
       if (
         !handledCatalogChoice
-        && FAQ_CATALOG_SHORTCUT_LABELS.has(patientText)
+        && browseShortcut
         && browseServices.length > 0
       ) {
         const services = browseServices;
@@ -349,6 +353,7 @@ export const createAgentPrepareNode = (
               type: "service_candidates_opened",
               utterance: patientText || "catalog",
               owner: "faq",
+              consultationDeclined: true,
               choices,
             },
           );
@@ -495,6 +500,36 @@ export const createAgentPrepareNode = (
                 bookingDraft = session.bookingDraft;
                 pendingInteraction = session.pendingInteraction;
               }
+            } else {
+              // Unique named procedure on an open offer (e.g. «ні, на колаген»)
+              // switches the pending service — same matcher as FAQ, no N-row copy.
+              const matchingRows = matchingCatalogRows(
+                patientText,
+                rescheduleState.servicesContext?.list ?? [],
+              );
+              const currentServiceId = pendingInteraction.service.id;
+              if (
+                matchingRows.length === 1
+                && matchingRows[0]!.id !== currentServiceId
+              ) {
+                const row = matchingRows[0]!;
+                const session = reduceBookingSession(
+                  { bookingDraft: bookingDraft ?? null, pendingInteraction },
+                  {
+                    type: "service_offered",
+                    service: {
+                      id: row.id,
+                      name: row.name,
+                      ...(row.duration != null
+                        ? { durationMinutes: row.duration }
+                        : {}),
+                      source: "catalog",
+                    },
+                  },
+                );
+                bookingDraft = session.bookingDraft;
+                pendingInteraction = session.pendingInteraction;
+              }
             }
           }
         } else if (bookingDraft?.mode !== "reschedule") {
@@ -586,6 +621,32 @@ export const createAgentPrepareNode = (
       const bookingEntry = bookingEntryTransitionForTurn(blockingState);
       if (bookingEntry?.kind === "offer_replacement") {
         const meeting = bookingEntry.meeting;
+        // Named procedure («запиши на колаген») must survive REPLACE so the
+        // post-cancel dates path can run instead of a consultation offer.
+        if (bookingDraft?.serviceAcceptance == null) {
+          const matchingRows = matchingCatalogRows(
+            lastPatientText(state),
+            state.servicesContext?.list ?? [],
+          );
+          if (matchingRows.length === 1) {
+            const row = matchingRows[0]!;
+            bookingDraft = reduceBookingDraft(
+              bookingDraft ?? createEmptyBookingDraft(),
+              {
+                type: "service_selected",
+                service: {
+                  id: row.id,
+                  name: row.name,
+                  ...(row.duration != null
+                    ? { durationMinutes: row.duration }
+                    : {}),
+                  source: "catalog",
+                },
+                accepted: true,
+              },
+            );
+          }
+        }
         bookingDraft = reduceBookingDraft(
           bookingDraft ?? createEmptyBookingDraft(),
           {

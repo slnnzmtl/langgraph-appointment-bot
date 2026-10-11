@@ -35,6 +35,7 @@ import {
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
+  SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
   VISIT_CHANGE_MENU,
   VISIT_CHANGE_MENU_EN,
 } from "../../shared/clinic-constants.js";
@@ -44,6 +45,7 @@ import {
   extractRawMessageText,
   labelIdFor,
   matchesReplyLabel,
+  normalizeReplyLabel,
   requestsConsultation,
 } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
@@ -102,6 +104,11 @@ export const FAQ_CATALOG_SHORTCUT_LABELS = new Set<string>([
   BOOKING_OFFER_MENU[1],
   BOOKING_OFFER_MENU_EN[1],
 ]);
+
+/** True for «Обрати іншу процедуру» / Choose another procedure / bare «Ні». */
+export const isFaqCatalogBrowseShortcut = (text: string): boolean =>
+  FAQ_CATALOG_SHORTCUT_LABELS.has(text)
+  || matchesReplyLabel(text, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES);
 
 /** Services-guide taps: consultation offer, not catalog drill-down chips. */
 export const FAQ_SERVICES_GUIDE_LABELS = new Set<string>([
@@ -620,6 +627,67 @@ export const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =
 
 /** Min length so tiny taps like «1» do not steal an offer keyboard or resume. */
 const FAQ_CATALOG_NAME_MIN_LEN = 3;
+/** Stem tokens shorter than this are too ambiguous for prefix matching. */
+const FAQ_CATALOG_STEM_MIN_LEN = 5;
+
+/** Strip leading negation / book-intent lead-ins before catalog name matching. */
+export const normalizeCatalogUtterance = (text: string): string => {
+  let normalized = normalizeReplyLabel(text);
+  // Leading bare/soft negation («ні, …», «no …», «не треба …»).
+  normalized = normalized
+    .replace(/^(?:ні|нi|no|не\s+треба)\s*[,:]?\s+/u, "")
+    .trim();
+  // Book-intent prefixes: «запиши на», «хочу на», «book me for», …
+  normalized = normalized
+    .replace(
+      /^(?:запиши(?:ть)?(?:\s+мене)?|записатись|записатися|хочу|бажаю|book(?:\s+me)?(?:\s+for)?)\s+(?:на\s+)?/u,
+      "",
+    )
+    .trim();
+  return normalized;
+};
+
+/** Collapse doubled letters so «коллаген» aligns with «колаген…». */
+const collapseDoubledLetters = (token: string): string =>
+  token.replace(/(.)\1+/gu, "$1");
+
+const catalogNameTokens = (name: string): string[] =>
+  name.split(/[\s,/()]+/u).filter((token) => token.length > 0);
+
+/** Shared prefix length — handles UA case endings («…цію» vs «…ція»). */
+const sharedPrefixLength = (left: string, right: string): number => {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+};
+
+const utteranceMatchesCatalogName = (
+  normalizedUtterance: string,
+  name: string,
+): boolean => {
+  if (
+    normalizedUtterance === name
+    || name.includes(normalizedUtterance)
+    || normalizedUtterance.includes(name)
+  ) {
+    return true;
+  }
+  const utteranceTokens = catalogNameTokens(normalizedUtterance)
+    .map(collapseDoubledLetters)
+    .filter((token) => token.length >= FAQ_CATALOG_STEM_MIN_LEN);
+  if (utteranceTokens.length === 0) {
+    return false;
+  }
+  const nameTokens = catalogNameTokens(name).map(collapseDoubledLetters);
+  return utteranceTokens.some((token) =>
+    nameTokens.some(
+      (nameToken) =>
+        sharedPrefixLength(token, nameToken) >= FAQ_CATALOG_STEM_MIN_LEN,
+    ));
+};
 
 /**
  * CRM rows whose names match free-text (brand/family/full title). Shared by
@@ -629,7 +697,7 @@ export const matchingCatalogRows = (
   text: string,
   services: ServicesContext["list"],
 ): ServicesContext["list"] => {
-  const normalized = text.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  const normalized = normalizeCatalogUtterance(text);
   if (
     normalized.length < FAQ_CATALOG_NAME_MIN_LEN
     || normalized.includes("?")
@@ -637,12 +705,8 @@ export const matchingCatalogRows = (
     return [];
   }
   return services.filter((row) => {
-    const name = row.name.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-    return (
-      normalized === name
-      || name.includes(normalized)
-      || normalized.includes(name)
-    );
+    const name = normalizeReplyLabel(row.name);
+    return utteranceMatchesCatalogName(normalized, name);
   });
 };
 
@@ -758,8 +822,8 @@ export const offeredServiceForTurn = (
   const lastHumanText = lastHuman != null
     ? extractMessageTextContent(lastHuman.content).trim()
     : "";
-  // «Обрати іншу процедуру» opens FAQ catalog — do not re-offer the pending peel.
-  if (FAQ_CATALOG_SHORTCUT_LABELS.has(lastHumanText)) {
+  // «Обрати іншу процедуру» / bare «Ні» opens FAQ catalog — do not re-offer.
+  if (isFaqCatalogBrowseShortcut(lastHumanText)) {
     return null;
   }
   if (state.bookingDraft?.serviceAcceptance?.status === "pending") {

@@ -229,6 +229,48 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     ).toBe(false);
   });
 
+  it.each(["НІ", "ні", "no", "не треба"] as const)(
+    "is true for bare decline %s on a consultation offer",
+    (label) => {
+      expect(
+        shouldRouteProcedureBrowseToFaq(
+          supervisorState({
+            pendingInteraction: serviceConfirmPending,
+            lastHandoff: {
+              agentId: "booking",
+              agentName: "Booking",
+              status: "ok",
+              replyText: "Підібрати вільний час на консультацію?",
+              replyButtons: ["Так", "Обрати іншу процедуру"],
+            },
+            messages: [
+              new AIMessage("Підібрати вільний час на консультацію?"),
+              new HumanMessage(label),
+            ],
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        stickyContinueAgentId(
+          supervisorState({
+            pendingInteraction: serviceConfirmPending,
+            lastHandoff: {
+              agentId: "booking",
+              agentName: "Booking",
+              status: "ok",
+              replyText: "Підібрати вільний час на консультацію?",
+              replyButtons: ["Так", "Обрати іншу процедуру"],
+            },
+            messages: [
+              new AIMessage("Підібрати вільний час на консультацію?"),
+              new HumanMessage(label),
+            ],
+          }),
+        ),
+      ).toBeNull();
+    },
+  );
+
   it.each(["Обрати іншу процедуру", "Choose another procedure"] as const)(
     "is true for choose_other chip %s despite SUPERVISOR_OWNED",
     (label) => {

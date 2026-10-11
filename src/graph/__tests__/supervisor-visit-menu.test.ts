@@ -551,6 +551,49 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
   });
 
+  it("forces FINISH + default menu on «Головне меню» when the model returns booking/book", async () => {
+    invoke.mockResolvedValue({
+      next: "booking",
+      intent: "book",
+      reply:
+        "Привіт, Ada! Я ШІ-асистент клініки.\n\nМожу записати вас, відповісти на запитання про послуги та допомогти з візитом.\n\nЧим можу допомогти?",
+    });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [
+          new HumanMessage("запиши на колаген"),
+          new AIMessage("Підібрати вільний час на консультацію?"),
+          new HumanMessage("Головне меню"),
+        ],
+        pendingInteraction: serviceConfirmPending,
+        bookingDraft: (() => {
+          const draft = createEmptyBookingDraft();
+          draft.serviceAcceptance = {
+            status: "pending",
+            service: {
+              id: CONSULTATION_SERVICE_ID,
+              name: "Консультація",
+              source: "catalog",
+            },
+          };
+          return draft;
+        })(),
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Підібрати вільний час на консультацію?",
+          replyButtons: ["Так", "Обрати іншу процедуру"],
+        },
+      }),
+    );
+
+    expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingInteraction).toBeNull();
+  });
+
   it("falls back to DEFAULT no-visits when «Мій запис» but list is empty", async () => {
     invoke.mockResolvedValue({
       next: "FINISH",
@@ -655,7 +698,26 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
   });
 
-  it("maps model choiceId decline on open visit_select", async () => {
+  it("declines an open visit_select on case-folded Ні, дякую without the LLM", async () => {
+    const status = await nodeWithPrefetch(meetings)(
+      supervisorState({ messages: [new HumanMessage("Мій запис")] }),
+    );
+    invoke.mockClear();
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [new HumanMessage("ні, дякую")],
+        pendingInteraction: status.pendingInteraction ?? null,
+        bookingContext: meetings,
+        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toBe(VISIT_DECLINE_REPLY_UK);
+  });
+
+  it("maps model choiceId decline on open visit_select for free-text paraphrase", async () => {
     const status = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
     );
@@ -666,7 +728,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({
-        messages: [new HumanMessage("ні, дякую")],
+        messages: [new HumanMessage("не хочу нічого змінювати")],
         pendingInteraction: status.pendingInteraction ?? null,
         bookingContext: meetings,
         contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },

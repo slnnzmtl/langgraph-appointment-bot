@@ -131,6 +131,17 @@ export const SERVICE_CONFIRM_PROCEDURE_EN = (name: string): string =>
   `Great, selected: ${name}. Would you like to book this procedure?`;
 
 /**
+ * Bare declines of a service_confirm offer — same catalog route as
+ * «Обрати іншу процедуру» (matched via normalizeReplyLabel).
+ */
+export const SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES = [
+  "ні",
+  "нi",
+  "no",
+  "не треба",
+] as const;
+
+/**
  * Stable reply-label identity for chips and main-menu shortcuts.
  * Prefer {@link labelIdFor} over ad-hoc Sets of Ukrainian/English strings.
  */

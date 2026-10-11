@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
+import { openServiceConfirmInteraction } from "../booking-session.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition } from "../types.js";
 
@@ -76,18 +77,11 @@ export const agents: ClinicAgentDefinition[] = [
   },
 ];
 
-export const serviceConfirmPending = {
-  kind: "service_confirm" as const,
-  service: {
-    id: CONSULTATION_SERVICE_ID,
-    name: "Консультація",
-    source: "catalog" as const,
-  },
-  choices: [
-    { id: "accept", label: "Так" },
-    { id: "choose_other", label: "Обрати іншу процедуру" },
-  ],
-};
+export const serviceConfirmPending = openServiceConfirmInteraction({
+  id: CONSULTATION_SERVICE_ID,
+  name: "Консультація",
+  source: "catalog",
+});
 
 export const dateSelectPending = {
   kind: "date_select" as const,

@@ -143,6 +143,14 @@ export const shouldContinueInSpecialist = (
     humanText,
   );
   if (interactionMatch.kind === "choice") {
+    // «Обрати іншу процедуру» / bare «Ні» on service_confirm must reach
+    // faqPredicates (closed session + FAQ catalog), not sticky booking.
+    if (
+      interactionMatch.choiceId === "choose_other"
+      && state.pendingInteraction?.kind === "service_confirm"
+    ) {
+      return false;
+    }
     return true;
   }
   if (

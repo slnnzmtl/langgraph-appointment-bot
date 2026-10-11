@@ -47,7 +47,12 @@ import {
   resolveCreatedMeetingId,
   runBookFlow,
 } from "./booking-helpers.js";
-import { drillToProcedureOffer, openBookingOffer } from "./offer-helpers.js";
+import {
+  drillToProcedureOffer,
+  loadCatalogServiceRows,
+  openBookingOffer,
+  pickUniqueNamedProcedure,
+} from "./offer-helpers.js";
 
 const PRICE_HINT = /грн|\d/i;
 const VISIT_NOTE_TEXT = "Турбує сухість шкіри на обличчі";
@@ -572,6 +577,146 @@ export const replaceProcedureScenario: SmokeScenario = {
         newId,
         "service",
         service.id,
+      );
+      return { warnings: bundle.warnings, turns: bundle.session.turns };
+    } finally {
+      bundle.restore();
+    }
+  },
+};
+
+/**
+ * Free-text «запиши на {procedure}» with an existing visit must open REPLACE for
+ * that named service, continue to dates after cancel, and the first «Головне меню»
+ * tap must show the full default keyboard (not only Головне меню).
+ */
+export const replaceNamedProcedureScenario: SmokeScenario = {
+  name: "replace-named-procedure",
+  tier: "write",
+  run: async (ctx) => {
+    const telegramId = writeTelegramId("g");
+    const { contactId, phone } = await prepareFreshContact(ctx, telegramId);
+    const catalog = await loadCatalogServiceRows(ctx.callTool, "replace-named-procedure");
+    const procedure = pickUniqueNamedProcedure(catalog, "replace-named-procedure");
+    const bundle = openBookingSession(ctx, "replace-named-procedure", telegramId);
+    try {
+      const first = await runBookFlow(bundle, {
+        phone,
+        decision: "confirm",
+        ...SMOKE_CONTACT_NAME,
+      });
+      const oldId = await resolveCreatedMeetingId(ctx, contactId, first.allCalls);
+
+      // Warm servicesContext so booking prepare can match the free-text name.
+      await bundle.session.say("Послуги");
+      await bundle.session.say(MAIN_MENU_LABEL);
+
+      const replaceTurn = await bundle.session.say(`запиши на ${procedure.token}`);
+      if (
+        replaceTurn.state.pendingInteraction?.kind !== "visit_select"
+        || replaceTurn.state.pendingInteraction.stage !== "replacement"
+      ) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: expected visit_select/replacement after «запиши на ${procedure.token}», got ${replaceTurn.state.pendingInteraction?.kind ?? "null"}/${replaceTurn.state.pendingInteraction?.kind === "visit_select" ? replaceTurn.state.pendingInteraction.stage : "n/a"}`,
+        );
+      }
+      expectButtons("replace-named-procedure REPLACE", replaceTurn.buttons, [
+        ...BOOKING_REPLACE_MENU,
+      ]);
+      expectNoButtons("replace-named-procedure REPLACE", replaceTurn.buttons, [
+        BOOKING_OFFER_MENU[0],
+        BOOKING_OFFER_MENU[1],
+      ]);
+      assertNoCreateMeeting("replace-named-procedure REPLACE turn", replaceTurn.calls);
+      const acceptedBefore = replaceTurn.state.bookingDraft?.serviceAcceptance;
+      if (
+        acceptedBefore?.status !== "accepted"
+        || acceptedBefore.service.id !== procedure.id
+      ) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: expected accepted service ${procedure.id} (${procedure.name}) before cancel, got ${acceptedBefore?.status ?? "null"}/${acceptedBefore?.service.id ?? "null"}`,
+        );
+      }
+
+      const cancelTap = await bundle.session.tap("Скасувати");
+      if (!cancelTap.pendingConfirm) {
+        await driveUntilMutationConfirm(bundle, {
+          phone,
+          ...SMOKE_CONTACT_NAME,
+          expectAction: "cancel",
+          maxTurns: 6,
+        });
+      }
+      const atCancel = await bundle.session.snapshot();
+      if (
+        atCancel.state.pendingInteraction?.kind !== "mutation_confirm"
+        || atCancel.state.pendingInteraction.action !== "cancel"
+      ) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: expected cancel HITL for ${oldId}, got ${atCancel.state.pendingInteraction?.kind ?? "null"}`,
+        );
+      }
+
+      const cancelConfirmed = await confirmOpenHitl(bundle);
+      const oldAfterCancel = await getMeeting(ctx.callTool, oldId);
+      if (oldAfterCancel.status !== "Not Held") {
+        throw new SmokeAssertError(
+          `replace-named-procedure: expected old meeting Not Held, got ${String(oldAfterCancel.status)}`,
+        );
+      }
+      if (cancelConfirmed.reply.trim() === "Запис скасовано.") {
+        throw new SmokeAssertError(
+          "replace-named-procedure: cancel closed the booking with terminal «Запис скасовано.»",
+        );
+      }
+      const idleDefault =
+        cancelConfirmed.buttons.includes(DEFAULT_MENU_NO_VISITS[0])
+        && cancelConfirmed.buttons.includes(DEFAULT_MENU_NO_VISITS[1])
+        && cancelConfirmed.buttons.includes(DEFAULT_MENU_NO_VISITS[2]);
+      const idleHasVisit =
+        cancelConfirmed.buttons.includes(DEFAULT_MENU_HAS_VISITS[0])
+        && cancelConfirmed.buttons.includes(DEFAULT_MENU_HAS_VISITS[1]);
+      if (idleDefault || idleHasVisit) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: cancel showed idle default menu [${cancelConfirmed.buttons.join(" | ")}]`,
+        );
+      }
+      const pendingKind = cancelConfirmed.state.pendingInteraction?.kind;
+      if (pendingKind !== "date_select" && pendingKind !== "time_select") {
+        throw new SmokeAssertError(
+          `replace-named-procedure: expected date_select/time_select after cancel, got ${pendingKind ?? "null"} (service=${cancelConfirmed.state.bookingDraft?.serviceAcceptance?.service.id ?? "null"})`,
+        );
+      }
+      const acceptedId = cancelConfirmed.state.bookingDraft?.serviceAcceptance?.service.id;
+      if (acceptedId !== procedure.id) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: expected accepted service ${procedure.id} after cancel, got ${acceptedId ?? "null"}`,
+        );
+      }
+      if (cancelConfirmed.state.bookingDraft?.replacement != null) {
+        throw new SmokeAssertError(
+          "replace-named-procedure: bookingDraft.replacement still set after cancel confirm",
+        );
+      }
+
+      const mainMenu = await bundle.session.say(MAIN_MENU_LABEL);
+      expectButtons("replace-named-procedure first Головне меню", mainMenu.buttons, [
+        ...DEFAULT_MENU_NO_VISITS,
+        MAIN_MENU_LABEL,
+      ]);
+      if (mainMenu.buttons.length === 1 && mainMenu.buttons[0] === MAIN_MENU_LABEL) {
+        throw new SmokeAssertError(
+          "replace-named-procedure: first Головне меню only showed Головне меню",
+        );
+      }
+      console.log(
+        "✓ replace-named-procedure: cancelled",
+        oldId,
+        "service",
+        procedure.id,
+        "token",
+        procedure.token,
+        "then default menu",
       );
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
