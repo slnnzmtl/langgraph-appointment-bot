@@ -1,6 +1,9 @@
 import { contactMissingFields } from "../tools/contact-tools.js";
 import type { AvailabilityContext } from "../tools/availability-tools.js";
-import type { BookingDraft } from "./booking-draft.js";
+import {
+  bookingDraftCanPresentAvailability,
+  type BookingDraft,
+} from "./booking-draft.js";
 import {
   buildDateSelectInteraction,
   buildEmptyAvailabilityInteraction,
@@ -67,6 +70,7 @@ export const restorePendingInteraction = (
   if (
     (draft.phase === "date" || draft.phase === "time")
     && input.availabilityContext != null
+    && bookingDraftCanPresentAvailability(draft)
   ) {
     const availability = input.availabilityContext;
     const open = availability.days.filter((day) => day.slots.length > 0);

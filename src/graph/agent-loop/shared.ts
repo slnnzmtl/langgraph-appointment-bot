@@ -56,12 +56,15 @@ import {
   type ReplacementMeeting,
 } from "../booking-draft.js";
 import {
+  consultationService,
   interpretInteractionReply,
   reduceBookingSession,
   type DateSelectInteraction,
   type InteractionChoice,
   type TimeSelectInteraction,
 } from "../booking-session.js";
+
+export { consultationService };
 import {
   availabilityDateHeading,
   buildDateSelectInteraction,
@@ -584,16 +587,6 @@ export const authoritativeSelectedSlot = (state: ClinicState): SelectedBookingSl
 export const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =>
   state.bookingDraft?.note.status ?? "unasked";
 
-export const consultationService = (source: "catalog" | "direct"): {
-  id: string;
-  name: string;
-  source: "catalog" | "direct";
-} => ({
-  id: CONSULTATION_SERVICE_ID,
-  name: "Консультація",
-  source,
-});
-
 /** Min length so tiny taps like «1» do not steal an offer keyboard or resume. */
 const FAQ_CATALOG_NAME_MIN_LEN = 3;
 
@@ -1012,6 +1005,9 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return {
       bookingDraft: session.bookingDraft,
       pendingInteraction: session.pendingInteraction,
+      ...(session.clearAvailability
+        ? { availabilityContext: null, availabilityCursor: null }
+        : {}),
     };
   }
 
@@ -1030,6 +1026,9 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return {
       bookingDraft: session.bookingDraft,
       pendingInteraction: session.pendingInteraction,
+      ...(session.clearAvailability
+        ? { availabilityContext: null, availabilityCursor: null }
+        : {}),
     };
   }
 
@@ -1054,10 +1053,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     && authoritativeSelectedSlot(state) != null
     && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
 
-  const reduceSlotSelection = (slot: SelectedBookingSlot): {
-    bookingDraft: BookingDraft | null;
-    pendingInteraction: ReturnType<typeof reduceBookingSession>["pendingInteraction"];
-  } | null => {
+  const reduceSlotSelection = (slot: SelectedBookingSlot): ClinicStateUpdate | null => {
     let draft = state.bookingDraft;
     if (draft == null) {
       return null;
@@ -1081,6 +1077,9 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return {
       bookingDraft: session.bookingDraft,
       pendingInteraction: session.pendingInteraction,
+      ...(session.clearAvailability
+        ? { availabilityContext: null, availabilityCursor: null }
+        : {}),
     };
   };
 
@@ -1089,11 +1088,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
   if (state.bookingDraft?.mode === "reschedule") {
     if (matchedSlot && !sameSlot) {
       trackEvent("booking_note_step", { phase: "reschedule_slot" });
-      const selected = reduceSlotSelection(matchedSlot);
-      return selected == null ? {} : {
-        bookingDraft: selected.bookingDraft,
-        pendingInteraction: selected.pendingInteraction,
-      };
+      return reduceSlotSelection(matchedSlot) ?? {};
     }
     return {};
   }
@@ -1120,21 +1115,13 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     }
     if (status === "awaiting" && matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });
-      const selected = reduceSlotSelection(matchedSlot);
-      return selected == null ? {} : {
-        bookingDraft: selected.bookingDraft,
-        pendingInteraction: selected.pendingInteraction,
-      };
+      return reduceSlotSelection(matchedSlot) ?? {};
     }
   }
 
   if (matchedSlot && (status === "unasked" || !sameSlot)) {
     trackEvent("booking_note_step", { phase: "awaiting" });
-    const selected = reduceSlotSelection(matchedSlot);
-    return selected == null ? {} : {
-      bookingDraft: selected.bookingDraft,
-      pendingInteraction: selected.pendingInteraction,
-    };
+    return reduceSlotSelection(matchedSlot) ?? {};
   }
 
   return {};

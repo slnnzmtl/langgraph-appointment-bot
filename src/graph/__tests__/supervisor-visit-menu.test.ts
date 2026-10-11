@@ -14,7 +14,7 @@ import {
   VISIT_CHANGE_MENU,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
-import { createEmptyBookingDraft } from "../booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
 import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
@@ -751,6 +751,94 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
     expect(update.next).toBe("booking");
     expect(update.bookingDraft?.pendingCommand ?? null).toBeNull();
+  });
+
+  it("FINISH-renders a canonical consultation offer for a fresh generic book intent", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+    const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
+      supervisorState({
+        messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
+      }),
+    );
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+    expect(update.lastHandoff?.replyButtons).toEqual(
+      expect.arrayContaining(["Так", "Обрати іншу процедуру"]),
+    );
+  });
+
+  it("does not FINISH-offer consultation when planned visits exist", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [new HumanMessage("хочу записатися")],
+      }),
+    );
+    expect(update.next).toBe("booking");
+    expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
+  });
+
+  it("does not FINISH-offer consultation when a booking draft is already active", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-botox", name: "Botox", source: "catalog" },
+      accepted: true,
+    });
+    const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
+      supervisorState({
+        bookingDraft: draft,
+        messages: [new HumanMessage("ще раз записатися")],
+      }),
+    );
+    expect(update.next).toBe("booking");
+    // Partial update must not replace the active draft with a fresh consultation offer.
+    expect(update.next).not.toBe("FINISH");
+    expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
+  });
+
+  it("routes named-procedure booking language to faq without seeding consultation", async () => {
+    invoke.mockResolvedValue({ next: "faq", intent: "faq" });
+    const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
+      supervisorState({
+        messages: [new HumanMessage("запиши на ботокс")],
+      }),
+    );
+    expect(update.next).toBe("faq");
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+  });
+
+  it("leaves an existing service_confirm for specialist handling on unmatched free text", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+    const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
+      supervisorState({
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          serviceAcceptance: {
+            status: "pending",
+            service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+          },
+        },
+        messages: [new HumanMessage("а що входить у консультацію?")],
+      }),
+    );
+    // Must route to booking specialist, not FINISH-repeat the offer card.
+    expect(update.next).toBe("booking");
+    expect(update.next).not.toBe("FINISH");
+    expect(update.lastHandoff).toBeNull();
   });
 });
 

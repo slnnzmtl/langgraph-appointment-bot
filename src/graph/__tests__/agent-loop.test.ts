@@ -6329,6 +6329,10 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 2,
         availabilityContext: moveSnapshot,
+        bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "reschedule_started",
+          meeting: { id: "6a95fe6e5b90474bc", name: "Visit" },
+        }),
         agentMessages: [
           new HumanMessage("Перенести"),
           new AIMessage({
@@ -6375,6 +6379,10 @@ describe("createAgentFinalizeNode", () => {
       clinicState({
         stepCount: 1,
         availabilityContext: moveSnapshot,
+        bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "reschedule_started",
+          meeting: { id: "6a95fe6e5b90474bc", name: "Visit" },
+        }),
         agentMessages: [
           new HumanMessage("10 вересня"),
           new AIMessage(
@@ -7115,6 +7123,27 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     startIntervalMinutes: 30,
   };
 
+  /** Availability coerce/finalize tests need an accepted create service (or reschedule target). */
+  const acceptedCreateDraft = (overrides: Partial<BookingDraft> = {}): BookingDraft =>
+    canonicalBookingDraft({
+      phase: "date",
+      selectedDate: null,
+      selectedSlot: null,
+      note: { status: "unasked" },
+      contactId: null,
+      serviceAcceptance: {
+        status: "accepted",
+        service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+      },
+      ...overrides,
+    });
+
+  const availabilityClinicState = (overrides: Partial<ClinicState> = {}): ClinicState =>
+    clinicState({
+      bookingDraft: acceptedCreateDraft(),
+      ...overrides,
+    });
+
   it("starts a direct reschedule with a fresh nearest search", async () => {
     const prepare = createAgentPrepareNode("booking");
     const rescheduleDraft = reduceBookingDraft(createEmptyBookingDraft(), {
@@ -7122,7 +7151,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       meeting: listedMeetings.meetings[0]!,
     });
     const seeded = await prepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Перенести")],
         bookingContext: listedMeetings,
         bookingDraft: rescheduleDraft,
@@ -7137,7 +7166,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Перенести")],
         bookingContext: listedMeetings,
         bookingDraft: seeded.bookingDraft,
@@ -7158,7 +7187,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("resolves date and time from one reschedule message and proceeds from the CRM slot", async () => {
     const message = new HumanMessage("Перенеси мій запис на 2026-10-16 о 14:00");
-    const base = clinicState({
+    const base = availabilityClinicState({
       messages: [message],
       bookingContext: listedMeetings,
       bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
@@ -7176,7 +7205,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       selectedSlot: null,
     });
 
-    const preparedState = clinicState({
+    const preparedState = availabilityClinicState({
       ...base,
       bookingDraft: seeded.bookingDraft,
       agentMessages: (seeded.agentMessages as Overwrite<AIMessage[]>).value,
@@ -7226,7 +7255,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       },
     );
     const toolsUpdate = await createAgentToolsNode([slotsTool], "booking")(
-      clinicState({
+      availabilityClinicState({
         ...preparedState,
         bookingDraft: seeded.bookingDraft,
         agentMessages: (lookup.agentMessages as Overwrite<AIMessage[]>).value,
@@ -7250,7 +7279,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
 
     const mutation = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         ...preparedState,
         bookingDraft: toolsUpdate.bookingDraft as BookingDraft,
         agentMessages: toolsUpdate.agentMessages as never,
@@ -7277,7 +7306,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       { type: "date_selected", date: "2026-09-10" },
     );
     const update = advanceBookingNoteStep(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("14:00")],
         bookingDraft: draft,
         availabilityContext: snapshot,
@@ -7308,7 +7337,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       startIntervalMinutes: 30,
     };
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: unavailable,
         availabilityContext: remainingAvailability,
         agentMessages: [
@@ -7344,7 +7373,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(offer.pendingInteraction?.kind).toBe("service_confirm");
     const prepare = createAgentPrepareNode("booking");
     const picked = await prepare(
-      clinicState({
+      availabilityClinicState({
         messages: [
           new HumanMessage("Записатись"),
           new AIMessage("Підібрати вільний час на консультацію?"),
@@ -7397,7 +7426,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       pendingCommand: null,
     };
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         contactContext: {
           ownership: "telegram",
           contacts: [{ id: "c-1", firstName: "Ada", lastName: "Lovelace" }],
@@ -7430,7 +7459,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("prepares a create call from a ready draft without an LLM mutation call", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         contactContext: {
           ownership: "telegram",
           contacts: [{ id: "c-1", firstName: "Ada", lastName: "Lovelace" }],
@@ -7510,7 +7539,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       description: "Видалення бородавки на ступні у сина, 11 років.",
     };
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Так, підтверджую!")],
         pendingInteraction: {
           kind: "mutation_confirm",
@@ -7555,7 +7584,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("does not replay a pending mutation for a non-affirmative chat reply", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("А можна інший час?")],
         bookingDraft: {
           ...canonicalBookingDraft(),
@@ -7580,7 +7609,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("re-arms cancel HITL after cancel chat-other once the model answered", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
-    const state = clinicState({
+    const state = availabilityClinicState({
       messages: [new HumanMessage("скільки коштує консультація")],
       bookingContext: listedMeetings,
       bookingDraft: {
@@ -7640,7 +7669,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("re-arms cancel HITL from awaitingConfirmation draft when bookingContext is empty", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
-    const state = clinicState({
+    const state = availabilityClinicState({
       messages: [new HumanMessage("Скільки коштує консультація?")],
       bookingContext: null,
       bookingDraft: {
@@ -7699,7 +7728,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("re-arms cancel HITL when pendingCommand is the CRM write payload", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
-    const state = clinicState({
+    const state = availabilityClinicState({
       messages: [new HumanMessage("Скільки коштує консультація?")],
       bookingContext: listedMeetings,
       bookingDraft: {
@@ -7760,7 +7789,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("re-arms cancel HITL when visit_select is still open after cancel chat-other", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
-    const state = clinicState({
+    const state = availabilityClinicState({
       messages: [new HumanMessage("Скільки коштує консультація?")],
       bookingContext: null,
       bookingDraft: {
@@ -7830,7 +7859,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("does not re-arm create chat-other as a mutation", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("скільки коштує консультація")],
         bookingContext: listedMeetings,
         bookingDraft: {
@@ -7866,7 +7895,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it.each([undefined, true])(
     "rejects a mutation call after a non-affirmative chat reply (confirmationGiven=%s)",
     (confirmationGiven) => {
-      const state = clinicState({
+      const state = availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft(),
           phase: "confirming",
@@ -7907,7 +7936,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("invalidates a create slot when chat confirmation remains unresolved", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft(),
           phase: "confirming",
@@ -7935,7 +7964,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("does not drop the slot when keep/switch already cleared the confirm command", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           note: { status: "skipped" },
@@ -7974,7 +8003,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("finalize keeps keep/switch labels in text and on the keyboard", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft({
           phase: "confirming",
@@ -8089,7 +8118,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("does not rewrite HITL other-reply prose with leftover pre-confirm TIME", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("запиши на 22 жовтня")],
         contactContext: ownedContactContext(),
         bookingDraft: {
@@ -8156,7 +8185,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       formatSystemMetadata: () => "DYN",
     });
     const update = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("запиши на 22 жовтня")],
         contactContext: ownedContactContext(),
         bookingDraft: {
@@ -8204,7 +8233,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     // Adapter maps NL decline to { confirmed: false } → cancelled tool result.
     const finalize = createAgentMutationFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft(),
           phase: "confirming",
@@ -8227,7 +8256,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("invalidates a reschedule slot when chat confirmation remains unresolved", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft({
             mode: "reschedule",
@@ -8264,7 +8293,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("clears direct cancellation confirmation state when chat confirmation remains unresolved", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         pendingCancellationPurpose: "direct",
         bookingDraft: {
           ...canonicalBookingDraft({
@@ -8300,7 +8329,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("terminates replacement cancellation when chat confirmation remains unresolved", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         pendingCancellationPurpose: "replacement",
         bookingDraft: {
           ...canonicalBookingDraft({
@@ -8337,7 +8366,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     async (consent) => {
       const commandPrepare = createAgentCommandPrepareNode("booking");
       const update = await commandPrepare(
-        clinicState({
+        availabilityClinicState({
           messages: [new HumanMessage(consent)],
           bookingDraft: {
             version: 7,
@@ -8386,7 +8415,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("dispatches direct cancellation from the authoritative single-visit list", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Скасувати")],
         bookingContext: listedMeetings,
         bookingDraft: {
@@ -8417,7 +8446,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     "як скасувати пізніше?",
     "я не хочу скасовувати",
   ])("does not synthesize cancel_meeting for non-imperative cancel phrasing (%s)", async (utterance) => {
-    const state = clinicState({
+    const state = availabilityClinicState({
       messages: [new HumanMessage(utterance)],
       bookingContext: listedMeetings,
       agentMessages: [new HumanMessage(utterance), new AIMessage("Добре")],
@@ -8441,7 +8470,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("reuses the cancellation command for explicit chat confirmation", async () => {
     const commandPrepare = createAgentCommandPrepareNode("booking");
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Скасувати")],
         bookingDraft: {
           version: 8,
@@ -8487,7 +8516,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       expiresAt: Date.now() + 60_000,
     };
     const update = await commandPrepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Скасувати")],
         bookingContext: listedMeetings,
         bookingDraft: {
@@ -8634,7 +8663,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       stepMinutes: 30,
       serviceId: "svc-1",
     };
-    const update = advanceBookingNoteStep(clinicState({
+    const update = advanceBookingNoteStep(availabilityClinicState({
       messages: [new HumanMessage("11")],
       availabilityContext: availability,
       bookingDraft: canonicalBookingDraft({
@@ -8677,7 +8706,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       ],
       stepMinutes: 30,
     };
-    const dateUpdate = advanceBookingNoteStep(clinicState({
+    const dateUpdate = advanceBookingNoteStep(availabilityClinicState({
       messages: [new HumanMessage("9 жовтня (пʼятниця)")],
       availabilityContext: multiDaySnapshot,
       bookingDraft: canonicalBookingDraft({
@@ -8690,7 +8719,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(dateUpdate.bookingDraft?.selectedDate).toBe("2026-10-09");
     expect(dateUpdate.bookingDraft?.selectedSlot).toBeNull();
 
-    const timeUpdate = advanceBookingNoteStep(clinicState({
+    const timeUpdate = advanceBookingNoteStep(availabilityClinicState({
       messages: [
         new HumanMessage("9 жовтня (пʼятниця)"),
         new HumanMessage("13:30"),
@@ -8720,7 +8749,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "date",
           selectedDate: null,
@@ -8773,7 +8802,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", () => {
     const update = advanceBookingNoteStep(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("губи"), new HumanMessage("14:00")],
         availabilityContext: snapshot,
         bookingDraft: canonicalBookingDraft({
@@ -8821,14 +8850,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       selectedSlot: null,
       note: { status: "unasked" },
     });
-    const dated = advanceBookingNoteStep(clinicState({
+    const dated = advanceBookingNoteStep(availabilityClinicState({
       messages: [new HumanMessage("27")],
       availabilityContext: availability,
       bookingDraft: initial,
     })).bookingDraft!;
     expect(dated.selectedDate).toBe("2026-10-27");
 
-    const timed = advanceBookingNoteStep(clinicState({
+    const timed = advanceBookingNoteStep(availabilityClinicState({
       messages: [new HumanMessage("11")],
       availabilityContext: availability,
       bookingDraft: dated,
@@ -8836,7 +8865,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(timed.selectedSlot?.dateStart).toBe("2026-10-27T11:00:00");
     expect(timed.note.status).toBe("awaiting");
 
-    const skipped = advanceBookingNoteStep(clinicState({
+    const skipped = advanceBookingNoteStep(availabilityClinicState({
       messages: [new HumanMessage(INTENT_SKIP_LABEL)],
       availabilityContext: availability,
       bookingDraft: timed,
@@ -8851,7 +8880,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("advanceBookingNoteStep skips on INTENT shortcut; free text stays for the note orch", () => {
     expect(
       advanceBookingNoteStep(
-        clinicState({
+        availabilityClinicState({
           messages: [new HumanMessage(INTENT_SKIP_LABEL)],
           bookingDraft: canonicalBookingDraft({
             phase: "note",
@@ -8862,7 +8891,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       ).bookingDraft?.note.status,
     ).toBe("skipped");
     const freeText = advanceBookingNoteStep(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("хочу ботокс губ")],
         bookingDraft: canonicalBookingDraft({
           phase: "note",
@@ -8896,7 +8925,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       pendingCommand: null,
     };
     const update = advanceBookingNoteStep(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("на 21.11")],
         bookingDraft: draft,
         availabilityContext: snapshot,
@@ -8910,7 +8939,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("selects the trusted interval without treating legacy step metadata as duration truth", () => {
     const update = advanceBookingNoteStep(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("12:30")],
         availabilityContext: {
           days: [{
@@ -8954,7 +8983,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         stepCount: 1,
         bookingDraft: canonicalBookingDraft({
           phase: "note",
@@ -8981,7 +9010,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     const toolsUpdate = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "note",
           note: { status: "awaiting" },
@@ -9001,7 +9030,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
     const finalize = createAgentFinalizeNode(agent);
     const update = finalize(
-      clinicState({
+      availabilityClinicState({
         stepCount: 2,
         bookingDraft: canonicalBookingDraft({
           phase: "note",
@@ -9057,7 +9086,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       ],
       stepMinutes: 30,
     };
-    const state = clinicState({
+    const state = availabilityClinicState({
       stepCount: 1,
       bookingDraft: canonicalBookingDraft({
         phase: "date",
@@ -9077,7 +9106,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const llmUpdate = await llm(state);
     expect(invoke).not.toHaveBeenCalled();
 
-    const update = createAgentFinalizeNode(agent)(clinicState({
+    const update = createAgentFinalizeNode(agent)(availabilityClinicState({
       ...state,
       agentMessages: [
         ...state.agentMessages,
@@ -9142,7 +9171,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     const toolsUpdate = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         bookingNoteStatus: "skipped",
         contactContext: ownedContactContext(),
         bookingDraft: {
@@ -9211,7 +9240,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       },
     );
     const update = await createAgentToolsNode([createTool], "booking")(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext("c-1"),
         availabilityContext: snapshot,
         bookingDraft: {
@@ -9270,7 +9299,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("records catalog consultation selection before accepting a generic procedure offer", async () => {
     const prepare = createAgentPrepareNode("booking");
-    const prepared = await prepare(clinicState({
+    const prepared = await prepare(availabilityClinicState({
       messages: [
         new HumanMessage("Консультація первинна"),
         new AIMessage("Бажаєте записатися на цю процедуру?"),
@@ -9309,7 +9338,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       },
     );
     const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
-      clinicState({
+      availabilityClinicState({
         ...prepared,
         contactContext: ownedContactContext(),
         bookingDraft: {
@@ -9396,7 +9425,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     const toolsUpdate = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft(),
         agentMessages: [
@@ -9450,7 +9479,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       description: "Короткий коментар.",
     };
     const update = await createAgentToolsNode([createTool], "booking")(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext("c-1"),
         availabilityContext: snapshot,
         bookingDraft: canonicalBookingDraft({
@@ -9492,7 +9521,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       schema: z.object({}),
     });
     const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft({
           phase: "confirming",
@@ -9529,7 +9558,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       },
     );
     const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: {
           version: 2,
@@ -9600,7 +9629,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     const declineUpdate = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft(),
         availabilityContext: snapshot,
@@ -9681,7 +9710,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       replacement: null,
     };
     const declineUpdate = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: draft,
         availabilityContext: {
@@ -9710,7 +9739,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(declineUpdate.bookingDraft?.note.status).toBe("skipped");
 
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage(OTHER_DATE_LABEL)],
         bookingDraft: declineUpdate.bookingDraft,
         availabilityContext: null,
@@ -9748,7 +9777,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([cancelTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         bookingNoteStatus: "skipped",
         availabilityContext: snapshot,
         selectedSlot: {
@@ -9788,7 +9817,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft({
           selectedDate: "2026-09-10",
@@ -9831,7 +9860,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         availabilityContext: snapshot,
         agentMessages: [
           new AIMessage({
@@ -9919,7 +9948,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       );
       const toolsNode = createAgentToolsNode([slotsTool], "booking");
       const update = await toolsNode(
-        clinicState({
+        availabilityClinicState({
           messages: [new HumanMessage(label)],
           availabilityContext: multiDay,
           agentMessages: [
@@ -9967,7 +9996,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([createTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft({
           selectedDate: "2026-10-13",
@@ -10038,7 +10067,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("13 жовтня")],
         availabilityContext: oct13,
         agentMessages: [
@@ -10084,7 +10113,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         agentMessages: [
           new AIMessage({
             content: "",
@@ -10123,7 +10152,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([rescheduleTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         bookingNoteStatus: "skipped",
         availabilityContext: snapshot,
         agentMessages: [
@@ -10217,7 +10246,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       stepMinutes: 30,
     };
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage(OTHER_DATE_LABEL)],
         agentMessages: [new HumanMessage(OTHER_DATE_LABEL)],
         availabilityContext: timeViewSnapshot,
@@ -10250,7 +10279,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([runSlotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage(OTHER_DATE_LABEL)],
         availabilityContext: timeViewSnapshot,
         agentMessages: llmUpdate.agentMessages as never,
@@ -10280,7 +10309,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       formatSystemMetadata: () => "DYN",
     });
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("ok")],
         agentMessages: [new HumanMessage("ok")],
         next: "booking",
@@ -10325,7 +10354,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       formatSystemMetadata: () => "DYN",
     });
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Послуги")],
         agentMessages: [new HumanMessage("Послуги")],
         next: "faq",
@@ -10339,7 +10368,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("injects present_availability_slots when DATE copy has no tool_calls", async () => {
     const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Так")],
         agentMessages: [new HumanMessage("Так")],
         availabilityContext: null,
@@ -10358,7 +10387,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("forces availability lookup for direct reschedule instead of accepting a day prompt", async () => {
     const llm = bookingLlmReturning("Оберіть новий день для перенесення візиту:");
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Перенести")],
         agentMessages: [new HumanMessage("Перенести")],
         bookingContext: listedMeetings,
@@ -10384,7 +10413,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("starts a fresh nearest search after accepting a consultation offer", async () => {
     const llm = bookingLlmReturning("Добре");
-    const state = clinicState({
+    const state = availabilityClinicState({
       messages: [new HumanMessage("Так")],
       agentMessages: [new HumanMessage("Так")],
       availabilityContext: {
@@ -10439,7 +10468,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Так")],
         availabilityContext: {
           ...snapshot,
@@ -10477,7 +10506,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     async (otherDateReply) => {
     const llm = bookingLlmReturning("Добре");
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage(otherDateReply)],
         agentMessages: [new HumanMessage(otherDateReply)],
         availabilityContext: snapshot,
@@ -10500,7 +10529,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       vi.setSystemTime(new Date("2026-09-24T09:00:00Z"));
       const llm = bookingLlmReturning("На 20 жовтня вільного часу немає.");
       const llmUpdate = await llm(
-        clinicState({
+        availabilityClinicState({
           messages: [new HumanMessage("20 жовтня")],
           agentMessages: [new HumanMessage("20 жовтня")],
           availabilityContext: snapshot,
@@ -10525,7 +10554,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       vi.setSystemTime(new Date("2026-09-28T09:00:00Z"));
       const llm = bookingLlmReturning("На 26 жовтня вільного часу немає.");
       const llmUpdate = await llm(
-        clinicState({
+        availabilityClinicState({
           messages: [new HumanMessage("26")],
           agentMessages: [new HumanMessage("26")],
           availabilityContext: {
@@ -10582,7 +10611,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       );
       const toolsNode = createAgentToolsNode([slotsTool], "booking");
       await toolsNode(
-        clinicState({
+        availabilityClinicState({
           messages: [new HumanMessage("20 жовтня")],
           availabilityContext: snapshot,
           agentMessages: [
@@ -10628,7 +10657,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("найближча дата")],
         agentMessages: [
           new AIMessage({
@@ -10650,7 +10679,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("does not re-inject slots after «Інша дата» already paged this turn", async () => {
     const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
     const llmUpdate = await llm(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage(OTHER_DATE_LABEL)],
         agentMessages: [
           new HumanMessage(OTHER_DATE_LABEL),
@@ -10701,7 +10730,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage(OTHER_DATE_LABEL)],
         availabilityContext: snapshot,
         agentMessages: [
@@ -10765,7 +10794,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     const update = await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("Інша процедура")],
         availabilityContext: snapshot,
         agentMessages: [
@@ -10809,7 +10838,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("другая")],
         availabilityContext: {
           days: [
@@ -10866,7 +10895,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("20 жовтня")],
         availabilityContext: null,
         agentMessages: [
@@ -10915,7 +10944,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     await toolsNode(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("другая")],
         availabilityContext: null,
         availabilityCursor: {
@@ -10946,7 +10975,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", () => {
     const finalize = createAgentFinalizeNode(agent);
     const withTool = finalize(
-      clinicState({
+      availabilityClinicState({
         stepCount: 2,
         availabilityContext: {
           days: [
@@ -11077,7 +11106,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       formatSystemMetadata: () => "DYN",
     });
     await llm(
-      clinicState({
+      availabilityClinicState({
         agentMessages: [new HumanMessage("14:00")],
         availabilityContext: snapshot,
         bookingDraft: {
@@ -11109,7 +11138,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(
-      clinicState({
+      availabilityClinicState({
         messages: [new HumanMessage("14:00")],
         availabilityContext: snapshot,
         bookingDraft: draft,
@@ -11119,7 +11148,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.note.status).toBe("unasked");
     expect(update.bookingDraft?.selectedSlot).toBeNull();
 
-    const advanced = advanceBookingNoteStep(clinicState({
+    const advanced = advanceBookingNoteStep(availabilityClinicState({
       messages: [new HumanMessage("14:00")],
       availabilityContext: snapshot,
       bookingDraft: draft,
@@ -11559,5 +11588,95 @@ describe("DDD-59: name must appear in patient messages", () => {
         },
       },
     ]);
+  });
+});
+
+describe("availability draft invariant", () => {
+  it("does not coerce present_availability_slots without an accepted service", async () => {
+    const { coerceAvailabilityToolCalls } = await import("../agent-loop/tool-call-coercion.js");
+    const response = new AIMessage("Підберу найближчі дати.");
+    const coerced = coerceAvailabilityToolCalls(
+      response,
+      clinicState({
+        messages: [new HumanMessage("Так")],
+        bookingDraft: null,
+      }),
+      "booking",
+      new Set(["present_availability_slots"]),
+    );
+    expect(coerced.tool_calls ?? []).toEqual([]);
+  });
+
+  it("rejects a native present_availability_slots call without an accepted service", async () => {
+    const slots = tool(async () => JSON.stringify({ days: [] }), {
+      name: "present_availability_slots",
+      description: "availability",
+      schema: z.object({
+        direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+      }),
+    });
+    const update = await createAgentToolsNode([slots], "booking")(
+      clinicState({
+        bookingDraft: null,
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "slots-1",
+            name: "present_availability_slots",
+            args: { direction: "nearest" },
+            type: "tool_call",
+          }],
+        })],
+      }),
+      { configurable: {} },
+    );
+    const toolMsg = (update.agentMessages as ToolMessage[])[0];
+    expect(toolMsg?.name).toBe("present_availability_slots");
+    expect(String(toolMsg?.content)).toContain("Availability requires accepted service");
+  });
+
+  it("finalize cannot build DATE/TIME UI from a null create draft", () => {
+    const finalize = createAgentFinalizeNode({
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "booking",
+      maxSteps: 10,
+    });
+    const update = finalize(
+      clinicState({
+        bookingDraft: null,
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "slots-1",
+              name: "present_availability_slots",
+              args: { direction: "nearest" },
+              type: "tool_call",
+            }],
+          }),
+          new ToolMessage({
+            content: JSON.stringify({
+              days: [{
+                date: "2026-10-13",
+                dayLabel: "13 жовтня",
+                slots: [{
+                  id: "slot-13-11",
+                  label: "11:00",
+                  dateStart: "2026-10-13T11:00:00",
+                  dateEnd: "2026-10-13T11:30:00",
+                }],
+              }],
+              stepMinutes: 30,
+            }),
+            tool_call_id: "slots-1",
+            name: "present_availability_slots",
+          }),
+        ],
+      }),
+    );
+    expect(update.pendingInteraction?.kind === "date_select"
+      || update.pendingInteraction?.kind === "time_select").toBeFalsy();
   });
 });

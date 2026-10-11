@@ -3,6 +3,7 @@ import { AIMessage } from "@langchain/core/messages";
 import { BOOKING_AGENT_ID } from "../types.js";
 import { kyivToday } from "../../tools/availability-slots.js";
 import { resolveBookingScheduleRequest } from "../booking-schedule.js";
+import { bookingDraftCanPresentAvailability } from "../booking-draft.js";
 import { trackToolError } from "../../analytics/track.js";
 import {
   extractRawMessageText,
@@ -52,6 +53,7 @@ export const coerceAvailabilityToolCalls = (
   }
   if (
     agentId === BOOKING_AGENT_ID
+    && bookingDraftCanPresentAvailability(state.bookingDraft)
     && !toolCalls.some((call) => call.name === "present_availability_slots")
   ) {
     const human = lastPatientText(state);
@@ -94,6 +96,7 @@ export const coerceAvailabilityToolCalls = (
   // and bind it to that visit. Multiple visits remain model/selection-driven.
   if (
     agentId === BOOKING_AGENT_ID
+    && bookingDraftCanPresentAvailability(state.bookingDraft)
     && !toolCalls.some((call) => call.name === "present_availability_slots")
   ) {
     const args = rescheduleAvailabilityArgsFromBookingContext(state);

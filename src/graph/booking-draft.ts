@@ -128,6 +128,26 @@ const draftHasValidServiceAcceptance = (draft: BookingDraft): boolean => {
     && (draft.serviceAcceptance?.status === "accepted" || draft.serviceAcceptance?.status === "pending");
 };
 
+/**
+ * True when present_availability_slots / DATE/TIME UI are legal for this draft.
+ * Create needs an accepted service with a nonblank id; reschedule needs a target id.
+ */
+export const bookingDraftCanPresentAvailability = (
+  draft: BookingDraft | null | undefined,
+): boolean => {
+  if (draft == null) {
+    return false;
+  }
+  if (draft.mode === "reschedule") {
+    const id = draft.rescheduleTarget?.id;
+    return typeof id === "string" && id.trim().length > 0;
+  }
+  const id = draft.serviceAcceptance?.service?.id;
+  return draft.serviceAcceptance?.status === "accepted"
+    && typeof id === "string"
+    && id.trim().length > 0;
+};
+
 const trimmedNonblank = (value: unknown): string | null => {
   if (typeof value !== "string") {
     return null;
