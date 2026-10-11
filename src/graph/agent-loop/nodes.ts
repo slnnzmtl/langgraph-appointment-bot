@@ -88,7 +88,7 @@ import {
   normalizeMeetingMutationArgs,
   shouldRearmCancelAfterChatOther,
 } from "./command-prepare.js";
-import { existingVisitBlocksNewBooking } from "./replacement-flow.js";
+import { bookingEntryTransitionForTurn } from "./replacement-flow.js";
 
 import {
   BOOKING_SLOT_REQUIRED_UK,
@@ -582,39 +582,22 @@ export const createAgentPrepareNode = (
         bookingDraft: bookingDraft ?? null,
         pendingInteraction,
       };
-      if (existingVisitBlocksNewBooking(blockingState)) {
-        const meeting = state.bookingContext?.meetings[0];
-        if (meeting != null) {
-          bookingDraft = reduceBookingDraft(
-            bookingDraft ?? createEmptyBookingDraft(),
-            {
-              type: "existing_booking_detected",
-              meeting: {
-                id: meeting.id,
-                name: meeting.name,
-                dateStart: meeting.dateStart,
-                dateEnd: meeting.dateEnd,
-              },
+      const bookingEntry = bookingEntryTransitionForTurn(blockingState);
+      if (bookingEntry?.kind === "offer_replacement") {
+        const meeting = bookingEntry.meeting;
+        bookingDraft = reduceBookingDraft(
+          bookingDraft ?? createEmptyBookingDraft(),
+          {
+            type: "existing_booking_detected",
+            meeting: {
+              id: meeting.id,
+              name: meeting.name,
+              dateStart: meeting.dateStart,
+              dateEnd: meeting.dateEnd,
             },
-          );
-        }
-      } else if (
-        labelIdFor(lastPatientText(state)) === "mainBook"
-        && (
-          bookingDraft == null
-          || (
-            bookingDraft.mode === "create"
-            && bookingDraft.replacement == null
-            && bookingDraft.pendingCommand == null
-            && bookingDraft.serviceAcceptance == null
-            && bookingDraft.selectedSlot == null
-            && bookingDraft.selectedDate == null
-          )
-        )
-        && pendingInteraction?.kind !== "service_confirm"
-        && pendingInteraction?.kind !== "visit_select"
-        && pendingInteraction?.kind !== "mutation_confirm"
-      ) {
+          },
+        );
+      } else if (bookingEntry?.kind === "offer_consultation") {
         // Fresh «Записатись»: open consultation offer without the LLM, so a
         // prior declined create in history cannot replay create_meeting.
         const session = reduceBookingSession(

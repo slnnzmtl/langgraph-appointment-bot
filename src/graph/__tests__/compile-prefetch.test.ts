@@ -18,6 +18,7 @@ import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_PHONE_QUESTION_UK,
+  BOOKING_REPLACE_MENU,
   BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
@@ -315,6 +316,70 @@ describe("compileClinicGraph prefetch once", () => {
 });
 
 describe("compileClinicGraph runtime-owned booking transition", () => {
+  it("replaces the visit-action menu when Записатись starts a new booking", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("LLM must not run."));
+    const supervisorInvoke = vi.fn(async () => ({
+      next: "booking",
+      intent: "book",
+    }));
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: [] },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({ invoke: supervisorInvoke }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+    const meeting = {
+      id: "m-1",
+      name: "Консультація - Ada",
+      dateStart: "2026-10-20 11:00:00",
+      dateEnd: "2026-10-20 11:30:00",
+    };
+
+    const result = await graph.invoke(
+      {
+        messages: [new HumanMessage("Записатись")],
+        bookingContext: {
+          meetings: [meeting],
+          dateFrom: "2026-10-11",
+        },
+        prefetchDirty: false,
+        prefetchFetchedAt: Date.now(),
+        pendingInteraction: {
+          kind: "visit_select",
+          stage: "action",
+          meetingId: meeting.id,
+          meetings: [meeting],
+          choices: [
+            { id: "reschedule", label: "Перенести" },
+            { id: "cancel", label: "Скасувати" },
+            { id: "decline", label: "Ні, дякую" },
+          ],
+        },
+      } as never,
+      { configurable: { thread_id: "action-menu-new-book" } },
+    );
+
+    expect(supervisorInvoke).toHaveBeenCalledOnce();
+    expect(modelInvoke).not.toHaveBeenCalled();
+    expect(result.bookingDraft?.replacement).toMatchObject({
+      status: "offered",
+      meeting: { id: "m-1" },
+    });
+    expect(result.pendingInteraction).toMatchObject({
+      kind: "visit_select",
+      stage: "replacement",
+      meetingId: "m-1",
+    });
+    expect(result.lastHandoff?.replyButtons).toEqual([...BOOKING_REPLACE_MENU]);
+  });
+
   it("opens service_candidate replyButtons for explicit service change from note free-text", async () => {
     const modelInvoke = vi.fn(async () => new AIMessage("LLM must not author catalog chips."));
     const supervisorInvoke = vi.fn(async () => ({ next: "faq" }));
