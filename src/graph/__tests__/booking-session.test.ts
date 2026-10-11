@@ -810,6 +810,16 @@ describe("bookingDraftCanPresentAvailability", () => {
     };
     expect(bookingDraftCanPresentAvailability(bareReschedule)).toBe(false);
   });
+
+  it("rejects replace mode even with an accepted service", () => {
+    const replace = reduceBookingDraft(acceptedWithDate(), {
+      type: "existing_booking_detected",
+      meeting: { id: "m-existing", name: "Existing visit" },
+    });
+    expect(replace.mode).toBe("replace");
+    expect(replace.serviceAcceptance?.status).toBe("accepted");
+    expect(bookingDraftCanPresentAvailability(replace)).toBe(false);
+  });
 });
 
 describe("availability and schedule fail-closed", () => {

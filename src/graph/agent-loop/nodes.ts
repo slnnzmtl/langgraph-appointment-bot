@@ -370,10 +370,19 @@ export const createAgentPrepareNode = (
           update.availabilityCursor = null;
         }
       }
-      const draftForRestore = (update.bookingDraft as BookingDraft | null | undefined)
-        ?? state.bookingDraft;
-      const pendingForRestore = (update.pendingInteraction as typeof state.pendingInteraction)
-        ?? state.pendingInteraction;
+      // Intentional null from scheduleRepair must not fall through ?? to the
+      // corrupt checkpoint. Undefined on update means "leave state as-is".
+      type Pending = typeof state.pendingInteraction;
+      const draftForRestore = scheduleRepair != null
+        ? scheduleRepair.bookingDraft
+        : (update.bookingDraft !== undefined
+          ? (update.bookingDraft as BookingDraft | null)
+          : state.bookingDraft);
+      const pendingForRestore: Pending = scheduleRepair != null
+        ? scheduleRepair.pendingInteraction
+        : (update.pendingInteraction !== undefined
+          ? (update.pendingInteraction as Pending)
+          : state.pendingInteraction);
       const restoredInteraction = restorePendingInteraction({
         bookingDraft: draftForRestore,
         pendingInteraction: pendingForRestore,
@@ -396,9 +405,9 @@ export const createAgentPrepareNode = (
       // Fold all events from this turn into one local aggregate. In particular,
       // service acceptance and the date/time/note ladder must never each reduce
       // from the stale checkpoint and then overwrite one another.
-      const effectivePending =
-        (update.pendingInteraction as typeof state.pendingInteraction | undefined)
-        ?? state.pendingInteraction;
+      const effectivePending: Pending = update.pendingInteraction !== undefined
+        ? (update.pendingInteraction as Pending)
+        : state.pendingInteraction;
       const repairedBase: ClinicState = {
         ...state,
         bookingDraft: draftForRestore ?? null,
@@ -430,7 +439,14 @@ export const createAgentPrepareNode = (
       // Orch ownership is inbound-only so a slot pick that opens visit_note
       // this turn still reaches the booking LLM. Skip utterance-driven draft
       // mutations when the orch already owns the turn.
-      const queueNoteOrch = bookingTurnNeedsNoteOrchestrator(rescheduleState);
+      // After clearing an illegal DATE/TIME card (+ availability), do not hand
+      // the turn to note orch solely because phase is still date/time — the
+      // booking LLM must re-offer slots.
+      const queueNoteOrch = scheduleRepair != null
+        && scheduleRepair.pendingInteraction == null
+        && scheduleRepair.clearAvailability
+        ? false
+        : bookingTurnNeedsNoteOrchestrator(rescheduleState);
       update.noteOrchQueued = queueNoteOrch;
       let bookingDraft: BookingDraft | null | undefined =
         rescheduleState.bookingDraft ?? undefined;

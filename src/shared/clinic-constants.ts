@@ -119,6 +119,17 @@ export const BOOKING_REPLACE_MENU_EN = ["Cancel", "No, thanks"] as const;
 export const BOOKING_OFFER_MENU = ["Так", "Обрати іншу процедуру"] as const;
 export const BOOKING_OFFER_MENU_EN = ["Yes", "Choose another procedure"] as const;
 
+/** Canonical service_confirm body for consultation (locale from snapped accept chip). */
+export const SERVICE_CONFIRM_CONSULTATION_UK = "Підібрати вільний час на консультацію?";
+export const SERVICE_CONFIRM_CONSULTATION_EN =
+  "Find a free time for a consultation?";
+
+/** Canonical service_confirm body for a named procedure. */
+export const SERVICE_CONFIRM_PROCEDURE_UK = (name: string): string =>
+  `Чудово, обрано: ${name}. Бажаєте записатися на цю процедуру?`;
+export const SERVICE_CONFIRM_PROCEDURE_EN = (name: string): string =>
+  `Great, selected: ${name}. Would you like to book this procedure?`;
+
 /**
  * Stable reply-label identity for chips and main-menu shortcuts.
  * Prefer {@link labelIdFor} over ad-hoc Sets of Ukrainian/English strings.

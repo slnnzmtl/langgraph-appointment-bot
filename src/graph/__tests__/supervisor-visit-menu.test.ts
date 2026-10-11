@@ -5,12 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import {
   ABANDON_BOOKING_REPLY_UK,
+  BOOKING_OFFER_MENU_EN,
   CONSULTATION_SERVICE_ID,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
   MAIN_MENU_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
+  SERVICE_CONFIRM_CONSULTATION_EN,
   VISIT_CHANGE_MENU,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
@@ -769,6 +771,23 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(
       expect.arrayContaining(["Так", "Обрати іншу процедуру"]),
     );
+  });
+
+  it("FINISH-renders an English consultation offer for English free-text book", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+    const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
+      supervisorState({
+        messages: [new HumanMessage("Can I book an appointment?")],
+      }),
+    );
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+    expect(update.lastHandoff?.replyText).toBe(SERVICE_CONFIRM_CONSULTATION_EN);
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU_EN]);
   });
 
   it("does not FINISH-offer consultation when planned visits exist", async () => {

@@ -142,6 +142,9 @@ export const bookingDraftCanPresentAvailability = (
     const id = draft.rescheduleTarget?.id;
     return typeof id === "string" && id.trim().length > 0;
   }
+  if (draft.mode !== "create") {
+    return false;
+  }
   const id = draft.serviceAcceptance?.service?.id;
   return draft.serviceAcceptance?.status === "accepted"
     && typeof id === "string"

@@ -3,9 +3,12 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 
 import {
   BOOKING_NOTE_QUESTION_UK,
+  BOOKING_OFFER_MENU_EN,
+  CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CHANGE_ACK_UK,
+  SERVICE_CONFIRM_CONSULTATION_EN,
   serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
 import {
@@ -617,6 +620,24 @@ describe("renderBookingInteractionMessage", () => {
       kind: "visit_note",
       choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
     })).toEqual([INTENT_SKIP_LABEL]);
+  });
+
+  it("renders English consultation service_confirm from the accept choice label", () => {
+    const interaction = {
+      kind: "service_confirm" as const,
+      service: {
+        id: CONSULTATION_SERVICE_ID,
+        name: "Консультація",
+        source: "catalog" as const,
+      },
+      choices: [
+        { id: "accept", label: BOOKING_OFFER_MENU_EN[0] },
+        { id: "choose_other", label: BOOKING_OFFER_MENU_EN[1] },
+      ],
+    };
+    expect(String(renderBookingInteractionMessage(interaction).content))
+      .toBe(SERVICE_CONFIRM_CONSULTATION_EN);
+    expect(replyButtonsForInteraction(interaction)).toEqual([...BOOKING_OFFER_MENU_EN]);
   });
 
   it("writes a fresh assistant message from the open interaction", () => {

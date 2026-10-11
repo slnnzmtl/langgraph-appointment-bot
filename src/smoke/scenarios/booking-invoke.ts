@@ -1,5 +1,6 @@
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import {
+  expectCalled,
   expectInteraction,
   expectNotCalled,
   SmokeAssertError,
@@ -68,6 +69,18 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
           `booking-free-text-typed-slot: expected DATE/TIME after Так, got ${afterAcceptKind ?? "null"}`,
         );
       }
+      // present_availability_slots is a graph tool; smoke records MCP only.
+      // get_working_time proves the availability CRM path ran after Так.
+      expectCalled(
+        "booking-free-text-typed-slot Так availability",
+        accepted.calls,
+        "get_working_time",
+      );
+      if (accepted.state.availabilityContext == null) {
+        throw new SmokeAssertError(
+          "booking-free-text-typed-slot: availabilityContext missing after Так (present_availability_slots)",
+        );
+      }
       assertNoWrites("booking-free-text-typed-slot Так", accepted.calls);
 
       let dated = accepted;
@@ -113,6 +126,15 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
           "booking-free-text-typed-slot: no slot choice on TIME interaction",
         );
       }
+      const snapshotDay = timeInteraction.snapshot.days.find(
+        (day) => day.date === timeInteraction.date,
+      );
+      const expectedSlot = snapshotDay?.slots.find((entry) => entry.id === slotChoice.id);
+      if (expectedSlot == null) {
+        throw new SmokeAssertError(
+          `booking-free-text-typed-slot: slotChoice.id ${slotChoice.id} missing from snapshot day ${timeInteraction.date}`,
+        );
+      }
       const priorTimePrompt = dated.reply;
       const noted = await bundle.session.say(slotChoice.label);
       if (noted.state.pendingInteraction?.kind !== "visit_note") {
@@ -126,9 +148,9 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
           "booking-free-text-typed-slot: selectedSlot missing after slot say()",
         );
       }
-      if (slot.dateStart.slice(0, 10) !== selectedDate) {
+      if (slot.dateStart !== expectedSlot.dateStart || slot.dateEnd !== expectedSlot.dateEnd) {
         throw new SmokeAssertError(
-          `booking-free-text-typed-slot: slot date ${slot.dateStart} != ${selectedDate}`,
+          `booking-free-text-typed-slot: selectedSlot ${slot.dateStart}–${slot.dateEnd} != snapshot ${expectedSlot.dateStart}–${expectedSlot.dateEnd}`,
         );
       }
       if (noted.reply === priorTimePrompt) {

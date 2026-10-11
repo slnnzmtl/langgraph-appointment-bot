@@ -1,5 +1,9 @@
 import { isSupervisorOwnedLabel, labelIdFor } from "../../shared/message-content.js";
 import {
+  bookingOfferLabels,
+  inferConversationLocaleFromText,
+} from "../../shared/conversation-locale.js";
+import {
   closedBookingSessionUpdate,
   consultationService,
   isBookingOwnedInteraction,
@@ -136,6 +140,8 @@ const freshGenericBookOffer: PostLlmRule = (ctx, decision) => {
   if (isBookingOwnedInteraction(ctx.state.pendingInteraction)) {
     return null;
   }
+  const locale = inferConversationLocaleFromText(ctx.lastHumanText);
+  const labels = bookingOfferLabels(locale);
   const session = reduceBookingSession(
     {
       bookingDraft: ctx.workingDraft ?? null,
@@ -144,6 +150,8 @@ const freshGenericBookOffer: PostLlmRule = (ctx, decision) => {
     {
       type: "service_offered",
       service: consultationService("catalog"),
+      acceptLabel: labels.acceptLabel,
+      chooseOtherLabel: labels.chooseOtherLabel,
     },
   );
   if (session.pendingInteraction?.kind !== "service_confirm") {

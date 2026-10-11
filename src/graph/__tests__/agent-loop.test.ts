@@ -468,6 +468,113 @@ describe("createAgentPrepareNode", () => {
     ).toBe("booking__finalize");
   });
 
+  it("honors null bookingDraft from invalid reschedule schedule repair", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const dateSelect = {
+      kind: "date_select" as const,
+      snapshot: {
+        snapshotId: "snap-1",
+        days: [{
+          date: "2026-10-13",
+          displayLabel: "13 жовтня",
+          slotSummaries: ["11:00"],
+          slots: [],
+        }],
+      },
+      choices: [{ id: "2026-10-13", label: "13 жовтня" }],
+    };
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("hello")],
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          mode: "reschedule",
+          rescheduleTarget: null,
+        },
+        pendingInteraction: dateSelect,
+        availabilityContext: {
+          days: [{
+            date: "2026-10-13",
+            dayLabel: "13 жовтня",
+            slots: [{
+              id: "slot-11",
+              label: "11:00",
+              dateStart: "2026-10-13T11:00:00",
+              dateEnd: "2026-10-13T11:30:00",
+            }],
+          }],
+          stepMinutes: 30,
+        },
+        availabilityCursor: { from: "2026-10-13", through: "2026-10-20" },
+        bookingContext: {
+          meetings: [{
+            id: "m-1",
+            name: "Visit",
+            dateStart: "2026-10-20 11:00:00",
+          }],
+          dateFrom: "2026-10-11",
+        },
+      }),
+    );
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingInteraction?.kind).toBe("visit_select");
+    expect(update.availabilityContext).toBeNull();
+    expect(update.availabilityCursor).toBeNull();
+    expect(update.noteOrchQueued).toBe(false);
+  });
+
+  it("honors null pendingInteraction from mismatched TIME schedule repair", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-botox", name: "Botox", source: "catalog" },
+      accepted: true,
+    });
+    const dated = reduceBookingDraft(accepted, {
+      type: "date_selected",
+      date: "2026-10-17",
+    })!;
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("hello")],
+        bookingDraft: dated,
+        pendingInteraction: {
+          kind: "time_select",
+          date: "2026-10-99",
+          snapshot: {
+            snapshotId: "snap-1",
+            days: [{
+              date: "2026-10-13",
+              displayLabel: "13 жовтня",
+              slotSummaries: ["11:00"],
+              slots: [],
+            }],
+          },
+          choices: [{ id: "slot-11", label: "11:00" }],
+        },
+        availabilityContext: {
+          days: [{
+            date: "2026-10-13",
+            dayLabel: "13 жовтня",
+            slots: [{
+              id: "slot-11",
+              label: "11:00",
+              dateStart: "2026-10-13T11:00:00",
+              dateEnd: "2026-10-13T11:30:00",
+            }],
+          }],
+          stepMinutes: 30,
+        },
+        availabilityCursor: { from: "2026-10-13", through: "2026-10-20" },
+      }),
+    );
+    expect(update.bookingDraft?.selectedDate).toBeNull();
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.availabilityContext).toBeNull();
+    expect(update.availabilityCursor).toBeNull();
+    expect(update.noteOrchQueued).toBe(false);
+  });
+
   it("keeps accepted service when REPLACE is offered before a slot", async () => {
     const prepare = createAgentPrepareNode("booking");
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
