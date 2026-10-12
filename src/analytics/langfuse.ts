@@ -16,6 +16,7 @@ import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 
 import { errorMessage } from "../shared/json-record.js";
 import {
+  asClinicTurnConversation,
   maskLangfusePayload,
   pickAllowedEventProps,
   toPropagateMetadata,
@@ -198,9 +199,10 @@ export const withClinicTurn = async <T>(
           fnStarted = true;
           const { result, output } = await fn(handler);
           try {
+            // Provenance wrap: mask must not JSON-parse conversation as telemetry.
             setActiveTraceIO({
-              input: options.input,
-              output,
+              input: asClinicTurnConversation(options.input),
+              output: asClinicTurnConversation(output),
             });
           } catch (error: unknown) {
             console.warn(`setActiveTraceIO failed: ${errorMessage(error)}`);

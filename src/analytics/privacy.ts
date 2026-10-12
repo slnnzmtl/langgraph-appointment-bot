@@ -3,8 +3,10 @@
  * No Langfuse / OpenTelemetry imports — safe for unit tests without SDK boot.
  *
  * Object payloads from CallbackHandler (chain/LLM/tool I/O) are deny-by-default:
- * only TIER1_PROP_ALLOWLIST keys are kept. Plain conversation strings (trace I/O)
- * still pass after phone/email/secret regex redaction.
+ * only TIER1_PROP_ALLOWLIST keys are kept. Arrays survive only under those keys
+ * (e.g. meeting_ids, fields_updated, missing_fields) — top-level / unkeyed arrays
+ * are dropped. Trace conversation strings are wrapped with asClinicTurnConversation
+ * so JSON-looking user text is not parsed as structured telemetry.
  */
 
 export const TIER1_PROP_ALLOWLIST = [
@@ -48,6 +50,17 @@ export const TIER1_PROP_ALLOWLIST = [
 
 const ALLOWED = new Set<string>(TIER1_PROP_ALLOWLIST);
 
+/**
+ * Prefix for setActiveTraceIO strings. Mask strips it and applies regex redaction
+ * only — never JSON-parse — so messages like `{"symptom":"rash"}` stay intact.
+ * RS (0x1E) is vanishingly unlikely in Telegram user text.
+ */
+export const CLINIC_TURN_CONVERSATION_PREFIX = "\u001eclinic-turn-io\u001e";
+
+/** Mark a string as trace-level conversation for provenance-aware masking. */
+export const asClinicTurnConversation = (text: string): string =>
+  `${CLINIC_TURN_CONVERSATION_PREFIX}${text}`;
+
 const SECRET_KEY_RE = /^(GOOGLE_API_KEY|ESPOCRM_API_KEY|Authorization|api[_-]?key|espocrm_api_key|secret[_-]?key|password|token)$/i;
 
 const SECRET_PATTERNS: Array<{ re: RegExp; replacement: string }> = [
@@ -89,54 +102,101 @@ const redactString = (value: string): string => {
   return next;
 };
 
-const maskValue = (value: unknown): unknown => {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (
-      (trimmed.startsWith("{") && trimmed.endsWith("}"))
-      || (trimmed.startsWith("[") && trimmed.endsWith("]"))
-    ) {
-      try {
-        return maskValue(JSON.parse(trimmed) as unknown);
-      } catch {
-        return redactString(value);
-      }
+/** Arrays under allowlisted keys: primitives kept (redacted); nested objects allowlisted. */
+const maskAllowedArray = (value: unknown[]): unknown[] =>
+  value.map((el) => {
+    if (typeof el === "string") {
+      // Field names / ids — regex only; do not JSON-parse.
+      return redactString(el);
     }
-    return redactString(value);
+    if (Array.isArray(el)) {
+      return [];
+    }
+    if (el != null && typeof el === "object") {
+      return maskObject(el as Record<string, unknown>);
+    }
+    return el;
+  });
+
+const maskObject = (record: Record<string, unknown>): Record<string, unknown> => {
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    if (SECRET_KEY_RE.test(key)) {
+      out[key] = "[REDACTED]";
+      continue;
+    }
+    if (!ALLOWED.has(key)) {
+      // Deny-by-default: unknown object keys (firstName, raw_mcp, checkpoint, …) drop.
+      continue;
+    }
+    if (Array.isArray(child)) {
+      out[key] = maskAllowedArray(child);
+      continue;
+    }
+    out[key] = maskStructured(child);
   }
+  return out;
+};
+
+/**
+ * Structured telemetry (objects / arrays). Top-level and unkeyed arrays are empty —
+ * they have no semantic key for allowlisting.
+ */
+const maskStructured = (value: unknown): unknown => {
   if (Array.isArray(value)) {
-    return value.map(maskValue);
+    return [];
   }
   if (value != null && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(record)) {
-      if (SECRET_KEY_RE.test(key)) {
-        out[key] = "[REDACTED]";
-        continue;
-      }
-      if (!ALLOWED.has(key)) {
-        // Deny-by-default: unknown object keys (firstName, raw_mcp, checkpoint, …) drop.
-        continue;
-      }
-      out[key] = maskValue(child);
-    }
-    return out;
+    return maskObject(value as Record<string, unknown>);
+  }
+  if (typeof value === "string") {
+    return maskStringLeaf(value);
   }
   return value;
 };
 
 /**
- * LangfuseSpanProcessor `mask` hook: receives stringified JSON of input/output/metadata.
+ * String leaf: provenance-wrapped conversation → redact only; JSON-looking
+ * unmarked strings (tool dumps) → parse then structured mask.
+ */
+const maskStringLeaf = (value: string): string | unknown => {
+  if (value.startsWith(CLINIC_TURN_CONVERSATION_PREFIX)) {
+    return redactString(value.slice(CLINIC_TURN_CONVERSATION_PREFIX.length));
+  }
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("{") && trimmed.endsWith("}"))
+    || (trimmed.startsWith("[") && trimmed.endsWith("]"))
+  ) {
+    try {
+      return maskStructured(JSON.parse(trimmed) as unknown);
+    } catch {
+      return redactString(value);
+    }
+  }
+  return redactString(value);
+};
+
+/**
+ * LangfuseSpanProcessor `mask` hook: receives stringified attribute values
+ * (OTEL serializes objects/strings via JSON.stringify).
  * Returns masked string (or original non-string data unchanged).
  */
 export const maskLangfusePayload = ({ data }: { data: unknown }): unknown => {
   if (typeof data !== "string") {
     return data;
   }
+  if (data.startsWith(CLINIC_TURN_CONVERSATION_PREFIX)) {
+    return redactString(data.slice(CLINIC_TURN_CONVERSATION_PREFIX.length));
+  }
   try {
     const parsed: unknown = JSON.parse(data);
-    return JSON.stringify(maskValue(parsed));
+    // OTEL wraps plain strings as JSON string literals — conversation stays a string.
+    if (typeof parsed === "string") {
+      const masked = maskStringLeaf(parsed);
+      return typeof masked === "string" ? masked : JSON.stringify(masked);
+    }
+    return JSON.stringify(maskStructured(parsed));
   } catch {
     return redactString(data);
   }

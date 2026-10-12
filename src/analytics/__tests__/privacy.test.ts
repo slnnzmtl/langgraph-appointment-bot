@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  asClinicTurnConversation,
   maskLangfusePayload,
   pickAllowedEventProps,
   toPropagateMetadata,
@@ -64,6 +65,31 @@ describe("maskLangfusePayload", () => {
     expect(String(parsed.GOOGLE_API_KEY)).toBe("[REDACTED]");
   });
 
+  it("drops top-level primitive arrays (no semantic key)", () => {
+    const leak = JSON.stringify(["Ada Lovelace", "hypertension medical note"]);
+    const masked = maskLangfusePayload({ data: leak });
+    expect(masked).toBe("[]");
+    expect(String(masked)).not.toContain("Ada");
+    expect(String(masked)).not.toContain("hypertension");
+  });
+
+  it("keeps arrays only under allowlisted keys", () => {
+    const input = JSON.stringify({
+      meeting_ids: ["m-1", "m-2"],
+      fields_updated: ["firstName", "phoneNumber"],
+      missing_fields: ["addressStreet"],
+      mystery_list: ["Ada Lovelace", "secret note"],
+    });
+    const parsed = JSON.parse(maskLangfusePayload({ data: input }) as string) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed.meeting_ids).toEqual(["m-1", "m-2"]);
+    expect(parsed.fields_updated).toEqual(["firstName", "phoneNumber"]);
+    expect(parsed.missing_fields).toEqual(["addressStreet"]);
+    expect(parsed).not.toHaveProperty("mystery_list");
+  });
+
   it("keeps plain conversation strings after phone/email/secret redaction", () => {
     const text =
       "Хочу записатись; дзвоніть +380501112233 або patient@example.com GOOGLE_API_KEY=AIzaSyLeak";
@@ -73,6 +99,20 @@ describe("maskLangfusePayload", () => {
     expect(String(masked)).toContain("[REDACTED_EMAIL]");
     expect(String(masked)).not.toContain("AIzaSyLeak");
     expect(String(masked)).not.toContain("+380501112233");
+  });
+
+  it("preserves JSON-looking conversation when provenance-wrapped (OTEL-serialized)", () => {
+    const message = '{"symptom":"rash"}';
+    // Langfuse _serialize(string) => JSON.stringify(string)
+    const otelAttribute = JSON.stringify(asClinicTurnConversation(message));
+    const masked = maskLangfusePayload({ data: otelAttribute });
+    expect(masked).toBe(message);
+  });
+
+  it("without provenance wrap, JSON-looking strings are treated as structured telemetry", () => {
+    const otelAttribute = JSON.stringify('{"symptom":"rash","firstName":"Ada"}');
+    const masked = maskLangfusePayload({ data: otelAttribute });
+    expect(masked).toBe("{}");
   });
 
   it("drops checkpoint and CRM dump keys (no nested copy)", () => {
