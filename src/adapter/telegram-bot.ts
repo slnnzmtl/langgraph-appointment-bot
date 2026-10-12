@@ -7,7 +7,11 @@ import {
 import { Telegraf } from "telegraf";
 import type { Context } from "telegraf";
 
-import { trackEvent } from "../analytics/track.js";
+import {
+  trackEvent,
+  withClinicTurn,
+  type ClinicTurnCallbacks,
+} from "../analytics/track.js";
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
 import {
   upgradeBookingCheckpoint,
@@ -241,16 +245,19 @@ export const hasPendingConfirmBooking = (
 };
 
 export type GraphTextTurnOptions = {
-  /** LangSmith / LangChain tags (default `["telegram"]`). */
+  /** LangSmith / LangChain / Langfuse tags (default `["telegram"]`). */
   tags?: string[];
   /** Run metadata.source (default `"telegram"`). */
   source?: string;
+  /** User message text for Langfuse trace input (set by handleGraphTextTurn). */
+  inputText?: string;
 };
 
-const graphInvokeConfig = (
+export const graphInvokeConfig = (
   threadId: string,
   telegramUserId: string,
   options?: GraphTextTurnOptions,
+  callbacks?: ClinicTurnCallbacks,
 ) => ({
   configurable: { thread_id: threadId },
   recursionLimit: GRAPH_RECURSION_LIMIT,
@@ -261,11 +268,12 @@ const graphInvokeConfig = (
     chat_id: threadId,
     source: options?.source ?? "telegram",
   },
+  ...(callbacks ? { callbacks: [callbacks] } : {}),
 });
 
 type GraphInvokeConfig = ReturnType<typeof graphInvokeConfig>;
 
-/** One exclusive graph session per thread. */
+/** One exclusive graph session per thread, wrapped in a Langfuse clinic-turn when enabled. */
 const runGraphExclusive = async (
   graph: Graph,
   threadId: string,
@@ -275,8 +283,28 @@ const runGraphExclusive = async (
 ): Promise<OutboundReply> =>
   runWithTelegramUserId(telegramUserId, () =>
     runExclusiveForThread(threadId, async () => {
-      const result = await run(graphInvokeConfig(threadId, telegramUserId, options));
-      return interpretInvokeResult(result);
+      const tags = options?.tags ?? ["telegram"];
+      const source = options?.source ?? "telegram";
+      return withClinicTurn(
+        {
+          userId: telegramUserId,
+          sessionId: threadId,
+          tags,
+          metadata: {
+            source,
+            telegram_user_id: telegramUserId,
+            chat_id: threadId,
+          },
+          input: options?.inputText ?? "",
+        },
+        async (callbacks) => {
+          const result = await run(
+            graphInvokeConfig(threadId, telegramUserId, options, callbacks),
+          );
+          const outbound = interpretInvokeResult(result);
+          return { result: outbound, output: outbound.text };
+        },
+      );
     }),
   );
 
@@ -364,7 +392,7 @@ export const handleGraphTextTurn = async (
         config,
       );
     }),
-  options,
+  { ...options, inputText: text },
   );
 
 const replyOutbound = async (ctx: Context, outbound: OutboundReply): Promise<void> => {

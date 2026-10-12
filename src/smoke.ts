@@ -1,6 +1,10 @@
 import "dotenv/config";
 
-import { applyTracingPrivacyDefaults } from "./analytics/track.js";
+import {
+  applyTracingPrivacyDefaults,
+  flushTracing,
+  startLangfuseTracing,
+} from "./analytics/track.js";
 import { loadConfig } from "./config.js";
 import { createClinicRuntime } from "./composition/clinic-runtime.js";
 import { SmokeAssertError } from "./smoke/assert.js";
@@ -122,6 +126,7 @@ const main = async (): Promise<void> => {
     );
   }
   applyTracingPrivacyDefaults();
+  startLangfuseTracing();
   const runtime = await createClinicRuntime(config);
   let supportsDeleteEntity = false;
   if (hasWriteScenarios && writesAllowed) {
@@ -222,6 +227,8 @@ const main = async (): Promise<void> => {
     }
     await runtime.shutdownAdapters();
     console.log("✓ shutdownAdapters completed");
+    await flushTracing();
+    console.log("✓ tracing flush completed");
   }
 
   printSummary(results);

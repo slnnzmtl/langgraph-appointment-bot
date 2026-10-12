@@ -565,8 +565,9 @@ describe("create_meeting HITL interrupt", () => {
               {
                 id: "mtg-existing",
                 name: "Consult: Ada",
-                dateStart: "2026-10-12T10:00:00",
-                dateEnd: "2026-10-12T10:30:00",
+                // Far-future start so filterUpcomingMeetings still treats it as upcoming.
+                dateStart: "2026-12-15T10:00:00",
+                dateEnd: "2026-12-15T10:30:00",
               },
             ],
           };

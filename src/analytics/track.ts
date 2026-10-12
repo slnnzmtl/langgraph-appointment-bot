@@ -3,6 +3,7 @@ import { getCurrentRunTree } from "langsmith/traceable";
 
 import { errorMessage, jsonEntityId, jsonErrorMessage, asJsonRecord } from "../shared/json-record.js";
 import { getTelegramUserId } from "../tools/telegram-user-context.js";
+import { emitLangfuseEvent, flushLangfuseTracing } from "./langfuse.js";
 
 export const TIER1_EVENTS = [
   "contact_lookup_telegram",
@@ -62,10 +63,11 @@ const optionalTelegramUserId = (): string | undefined => {
 };
 
 /**
- * When tracing is on, hide LLM/tool inputs and outputs unless the operator opted in.
+ * When LangSmith tracing is on, hide LLM/tool inputs and outputs unless the operator opted in.
  * Call once at process start, before any LangSmith Client is constructed.
  * Does not hide metadata (telegram_user_id / chat_id stay). Explicit
  * LANGSMITH_HIDE_INPUTS / LANGSMITH_HIDE_OUTPUTS win via ??= .
+ * Langfuse conversation capture is independent (on when LANGFUSE_TRACING is configured).
  */
 export const applyTracingPrivacyDefaults = (): void => {
   if (!isTracingEnabled()) {
@@ -83,7 +85,7 @@ const getClient = (): Client => {
   return sharedClient;
 };
 
-const emitRun = (name: Tier1EventName, props: Record<string, unknown>): void => {
+const emitLangSmithRun = (name: Tier1EventName, props: Record<string, unknown>): void => {
   if (!isTracingEnabled()) {
     return;
   }
@@ -103,7 +105,7 @@ const emitRun = (name: Tier1EventName, props: Record<string, unknown>): void => 
       ...(parent?.id ? { parent_run_id: parent.id } : {}),
     })
     .catch((error: unknown) => {
-      console.warn(`trackEvent post failed (${name}): ${errorMessage(error)}`);
+      console.warn(`trackEvent LangSmith post failed (${name}): ${errorMessage(error)}`);
     });
 };
 
@@ -119,7 +121,8 @@ export const trackEvent: TrackEventFn = (name, props) => {
       trackEventSpy(name, merged);
       return;
     }
-    emitRun(name, merged);
+    emitLangSmithRun(name, merged);
+    emitLangfuseEvent(name, merged);
   } catch (error: unknown) {
     console.warn(`trackEvent failed (${name}): ${errorMessage(error)}`);
   }
@@ -170,3 +173,38 @@ export const finishTrackedWrite = (
   onSuccess(entityId);
   return raw;
 };
+
+/**
+ * Flush Langfuse (bounded) and LangSmith pending runs. Never throws past a warn.
+ * Safe for SIGINT/SIGTERM and smoke finally — unreachable Langfuse must not hang exit.
+ */
+export const flushTracing = async (): Promise<void> => {
+  await flushLangfuseTracing();
+  if (!isTracingEnabled() || !sharedClient) {
+    return;
+  }
+  try {
+    const client = sharedClient as Client & {
+      flush?: () => Promise<void>;
+      flushPending?: () => Promise<void>;
+      awaitPendingTraceBatches?: () => Promise<void>;
+    };
+    if (typeof client.flush === "function") {
+      await client.flush();
+    } else if (typeof client.awaitPendingTraceBatches === "function") {
+      await client.awaitPendingTraceBatches();
+    } else if (typeof client.flushPending === "function") {
+      await client.flushPending();
+    }
+  } catch (error: unknown) {
+    console.warn(`LangSmith flush failed: ${errorMessage(error)}`);
+  }
+};
+
+export {
+  withClinicTurn,
+  startLangfuseTracing,
+  isLangfuseTracingEnabled,
+  createClinicTurnCallbackHandler,
+  type ClinicTurnCallbacks,
+} from "./langfuse.js";

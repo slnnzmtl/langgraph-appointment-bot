@@ -307,6 +307,45 @@ describe("contact-tools", () => {
         },
       });
       expect(JSON.parse(result)).toEqual({ ok: true });
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "contact_lookup_telegram",
+          props: expect.objectContaining({
+            outcome: "not_found",
+            tool: "lookup_contact_by_telegram",
+          }),
+        }),
+      );
+    });
+  });
+
+  it("lookupContactByTelegram emits contact_lookup_telegram success with contact_id", async () => {
+    const lookupTool: typeof callTool = async (name, args) => {
+      calls.push({ name, args });
+      return {
+        success: true,
+        contacts: [
+          {
+            id: "c-tg-1",
+            firstName: "Ada",
+            lastName: "Lovelace",
+            phoneNumber: "+380501112233",
+          },
+        ],
+      };
+    };
+    await withTg(async () => {
+      await lookupContactByTelegram(lookupTool);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          name: "contact_lookup_telegram",
+          props: expect.objectContaining({
+            outcome: "success",
+            tool: "lookup_contact_by_telegram",
+            contact_id: "c-tg-1",
+          }),
+        }),
+      );
     });
   });
 
@@ -315,6 +354,15 @@ describe("contact-tools", () => {
     expect(JSON.parse(result)).toMatchObject({
       error: expect.stringContaining("Telegram user id is not set"),
     });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        name: "contact_lookup_telegram",
+        props: expect.objectContaining({
+          outcome: "error",
+          tool: "lookup_contact_by_telegram",
+        }),
+      }),
+    );
   });
 
   it("normalizeContactLookupResult keeps found contacts and missingFields", () => {
