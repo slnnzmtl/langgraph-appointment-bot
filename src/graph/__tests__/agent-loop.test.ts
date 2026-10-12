@@ -1,7 +1,7 @@
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from "@langchain/core/messages";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { tool } from "@langchain/core/tools";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
@@ -72,8 +72,14 @@ import {
 import { createContactTools, type ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
 import type { ClinicState } from "../state.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
+import {
+  availabilityMatchesBooking,
+  createEmptyBookingDraft,
+  reduceBookingDraft,
+} from "../booking-draft.js";
 import type { BookingDraft } from "../booking-draft.js";
+import { reduceBookingSession } from "../booking-session.js";
+import { offeredServiceForTurn } from "../agent-loop/shared.js";
 import type { ClinicAgentDefinition } from "../types.js";
 
 const listedMeetings: BookingContext = {
@@ -682,6 +688,164 @@ describe("createAgentPrepareNode", () => {
     maxSteps: 8,
   };
 
+  it("does not guess a named procedure into the draft when REPLACE opens", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("запиши на колаген")],
+        bookingContext: listedMeetings,
+        servicesContext: {
+          list: [
+            {
+              id: "svc-collagen",
+              name: "Колагеностимуляція Полімолочна кислота",
+              duration: 60,
+            },
+            { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+          ],
+        },
+      }),
+    );
+
+    expect(update.bookingDraft?.replacement?.status).toBe("offered");
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+
+    const finalize = createAgentFinalizeNode(bookingAgent);
+    const rendered = finalize(
+      clinicState({
+        messages: [new HumanMessage("запиши на колаген")],
+        bookingContext: listedMeetings,
+        bookingDraft: update.bookingDraft,
+        agentMessages: [new HumanMessage("запиши на колаген")],
+      }),
+    );
+    expect(rendered.pendingInteraction).toMatchObject({
+      kind: "visit_select",
+      stage: "replacement",
+    });
+    expect(rendered.lastHandoff?.replyButtons).toEqual([...BOOKING_REPLACE_MENU]);
+  });
+
+  it("does not open consultation after REPLACE cancel when a named service was accepted", async () => {
+    const cancelTool = tool(
+      async () => JSON.stringify({
+        success: true,
+        id: "m-1",
+        status: "Not Held",
+      }),
+      {
+        name: "cancel_meeting",
+        description: "cancel",
+        schema: z.object({ meetingId: z.string() }),
+      },
+    );
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "service_selected",
+        service: {
+          id: "svc-collagen",
+          name: "Колагеностимуляція Полімолочна кислота",
+          source: "catalog",
+          durationMinutes: 60,
+        },
+        accepted: true,
+      }),
+      {
+        type: "existing_booking_detected",
+        meeting: listedMeetings.meetings[0]!,
+      },
+    );
+    const cancelling = reduceBookingDraft(draft, {
+      type: "cancel_existing_requested",
+      command: {
+        action: "cancel",
+        payload: { meetingId: "m-1" },
+      },
+    });
+    const update = await createAgentToolsNode([cancelTool], "booking")(
+      clinicState({
+        bookingContext: listedMeetings,
+        bookingDraft: cancelling,
+        pendingCancellationPurpose: "replacement",
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "cancel",
+          choices: [
+            { id: "confirm", label: "✅" },
+            { id: "decline", label: "❌" },
+          ],
+        },
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "cancel-1",
+              name: "cancel_meeting",
+              args: { meetingId: "m-1" },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(update.bookingDraft?.replacement).toBeNull();
+    expect(update.bookingDraft?.mode).toBe("create");
+    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "accepted",
+      service: { id: "svc-collagen" },
+    });
+    expect(update.pendingInteraction).toBeNull();
+  });
+
+  it("switches an open consultation offer to collagen on booking free-text", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const offered = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: "Консультація",
+          source: "catalog",
+        },
+      },
+    );
+
+    for (const utterance of ["запиши на колаген", "ні, на колаген"] as const) {
+      const update = await prepare(
+        clinicState({
+          messages: [new HumanMessage(utterance)],
+          servicesContext: {
+            list: [
+              {
+                id: "svc-collagen",
+                name: "Колагеностимуляція Полімолочна кислота",
+                duration: 60,
+              },
+              { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+            ],
+          },
+          bookingDraft: offered.bookingDraft,
+          pendingInteraction: offered.pendingInteraction,
+        }),
+      );
+
+      expect(update.pendingInteraction).toMatchObject({
+        kind: "service_confirm",
+        service: {
+          id: "svc-collagen",
+          name: "Колагеностимуляція Полімолочна кислота",
+        },
+      });
+      expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
+        status: "pending",
+        service: { id: "svc-collagen" },
+      });
+    }
+  });
+
   it("finalize renders REPLACE after prepare offers an existing visit", () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "existing_booking_detected",
@@ -765,7 +929,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.pendingInteraction).toBeNull();
   });
 
-  it("committed replacement cancel without originalCommand clears replacement", async () => {
+  it("committed replacement cancel without originalCommand opens FAQ catalog", async () => {
     const cancelTool = tool(
       async () => JSON.stringify({
         success: true,
@@ -789,10 +953,18 @@ describe("createAgentPrepareNode", () => {
         payload: { meetingId: "m-1" },
       },
     });
+    const servicesContext = {
+      list: [
+        { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+        { id: "svc-peel", name: "Пілінг поверхневий" },
+        { id: "svc-lip", name: "збільшення губ" },
+      ],
+    };
     const update = await createAgentToolsNode([cancelTool], "booking")(
       clinicState({
         bookingContext: listedMeetings,
         bookingDraft: cancelling,
+        servicesContext,
         pendingCancellationPurpose: "replacement",
         pendingInteraction: {
           kind: "mutation_confirm",
@@ -819,7 +991,16 @@ describe("createAgentPrepareNode", () => {
     expect(update.bookingDraft?.replacement).toBeNull();
     expect(update.bookingDraft?.mode).toBe("create");
     expect(update.bookingDraft?.pendingCommand).toBeNull();
-    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      consultationDeclined: true,
+    });
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.length
+        : 0,
+    ).toBeGreaterThan(0);
     expect(update.bookingContext?.meetings).toEqual([]);
     expect(
       routeAfterAgentTools(
@@ -837,6 +1018,21 @@ describe("createAgentPrepareNode", () => {
         "booking__finalize",
       ),
     ).toBe("booking__finalize");
+
+    const finalize = createAgentFinalizeNode(bookingAgent);
+    const rendered = finalize(
+      clinicState({
+        bookingDraft: update.bookingDraft,
+        pendingInteraction: update.pendingInteraction,
+        servicesContext,
+        pendingCancellationPurpose: "replacement",
+        agentMessages: update.agentMessages as never,
+      }),
+    );
+    expect(rendered.lastHandoff?.replyText).toMatch(/^Запис скасовано\./);
+    expect(rendered.lastHandoff?.replyText).toContain("•");
+    expect(rendered.lastHandoff?.replyButtons?.length).toBeGreaterThan(0);
+    expect(rendered.lastHandoff?.replyButtons).not.toContain("Так");
   });
 
   it("requests nearest slots after replacement cancel with accepted service and keeps purpose", async () => {
@@ -1126,7 +1322,10 @@ describe("createAgentPrepareNode", () => {
     );
 
     expect(update.pendingInteraction?.kind).toBe("service_candidate");
-    expect(update.pendingInteraction).toMatchObject({ owner: "faq" });
+    expect(update.pendingInteraction).toMatchObject({
+      owner: "faq",
+      consultationDeclined: true,
+    });
     expect(
       update.pendingInteraction?.kind === "service_candidate"
         ? update.pendingInteraction.choices.map((c) => c.label)
@@ -1135,6 +1334,126 @@ describe("createAgentPrepareNode", () => {
       "Ін'єкційні процедури",
       "Видалення новоутворень",
     ]);
+  });
+
+  it("opens FAQ catalog chips on bare НІ after a consultation offer", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [
+        { label: "Ін'єкційні процедури", serviceIds: ["svc-collagen"] },
+        { label: "Дерматологія", serviceIds: ["svc-derm"] },
+      ],
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("НІ")],
+        servicesContext: {
+          list: [
+            { id: "svc-collagen", name: "Колагеностимуляція Полімолочна кислота" },
+            { id: "svc-derm", name: "Видалення новоутворень" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            {
+              id: "choose_other",
+              label: "Обрати іншу процедуру",
+              aliases: ["ні", "нi", "no", "не треба"],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      consultationDeclined: true,
+    });
+  });
+
+  it("offers the collagen procedure when patient types запиши на коллаген on an open offer", async () => {
+    const prepare = createAgentPrepareNode("faq");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("запиши на коллаген")],
+        servicesContext: {
+          list: [
+            {
+              id: "svc-collagen",
+              name: "Колагеностимуляція Полімолочна кислота",
+              duration: 60,
+            },
+            { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: {
+        id: "svc-collagen",
+        name: "Колагеностимуляція Полімолочна кислота",
+      },
+    });
+  });
+
+  it("offers collagen when patient declines consultation and names the procedure", async () => {
+    const prepare = createAgentPrepareNode("faq");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ні, запиши на колагеностимуляцію")],
+        servicesContext: {
+          list: [
+            {
+              id: "svc-collagen",
+              name: "Колагеностимуляція Полімолочна кислота",
+              duration: 60,
+            },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            {
+              id: "choose_other",
+              label: "Обрати іншу процедуру",
+              aliases: ["ні", "нi", "no", "не треба"],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: { id: "svc-collagen" },
+    });
   });
 
   it("loads the catalog before opening chips when Обрати іншу процедуру is the first catalog touch", async () => {
@@ -1171,6 +1490,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.pendingInteraction).toMatchObject({
       kind: "service_candidate",
       owner: "faq",
+      consultationDeclined: true,
     });
   });
 
@@ -1288,12 +1608,379 @@ describe("createAgentPrepareNode", () => {
       }),
     );
 
-    // Prepare only handles exact chip taps — «не знаю» reaches the model.
+    // Questions / hedge text stay model-owned — catalog unchanged.
     expect(prepared.pendingInteraction).toBeUndefined();
+  });
+
+  it("opens Ботулінотерапія brand chips for «ботокс» despite lexical «ботокс» titles", async () => {
+    const familyIds = ["corr", "meso", "z1", "z2", "n1", "n2"] as const;
+    let selectCalls = 0;
+    let selectCandidateCount = 0;
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async (input) => {
+        selectCalls += 1;
+        selectCandidateCount = input.candidates.length;
+        return {
+          serviceIds: [...familyIds],
+          groups: [
+            { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+            { label: "Nabota", serviceIds: ["n1", "n2"] },
+            { label: "Інше", serviceIds: ["corr", "meso"] },
+          ],
+        };
+      },
+    });
+    const services = {
+      list: [
+        { id: "c1", name: "Консультація первинна" },
+        { id: "corr", name: "Корекція ботокс" },
+        { id: "meso", name: "Мезоботокс" },
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+        { id: "p1", name: "Пілінг поверхневий" },
+      ],
+    };
+    const rootChoices = [
+      {
+        id: "g0",
+        label: "Консультації та діагностика",
+        serviceIds: ["c1"],
+      },
+      {
+        id: "g1",
+        label: "Ін'єкційна косметологія",
+        serviceIds: ["corr", "meso", "z1", "z2", "n1", "n2"],
+      },
+      {
+        id: "g2",
+        label: "Доглядові процедури",
+        serviceIds: ["p1"],
+      },
+    ];
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ботокс")],
+        servicesContext: services,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          consultationDeclined: true,
+          choices: rootChoices,
+        },
+      }),
+    );
+
+    expect(selectCalls).toBe(1);
+    expect(selectCandidateCount).toBe(services.list.length);
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    const narrowed =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction
+        : null;
+    expect(narrowed?.owner).toBe("faq");
+    expect(narrowed?.consultationDeclined).toBe(true);
+    const labels = narrowed?.choices.map((c) => c.label) ?? [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
+    expect(labels).not.toContain("Корекція ботокс");
+    expect(labels).not.toContain("Мезоботокс");
+    expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
+
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("ботокс")],
+        servicesContext: services,
+        pendingInteraction: prepared.pendingInteraction ?? null,
+        agentMessages: [
+          faqCatalogAi(
+            "В ін'єкційній косметології доступні такі варіанти ботулінотерапії:",
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual(labels);
+    expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
+  });
+
+  it("expands already-narrow «ботокс» chips via full-catalog selector", async () => {
+    let selectCandidateIds: string[] = [];
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async (input) => {
+        selectCandidateIds = input.candidates.map((row) => row.id);
+        return {
+          serviceIds: ["corr", "meso", "z1", "z2", "n1", "n2"],
+          groups: [
+            { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+            { label: "Nabota", serviceIds: ["n1", "n2"] },
+            { label: "Інше", serviceIds: ["corr", "meso"] },
+          ],
+        };
+      },
+    });
+    const services = {
+      list: [
+        { id: "corr", name: "Корекція ботокс" },
+        { id: "meso", name: "Мезоботокс" },
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+      ],
+    };
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ботулінотерапія")],
+        servicesContext: services,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "ботокс",
+          consultationDeclined: true,
+          choices: [
+            { id: "corr", label: "Корекція ботокс", serviceIds: ["corr"] },
+            { id: "meso", label: "Мезоботокс", serviceIds: ["meso"] },
+          ],
+        },
+      }),
+    );
+    expect(selectCandidateIds).toEqual(["corr", "meso", "z1", "z2", "n1", "n2"]);
+    const labels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
+    expect(labels).not.toEqual(["Корекція ботокс", "Мезоботокс"]);
+  });
+
+  it("offers exact CRM name without calling selectCandidates", async () => {
+    let selectCalls = 0;
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => {
+        selectCalls += 1;
+        return { serviceIds: ["z1", "n1"] };
+      },
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Корекція ботокс")],
+        servicesContext: {
+          list: [
+            { id: "corr", name: "Корекція ботокс" },
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          consultationDeclined: true,
+          choices: [
+            { id: "g0", label: "Ін'єкційна", serviceIds: ["corr", "z1", "n1"] },
+          ],
+        },
+      }),
+    );
+    expect(selectCalls).toBe(0);
+    expect(prepared.pendingInteraction?.kind).toBe("service_confirm");
+    expect(
+      prepared.pendingInteraction?.kind === "service_confirm"
+        ? prepared.pendingInteraction.service.id
+        : null,
+    ).toBe("corr");
+  });
+
+  it("narrows open service_confirm on Cyrillic «ботокс» via selectCandidates", async () => {
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2", "n1", "n2"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+        ],
+      }),
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ботокс")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+            { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    const labels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
+    expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
+  });
+
+  it("does not call selectCandidates for «що таке Disport?» on open catalog", async () => {
+    let selectCalls = 0;
+    const root = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "catalog",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Ін'єкційна косметологія", serviceIds: ["z1", "n1"] },
+      ],
+    };
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => {
+        selectCalls += 1;
+        return { serviceIds: ["z1", "n1"] };
+      },
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("що таке Disport?")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        pendingInteraction: root,
+      }),
+    );
+    expect(selectCalls).toBe(0);
+    expect(prepared.pendingInteraction).toBeUndefined();
+  });
+
+  it("opens FAQ family chips from booking prepare on «запиши на ботокс»", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2", "n1", "n2"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+        ],
+      }),
+    });
+    const services = {
+      list: [
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+      ],
+    };
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: services,
+      }),
+    );
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    expect(
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.owner
+        : null,
+    ).toBe("faq");
+    expect(
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.consultationDeclined
+        : null,
+    ).toBe(true);
+    expect(prepared.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+
+    const merged = clinicState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      servicesContext: services,
+      pendingInteraction: prepared.pendingInteraction ?? null,
+      bookingDraft: prepared.bookingDraft ?? null,
+      agentMessages: [],
+    });
+    expect(
+      routeAfterAgentPrepare(
+        merged,
+        "booking__llm",
+        "booking__command_prepare",
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+
+    const bookingAgent: ClinicAgentDefinition = {
+      id: "booking",
+      name: "Booking",
+      description: "Books",
+      systemPrompt: "booking",
+      maxSteps: 6,
+    };
+    const finalize = createAgentFinalizeNode(bookingAgent);
+    const update = finalize(merged);
+    const labels =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(update.lastHandoff?.replyButtons).toEqual(labels);
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
+    expect(update.lastHandoff?.replyButtons).not.toContain(BOOKING_OFFER_MENU[0]);
+    expect(update.lastHandoff?.replyText).toContain("•");
+    expect(update.lastHandoff?.replyText).not.toContain("Запис скасовано.");
+  });
+
+  it("offeredServiceForTurn returns null when several rows match lexically", () => {
+    const offered = offeredServiceForTurn(
+      clinicState({
+        messages: [new HumanMessage("botox")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+      }),
+      "faq",
+      [],
+    );
+    expect(offered).toBeNull();
   });
 
   it("reopens FAQ catalog chips when patient types a brand after consultation offer", async () => {
     const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2"],
+        groups: [
+          { label: "1 зона", serviceIds: ["z1"] },
+          { label: "2 зони", serviceIds: ["z2"] },
+        ],
+      }),
       partitionCandidates: async () => [
         { label: "1 зона", serviceIds: ["z1"] },
         { label: "2 зони", serviceIds: ["z2"] },
@@ -2013,6 +2700,24 @@ describe("availability context helpers", () => {
         }),
       ),
     ).toBe("pending_confirmation");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ cancelled: true, left: true }),
+          tool_call_id: "1",
+          name: "reschedule_meeting",
+        }),
+      ),
+    ).toBe("abandoned");
+    expect(
+      classifyMeetingMutationToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ cancelled: true }),
+          tool_call_id: "1",
+          name: "reschedule_meeting",
+        }),
+      ),
+    ).toBe("declined");
     expect(
       classifyMeetingMutationToolMessage(
         new ToolMessage({ content: "", tool_call_id: "1", name: "create_meeting" }),
@@ -6030,6 +6735,99 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
   });
 
+  it("offer_consultation after consultationDeclined keeps catalog chips", () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "Answers FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent);
+    const choices = [
+      { id: "inj", label: "Ін'єкційна косметологія", serviceIds: ["c1", "c2"] },
+      { id: "derm", label: "Дерматологія", serviceIds: ["d1"] },
+    ];
+    const update = finalize(
+      clinicState({
+        stepCount: 1,
+        messages: [new HumanMessage("запиши на коллаген")],
+        servicesContext: {
+          list: [
+            { id: "c1", name: "Колагеностимуляція Полімолочна кислота" },
+            { id: "c2", name: "Біоревіталізація" },
+            { id: "d1", name: "Видалення новоутворень" },
+          ],
+        },
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "Обрати іншу процедуру",
+          consultationDeclined: true,
+          choices,
+        },
+        agentMessages: [
+          faqCatalogAi(
+            "В ін'єкційній косметології є процедура «Колагеностимуляція».",
+            "offer_consultation",
+          ),
+        ],
+      }),
+    );
+
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
+    expect(update.lastHandoff?.replyButtons).toEqual(choices.map((c) => c.label));
+    expect(update.lastHandoff?.replyText).not.toContain(
+      "Підібрати вільний час на консультацію?",
+    );
+  });
+
+  it("finalize prepends Запис скасовано. when REPLACE cancel continues with consultation offer", () => {
+    const finalize = createAgentFinalizeNode({
+      id: "booking",
+      name: "Booking",
+      description: "Booking",
+      systemPrompt: "book",
+      maxSteps: 8,
+    });
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: {
+        id: CONSULTATION_SERVICE_ID,
+        name: "Консультація",
+        source: "catalog",
+      },
+      accepted: false,
+    });
+    const update = finalize(
+      clinicState({
+        messages: [new HumanMessage("✅")],
+        bookingDraft: draft,
+        pendingCancellationPurpose: "replacement",
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+        // No AIMessage — prepare opened the offer without an LLM turn.
+        agentMessages: [new HumanMessage("✅")],
+      }),
+    );
+
+    expect(update.pendingCancellationPurpose).toBeNull();
+    expect(update.lastHandoff?.replyText).toBe(
+      "Запис скасовано.\n\nПідібрати вільний час на консультацію?",
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+  });
+
   it("offer_consultation keeps mid-text questions and only strips a trailing yes/no", () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -6955,13 +7753,147 @@ describe("runtime-owned cancellation outcomes", () => {
     )).toBe("booking__mutation_finalize");
 
     const declined = createAgentMutationFinalizeNode(agent)(state);
-    expect(declined.lastHandoff).toMatchObject({
-      status: "ok",
-      replyText: "Запис не було перенесено.",
+    expect(declined).not.toBeInstanceOf(Command);
+    expect(declined).toMatchObject({
+      lastHandoff: {
+        status: "ok",
+        replyText: "Запис не було перенесено.",
+      },
+      bookingDraft: null,
+      pendingCancellationPurpose: null,
     });
-    expect(declined.lastHandoff?.replyText).not.toContain("вільні");
-    expect(declined.bookingDraft).toBeNull();
-    expect(declined.pendingCancellationPurpose).toBeNull();
+    expect((declined as { lastHandoff?: { replyText?: string } }).lastHandoff?.replyText)
+      .not.toContain("вільні");
+  });
+
+  it("routes main-menu leave to mutation finalize, which hands off to the supervisor", () => {
+    for (const [mutationName, draft, purpose] of [
+      [
+        "reschedule_meeting",
+        canonicalBookingDraft({
+          mode: "reschedule",
+          phase: "confirming",
+          selectedDate: "2026-09-10",
+          pendingCommand: {
+            action: "reschedule",
+            payload: {
+              meetingId: "m-1",
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+            },
+          },
+          rescheduleTarget: { id: "m-1", name: "Consult" },
+        }),
+        null,
+      ],
+      [
+        "create_meeting",
+        canonicalBookingDraft({
+          phase: "confirming",
+          pendingCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+            },
+          },
+        }),
+        null,
+      ],
+      [
+        "cancel_meeting",
+        canonicalBookingDraft({
+          phase: "confirming",
+          pendingCommand: {
+            action: "cancel",
+            payload: { meetingId: "m-1" },
+          },
+        }),
+        "direct" as const,
+      ],
+    ] as const) {
+      const state = clinicState({
+        bookingContext: listedMeetings,
+        bookingDraft: draft,
+        pendingCancellationPurpose: purpose,
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              cancelled: true,
+              left: true,
+              message: "Cancelled by user.",
+            }),
+            tool_call_id: `${mutationName}-leave`,
+            name: mutationName,
+          }),
+        ],
+      });
+
+      expect(routeAfterAgentTools(
+        state,
+        "booking__llm",
+        "booking__tools",
+        "booking__mutation_finalize",
+        "booking__command_prepare",
+      )).toBe("booking__mutation_finalize");
+
+      const finalized = createAgentMutationFinalizeNode(agent)(state);
+      expect(finalized).toBeInstanceOf(Command);
+      const command = finalized as Command;
+      expect(command.goto).toEqual(["supervisor"]);
+      expect(command.update).toMatchObject({
+        bookingDraft: null,
+        pendingInteraction: null,
+        pendingCancellationPurpose: null,
+        lastHandoff: null,
+      });
+    }
+  });
+
+  it("routes an abandoned replacement cancellation to the supervisor", () => {
+    const state = clinicState({
+      bookingContext: listedMeetings,
+      pendingCancellationPurpose: "replacement",
+      bookingDraft: canonicalBookingDraft({
+        mode: "replace",
+        phase: "confirming",
+        pendingCommand: {
+          action: "cancel",
+          payload: { meetingId: "m-1" },
+        },
+        replacement: {
+          meeting: { id: "m-1" },
+          status: "cancelling",
+          originalCommand: {
+            action: "create",
+            payload: {
+              serviceId: "svc-1",
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+            },
+          },
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ cancelled: true, left: true }),
+          tool_call_id: "cancel-leave",
+          name: "cancel_meeting",
+        }),
+      ],
+    });
+
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+    )).toBe("booking__mutation_finalize");
+
+    const finalized = createAgentMutationFinalizeNode(agent)(state);
+    expect(finalized).toBeInstanceOf(Command);
+    expect((finalized as Command).goto).toEqual(["supervisor"]);
   });
 
   it("routes HITL other-reply after skip to the booking LLM, not the note orchestrator", () => {
@@ -7364,6 +8296,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       name: "present_availability_slots",
       args: {
         direction: "nearest",
+        durationMinutes: 30,
         excludeMeetingIds: ["m-1"],
         forceRefresh: true,
       },
@@ -7404,6 +8337,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       args: {
         direction: "exact",
         date: "2026-10-16",
+        durationMinutes: 30,
         excludeMeetingIds: ["m-1"],
         forceRefresh: true,
       },
@@ -7434,6 +8368,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         schema: z.object({
           direction: z.string().optional(),
           date: z.string().optional(),
+          durationMinutes: z.number().optional(),
           excludeMeetingIds: z.array(z.string()).optional(),
           forceRefresh: z.boolean().optional(),
         }),
@@ -7450,6 +8385,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(invoked[0]).toMatchObject({
       direction: "exact",
       date: "2026-10-16",
+      durationMinutes: 30,
       excludeMeetingIds: ["m-1"],
       forceRefresh: true,
     });
@@ -7482,6 +8418,187 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
+  it("keeps the CRM visit duration for a 60-minute reschedule end to end", async () => {
+    const sixtyMinuteMeeting = {
+      id: "m-60",
+      name: "Пілінг поверхневий",
+      dateStart: "2026-10-26T11:00:00",
+      dateEnd: "2026-10-26T12:00:00",
+    };
+    const message = new HumanMessage("Перенеси мій запис на 2026-10-23 о 11:00");
+    const base = clinicState({
+      messages: [message],
+      bookingContext: {
+        meetings: [sixtyMinuteMeeting],
+        dateFrom: "2026-10-10",
+      },
+      bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
+        type: "reschedule_started",
+        meeting: sixtyMinuteMeeting,
+      }),
+    });
+    const prepare = createAgentPrepareNode("booking");
+    const seeded = await prepare(base);
+    expect(seeded.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      rescheduleTarget: { id: "m-60" },
+      selectedDate: "2026-10-23",
+      requestedTime: { value: "11:00", status: "pending" },
+    });
+
+    const preparedState = clinicState({
+      ...base,
+      bookingDraft: seeded.bookingDraft,
+      agentMessages: (seeded.agentMessages as Overwrite<AIMessage[]>).value,
+    });
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const lookup = await commandPrepare(preparedState);
+    const lookupCall = ((lookup.agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
+      .tool_calls?.[0];
+    expect(lookupCall).toMatchObject({
+      name: "present_availability_slots",
+      args: {
+        direction: "exact",
+        date: "2026-10-23",
+        durationMinutes: 60,
+        excludeMeetingIds: ["m-60"],
+        forceRefresh: true,
+      },
+    });
+
+    const staleThirtyMinuteSnapshot: AvailabilityContext = {
+      days: [{
+        date: "2026-10-23",
+        slots: [{
+          id: "stale",
+          label: "11:00",
+          dateStart: "2026-10-23T11:00:00",
+          dateEnd: "2026-10-23T11:30:00",
+        }],
+      }],
+      stepMinutes: 30,
+      startIntervalMinutes: 30,
+      excludeMeetingIds: ["m-60"],
+    };
+    expect(availabilityMatchesBooking(
+      staleThirtyMinuteSnapshot,
+      seeded.bookingDraft as BookingDraft,
+    )).toBe(false);
+
+    const invoked: Record<string, unknown>[] = [];
+    const slotsTool = tool(
+      async (input: Record<string, unknown>) => {
+        invoked.push(input);
+        return JSON.stringify({
+          days: [{
+            date: "2026-10-23",
+            slots: [{
+              id: "slot-11",
+              label: "11:00",
+              dateStart: "2026-10-23T11:00:00",
+              dateEnd: "2026-10-23T12:00:00",
+            }],
+          }],
+          stepMinutes: 60,
+          excludeMeetingIds: ["m-60"],
+          query: { kind: "exact", date: "2026-10-23", coverageComplete: true },
+        });
+      },
+      {
+        name: "present_availability_slots",
+        description: "slots",
+        schema: z.object({
+          direction: z.string().optional(),
+          date: z.string().optional(),
+          durationMinutes: z.number().optional(),
+          excludeMeetingIds: z.array(z.string()).optional(),
+          forceRefresh: z.boolean().optional(),
+        }),
+      },
+    );
+    const toolsUpdate = await createAgentToolsNode([slotsTool], "booking")(
+      clinicState({
+        ...preparedState,
+        bookingDraft: seeded.bookingDraft,
+        availabilityContext: staleThirtyMinuteSnapshot,
+        agentMessages: (lookup.agentMessages as Overwrite<AIMessage[]>).value,
+      }),
+      { configurable: {} },
+    );
+    expect(invoked[0]).toMatchObject({
+      direction: "exact",
+      date: "2026-10-23",
+      durationMinutes: 60,
+      excludeMeetingIds: ["m-60"],
+    });
+    expect(toolsUpdate.bookingDraft).toMatchObject({
+      selectedDate: "2026-10-23",
+      selectedSlot: {
+        dateStart: "2026-10-23T11:00:00",
+        dateEnd: "2026-10-23T12:00:00",
+      },
+      phase: "ready",
+    });
+
+    const mutation = await commandPrepare(
+      clinicState({
+        ...preparedState,
+        bookingDraft: toolsUpdate.bookingDraft as BookingDraft,
+        agentMessages: toolsUpdate.agentMessages as never,
+        availabilityContext: toolsUpdate.availabilityContext as AvailabilityContext,
+      }),
+    );
+    const mutationCall = ((mutation.agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
+      .tool_calls?.[0];
+    // Revalidation runs before the mutation when the snapshot still needs a fresh check.
+    if (mutationCall?.name === "present_availability_slots") {
+      expect(mutationCall.args).toMatchObject({
+        direction: "exact",
+        date: "2026-10-23",
+        durationMinutes: 60,
+        excludeMeetingIds: ["m-60"],
+        forceRefresh: true,
+      });
+      const revalidated = await createAgentToolsNode([slotsTool], "booking")(
+        clinicState({
+          ...preparedState,
+          bookingDraft: toolsUpdate.bookingDraft as BookingDraft,
+          agentMessages: (mutation.agentMessages as Overwrite<AIMessage[]>).value,
+          availabilityContext: toolsUpdate.availabilityContext as AvailabilityContext,
+        }),
+        { configurable: {} },
+      );
+      const afterRevalidate = await commandPrepare(
+        clinicState({
+          ...preparedState,
+          bookingDraft: revalidated.bookingDraft as BookingDraft,
+          agentMessages: revalidated.agentMessages as never,
+          availabilityContext: revalidated.availabilityContext as AvailabilityContext,
+        }),
+      );
+      const rescheduleCall = (
+        (afterRevalidate.agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage
+      ).tool_calls?.[0];
+      expect(rescheduleCall).toMatchObject({
+        name: "reschedule_meeting",
+        args: {
+          meetingId: "m-60",
+          dateStart: "2026-10-23T11:00:00",
+          dateEnd: "2026-10-23T12:00:00",
+        },
+      });
+    } else {
+      expect(mutationCall).toMatchObject({
+        name: "reschedule_meeting",
+        args: {
+          meetingId: "m-60",
+          dateStart: "2026-10-23T11:00:00",
+          dateEnd: "2026-10-23T12:00:00",
+        },
+      });
+    }
+  });
+
   it("records a reschedule time without entering the note step", () => {
     const draft = reduceBookingDraft(
       reduceBookingDraft(createEmptyBookingDraft(), {
@@ -7494,7 +8611,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       availabilityClinicState({
         messages: [new HumanMessage("14:00")],
         bookingDraft: draft,
-        availabilityContext: snapshot,
+        availabilityContext: {
+          ...snapshot,
+          excludeMeetingIds: ["m-1"],
+        },
       }),
     );
 
@@ -10227,19 +11347,19 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
               id: "a",
               label: "14:00",
               dateStart: "2026-10-13T14:00:00",
-              dateEnd: "2026-10-13T15:00:00",
+              dateEnd: "2026-10-13T14:30:00",
             },
           ],
         },
       ],
-      stepMinutes: 60,
+      stepMinutes: 30,
       startIntervalMinutes: 30,
     };
     let crmCalls = 0;
     const slotsTool = tool(
       async () => {
         crmCalls += 1;
-        return JSON.stringify({ days: [], stepMinutes: 60 });
+        return JSON.stringify({ days: [], stepMinutes: 30 });
       },
       {
         name: "present_availability_slots",
@@ -10590,6 +11710,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         name: "present_availability_slots",
         args: {
           direction: "nearest",
+          durationMinutes: 30,
           excludeMeetingIds: ["m-1"],
         },
       }),

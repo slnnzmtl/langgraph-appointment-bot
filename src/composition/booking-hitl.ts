@@ -1,26 +1,29 @@
 /**
  * Facade for adapter-layer confirm-card resume. Keeps telegram-bot off graph/*.
+ * Returns only the patient's decision (+ checkpoint upgrade); session transitions
+ * belong to the graph after the meeting tool reports its outcome.
  */
+import { HumanMessage } from "@langchain/core/messages";
+
 import { classifyConfirmReply } from "../shared/confirm-reply.js";
 import {
   isConfirmationAffirmation,
   isConfirmationDecline,
 } from "../shared/message-content.js";
-import type { BookingDraft } from "../graph/booking-draft.js";
 import {
   interpretInteractionReply,
-  reduceBookingSession,
   type PendingInteraction,
 } from "../graph/booking-session.js";
 
 export type ConfirmBookingResume =
   | { confirmed: true }
   | { confirmed: false }
+  | { left: true }
   | { userReply: string };
 
 export type ConfirmBookingHitlResult = {
   resume: ConfirmBookingResume;
-  /** Booking-state patch merged with checkpoint upgrade; no chat messages. */
+  /** Checkpoint upgrade (+ HumanMessage for chat/leave); no session patching. */
   update: Record<string, unknown>;
 };
 
@@ -44,56 +47,37 @@ const asMutationConfirm = (
   return null;
 };
 
-const asBookingDraft = (bookingDraft: unknown): BookingDraft | null =>
-  bookingDraft != null && typeof bookingDraft === "object"
-    ? bookingDraft as BookingDraft
-    : null;
-
 /**
  * Interpret patient text while a create/cancel/reschedule confirm card is pending.
- * Returns resume payload + booking-state update for Command; adapter appends HumanMessage.
+ * Returns resume payload + Command.update (checkpoint upgrade; HumanMessage for chat).
  */
 export const resumeConfirmBookingHitl = (
   input: ResumeConfirmBookingHitlInput,
 ): ConfirmBookingHitlResult => {
   const bookingUpdate = input.bookingUpdate ?? {};
   const mutationInteraction = asMutationConfirm(input.pendingInteraction);
-  const bookingDraft = asBookingDraft(input.bookingDraft);
   const text = input.text;
-
-  const interactionUpdate = (
-    choiceId: "confirm" | "decline",
-  ): Record<string, unknown> => {
-    if (mutationInteraction == null) {
-      return bookingUpdate;
-    }
-    const session = reduceBookingSession(
-      {
-        bookingDraft,
-        pendingInteraction: mutationInteraction,
-      },
-      { type: "interaction_choice", choiceId },
-    );
-    return {
-      ...bookingUpdate,
-      bookingDraft: session.bookingDraft,
-      pendingInteraction: choiceId === "confirm"
-        ? session.pendingInteraction
-        : null,
-    };
-  };
 
   const tap = classifyConfirmReply(text);
   if (tap.kind === "confirmed") {
     return {
       resume: { confirmed: true },
-      update: interactionUpdate("confirm"),
+      update: bookingUpdate,
     };
   }
-  if (tap.kind === "declined" || tap.kind === "leave") {
+  if (tap.kind === "declined") {
     return {
       resume: { confirmed: false },
-      update: interactionUpdate("decline"),
+      update: bookingUpdate,
+    };
+  }
+  if (tap.kind === "leave") {
+    return {
+      resume: { left: true },
+      update: {
+        ...bookingUpdate,
+        messages: [new HumanMessage(text)],
+      },
     };
   }
 
@@ -108,7 +92,7 @@ export const resumeConfirmBookingHitl = (
     ) {
       return {
         resume: { confirmed: true },
-        update: interactionUpdate("confirm"),
+        update: bookingUpdate,
       };
     }
     if (
@@ -117,28 +101,16 @@ export const resumeConfirmBookingHitl = (
     ) {
       return {
         resume: { confirmed: false },
-        update: interactionUpdate("decline"),
+        update: bookingUpdate,
       };
     }
-    const session = reduceBookingSession(
-      {
-        bookingDraft,
-        pendingInteraction: mutationInteraction,
-      },
-      { type: "mutation_chat_other" },
-    );
-    return {
-      resume: { userReply: text },
-      update: {
-        ...bookingUpdate,
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      },
-    };
   }
 
   return {
     resume: { userReply: text },
-    update: bookingUpdate,
+    update: {
+      ...bookingUpdate,
+      messages: [new HumanMessage(text)],
+    },
   };
 };

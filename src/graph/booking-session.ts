@@ -6,8 +6,10 @@ import {
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
+  SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
   VISIT_CHANGE_MENU,
 } from "../shared/clinic-constants.js";
+import { normalizeReplyLabel } from "../shared/message-content.js";
 import {
   bookingDraftCanPresentAvailability,
   reduceBookingDraft,
@@ -67,6 +69,11 @@ export type ServiceCandidateInteraction = {
   noteCandidate?: string;
   /** Who owns this catalog wait: booking = mid-flow change; faq = catalog browse. */
   owner?: "faq" | "booking";
+  /**
+   * True after the patient declined a consultation offer («Обрати іншу процедуру»
+   * / bare «Ні»). FAQ must not re-offer consultation while browsing.
+   */
+  consultationDeclined?: boolean;
   choices: InteractionChoice[];
 };
 
@@ -227,7 +234,11 @@ export const openServiceConfirmInteraction = (
   service,
   choices: [
     { id: "accept", label: acceptLabel },
-    { id: "choose_other", label: chooseOtherLabel },
+    {
+      id: "choose_other",
+      label: chooseOtherLabel,
+      aliases: [...SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES],
+    },
   ],
 });
 
@@ -385,6 +396,7 @@ export type BookingSessionEvent =
       query?: string;
       noteCandidate?: string;
       owner?: "faq" | "booking";
+      consultationDeclined?: boolean;
       choices: InteractionChoice[];
     }
   | { type: "service_unresolved"; returnLabel: string }
@@ -463,11 +475,14 @@ export const interpretInteractionReply = (
   if (trimmed.length === 0) {
     return { kind: "unmatched" };
   }
+  const normalized = normalizeReplyLabel(trimmed);
   const choice = interaction.choices.find((entry) => {
-    if (entry.label === trimmed) {
+    if (normalizeReplyLabel(entry.label) === normalized) {
       return true;
     }
-    return entry.aliases?.some((alias) => alias === trimmed) === true;
+    return entry.aliases?.some(
+      (alias) => normalizeReplyLabel(alias) === normalized,
+    ) === true;
   });
   return choice != null
     ? { kind: "choice", choiceId: choice.id }
@@ -867,20 +882,8 @@ export const reduceBookingSession = (
           }
         }
       }
-      if (interaction.kind === "mutation_confirm") {
-        if (event.choiceId === "confirm") {
-          // Keep interaction until the write succeeds; adapter clears after resume.
-          return noEffect(current);
-        }
-        if (event.choiceId === "decline") {
-          return noEffect({
-            bookingDraft: draft != null
-              ? reduceBookingDraft(draft, { type: "command_cleared" })
-              : null,
-            pendingInteraction: null,
-          });
-        }
-      }
+      // mutation_confirm affirm/decline are resume decisions (confirmed / left),
+      // not interaction_choice events — the adapter no longer pre-patches here.
       if (interaction.kind === "date_select" || interaction.kind === "time_select") {
         if (event.choiceId === "other_date" || event.choiceId === "earlier" || event.choiceId === "later") {
           return noEffect({
@@ -1030,6 +1033,9 @@ export const reduceBookingSession = (
           ...(event.query != null ? { query: event.query } : {}),
           ...(event.noteCandidate != null ? { noteCandidate: event.noteCandidate } : {}),
           owner: event.owner ?? "booking",
+          ...(event.consultationDeclined === true
+            ? { consultationDeclined: true }
+            : {}),
           choices: event.choices,
         },
       });
@@ -1134,8 +1140,8 @@ export const reduceBookingSession = (
     }
     case "mutation_chat_other": {
       // Chat text while HITL is paused: invalidate the frozen mutation but keep
-      // mutation_confirm until tools/finalize clear it. Affirm/decline use
-      // confirmed resume and never reach this event.
+      // mutation_confirm until tools/finalize clear it. Affirm/decline/leave use
+      // typed resume payloads and never reach this event.
       if (interaction?.kind !== "mutation_confirm") {
         return noEffect(current);
       }

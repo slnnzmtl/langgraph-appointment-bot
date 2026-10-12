@@ -183,6 +183,29 @@ describe("stickyContinueAgentId open note reply", () => {
     }))).toBe("faq");
   });
 
+  it("routes FAQ catalog chips to FAQ even when lastHandoff is booking after REPLACE cancel", () => {
+    expect(stickyContinueAgentId(supervisorState({
+      messages: [new HumanMessage("Ін'єкційні процедури")],
+      pendingInteraction: {
+        kind: "service_candidate",
+        owner: "faq",
+        utterance: "catalog",
+        consultationDeclined: true,
+        choices: [
+          { id: "g0", label: "Ін'єкційні процедури", serviceIds: ["svc-b", "svc-c"] },
+          { id: "svc-peel", label: "Пілінг", serviceIds: ["svc-peel"] },
+        ],
+      },
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "Запис скасовано.\n\nДоступні такі варіанти:",
+        replyButtons: ["Ін'єкційні процедури", "Пілінг"],
+      },
+    }))).toBe("faq");
+  });
+
   it("routes explicit return_to_booking to Booking over FAQ catalog", () => {
     expect(stickyContinueAgentId(supervisorState({
       messages: [new HumanMessage(RETURN_TO_BOOKING_LABEL_UK)],

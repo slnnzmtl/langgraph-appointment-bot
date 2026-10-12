@@ -4,7 +4,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { type ClinicAgentDefinition } from "../types.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
 import { trackEvent } from "../../analytics/track.js";
@@ -93,18 +93,39 @@ export const defaultMenuHasVisit = (
  * Complete a terminal cancellation outcome. The model is intentionally not
  * called again here: it must not turn a declined write into a success message
  * or ask for an action without supplying its keyboard.
+ *
+ * Main-menu leave (`abandoned`) hands control back to the supervisor so the
+ * single existing main-menu path renders the greeting + default menu.
  */
 export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
+  (state: ClinicState, _config?: RunnableConfig): ClinicStateUpdate | Command => {
     const result = terminalMeetingMutationOutcome(state);
     if (!result) {
       return {};
     }
     const outcome = classifyMeetingMutationToolMessage(result);
+    const mutationName = result.name ?? "";
+
+    if (outcome === "abandoned") {
+      trackEvent("meeting_mutation_outcome", {
+        mutation: mutationName,
+        outcome,
+      });
+      return new Command({
+        goto: "supervisor",
+        update: {
+          agentMessages: new Overwrite([] as BaseMessage[]),
+          stepCount: 0,
+          pendingCancellationPurpose: null,
+          lastHandoff: null,
+          ...closedBookingSessionUpdate(),
+        },
+      });
+    }
+
     const committed = outcome === "committed";
     const declined = outcome === "declined";
     const blocked = outcome === "blocked";
-    const mutationName = result.name ?? "";
     const replacementCancellation = state.pendingCancellationPurpose === "replacement";
     const draftSlot = state.bookingDraft?.selectedSlot;
     const draftDate = state.bookingDraft?.selectedDate;

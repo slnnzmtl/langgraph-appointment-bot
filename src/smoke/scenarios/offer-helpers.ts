@@ -1,12 +1,232 @@
 import {
   BOOKING_OFFER_MENU,
+  CONSULTATION_SERVICE_ID,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
-import { SmokeAssertError } from "../assert.js";
+import { matchingCatalogRows } from "../../graph/agent-loop/shared.js";
+import { asJsonRecord } from "../../shared/json-record.js";
+import { normalizeReplyLabel } from "../../shared/message-content.js";
+import type { McpCallTool } from "../../shared/mcp.js";
+import {
+  SERVICES_CONTEXT_MAX_ROWS,
+  type ServicesContext,
+} from "../../tools/service-tools.js";
+import { expectNotCalled, SmokeAssertError } from "../assert.js";
 import type { SmokeSession, TurnResult } from "../harness.js";
+
+const WRITE_TOOLS = [
+  "create_meeting",
+  "update_meeting",
+  "create_contact",
+  "cancel_meeting",
+  "reschedule_meeting",
+] as const;
+
+/** CRM rows in the botulinum therapy family (live catalog naming). */
+const BOTULINUM_FAMILY_LABEL = "ботулінотерап";
 
 export const isConsultationName = (name: string): boolean =>
   /консультац/i.test(name.trim());
+
+export type NamedProcedurePick = {
+  id: string;
+  name: string;
+  /** Free-text token for «запиши на {token}» that uniquely matches this row. */
+  token: string;
+  durationMinutes?: number;
+};
+
+const STEM_MIN_LEN = 5;
+
+/** Candidate utterance tokens from a CRM service name (longest first). */
+const candidateTokensForName = (name: string): string[] => {
+  const normalized = normalizeReplyLabel(name);
+  const words = normalized.split(/[\s,/()]+/u).filter((part) => part.length >= STEM_MIN_LEN);
+  const tokens = new Set<string>();
+  for (const word of words) {
+    tokens.add(word);
+    for (let len = word.length; len >= STEM_MIN_LEN; len -= 1) {
+      tokens.add(word.slice(0, len));
+    }
+  }
+  return [...tokens].sort((left, right) => right.length - left.length);
+};
+
+/**
+ * Pick a non-consultation catalog row with a free-text token that
+ * {@link matchingCatalogRows} resolves uniquely. Prefers /колаген/i names.
+ */
+export const pickUniqueNamedProcedure = (
+  services: ServicesContext["list"],
+  label: string,
+): NamedProcedurePick => {
+  const catalog = services.slice(0, SERVICES_CONTEXT_MAX_ROWS);
+  const nonConsult = catalog.filter(
+    (row) => row.id !== CONSULTATION_SERVICE_ID && !isConsultationName(row.name),
+  );
+  if (nonConsult.length === 0) {
+    throw new SmokeAssertError(
+      `${label}: no non-consultation services in catalog (${catalog.length} rows)`,
+    );
+  }
+  const ordered = [
+    ...nonConsult.filter((row) => /колаген/i.test(row.name)),
+    ...nonConsult.filter((row) => !/колаген/i.test(row.name)),
+  ];
+  for (const row of ordered) {
+    for (const token of candidateTokensForName(row.name)) {
+      const matches = matchingCatalogRows(token, catalog);
+      if (matches.length === 1 && matches[0]!.id === row.id) {
+        return {
+          id: row.id,
+          name: row.name,
+          token,
+          ...(row.duration != null && Number.isFinite(row.duration)
+            ? { durationMinutes: row.duration }
+            : {}),
+        };
+      }
+    }
+  }
+  throw new SmokeAssertError(
+    `${label}: no unique matchingCatalogRows token among ${nonConsult.length} non-consultation services`,
+  );
+};
+
+export type FamilyFreeTextPick = {
+  text: "ботокс";
+  familyIds: string[];
+};
+
+/**
+ * Live botulinum family for free-text «ботокс» smoke coverage. Requires ≥2 CRM
+ * rows. Lexical may already hit brand titles containing «ботокс»; otherwise the
+ * LLM selector path must resolve the family.
+ */
+export const pickFamilyFreeText = (
+  services: ServicesContext["list"],
+  label: string,
+): FamilyFreeTextPick => {
+  const familyIds = services
+    .filter((row) => normalizeReplyLabel(row.name).includes(BOTULINUM_FAMILY_LABEL))
+    .map((row) => row.id);
+  if (familyIds.length < 2) {
+    throw new SmokeAssertError(
+      `${label}: need ≥2 botulinum catalog rows for «ботокс» free-text, got ${familyIds.length}`,
+    );
+  }
+  const familySet = new Set(familyIds);
+  const lexical = matchingCatalogRows("ботокс", services);
+  const lexicalOutsideFamily = lexical.filter((row) => !familySet.has(row.id));
+  if (lexicalOutsideFamily.length > 0) {
+    throw new SmokeAssertError(
+      `${label}: matchingCatalogRows(«ботокс») hit non-family rows ${lexicalOutsideFamily.map((r) => r.name).join(" | ")}`,
+    );
+  }
+  return { text: "ботокс", familyIds };
+};
+
+/** Assert a turn opened narrowed FAQ family chips (not root, not Так/Обрати). */
+export const expectFamilyCatalogTurn = (
+  label: string,
+  turn: TurnResult,
+  options: {
+    familyIds: readonly string[];
+    rootChoiceIds?: readonly string[];
+  },
+): void => {
+  const pending = turn.state.pendingInteraction;
+  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
+    throw new SmokeAssertError(
+      `${label}: expected faq service_candidate, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
+    );
+  }
+  if (pending.choices.length < 2) {
+    throw new SmokeAssertError(
+      `${label}: expected ≥2 family choices, got ${pending.choices.length}`,
+    );
+  }
+  const familySet = new Set(options.familyIds);
+  for (const choice of pending.choices) {
+    for (const id of choice.serviceIds ?? []) {
+      if (!familySet.has(id)) {
+        throw new SmokeAssertError(
+          `${label}: choice «${choice.label}» includes non-family id ${id}`,
+        );
+      }
+    }
+    if (!turn.buttons.includes(choice.label)) {
+      throw new SmokeAssertError(
+        `${label}: button missing for choice «${choice.label}» (buttons=[${turn.buttons.join(" | ")}])`,
+      );
+    }
+  }
+  if (options.rootChoiceIds != null) {
+    const rootSet = new Set(options.rootChoiceIds);
+    const sameAsRoot =
+      pending.choices.length === options.rootChoiceIds.length
+      && pending.choices.every((choice) => rootSet.has(choice.id));
+    if (sameAsRoot) {
+      throw new SmokeAssertError(
+        `${label}: choices still match root catalog ids [${options.rootChoiceIds.join(",")}]`,
+      );
+    }
+  }
+  if (turn.buttons.includes(BOOKING_OFFER_MENU[0])) {
+    throw new SmokeAssertError(
+      `${label}: unexpected «${BOOKING_OFFER_MENU[0]}» on family catalog keyboard`,
+    );
+  }
+  // Brand-level guide (Botox/Disport or Nabota), not only «Корекція ботокс» / «Мезоботокс».
+  const brandNeedles = ["disport", "nabota"];
+  const hasBrandChip = turn.buttons.some((button) => {
+    const normalized = normalizeReplyLabel(button);
+    return brandNeedles.some((needle) => normalized.includes(needle));
+  });
+  if (!hasBrandChip) {
+    throw new SmokeAssertError(
+      `${label}: expected a Disport/Nabota brand chip, got [${turn.buttons.join(" | ")}]`,
+    );
+  }
+  if (turn.state.bookingDraft?.serviceAcceptance != null) {
+    throw new SmokeAssertError(
+      `${label}: must not guess serviceAcceptance (${turn.state.bookingDraft.serviceAcceptance.service.id})`,
+    );
+  }
+  expectNotCalled(label, turn.calls, [...WRITE_TOOLS]);
+};
+
+/** Load cService rows the same way list_services does (for smoke procedure picks). */
+export const loadCatalogServiceRows = async (
+  callTool: McpCallTool,
+  label: string,
+): Promise<ServicesContext["list"]> => {
+  const raw = await callTool("search_entity", {
+    entityType: "cService",
+    select: ["id", "name", "duration", "description"],
+    limit: 200,
+  });
+  const record = asJsonRecord(raw);
+  const list = Array.isArray(record?.list) ? record.list : Array.isArray(raw) ? raw : [];
+  const rows: ServicesContext["list"] = [];
+  for (const entry of list) {
+    const row = asJsonRecord(entry);
+    if (row == null || typeof row.id !== "string" || typeof row.name !== "string") {
+      continue;
+    }
+    rows.push({
+      id: row.id,
+      name: row.name,
+      ...(row.duration !== undefined && row.duration !== null
+        ? { duration: Number(row.duration) }
+        : {}),
+    });
+  }
+  if (rows.length === 0) {
+    throw new SmokeAssertError(`${label}: search_entity(cService) returned no rows`);
+  }
+  return rows;
+};
 
 const hasBookingOfferKeyboard = (buttons: string[]): boolean =>
   buttons.includes(BOOKING_OFFER_MENU[0]) && buttons.includes(BOOKING_OFFER_MENU[1]);

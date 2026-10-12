@@ -143,6 +143,14 @@ export const shouldContinueInSpecialist = (
     humanText,
   );
   if (interactionMatch.kind === "choice") {
+    // «Обрати іншу процедуру» / bare «Ні» on service_confirm must reach
+    // faqPredicates (closed session + FAQ catalog), not sticky booking.
+    if (
+      interactionMatch.choiceId === "choose_other"
+      && state.pendingInteraction?.kind === "service_confirm"
+    ) {
+      return false;
+    }
     return true;
   }
   if (
@@ -197,6 +205,17 @@ export const stickyContinueAgentId = (
   }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
+  // REPLACE cancel may open an FAQ-owned catalog while lastHandoff is still
+  // booking — keep chip taps / free text on FAQ prepare.
+  if (
+    state.pendingInteraction?.kind === "service_candidate"
+    && state.pendingInteraction.owner === "faq"
+    && human.length > 0
+    && !isSupervisorOwnedLabel(human)
+    && !isSupervisorOwnedLabel(humanLine)
+  ) {
+    return FAQ_AGENT_ID;
+  }
   const returnLabel = state.pendingInteraction?.choices.find(
     (choice) => choice.id === "return_to_booking",
   )?.label;

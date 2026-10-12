@@ -407,6 +407,30 @@ describe("reduceBookingSession", () => {
       "accept",
       "choose_other",
     ]);
+    const chooseOther = result.pendingInteraction?.choices.find(
+      (choice) => choice.id === "choose_other",
+    );
+    expect(chooseOther?.aliases).toEqual(
+      expect.arrayContaining(["ні", "no", "не треба"]),
+    );
+  });
+
+  it("service_candidates_opened preserves consultationDeclined", () => {
+    const result = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_candidates_opened",
+        utterance: "Обрати іншу процедуру",
+        owner: "faq",
+        consultationDeclined: true,
+        choices: [{ id: "g1", label: "Ін'єкції", serviceIds: ["a", "b"] }],
+      },
+    );
+    expect(result.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      consultationDeclined: true,
+    });
   });
 
   it("accept on service_confirm accepts the service; choose_other opens catalog_detour", () => {

@@ -48,6 +48,7 @@ import {
 import {
   createResolveServiceChange,
   createServiceCandidatePartitioner,
+  createServiceCandidateSelector,
 } from "./service-resolution.js";
 import type { AgentPrefetchResult } from "./types.js";
 import { createClinicStateAnnotation } from "./state.js";
@@ -144,6 +145,14 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const faqPartitionCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
     ? createServiceCandidatePartitioner(options.supervisorLlm)
     : undefined;
+  const faqSelectCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
+    ? createServiceCandidateSelector(options.supervisorLlm)
+    : undefined;
+  const faqListServicesTool = options.agentTools[FAQ_AGENT_ID]
+    ?.find((entry) => entry.name === "list_services");
+  const loadServices = faqListServicesTool != null
+    ? async () => normalizeListServicesResult(String(await faqListServicesTool.invoke({})))
+    : undefined;
 
   for (const agent of options.agents) {
     const tools = options.agentTools[agent.id] ?? [];
@@ -157,14 +166,23 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const interactionRender = interactionRenderNodeName(agent.id);
     const isBooking = agent.id === BOOKING_AGENT_ID;
 
-    const listServicesTool = agent.id === FAQ_AGENT_ID
-      ? tools.find((entry) => entry.name === "list_services")
-      : undefined;
-    const loadServices = listServicesTool != null
-      ? async () => normalizeListServicesResult(String(await listServicesTool.invoke({})))
-      : undefined;
     const classifyContactName = isBooking
       ? (options.classifyContactName ?? createContactNameClassifier(options.supervisorLlm))
+      : undefined;
+
+    const prepareOptions = agent.id === FAQ_AGENT_ID || isBooking
+      ? {
+          ...(faqPartitionCandidates != null
+            ? { partitionCandidates: faqPartitionCandidates }
+            : {}),
+          ...(faqSelectCandidates != null
+            ? { selectCandidates: faqSelectCandidates }
+            : {}),
+          ...(loadServices != null ? { loadServices } : {}),
+          ...(isBooking && classifyContactName != null
+            ? { classifyContactName }
+            : {}),
+        }
       : undefined;
 
     graph = graph
@@ -172,20 +190,17 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         prepare,
         createAgentPrepareNode(
           agent.id,
-          agent.id === FAQ_AGENT_ID
-            ? {
-                ...(faqPartitionCandidates != null
-                  ? { partitionCandidates: faqPartitionCandidates }
-                  : {}),
-                ...(loadServices != null ? { loadServices } : {}),
-              }
-            : isBooking && classifyContactName != null
-              ? { classifyContactName }
-              : undefined,
+          prepareOptions,
         ),
       )
       .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
-      .addNode(mutationFinalize, createAgentMutationFinalizeNode(agent))
+      .addNode(
+        mutationFinalize,
+        createAgentMutationFinalizeNode(agent),
+        // Plain updates follow the static edge to END; main-menu leave Command
+        // hands control back to the supervisor's existing greeting path.
+        { ends: [END, "supervisor"] },
+      )
       .addNode(
         llm,
         createAgentLlmNode({
@@ -204,8 +219,22 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             : {}),
         }),
       )
-      .addNode(toolsNode, createAgentToolsNode(tools, agent.id))
-      .addNode(finalize, createAgentFinalizeNode(agent));
+      .addNode(
+        toolsNode,
+        createAgentToolsNode(
+          tools,
+          agent.id,
+          isBooking && faqPartitionCandidates != null
+            ? { partitionCandidates: faqPartitionCandidates }
+            : undefined,
+        ),
+      )
+      .addNode(
+        finalize,
+        createAgentFinalizeNode(agent),
+        // Safety-net path may return the same abandon Command as mutationFinalize.
+        { ends: [END, "supervisor"] },
+      );
 
     if (isBooking) {
       const classify = options.classifyNoteTurn
@@ -267,14 +296,13 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             llm,
             isBooking ? commandPrepare : undefined,
             isBooking ? noteOrch : undefined,
-            isBooking ? finalize : undefined,
+            finalize,
           ),
         {
           [llm]: llm,
           [commandPrepare]: commandPrepare,
-          ...(isBooking
-            ? { [noteOrch]: noteOrch, [finalize]: finalize }
-            : {}),
+          [finalize]: finalize,
+          ...(isBooking ? { [noteOrch]: noteOrch } : {}),
         },
       )
       .addConditionalEdges(

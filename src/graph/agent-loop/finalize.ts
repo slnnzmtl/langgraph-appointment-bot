@@ -4,7 +4,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
@@ -264,9 +264,10 @@ const withServiceConfirmQuestion = (
 };
 
 export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate => {
+  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate | Command => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
+      // Includes main-menu leave → Command({ goto: "supervisor" }).
       return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;
@@ -315,8 +316,8 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           },
         };
       }
-      // Prepare opened a booking-owned menu without an LLM turn (REPLACE cancel
-      // continue, or fresh «Записатись» consultation offer).
+      // Prepare/tools opened a booking-owned menu without an LLM turn (REPLACE
+      // cancel continue into catalog, book-intent family chips, or «Записатись»).
       if (
         agent.id === BOOKING_AGENT_ID
         && state.pendingInteraction != null
@@ -324,19 +325,34 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         && (
           state.pendingCancellationPurpose === "replacement"
           || state.pendingInteraction.kind === "service_confirm"
+          || (
+            state.pendingInteraction.kind === "service_candidate"
+            && state.pendingInteraction.owner === "faq"
+          )
         )
       ) {
-        const replyText = String(
-          renderBookingInteractionMessage(state.pendingInteraction).content,
-        );
-        const replyButtons = replyButtonsForInteraction(state.pendingInteraction);
+        const interaction = state.pendingInteraction;
+        const isFaqCatalog =
+          interaction.kind === "service_candidate"
+          && interaction.owner === "faq";
+        const body = isFaqCatalog
+          ? renderFaqCatalogReply(
+              interaction.choices,
+              state.servicesContext?.list ?? [],
+            )
+          : String(renderBookingInteractionMessage(interaction).content);
+        const replyText =
+          state.pendingCancellationPurpose === "replacement"
+            ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${body}`
+            : body;
+        const replyButtons = replyButtonsForInteraction(interaction);
         return {
           ...cleared,
           ...confirmationCleanup,
           ...(state.pendingCancellationPurpose === "replacement"
             ? { pendingCancellationPurpose: null }
             : {}),
-          pendingInteraction: state.pendingInteraction,
+          pendingInteraction: interaction,
           messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
           lastHandoff: {
             agentId: agent.id,
@@ -392,6 +408,50 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
             replyButtons: [OTHER_DATE_LABEL, MAIN_MENU_LABEL],
           },
         };
+      }
+      // Prepare opened FAQ catalog or a catalog offer without an LLM turn.
+      if (agent.id === FAQ_AGENT_ID && state.pendingInteraction != null) {
+        const interaction = state.pendingInteraction;
+        if (
+          interaction.kind === "service_candidate"
+          && interaction.owner === "faq"
+        ) {
+          const replyText = renderFaqCatalogReply(
+            interaction.choices,
+            state.servicesContext?.list ?? [],
+          );
+          const replyButtons = replyButtonsForInteraction(interaction);
+          return {
+            ...cleared,
+            ...confirmationCleanup,
+            pendingInteraction: interaction,
+            messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
+            lastHandoff: {
+              agentId: agent.id,
+              agentName: agent.name,
+              status: "ok",
+              replyText,
+              replyButtons,
+            },
+          };
+        }
+        if (interaction.kind === "service_confirm") {
+          const replyText = String(renderBookingInteractionMessage(interaction).content);
+          const replyButtons = replyButtonsForInteraction(interaction);
+          return {
+            ...cleared,
+            ...confirmationCleanup,
+            pendingInteraction: interaction,
+            messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
+            lastHandoff: {
+              agentId: agent.id,
+              agentName: agent.name,
+              status: "ok",
+              replyText,
+              replyButtons,
+            },
+          };
+        }
       }
       return {
         ...cleared,
@@ -604,28 +664,94 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
           owner: "faq";
         };
         if (faqCatalogAction === "offer_consultation") {
-          const session = reduceBookingSession(
-            {
-              bookingDraft: state.bookingDraft ?? null,
-              pendingInteraction: catalog,
-            },
-            {
-              type: "service_offered",
-              service: consultationService("catalog"),
-            },
-          );
-          serviceOfferUpdate = {
-            bookingDraft: session.bookingDraft,
-            pendingInteraction: session.pendingInteraction,
-          };
-          if (session.pendingInteraction?.kind === "service_confirm") {
-            replyText = withServiceConfirmQuestion(replyText, session.pendingInteraction);
-            replyButtons = replyButtonsForInteraction(session.pendingInteraction);
-            yieldFlag = true;
-            trackEvent("reply_menu_filled", {
-              menu: "service_confirm",
-              reason: "faq_catalog_action",
-            });
+          // Patient already declined consultation («Обрати іншу процедуру» /
+          // bare «Ні») — keep browsing. Singleton catalog level → offer that
+          // procedure instead of reopening the consultation yes/no.
+          if (catalog.consultationDeclined === true) {
+            const singletonIds = catalog.choices.length === 1
+              ? catalog.choices[0]?.serviceIds
+              : undefined;
+            const singletonService =
+              singletonIds != null && singletonIds.length === 1
+                ? (state.servicesContext?.list ?? []).find(
+                    (row) => row.id === singletonIds[0],
+                  )
+                : undefined;
+            if (singletonService != null) {
+              const session = reduceBookingSession(
+                {
+                  bookingDraft: state.bookingDraft ?? null,
+                  pendingInteraction: catalog,
+                },
+                {
+                  type: "service_offered",
+                  service: {
+                    id: singletonService.id,
+                    name: singletonService.name,
+                    ...(singletonService.duration != null
+                      ? { durationMinutes: singletonService.duration }
+                      : {}),
+                    source: "catalog",
+                  },
+                },
+              );
+              serviceOfferUpdate = {
+                bookingDraft: session.bookingDraft,
+                pendingInteraction: session.pendingInteraction,
+              };
+              if (session.pendingInteraction?.kind === "service_confirm") {
+                replyText = withServiceConfirmQuestion(
+                  replyText,
+                  session.pendingInteraction,
+                );
+                replyButtons = replyButtonsForInteraction(
+                  session.pendingInteraction,
+                );
+                yieldFlag = true;
+                trackEvent("reply_menu_filled", {
+                  menu: "service_confirm",
+                  reason: "faq_catalog_declined_singleton",
+                });
+              }
+            } else {
+              const modelIntro = faqCatalogIntroFromModel(replyText);
+              replyText = renderFaqCatalogReply(
+                catalog.choices,
+                state.servicesContext?.list ?? [],
+                modelIntro,
+              );
+              replyButtons = replyButtonsForInteraction(catalog);
+              // Keep the open catalog explicitly so the decline flag survives.
+              serviceOfferUpdate = { pendingInteraction: catalog };
+              trackEvent("reply_menu_filled", {
+                menu: "service_candidate",
+                reason: "faq_offer_blocked_declined",
+              });
+            }
+          } else {
+            const session = reduceBookingSession(
+              {
+                bookingDraft: state.bookingDraft ?? null,
+                pendingInteraction: catalog,
+              },
+              {
+                type: "service_offered",
+                service: consultationService("catalog"),
+              },
+            );
+            serviceOfferUpdate = {
+              bookingDraft: session.bookingDraft,
+              pendingInteraction: session.pendingInteraction,
+            };
+            if (session.pendingInteraction?.kind === "service_confirm") {
+              replyText = withServiceConfirmQuestion(replyText, session.pendingInteraction);
+              replyButtons = replyButtonsForInteraction(session.pendingInteraction);
+              yieldFlag = true;
+              trackEvent("reply_menu_filled", {
+                menu: "service_confirm",
+                reason: "faq_catalog_action",
+              });
+            }
           }
         } else if (faqCatalogAction === "close_catalog") {
           serviceOfferUpdate = { pendingInteraction: null };

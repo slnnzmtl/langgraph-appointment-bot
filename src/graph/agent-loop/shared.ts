@@ -35,6 +35,7 @@ import {
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
+  SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
   VISIT_CHANGE_MENU,
   VISIT_CHANGE_MENU_EN,
 } from "../../shared/clinic-constants.js";
@@ -42,14 +43,18 @@ import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record
 import {
   extractMessageTextContent,
   extractRawMessageText,
+  isSupervisorOwnedLabel,
   labelIdFor,
   matchesReplyLabel,
+  normalizeReplyLabel,
   requestsConsultation,
 } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import { getTelegramUserId } from "../../tools/telegram-user-context.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
+  availabilityMatchesBooking,
+  availabilityRequestFieldsFromDraft,
   reduceBookingDraft,
   type BookingDraft,
   type BookingService,
@@ -76,7 +81,10 @@ import {
 import { buildFaqCatalogChoices, shortenFaqChoiceLabels } from "../faq-catalog.js";
 import {
   partitionRemainingServiceChoices,
+  safeSelect,
+  interactionChoicesFromSelectorGroups,
   type PartitionServiceCandidates,
+  type SelectServiceCandidates,
 } from "../service-resolution.js";
 
 /** CRM writes that invalidate checkpointed contact/meetings prefetch. */
@@ -100,6 +108,11 @@ export const FAQ_CATALOG_SHORTCUT_LABELS = new Set<string>([
   BOOKING_OFFER_MENU[1],
   BOOKING_OFFER_MENU_EN[1],
 ]);
+
+/** True for «Обрати іншу процедуру» / Choose another procedure / bare «Ні». */
+export const isFaqCatalogBrowseShortcut = (text: string): boolean =>
+  FAQ_CATALOG_SHORTCUT_LABELS.has(text)
+  || matchesReplyLabel(text, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES);
 
 /** Services-guide taps: consultation offer, not catalog drill-down chips. */
 export const FAQ_SERVICES_GUIDE_LABELS = new Set<string>([
@@ -162,6 +175,7 @@ export type MeetingMutationOutcome =
   | "committed"
   | "pending_confirmation"
   | "declined"
+  | "abandoned"
   | "blocked"
   | "failed"
   | null;
@@ -184,6 +198,10 @@ export const classifyMeetingMutationToolMessage = (
   if (record.awaitingConfirmation === true) {
     return "pending_confirmation";
   }
+  // Main-menu leave: cancelled write with an explicit left flag.
+  if (record.left === true && record.cancelled === true) {
+    return "abandoned";
+  }
   if (record.cancelled === true) {
     return "declined";
   }
@@ -193,9 +211,9 @@ export const classifyMeetingMutationToolMessage = (
   return committedMeetingEntityId(body) != null ? "committed" : "failed";
 };
 
+/** HITL ❌ only — main-menu leave is `abandoned` and must not keep the draft for re-pick. */
 export const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
-  MEETING_MUTATION_TOOLS.has(message.name ?? "")
-  && asJsonRecord(extractMessageTextContent(message.content).trim())?.cancelled === true;
+  classifyMeetingMutationToolMessage(message) === "declined";
 
 /**
  * True when model prose must not ship: a non-committed meeting write this turn,
@@ -213,6 +231,7 @@ export const bookingOutcomeRiskState = (state: ClinicState): boolean => {
       outcome === "failed"
       || outcome === "blocked"
       || outcome === "declined"
+      || outcome === "abandoned"
       || outcome === "pending_confirmation"
     ) {
       return true;
@@ -238,19 +257,31 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
       const record = asJsonRecord(extractMessageTextContent(message.content).trim());
       const isReplacementConflict = record?.error === "Already booked";
       const isInvariantGuard = record?.error === CREATE_CONSULTATION_REQUIRED_ERROR;
-      if (!isReplacementConflict && (isInvariantGuard || outcome === "committed" || outcome === "declined" || outcome === "failed")) {
+      if (
+        !isReplacementConflict
+        && (
+          isInvariantGuard
+          || outcome === "committed"
+          || outcome === "declined"
+          || outcome === "abandoned"
+          || outcome === "failed"
+        )
+      ) {
         return message;
       }
       continue;
     }
     // A committed replacement cancellation is a continuation, not a
     // patient-facing terminal outcome: the replacement create flow owns it.
-    // Declined/failed replacement cancellation outcomes are terminal, but must
-    // retain their replacement origin for the correct response/menu.
+    // Declined/failed/abandoned replacement cancellation outcomes are terminal,
+    // but must retain their replacement origin for the correct response/menu.
     if (state.pendingCancellationPurpose === "replacement") {
-      // Failed/blocked replacement cancel must close the session — leaving
-      // cancelling + originalCommand would replay a stale create later.
-      return outcome === "declined" || outcome === "failed" || outcome === "blocked"
+      // Failed/blocked/abandoned replacement cancel must close the session —
+      // leaving cancelling + originalCommand would replay a stale create later.
+      return outcome === "declined"
+        || outcome === "abandoned"
+        || outcome === "failed"
+        || outcome === "blocked"
         ? message
         : null;
     }
@@ -259,7 +290,13 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     if (state.bookingDraft?.replacement != null) {
       return null;
     }
-    if (outcome === "committed" || outcome === "declined" || outcome === "blocked" || outcome === "failed") {
+    if (
+      outcome === "committed"
+      || outcome === "declined"
+      || outcome === "abandoned"
+      || outcome === "blocked"
+      || outcome === "failed"
+    ) {
       return message;
     }
     return null;
@@ -267,14 +304,19 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
   return null;
 };
 
-/** Committed, failed, or HITL ❌ — stale free/busy and note step must not survive. */
+/** Committed, failed, HITL ❌, or main-menu leave — stale free/busy must not survive. */
 export const meetingMutationClearsAvailability = (messages: BaseMessage[]): boolean =>
   messages.some((message) => {
     if (!(message instanceof ToolMessage)) {
       return false;
     }
     const outcome = classifyMeetingMutationToolMessage(message);
-    return outcome === "committed" || outcome === "failed" || meetingMutationIsHitlDecline(message);
+    return (
+      outcome === "committed"
+      || outcome === "failed"
+      || outcome === "declined"
+      || outcome === "abandoned"
+    );
   });
 
 const toolMessageName = (message: BaseMessage): string | undefined => {
@@ -589,16 +631,77 @@ export const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =
 
 /** Min length so tiny taps like «1» do not steal an offer keyboard or resume. */
 const FAQ_CATALOG_NAME_MIN_LEN = 3;
+/** Stem tokens shorter than this are too ambiguous for prefix matching. */
+const FAQ_CATALOG_STEM_MIN_LEN = 5;
+
+/** Strip leading negation / book-intent lead-ins before catalog name matching. */
+export const normalizeCatalogUtterance = (text: string): string => {
+  let normalized = normalizeReplyLabel(text);
+  // Leading bare/soft negation («ні, …», «no …», «не треба …»).
+  normalized = normalized
+    .replace(/^(?:ні|нi|no|не\s+треба)\s*[,:]?\s+/u, "")
+    .trim();
+  // Book-intent prefixes: «запиши на», «хочу на», «book me for», …
+  normalized = normalized
+    .replace(
+      /^(?:запиши(?:ть)?(?:\s+мене)?|записатись|записатися|хочу|бажаю|book(?:\s+me)?(?:\s+for)?)\s+(?:на\s+)?/u,
+      "",
+    )
+    .trim();
+  return normalized;
+};
+
+/** Collapse doubled letters so «коллаген» aligns with «колаген…». */
+const collapseDoubledLetters = (token: string): string =>
+  token.replace(/(.)\1+/gu, "$1");
+
+const catalogNameTokens = (name: string): string[] =>
+  name.split(/[\s,/()]+/u).filter((token) => token.length > 0);
+
+/** Shared prefix length — handles UA case endings («…цію» vs «…ція»). */
+const sharedPrefixLength = (left: string, right: string): number => {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+};
+
+const utteranceMatchesCatalogName = (
+  normalizedUtterance: string,
+  name: string,
+): boolean => {
+  if (
+    normalizedUtterance === name
+    || name.includes(normalizedUtterance)
+    || normalizedUtterance.includes(name)
+  ) {
+    return true;
+  }
+  const utteranceTokens = catalogNameTokens(normalizedUtterance)
+    .map(collapseDoubledLetters)
+    .filter((token) => token.length >= FAQ_CATALOG_STEM_MIN_LEN);
+  if (utteranceTokens.length === 0) {
+    return false;
+  }
+  const nameTokens = catalogNameTokens(name).map(collapseDoubledLetters);
+  return utteranceTokens.some((token) =>
+    nameTokens.some(
+      (nameToken) =>
+        sharedPrefixLength(token, nameToken) >= FAQ_CATALOG_STEM_MIN_LEN,
+    ));
+};
 
 /**
  * CRM rows whose names match free-text (brand/family/full title). Shared by
- * offeredServiceForTurn (first hit) and post-offer catalog resume (all ids).
+ * offeredServiceForTurn (unique hit only) and catalog free-text narrowing.
  */
 export const matchingCatalogRows = (
   text: string,
   services: ServicesContext["list"],
 ): ServicesContext["list"] => {
-  const normalized = text.trim().toLocaleLowerCase().replace(/\s+/g, " ");
+  const normalized = normalizeCatalogUtterance(text);
   if (
     normalized.length < FAQ_CATALOG_NAME_MIN_LEN
     || normalized.includes("?")
@@ -606,23 +709,114 @@ export const matchingCatalogRows = (
     return [];
   }
   return services.filter((row) => {
-    const name = row.name.trim().toLocaleLowerCase().replace(/\s+/g, " ");
-    return (
-      normalized === name
-      || name.includes(normalized)
-      || normalized.includes(name)
-    );
+    const name = normalizeReplyLabel(row.name);
+    return utteranceMatchesCatalogName(normalized, name);
   });
+};
+
+export type CatalogFreeTextResult =
+  | { kind: "none" }
+  | { kind: "one"; row: ServicesContext["list"][number] }
+  | {
+    kind: "many";
+    ids: string[];
+    groups?: Array<{ label: string; serviceIds: string[] }>;
+  };
+
+/**
+ * Whole-family selector override: include every brand/zone in the procedure
+ * family and return one guide level — not only titles that contain the word.
+ */
+export const CATALOG_FAMILY_SELECTOR_QUERY =
+  "Include every CRM row in that procedure family (all brands and zones), "
+  + "including titles that do not contain the patient's word. "
+  + "Group exactly one guide level (brand or zone), the same level as tapping that family.";
+
+/**
+ * Narrow free-text to a procedure-family catalog level. Exact CRM name → one
+ * offer; otherwise the LLM selector expands slang («ботокс») to the full
+ * family. Lexical substring hits alone must not skip the selector.
+ */
+export const resolveCatalogFreeText = async (input: {
+  text: string;
+  rows: ServicesContext["list"];
+  selectCandidates?: SelectServiceCandidates;
+}): Promise<CatalogFreeTextResult> => {
+  const trimmed = input.text.trim();
+  if (
+    trimmed.length === 0
+    || trimmed.includes("?")
+    || labelIdFor(trimmed) != null
+    || isSupervisorOwnedLabel(trimmed)
+    || isFaqCatalogBrowseShortcut(trimmed)
+    || matchesReplyLabel(trimmed, FAQ_SERVICES_GUIDE_LABELS)
+  ) {
+    return { kind: "none" };
+  }
+  const normalized = normalizeCatalogUtterance(trimmed);
+  if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
+    return { kind: "none" };
+  }
+  if (input.rows.length === 0) {
+    return { kind: "none" };
+  }
+
+  const lexical = matchingCatalogRows(trimmed, input.rows);
+  if (lexical.length === 1) {
+    const row = lexical[0]!;
+    // Exact CRM title only — substring/stem hits fall through to the family selector.
+    if (normalizeReplyLabel(row.name) === normalized) {
+      return { kind: "one", row };
+    }
+  }
+
+  const allowlist = new Map(input.rows.map((row) => [row.id, row]));
+  if (input.selectCandidates != null) {
+    const selection = await safeSelect(input.selectCandidates, {
+      utterance: normalized,
+      query: CATALOG_FAMILY_SELECTOR_QUERY,
+      candidates: input.rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        ...(row.description != null ? { description: row.description } : {}),
+      })),
+    });
+    const ids = [...new Set(
+      (selection?.serviceIds ?? []).filter((id) => allowlist.has(id)),
+    )];
+    if (ids.length === 1) {
+      return { kind: "one", row: allowlist.get(ids[0]!)! };
+    }
+    if (ids.length > 1) {
+      return {
+        kind: "many",
+        ids,
+        ...(selection?.groups != null ? { groups: selection.groups } : {}),
+      };
+    }
+  }
+
+  // One lexical hit → offer that CRM row; several hits need the selector above.
+  if (lexical.length === 1) {
+    return { kind: "one", row: lexical[0]! };
+  }
+  return { kind: "none" };
 };
 
 const catalogServiceForText = (
   text: string,
   state: ClinicState,
 ): { id: string; name: string; durationMinutes?: number; source: "catalog" } | null => {
-  const service = matchingCatalogRows(text, state.servicesContext?.list ?? [])[0];
-  if (service == null) {
+  const normalized = normalizeCatalogUtterance(text);
+  if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
     return null;
   }
+  const rows = state.servicesContext?.list ?? [];
+  const exact = rows.filter((row) => normalizeReplyLabel(row.name) === normalized);
+  if (exact.length !== 1) {
+    return null;
+  }
+  const service = exact[0]!;
   return {
     id: service.id,
     name: service.name,
@@ -727,8 +921,8 @@ export const offeredServiceForTurn = (
   const lastHumanText = lastHuman != null
     ? extractMessageTextContent(lastHuman.content).trim()
     : "";
-  // «Обрати іншу процедуру» opens FAQ catalog — do not re-offer the pending peel.
-  if (FAQ_CATALOG_SHORTCUT_LABELS.has(lastHumanText)) {
+  // «Обрати іншу процедуру» / bare «Ні» opens FAQ catalog — do not re-offer.
+  if (isFaqCatalogBrowseShortcut(lastHumanText)) {
     return null;
   }
   if (state.bookingDraft?.serviceAcceptance?.status === "pending") {
@@ -772,12 +966,10 @@ export const rescheduleAvailabilityArgsFromBookingContext = (
   if (!meeting) {
     return null;
   }
-  const durationMinutes = state.bookingDraft?.serviceAcceptance?.service.durationMinutes;
   return {
     ...args,
     direction: args.direction ?? "nearest",
-    excludeMeetingIds: [meeting.id],
-    ...(durationMinutes != null ? { durationMinutes } : {}),
+    ...availabilityRequestFieldsFromDraft(state.bookingDraft),
   };
 };
 
@@ -1041,10 +1233,7 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
 
   const selectedDate = state.bookingDraft?.selectedDate
     ?? (authoritativeSelectedSlot(state)?.dateStart.slice(0, 10) || null);
-  const availabilityMatchesService = availability == null
-    || availability.serviceId == null
-    || availability.serviceId === state.bookingDraft?.serviceAcceptance?.service.id;
-  const matchedSlot = availabilityMatchesService
+  const matchedSlot = availabilityMatchesBooking(availability, state.bookingDraft)
     ? matchAvailabilitySlot(human, availability, selectedDate)
     : null;
 
@@ -1195,14 +1384,7 @@ export const availabilityRecoveryOffer = (
   if (!availability) {
     return null;
   }
-  const acceptedId = state.bookingDraft?.serviceAcceptance?.status === "accepted"
-    ? state.bookingDraft.serviceAcceptance.service.id
-    : undefined;
-  if (
-    availability.serviceId != null
-    && acceptedId != null
-    && availability.serviceId !== acceptedId
-  ) {
+  if (!availabilityMatchesBooking(availability, state.bookingDraft)) {
     return null;
   }
   const selectedDate = state.bookingDraft?.selectedDate;
@@ -1296,8 +1478,24 @@ export const resolveFaqCatalogChoices = async (input: {
   utterance: string;
   query?: string;
   selectedLabel?: string;
+  groups?: Array<{ label: string; serviceIds: string[] }>;
   partitionCandidates?: PartitionServiceCandidates;
 }): Promise<InteractionChoice[]> => {
+  const fromSelectorGroups = input.remainingIds != null && input.groups != null
+    ? interactionChoicesFromSelectorGroups(
+      input.services,
+      input.remainingIds,
+      input.groups,
+    )
+    : [];
+  if (fromSelectorGroups.length > 0) {
+    return shortenFaqChoiceLabels(
+      fromSelectorGroups,
+      input.selectedLabel != null && input.selectedLabel.length > 0
+        ? { selectedLabel: input.selectedLabel }
+        : undefined,
+    );
+  }
   const partitioned = await partitionRemainingServiceChoices({
     rows: input.services,
     ...(input.remainingIds != null ? { remainingIds: input.remainingIds } : {}),

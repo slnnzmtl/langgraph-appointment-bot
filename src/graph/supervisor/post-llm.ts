@@ -172,11 +172,26 @@ const freshGenericBookOffer: PostLlmRule = (ctx, decision) => {
 };
 
 const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
-  let routed = resolveRoutingDecision(decision, ctx.state, enabledIds, ctx.bookingContext);
-  const intentSpecialist = specialistForSupervisorIntent(decision.intent);
+  // «Головне меню» must stay on FINISH with the default keyboard even when the
+  // model returns next=booking / intent=book from nearby booking history.
+  const mainMenuLine = isGreetingOrMainMenuLine(ctx.lastHumanLine);
+  const effectiveDecision: ClinicRoutingDecision = mainMenuLine
+    ? (() => {
+        const { intent: _ignored, ...rest } = decision;
+        return { ...rest, next: FINISH_ROUTE };
+      })()
+    : decision;
+  let routed = resolveRoutingDecision(
+    effectiveDecision,
+    ctx.state,
+    enabledIds,
+    ctx.bookingContext,
+  );
+  const intentSpecialist = specialistForSupervisorIntent(effectiveDecision.intent);
   let path: SupervisorRoutingPath = "llm";
   if (
-    intentSpecialist != null
+    !mainMenuLine
+    && intentSpecialist != null
     && routed.next !== intentSpecialist
     && enabledIds.has(intentSpecialist)
   ) {
@@ -184,7 +199,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
     path = "llm_intent_override";
   }
 
-  const mutationAction = visitMutationActionForIntent(decision.intent);
+  const mutationAction = visitMutationActionForIntent(effectiveDecision.intent);
   const seed = routed.next === BOOKING_AGENT_ID
     ? seedVisitMutation(mutationAction, ctx.bookingContext, ctx.workingDraft)
     : { update: {}, draftDiscarded: false };
@@ -193,7 +208,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
     ctx.state.lastHandoff?.agentId === BOOKING_AGENT_ID
     && routed.next === BOOKING_AGENT_ID
     && !isSupervisorOwnedLabel(ctx.lastHumanLine);
-  const abandonDraft = isGreetingOrMainMenuLine(ctx.lastHumanLine)
+  const abandonDraft = mainMenuLine
     || labelIdFor(ctx.lastHumanLine) === "offerChooseOther";
 
   const outcome: RouteOutcome = {
