@@ -186,14 +186,19 @@ export const extractContactIdFromSearchResult = (contactJson: string): string | 
 export const lookupContactByTelegram = async (callTool: McpCallTool): Promise<string> => {
   try {
     const cTelegram = getTelegramUserId();
-    const result = await callTool("search_contacts", {
-      cTelegram,
-      limit: 5,
-      select: CONTACT_SEARCH_SELECT,
-    });
-    return annotateContactSearchResult(result);
+    const result = annotateContactSearchResult(
+      await callTool("search_contacts", {
+        cTelegram,
+        limit: 5,
+        select: CONTACT_SEARCH_SELECT,
+      }),
+    );
+    trackContactLookup("contact_lookup_telegram", "lookup_contact_by_telegram", result);
+    return result;
   } catch (error) {
-    return JSON.stringify({ error: errorMessage(error) });
+    const result = JSON.stringify({ error: errorMessage(error) });
+    trackContactLookup("contact_lookup_telegram", "lookup_contact_by_telegram", result);
+    return result;
   }
 };
 

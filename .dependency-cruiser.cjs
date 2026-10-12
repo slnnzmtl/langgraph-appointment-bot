@@ -233,6 +233,33 @@ module.exports = {
       to: {
         path: '^src/(graph|composition|tools|adapter)'
       }
+    },
+    {
+      name: 'langfuse-sdk-only-in-analytics-langfuse',
+      comment:
+        'Only src/analytics/langfuse.ts may import @langfuse/* or @opentelemetry/*. '
+        + 'Business code uses the provider-neutral track.ts / withClinicTurn boundary. '
+        + 'Integration tests under src/analytics/__tests__/ may import SDKs for in-memory exporters.',
+      severity: 'error',
+      from: {
+        pathNot:
+          '(^src/analytics/langfuse[.]ts$)|(^src/analytics/__tests__/)'
+      },
+      to: {
+        path: '@(langfuse|opentelemetry)/'
+      }
+    },
+    {
+      name: 'langfuse-module-only-via-track',
+      comment:
+        'Do not import src/analytics/langfuse.ts from outside analytics/. Use track.ts.',
+      severity: 'error',
+      from: {
+        pathNot: '^src/analytics/'
+      },
+      to: {
+        path: '^src/analytics/langfuse[.]ts$'
+      }
     }
   ],
   options: {

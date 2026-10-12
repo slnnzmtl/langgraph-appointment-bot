@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { HumanMessage } from "@langchain/core/messages";
 
+import { withClinicTurn } from "../../analytics/track.js";
 import { soft } from "../assert.js";
 import { ensureSmokeContact, findContactByTelegram } from "../crm.js";
 import { isIsolatedSmokeTelegramId, writeTelegramId } from "../env.js";
@@ -9,6 +10,9 @@ import { installCallToolRecorder } from "../harness.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import type { CleanupRegistryLike, SmokeEnv, SoftWarning, SmokeScenario } from "../types.js";
 import type { McpCallTool } from "../../shared/mcp.js";
+
+const IDENTITY_USER_TEXT =
+  "I want to book an appointment. Start by looking up my contact.";
 
 const softPhoneHeuristic = (text: string): boolean =>
   /(?:\bphone\b|телефон|номер)/i.test(text);
@@ -79,32 +83,44 @@ export const identityScenario: SmokeScenario = {
       });
 
       drain();
+      const knownThreadId = `smoke-identity-known-${randomUUID().slice(0, 8)}`;
       const known = await runWithTelegramUserId(knownId, async () => {
         try {
-          const result = await graph.invoke(
+          return await withClinicTurn(
             {
-              messages: [
-                new HumanMessage(
-                  "I want to book an appointment. Start by looking up my contact.",
-                ),
-              ],
-            },
-            {
-              configurable: { thread_id: `smoke-identity-known-${randomUUID().slice(0, 8)}` },
-              recursionLimit: 40,
-              runName: "clinic-turn",
+              userId: knownId,
+              sessionId: knownThreadId,
               tags: ["smoke", "smoke:identity"],
               metadata: {
+                source: "smoke",
                 telegram_user_id: knownId,
                 chat_id: "smoke-identity-known",
-                source: "smoke",
               },
+              input: IDENTITY_USER_TEXT,
+            },
+            async (callbacks) => {
+              const result = await graph.invoke(
+                { messages: [new HumanMessage(IDENTITY_USER_TEXT)] },
+                {
+                  configurable: { thread_id: knownThreadId },
+                  recursionLimit: 40,
+                  runName: "clinic-turn",
+                  tags: ["smoke", "smoke:identity"],
+                  metadata: {
+                    telegram_user_id: knownId,
+                    chat_id: "smoke-identity-known",
+                    source: "smoke",
+                  },
+                  ...(callbacks ? { callbacks: [callbacks] } : {}),
+                },
+              );
+              const reply = lastAiText(result.messages as Array<{ content?: unknown }>);
+              return {
+                result: { reply, recursionHit: false as const },
+                output: reply,
+              };
             },
           );
-          return {
-            reply: lastAiText(result.messages as Array<{ content?: unknown }>),
-            recursionHit: false,
-          };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes("Recursion limit")) {
@@ -146,34 +162,44 @@ export const identityScenario: SmokeScenario = {
 
       drain();
       const unknownId = writeTelegramId("8");
+      const unknownThreadId = `smoke-identity-unknown-${randomUUID().slice(0, 8)}`;
       const unknown = await runWithTelegramUserId(unknownId, async () => {
         try {
-          const result = await graph.invoke(
+          return await withClinicTurn(
             {
-              messages: [
-                new HumanMessage(
-                  "I want to book an appointment. Start by looking up my contact.",
-                ),
-              ],
-            },
-            {
-              configurable: {
-                thread_id: `smoke-identity-unknown-${randomUUID().slice(0, 8)}`,
-              },
-              recursionLimit: 40,
-              runName: "clinic-turn",
+              userId: unknownId,
+              sessionId: unknownThreadId,
               tags: ["smoke", "smoke:identity"],
               metadata: {
+                source: "smoke",
                 telegram_user_id: unknownId,
                 chat_id: "smoke-identity-unknown",
-                source: "smoke",
               },
+              input: IDENTITY_USER_TEXT,
+            },
+            async (callbacks) => {
+              const result = await graph.invoke(
+                { messages: [new HumanMessage(IDENTITY_USER_TEXT)] },
+                {
+                  configurable: { thread_id: unknownThreadId },
+                  recursionLimit: 40,
+                  runName: "clinic-turn",
+                  tags: ["smoke", "smoke:identity"],
+                  metadata: {
+                    telegram_user_id: unknownId,
+                    chat_id: "smoke-identity-unknown",
+                    source: "smoke",
+                  },
+                  ...(callbacks ? { callbacks: [callbacks] } : {}),
+                },
+              );
+              const reply = lastAiText(result.messages as Array<{ content?: unknown }>);
+              return {
+                result: { reply, recursionHit: false as const },
+                output: reply,
+              };
             },
           );
-          return {
-            reply: lastAiText(result.messages as Array<{ content?: unknown }>),
-            recursionHit: false,
-          };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (message.includes("Recursion limit")) {
