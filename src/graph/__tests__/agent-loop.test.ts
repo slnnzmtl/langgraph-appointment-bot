@@ -11347,19 +11347,19 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
               id: "a",
               label: "14:00",
               dateStart: "2026-10-13T14:00:00",
-              dateEnd: "2026-10-13T15:00:00",
+              dateEnd: "2026-10-13T14:30:00",
             },
           ],
         },
       ],
-      stepMinutes: 60,
+      stepMinutes: 30,
       startIntervalMinutes: 30,
     };
     let crmCalls = 0;
     const slotsTool = tool(
       async () => {
         crmCalls += 1;
-        return JSON.stringify({ days: [], stepMinutes: 60 });
+        return JSON.stringify({ days: [], stepMinutes: 30 });
       },
       {
         name: "present_availability_slots",
