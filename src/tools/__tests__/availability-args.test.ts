@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
 
+import {
+  availabilityMatchesBooking,
+  bookingAvailabilityScope,
+  createEmptyBookingDraft,
+  reduceBookingDraft,
+} from "../../graph/booking-draft.js";
+import {
+  CLINIC_SLOT_MINUTES,
+  CONSULTATION_SERVICE_ID,
+} from "../../shared/clinic-constants.js";
 import { normalizeAvailabilityToolArgs } from "../availability-args.js";
 
 describe("normalizeAvailabilityToolArgs", () => {
@@ -18,6 +28,37 @@ describe("normalizeAvailabilityToolArgs", () => {
 
     expect(args.durationMinutes).toBe(60);
     expect(args.excludeMeetingIds).toEqual(["meeting-1"]);
+  });
+
+  it("replaces model-invented duration and exclusions for consultation with no draft duration", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+      accepted: true,
+    });
+    const scope = bookingAvailabilityScope(draft);
+    expect(scope).toEqual({ serviceId: CONSULTATION_SERVICE_ID });
+
+    const args = normalizeAvailabilityToolArgs({
+      args: {
+        direction: "nearest",
+        durationMinutes: 60,
+        excludeMeetingIds: ["unrelated"],
+      },
+      runtimeRequest: null,
+      scope,
+      availabilityPagedThisTurn: false,
+    });
+
+    expect(args.durationMinutes).toBe(CLINIC_SLOT_MINUTES);
+    expect(args.excludeMeetingIds).toBeUndefined();
+    expect(availabilityMatchesBooking(
+      {
+        stepMinutes: CLINIC_SLOT_MINUTES,
+        serviceId: CONSULTATION_SERVICE_ID,
+      },
+      draft,
+    )).toBe(true);
   });
 
   it("drops model exact-today when the patient named no date", () => {

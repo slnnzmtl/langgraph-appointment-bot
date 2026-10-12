@@ -1,4 +1,5 @@
 import type { BookingAvailabilityScope } from "../graph/booking-draft.js";
+import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
 import type { BookingScheduleRequest } from "../shared/booking-schedule.js";
 import {
   alignToAnchors,
@@ -142,15 +143,13 @@ export const normalizeAvailabilityToolArgs = ({
   }
 
   if (scope) {
-    if (scope.durationMinutes != null) {
-      args.durationMinutes = scope.durationMinutes;
-    }
-    if (scope.excludeMeetingIds != null) {
-      if (scope.excludeMeetingIds.length > 0) {
-        args.excludeMeetingIds = [...scope.excludeMeetingIds];
-      } else {
-        delete args.excludeMeetingIds;
-      }
+    // Scope is authoritative: always replace both fields so model-invented
+    // duration/exclusions cannot survive when the draft omits them (e.g. consultation).
+    args.durationMinutes = scope.durationMinutes ?? CLINIC_SLOT_MINUTES;
+    if (scope.excludeMeetingIds != null && scope.excludeMeetingIds.length > 0) {
+      args.excludeMeetingIds = [...scope.excludeMeetingIds];
+    } else {
+      delete args.excludeMeetingIds;
     }
   }
 
