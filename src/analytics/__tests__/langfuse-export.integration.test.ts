@@ -1,18 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { tool } from "@langchain/core/tools";
 import { InMemorySpanExporter } from "@opentelemetry/sdk-trace-base";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { CallbackHandler } from "@langfuse/langchain";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import {
   propagateAttributes,
   setActiveTraceIO,
   startActiveObservation,
-  startObservation,
 } from "@langfuse/tracing";
+import { z } from "zod";
 
 import { maskLangfusePayload } from "../privacy.js";
 
 const USER_TEXT = "Хочу записатись завтра о 10:00";
 const ASSISTANT_TEXT = "Підтвердіть, будь ласка: консультація завтра о 10:00.";
+
+const LEAK_FIRST = "Ada";
+const LEAK_LAST = "Lovelace";
+const LEAK_STREET = "42 Baker Street PII";
+const LEAK_NOTE = "hypertension medical note dump";
+const LEAK_RAW = "raw_mcp_contacts_blob_unique";
 
 const spanPayloadBlob = (span: {
   attributes: Record<string, unknown>;
@@ -55,7 +63,30 @@ describe("langfuse export privacy integration", () => {
     delete process.env.LANGFUSE_BASE_URL;
   });
 
-  it("exports conversation text and strips secrets, CRM dumps, checkpoint, headers", async () => {
+  it("CallbackHandler path masks PII dumps and keeps setActiveTraceIO text", async () => {
+    const leakyTool = tool(
+      async () =>
+        JSON.stringify({
+          firstName: LEAK_FIRST,
+          lastName: LEAK_LAST,
+          addressStreet: LEAK_STREET,
+          medicalNote: LEAK_NOTE,
+          raw_mcp: { marker: LEAK_RAW, contacts: [{ id: "c-1" }] },
+          contact_id: "c-1",
+          outcome: "success",
+        }),
+      {
+        name: "update_contact_leaky",
+        description: "Integration fixture that returns CRM-shaped PII",
+        schema: z.object({
+          firstName: z.string(),
+          lastName: z.string(),
+          addressStreet: z.string(),
+          medicalNote: z.string(),
+        }),
+      },
+    );
+
     await propagateAttributes(
       {
         traceName: "clinic-turn",
@@ -65,34 +96,22 @@ describe("langfuse export privacy integration", () => {
         metadata: { source: "telegram" },
       },
       () =>
-        // Wrapper is "adapter"; traceName stays "clinic-turn" (matches production withClinicTurn).
         startActiveObservation("adapter", async () => {
-          startObservation(
-            "tool",
+          const handler = new CallbackHandler({
+            userId: "1363967211",
+            sessionId: "1363967211",
+            tags: ["telegram"],
+            traceMetadata: { source: "telegram" },
+          });
+          await leakyTool.invoke(
             {
-              input: {
-                GOOGLE_API_KEY: "AIzaSyIntegrationSecret",
-                ESPOCRM_API_KEY: "espocrm-secret-key",
-                Authorization: "Bearer sk-live-token",
-                bookingDraft: { note: "patient free text note", serviceId: "svc-1" },
-                pendingInteraction: { kind: "mutation_confirm" },
-                contactContext: {
-                  firstName: "Ada",
-                  phoneNumber: "+380501112233",
-                  email: "ada@example.com",
-                },
-                contacts: [{ id: "c-1", firstName: "Ada", phoneNumber: "+380501112233" }],
-                messages: [{ role: "human", content: "checkpoint messages" }],
-                tool_dump: {
-                  raw_mcp: { success: true, contacts: [{ id: "c-1" }] },
-                },
-                meeting_id: "meet-1",
-              },
-              output: { error: "ok", contact_id: "c-1" },
+              firstName: LEAK_FIRST,
+              lastName: LEAK_LAST,
+              addressStreet: LEAK_STREET,
+              medicalNote: LEAK_NOTE,
             },
-            { asType: "tool" },
-          ).end();
-
+            { callbacks: [handler] },
+          );
           setActiveTraceIO({
             input: USER_TEXT,
             output: ASSISTANT_TEXT,
@@ -110,16 +129,11 @@ describe("langfuse export privacy integration", () => {
     expect(all).toContain(USER_TEXT);
     expect(all).toContain(ASSISTANT_TEXT);
 
-    expect(all).not.toContain("AIzaSyIntegrationSecret");
-    expect(all).not.toContain("espocrm-secret-key");
-    expect(all).not.toContain("sk-live-token");
-    expect(all).not.toContain("+380501112233");
-    expect(all).not.toContain("ada@example.com");
-    expect(all).not.toContain("patient free text note");
-    expect(all).not.toContain("checkpoint messages");
-
-    // Omitted object markers or absence of nested CRM dumps
-    const hasRawContactsArray = /"contacts"\s*:\s*\[/.test(all);
-    expect(hasRawContactsArray).toBe(false);
+    expect(all).not.toContain(LEAK_FIRST);
+    expect(all).not.toContain(LEAK_LAST);
+    expect(all).not.toContain(LEAK_STREET);
+    expect(all).not.toContain(LEAK_NOTE);
+    expect(all).not.toContain(LEAK_RAW);
+    expect(all).not.toContain("raw_mcp");
   });
 });

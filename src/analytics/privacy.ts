@@ -1,6 +1,10 @@
 /**
  * Provider-neutral Tier 1 property allowlist and Langfuse export masking.
  * No Langfuse / OpenTelemetry imports — safe for unit tests without SDK boot.
+ *
+ * Object payloads from CallbackHandler (chain/LLM/tool I/O) are deny-by-default:
+ * only TIER1_PROP_ALLOWLIST keys are kept. Plain conversation strings (trace I/O)
+ * still pass after phone/email/secret regex redaction.
  */
 
 export const TIER1_PROP_ALLOWLIST = [
@@ -43,20 +47,6 @@ export const TIER1_PROP_ALLOWLIST = [
 ] as const;
 
 const ALLOWED = new Set<string>(TIER1_PROP_ALLOWLIST);
-
-/** Checkpoint / graph-state keys that must never leave the process. */
-const OMIT_OBJECT_KEYS = new Set([
-  "bookingDraft",
-  "pendingInteraction",
-  "contactContext",
-  "bookingContext",
-  "availabilityContext",
-  "messages",
-  "contacts",
-  "channel_values",
-  "checkpoint",
-  "values",
-]);
 
 const SECRET_KEY_RE = /^(GOOGLE_API_KEY|ESPOCRM_API_KEY|Authorization|api[_-]?key|espocrm_api_key|secret[_-]?key|password|token)$/i;
 
@@ -121,12 +111,12 @@ const maskValue = (value: unknown): unknown => {
     const record = value as Record<string, unknown>;
     const out: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(record)) {
-      if (OMIT_OBJECT_KEYS.has(key)) {
-        out[key] = { _omitted: true };
-        continue;
-      }
       if (SECRET_KEY_RE.test(key)) {
         out[key] = "[REDACTED]";
+        continue;
+      }
+      if (!ALLOWED.has(key)) {
+        // Deny-by-default: unknown object keys (firstName, raw_mcp, checkpoint, …) drop.
         continue;
       }
       out[key] = maskValue(child);

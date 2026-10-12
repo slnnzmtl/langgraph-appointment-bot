@@ -2,11 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const startObservation = vi.fn();
 const forceFlush = vi.fn(async () => undefined);
+const startActiveObservation = vi.fn(
+  (_name: string, fn: (span: unknown) => unknown) => fn({}),
+);
+const propagateAttributes = vi.fn((_attrs: unknown, fn: () => unknown) => fn());
+const setActiveTraceIO = vi.fn();
 
 vi.mock("@langfuse/tracing", () => ({
-  propagateAttributes: (_attrs: unknown, fn: () => unknown) => fn(),
-  startActiveObservation: (_name: string, fn: (span: unknown) => unknown) => fn({}),
-  setActiveTraceIO: vi.fn(),
+  propagateAttributes: (...args: unknown[]) =>
+    (propagateAttributes as (...a: unknown[]) => unknown)(...args),
+  startActiveObservation: (...args: unknown[]) =>
+    (startActiveObservation as (...a: unknown[]) => unknown)(...args),
+  setActiveTraceIO: (...args: unknown[]) => setActiveTraceIO(...args),
   startObservation: (...args: unknown[]) => startObservation(...args),
 }));
 
@@ -32,12 +39,26 @@ vi.mock("@opentelemetry/sdk-trace-node", () => ({
   },
 }));
 
-describe("emitLangfuseEvent / flushLangfuseTracing", () => {
+const enableLangfuseEnv = (): void => {
+  process.env.LANGFUSE_TRACING = "true";
+  process.env.LANGFUSE_PUBLIC_KEY = "pk";
+  process.env.LANGFUSE_SECRET_KEY = "sk";
+  process.env.LANGFUSE_BASE_URL = "http://langfuse-web:3000";
+};
+
+describe("emitLangfuseEvent / flushLangfuseTracing / withClinicTurn", () => {
   afterEach(async () => {
     vi.resetModules();
     startObservation.mockReset();
     forceFlush.mockReset();
     forceFlush.mockImplementation(async () => undefined);
+    startActiveObservation.mockReset();
+    startActiveObservation.mockImplementation(
+      (_name: string, fn: (span: unknown) => unknown) => fn({}),
+    );
+    propagateAttributes.mockReset();
+    propagateAttributes.mockImplementation((_attrs: unknown, fn: () => unknown) => fn());
+    setActiveTraceIO.mockReset();
     delete process.env.LANGFUSE_TRACING;
     delete process.env.LANGFUSE_PUBLIC_KEY;
     delete process.env.LANGFUSE_SECRET_KEY;
@@ -46,10 +67,7 @@ describe("emitLangfuseEvent / flushLangfuseTracing", () => {
   });
 
   it("emits root asType event without parent (webhook-style)", async () => {
-    process.env.LANGFUSE_TRACING = "true";
-    process.env.LANGFUSE_PUBLIC_KEY = "pk";
-    process.env.LANGFUSE_SECRET_KEY = "sk";
-    process.env.LANGFUSE_BASE_URL = "http://langfuse-web:3000";
+    enableLangfuseEnv();
     const { emitLangfuseEvent, setLangfuseEnabledForTests } = await import("../langfuse.js");
     setLangfuseEnabledForTests(true);
     emitLangfuseEvent("reminder_sent", {
@@ -76,10 +94,7 @@ describe("emitLangfuseEvent / flushLangfuseTracing", () => {
   });
 
   it("never throws when startObservation fails", async () => {
-    process.env.LANGFUSE_TRACING = "true";
-    process.env.LANGFUSE_PUBLIC_KEY = "pk";
-    process.env.LANGFUSE_SECRET_KEY = "sk";
-    process.env.LANGFUSE_BASE_URL = "http://langfuse-web:3000";
+    enableLangfuseEnv();
     startObservation.mockImplementation(() => {
       throw new Error("boom");
     });
@@ -89,10 +104,7 @@ describe("emitLangfuseEvent / flushLangfuseTracing", () => {
   });
 
   it("bounds flush when forceFlush hangs", async () => {
-    process.env.LANGFUSE_TRACING = "true";
-    process.env.LANGFUSE_PUBLIC_KEY = "pk";
-    process.env.LANGFUSE_SECRET_KEY = "sk";
-    process.env.LANGFUSE_BASE_URL = "http://langfuse-web:3000";
+    enableLangfuseEnv();
     process.env.LANGFUSE_TIMEOUT = "0.05";
     forceFlush.mockImplementation(
       () =>
@@ -112,5 +124,57 @@ describe("emitLangfuseEvent / flushLangfuseTracing", () => {
     await flushLangfuseTracing();
     expect(Date.now() - started).toBeLessThan(5_000);
     await resetLangfuseTracingForTests();
+  });
+
+  it("clears the flush race timer after a successful forceFlush", async () => {
+    enableLangfuseEnv();
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+    const {
+      startLangfuseTracing,
+      flushLangfuseTracing,
+      setLangfuseEnabledForTests,
+      resetLangfuseTracingForTests,
+    } = await import("../langfuse.js");
+    setLangfuseEnabledForTests(true);
+    startLangfuseTracing();
+    await flushLangfuseTracing();
+    expect(forceFlush).toHaveBeenCalled();
+    expect(clearSpy).toHaveBeenCalled();
+    clearSpy.mockRestore();
+    await resetLangfuseTracingForTests();
+  });
+
+  it("propagates fn errors without re-invoking fn", async () => {
+    enableLangfuseEnv();
+    const { withClinicTurn, setLangfuseEnabledForTests } = await import("../langfuse.js");
+    setLangfuseEnabledForTests(true);
+    const fn = vi.fn(async () => {
+      throw new Error("crm write failed after mutation");
+    });
+    await expect(
+      withClinicTurn(
+        { userId: "u1", sessionId: "s1", input: "hi" },
+        fn,
+      ),
+    ).rejects.toThrow("crm write failed after mutation");
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to fn(undefined) only when tracing setup fails before fn starts", async () => {
+    enableLangfuseEnv();
+    startActiveObservation.mockImplementation(() => {
+      throw new Error("otel span start failed");
+    });
+    const { withClinicTurn, setLangfuseEnabledForTests } = await import("../langfuse.js");
+    setLangfuseEnabledForTests(true);
+    const fn = vi.fn(async (callbacks: unknown) => {
+      expect(callbacks).toBeUndefined();
+      return { result: "ok", output: "done" };
+    });
+    await expect(
+      withClinicTurn({ userId: "u1", sessionId: "s1", input: "hi" }, fn),
+    ).resolves.toBe("ok");
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledWith(undefined);
   });
 });

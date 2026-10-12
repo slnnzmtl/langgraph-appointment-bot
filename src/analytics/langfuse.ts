@@ -151,6 +151,7 @@ export type WithClinicTurnOptions = {
  * Wrapper observation is named "adapter" (not "clinic-turn") so LangGraph's
  * runName "clinic-turn" is the sole observation with that name under the trace.
  * When Langfuse is off, runs `fn` with undefined callbacks (passthrough).
+ * Application errors from `fn` always propagate — never re-invoke `fn` after it starts.
  */
 export const withClinicTurn = async <T>(
   options: WithClinicTurnOptions,
@@ -160,14 +161,30 @@ export const withClinicTurn = async <T>(
     const { result } = await fn(undefined);
     return result;
   }
+
+  const tags = options.tags ?? ["telegram"];
+  const metadata = toPropagateMetadata({
+    source: "telegram",
+    telegram_user_id: options.userId,
+    chat_id: options.sessionId,
+    ...options.metadata,
+  });
+
+  let handler: ClinicTurnCallbacks | undefined;
   try {
-    const tags = options.tags ?? ["telegram"];
-    const metadata = toPropagateMetadata({
-      source: "telegram",
-      telegram_user_id: options.userId,
-      chat_id: options.sessionId,
-      ...options.metadata,
+    handler = new CallbackHandler({
+      userId: options.userId,
+      sessionId: options.sessionId,
+      tags,
+      traceMetadata: metadata,
     });
+  } catch (error: unknown) {
+    console.warn(`CallbackHandler create failed: ${errorMessage(error)}`);
+    handler = undefined;
+  }
+
+  let fnStarted = false;
+  try {
     return await propagateAttributes(
       {
         traceName: "clinic-turn",
@@ -178,12 +195,7 @@ export const withClinicTurn = async <T>(
       },
       () =>
         startActiveObservation("adapter", async () => {
-          const handler = new CallbackHandler({
-            userId: options.userId,
-            sessionId: options.sessionId,
-            tags,
-            traceMetadata: metadata,
-          });
+          fnStarted = true;
           const { result, output } = await fn(handler);
           try {
             setActiveTraceIO({
@@ -197,6 +209,9 @@ export const withClinicTurn = async <T>(
         }),
     );
   } catch (error: unknown) {
+    if (fnStarted) {
+      throw error;
+    }
     console.warn(`withClinicTurn Langfuse wrap failed: ${errorMessage(error)}`);
     const { result } = await fn(undefined);
     return result;
@@ -260,23 +275,30 @@ export const emitLangfuseEvent = (
 
 /**
  * Bounded forceFlush + optional provider shutdown. Never hangs past timeout+slack.
+ * Clears the race timer on success so smoke/CLI exit is not delayed.
  */
 export const flushLangfuseTracing = async (): Promise<void> => {
   if (!spanProcessor) {
     return;
   }
   const timeoutMs = readTimeoutSeconds() * 1_000 + FLUSH_SLACK_MS;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
       spanProcessor.forceFlush(),
       new Promise<void>((_, reject) => {
-        setTimeout(() => {
+        timer = setTimeout(() => {
           reject(new Error(`Langfuse forceFlush timed out after ${timeoutMs}ms`));
         }, timeoutMs);
+        timer.unref?.();
       }),
     ]);
   } catch (error: unknown) {
     console.warn(`Langfuse flush failed: ${errorMessage(error)}`);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
   }
 };
 
