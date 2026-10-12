@@ -696,32 +696,6 @@ export const createAgentPrepareNode = (
       const bookingEntry = bookingEntryTransitionForTurn(blockingState);
       if (bookingEntry?.kind === "offer_replacement") {
         const meeting = bookingEntry.meeting;
-        // Named procedure («запиши на колаген») must survive REPLACE so the
-        // post-cancel dates path can run instead of a consultation offer.
-        if (bookingDraft?.serviceAcceptance == null) {
-          const matchingRows = matchingCatalogRows(
-            lastPatientText(state),
-            state.servicesContext?.list ?? [],
-          );
-          if (matchingRows.length === 1) {
-            const row = matchingRows[0]!;
-            bookingDraft = reduceBookingDraft(
-              bookingDraft ?? createEmptyBookingDraft(),
-              {
-                type: "service_selected",
-                service: {
-                  id: row.id,
-                  name: row.name,
-                  ...(row.duration != null
-                    ? { durationMinutes: row.duration }
-                    : {}),
-                  source: "catalog",
-                },
-                accepted: true,
-              },
-            );
-          }
-        }
         bookingDraft = reduceBookingDraft(
           bookingDraft ?? createEmptyBookingDraft(),
           {
