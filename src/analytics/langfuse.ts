@@ -15,12 +15,7 @@ import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import type { SpanExporter } from "@opentelemetry/sdk-trace-base";
 
 import { errorMessage } from "../shared/json-record.js";
-import {
-  asClinicTurnConversation,
-  maskLangfusePayload,
-  pickAllowedEventProps,
-  toPropagateMetadata,
-} from "./privacy.js";
+import { toPropagateMetadata } from "./privacy.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -113,7 +108,6 @@ export const startLangfuseTracing = (options?: StartLangfuseTracingOptions): voi
     const baseUrl = process.env.LANGFUSE_BASE_URL?.trim();
     spanProcessor = new LangfuseSpanProcessor({
       ...(options?.exporter ? { exporter: options.exporter } : {}),
-      mask: maskLangfusePayload,
       timeout,
       environment,
       ...(release ? { release } : {}),
@@ -199,10 +193,9 @@ export const withClinicTurn = async <T>(
           fnStarted = true;
           const { result, output } = await fn(handler);
           try {
-            // Provenance wrap: mask must not JSON-parse conversation as telemetry.
             setActiveTraceIO({
-              input: asClinicTurnConversation(options.input),
-              output: asClinicTurnConversation(output),
+              input: options.input,
+              output,
             });
           } catch (error: unknown) {
             console.warn(`setActiveTraceIO failed: ${errorMessage(error)}`);
@@ -260,13 +253,12 @@ export const emitLangfuseEvent = (
     return;
   }
   try {
-    const allowed = pickAllowedEventProps(props);
     // Event observations auto-end; asType: "event"
     startObservation(
       name,
       {
-        input: allowed,
-        metadata: toPropagateMetadata(allowed),
+        input: props,
+        metadata: toPropagateMetadata(props),
       },
       { asType: "event" },
     );

@@ -85,12 +85,11 @@ describe("emitLangfuseEvent / flushLangfuseTracing / withClinicTurn", () => {
           outcome: "success",
           telegram_user_id: "42",
           meeting_count: 1,
+          firstName: "Ada",
         }),
       }),
       { asType: "event" },
     );
-    const input = startObservation.mock.calls[0]?.[1]?.input as Record<string, unknown>;
-    expect(input).not.toHaveProperty("firstName");
   });
 
   it("never throws when startObservation fails", async () => {
