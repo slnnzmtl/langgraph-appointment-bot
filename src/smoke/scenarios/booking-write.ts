@@ -264,6 +264,13 @@ export const doubleBookGuardScenario: SmokeScenario = {
         );
       }
 
+      const myVisit = await bundle.session.say("Мій запис");
+      expectButtons("double-book-guard visit action menu", myVisit.buttons, [
+        ...VISIT_CHANGE_MENU,
+      ]);
+
+      // A new-booking request must supersede the visit action menu and enter
+      // the same deterministic REPLACE flow as a direct «Записатись» turn.
       const second = await bundle.session.say("Записатись");
       if (
         second.state.pendingInteraction?.kind !== "visit_select"

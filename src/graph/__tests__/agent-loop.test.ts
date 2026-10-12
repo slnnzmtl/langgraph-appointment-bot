@@ -440,6 +440,84 @@ describe("createAgentPrepareNode", () => {
     ).toBe("booking__finalize");
   });
 
+  it("supersedes an action-stage visit menu with REPLACE on explicit Записатись", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const actionInteraction = {
+      kind: "visit_select" as const,
+      stage: "action" as const,
+      meetingId: "m-1",
+      meetings: listedMeetings.meetings,
+      choices: [
+        { id: "reschedule", label: "Перенести" },
+        { id: "cancel", label: "Скасувати" },
+        { id: "decline", label: "Ні, дякую" },
+      ],
+    };
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Записатись")],
+        bookingContext: listedMeetings,
+        pendingInteraction: actionInteraction,
+      }),
+    );
+
+    expect(update.bookingDraft?.replacement).toMatchObject({
+      status: "offered",
+      meeting: { id: "m-1" },
+    });
+    const effectiveState = clinicState({
+      messages: [new HumanMessage("Записатись")],
+      bookingContext: listedMeetings,
+      bookingDraft: update.bookingDraft,
+      pendingInteraction: actionInteraction,
+    });
+    expect(
+      routeAfterAgentPrepare(
+        effectiveState,
+        "booking__llm",
+        "booking__command_prepare",
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+
+    const finalized = createAgentFinalizeNode(bookingAgent)(effectiveState);
+    expect(finalized.pendingInteraction).toMatchObject({
+      kind: "visit_select",
+      stage: "replacement",
+      meetingId: "m-1",
+    });
+    expect(finalized.lastHandoff?.replyButtons).toEqual([...BOOKING_REPLACE_MENU]);
+  });
+
+  it("supersedes a stale action-stage menu with consultation when no visit exists", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Записатись")],
+        bookingContext: { meetings: [], dateFrom: "2026-08-11" },
+        pendingInteraction: {
+          kind: "visit_select",
+          stage: "action",
+          meetingId: "m-stale",
+          meetings: [{ id: "m-stale" }],
+          choices: [
+            { id: "reschedule", label: "Перенести" },
+            { id: "cancel", label: "Скасувати" },
+            { id: "decline", label: "Ні, дякую" },
+          ],
+        },
+      }),
+    );
+
+    expect(update.bookingDraft?.replacement ?? null).toBeNull();
+    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
+  });
+
   it("opens consultation offer on Записатись when bookingContext has no visits", async () => {
     const prepare = createAgentPrepareNode("booking");
     const update = await prepare(

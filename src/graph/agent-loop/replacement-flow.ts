@@ -1,6 +1,7 @@
 import type { ClinicState } from "../state.js";
 import { type PendingBookingCommand } from "../booking-draft.js";
 import { cancelCommandFromMeeting } from "../cancel-command.js";
+import { labelIdFor } from "../../shared/message-content.js";
 import {
   interpretInteractionReply,
   openVisitReplacementInteraction,
@@ -8,29 +9,68 @@ import {
 
 import { lastPatientText } from "./shared.js";
 
-/**
- * True when a new create booking must pause for REPLACE before the LLM runs:
- * an upcoming Planned/Confirmed visit is already in bookingContext.
- */
-export const existingVisitBlocksNewBooking = (state: ClinicState): boolean => {
+export type BookingEntryTransition =
+  | {
+      kind: "offer_replacement";
+      meeting: NonNullable<ClinicState["bookingContext"]>["meetings"][number];
+    }
+  | { kind: "offer_consultation" }
+  | null;
+
+const isFreshCreateDraft = (state: ClinicState): boolean => {
   const draft = state.bookingDraft;
-  if (draft != null && draft.mode !== "create") {
-    return false;
-  }
-  if (draft?.replacement != null) {
-    return false;
-  }
-  if (draft?.pendingCommand != null) {
-    return false;
-  }
+  return draft == null
+    || (
+      draft.mode === "create"
+      && draft.replacement == null
+      && draft.pendingCommand == null
+      && draft.serviceAcceptance == null
+      && draft.selectedSlot == null
+      && draft.selectedDate == null
+    );
+};
+
+/**
+ * Resolve graph-owned entry into the create flow once, before the LLM.
+ *
+ * A visit action/meeting menu is superseded only by the explicit main-book
+ * shortcut. This distinction matters because schedule repair can open that
+ * same menu internally on an unrelated turn. Replacement and mutation
+ * confirmation are active write workflows and are never superseded here.
+ */
+export const bookingEntryTransitionForTurn = (
+  state: ClinicState,
+): BookingEntryTransition => {
+  const draft = state.bookingDraft;
   const interaction = state.pendingInteraction;
+  const explicitMainBook = labelIdFor(lastPatientText(state)) === "mainBook";
+
   if (
-    interaction?.kind === "visit_select"
-    || interaction?.kind === "mutation_confirm"
+    interaction?.kind === "mutation_confirm"
+    || (interaction?.kind === "visit_select" && interaction.stage === "replacement")
   ) {
-    return false;
+    return null;
   }
-  return (state.bookingContext?.meetings.length ?? 0) > 0;
+
+  const visitSelectionOpen = interaction?.kind === "visit_select";
+  const canStartCreate = (draft == null || draft.mode === "create")
+    && draft?.replacement == null
+    && draft?.pendingCommand == null
+    && (!visitSelectionOpen || explicitMainBook);
+  const meeting = state.bookingContext?.meetings[0];
+  if (canStartCreate && meeting != null) {
+    return { kind: "offer_replacement", meeting };
+  }
+
+  if (
+    explicitMainBook
+    && isFreshCreateDraft(state)
+    && interaction?.kind !== "service_confirm"
+  ) {
+    return { kind: "offer_consultation" };
+  }
+
+  return null;
 };
 
 export const replacementActionForTurn = (
