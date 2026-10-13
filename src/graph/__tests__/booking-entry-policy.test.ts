@@ -955,7 +955,47 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
       supervisorState({ messages: [new HumanMessage("Записатись")] }),
     );
     expect(invoke).toHaveBeenCalledOnce();
-    expect(loadServices).toHaveBeenCalledOnce();
+    expect(loadServices).not.toHaveBeenCalled();
+    expect(update.next).toBe("booking");
+    expect(update.supervisorIntent).toBeNull();
+  });
+
+  it("does not treat «Записатись» as CRM evidence when catalog has запис* titles", async () => {
+    const zapisCatalog = {
+      list: [
+        { id: "svc-zapis", name: "Запис консультації", duration: 30 },
+        ...botoxServices.list,
+      ],
+    };
+    expect(
+      utteranceHasCatalogCrmEvidence({
+        text: "Записатись",
+        services: zapisCatalog.list,
+      }),
+    ).toBe(false);
+
+    const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
+    const loadServices = vi.fn(async () => zapisCatalog);
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: ownedContact,
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      }),
+      loadServices,
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Записатись")],
+        servicesContext: zapisCatalog,
+      }),
+    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(loadServices).not.toHaveBeenCalled();
     expect(update.next).toBe("booking");
     expect(update.supervisorIntent).toBeNull();
   });

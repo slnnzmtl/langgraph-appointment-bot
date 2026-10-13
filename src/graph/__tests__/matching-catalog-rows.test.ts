@@ -57,6 +57,13 @@ describe("matchingCatalogRows", () => {
     expect(matchingCatalogRows("що це?", catalog)).toEqual([]);
     expect(matchingCatalogRows("можна записатись на ботокс?", catalog)).toEqual([]);
   });
+
+  it("may stem-match «Записатись» to CRM titles starting with запис", () => {
+    const rows = matchingCatalogRows("Записатись", [
+      { id: "svc-zapis", name: "Запис консультації", duration: 30 },
+    ]);
+    expect(rows.map((row) => row.id)).toEqual(["svc-zapis"]);
+  });
 });
 
 describe("resolveCatalogLexicalEvidence", () => {

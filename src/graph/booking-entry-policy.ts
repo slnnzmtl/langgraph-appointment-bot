@@ -14,6 +14,10 @@ import {
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "./service-resolution.js";
+import {
+  isSupervisorOwnedLabel,
+  labelIdFor,
+} from "../shared/message-content.js";
 import type { ClinicRoutingDecision, SupervisorIntent } from "./routing.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "./types.js";
 import type { ServicesContext } from "../tools/service-tools.js";
@@ -206,16 +210,24 @@ export type NamedBookingPolicyResult = {
 /**
  * CRM vocabulary evidence via lexical stems (terminal `?` allowed).
  * Multi-stem families count when rows hit — no family selector.
+ * Main-menu / supervisor-owned chips («Записатись», …) are never CRM evidence.
  */
 export const utteranceHasCatalogCrmEvidence = (input: {
   text: string;
   services: ServicesContext["list"];
 }): boolean => {
-  if (input.services.length === 0 || input.text.trim().length === 0) {
+  const text = input.text.trim();
+  if (text.length === 0) {
+    return false;
+  }
+  if (labelIdFor(text) != null || isSupervisorOwnedLabel(text)) {
+    return false;
+  }
+  if (input.services.length === 0) {
     return false;
   }
   return resolveCatalogLexicalEvidence(
-    input.text,
+    text,
     input.services,
     { allowTerminalQuestion: true },
   ).rows.length > 0;
@@ -260,6 +272,14 @@ export const refineSupervisorNamedBooking = async (input: {
   }
 
   if (intent !== "book") {
+    return { decision };
+  }
+
+  // Keyboard «Записатись» / other owned chips: keep model book, skip catalog.
+  if (
+    labelIdFor(input.patientText.trim()) != null
+    || isSupervisorOwnedLabel(input.patientText.trim())
+  ) {
     return { decision };
   }
 
