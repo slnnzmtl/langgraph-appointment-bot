@@ -5,6 +5,7 @@ import {
   createEmptyBookingDraft,
   reduceBookingDraft,
 } from "../booking-draft.js";
+import { restorePendingInteraction } from "../booking-interaction-restore.js";
 import {
   BOOKING_OWNED_INTERACTION_KINDS,
   clearBookingOwnedInteraction,
@@ -1001,5 +1002,186 @@ describe("interpretInteractionReply", () => {
     expect(interpretInteractionReply(visitNote, "Так")).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(null, INTENT_SKIP_LABEL)).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(visitNote, "  ")).toEqual({ kind: "unmatched" });
+  });
+});
+
+describe("contact_field_submitted session event", () => {
+  const detailsDraft = () => {
+    const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+      accepted: true,
+    });
+    return reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(accepted, { type: "date_selected", date: "2026-10-17" }),
+        {
+          type: "slot_selected",
+          slot: selectedSlot,
+        },
+      ),
+      { type: "note_status", status: "skipped" },
+    );
+  };
+
+  it("atomically persists phone and advances to firstName", () => {
+    const session = reduceBookingSession(
+      {
+        bookingDraft: detailsDraft(),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "phoneNumber",
+          choices: [],
+        },
+      },
+      {
+        type: "contact_field_submitted",
+        field: "phoneNumber",
+        value: "0501112233",
+      },
+    );
+    expect(session.bookingDraft?.contactDetails).toEqual({
+      phoneNumber: "+380501112233",
+    });
+    expect(session.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+  });
+
+  it("folds leftover collected lastName into draft and clears when complete", () => {
+    const withPhoneAndFirst = reduceBookingDraft(
+      reduceBookingDraft(detailsDraft(), {
+        type: "contact_field_submitted",
+        field: "phoneNumber",
+        value: "+380501112233",
+      }),
+      {
+        type: "contact_field_submitted",
+        field: "firstName",
+        value: "Олена",
+      },
+    );
+    const session = reduceBookingSession(
+      {
+        bookingDraft: withPhoneAndFirst,
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          collected: { lastName: "Коваль" },
+          choices: [],
+        },
+      },
+      {
+        type: "contact_field_submitted",
+        field: "lastName",
+        value: "Коваль",
+      },
+    );
+    expect(session.bookingDraft?.contactDetails).toEqual({
+      phoneNumber: "+380501112233",
+      firstName: "Олена",
+      lastName: "Коваль",
+    });
+    expect(session.pendingInteraction).toBeNull();
+  });
+
+  it("keeps contactDetails after the open contact_field is cleared as complete", () => {
+    const withNames = reduceBookingDraft(
+      reduceBookingDraft(detailsDraft(), {
+        type: "contact_field_submitted",
+        field: "phoneNumber",
+        value: "+380501112233",
+      }),
+      { type: "contact_field_submitted", field: "firstName", value: "Олена" },
+    );
+    const session = reduceBookingSession(
+      {
+        bookingDraft: withNames,
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          choices: [],
+        },
+      },
+      {
+        type: "contact_field_submitted",
+        field: "lastName",
+        value: "Коваль",
+      },
+    );
+    expect(session.pendingInteraction).toBeNull();
+    expect(session.bookingDraft?.contactDetails).toEqual({
+      phoneNumber: "+380501112233",
+      firstName: "Олена",
+      lastName: "Коваль",
+    });
+  });
+});
+
+describe("restorePendingInteraction contact details", () => {
+  it("returns null when canonical identity is complete instead of phoneNumber", () => {
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+          accepted: true,
+        }),
+        { type: "date_selected", date: "2026-10-17" },
+      ),
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const ready = reduceBookingDraft(draft, { type: "note_status", status: "skipped" });
+    const withDetails = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(ready, {
+          type: "contact_field_submitted",
+          field: "phoneNumber",
+          value: "+380501112233",
+        }),
+        { type: "contact_field_submitted", field: "firstName", value: "Олена" },
+      ),
+      { type: "contact_field_submitted", field: "lastName", value: "Коваль" },
+    );
+    expect(
+      restorePendingInteraction({
+        bookingDraft: withDetails,
+        pendingInteraction: null,
+        prefetchFresh: true,
+        contactContext: { ownership: "phone", contacts: [] },
+      }),
+    ).toBeNull();
+  });
+
+  it("opens only lastName for an owned CRM contact missing lastName", () => {
+    const draft = reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(createEmptyBookingDraft(), {
+          type: "service_selected",
+          service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+          accepted: true,
+        }),
+        { type: "date_selected", date: "2026-10-17" },
+      ),
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const ready = reduceBookingDraft(draft, { type: "note_status", status: "skipped" });
+    expect(
+      restorePendingInteraction({
+        bookingDraft: { ...ready, contactId: "c-1", phase: "details" },
+        pendingInteraction: null,
+        prefetchFresh: true,
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{
+            id: "c-1",
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+            lastName: "",
+          }],
+        },
+      }),
+    ).toMatchObject({ kind: "contact_field", field: "lastName" });
   });
 });

@@ -8,6 +8,7 @@ export const TIER1_EVENTS = [
   "contact_created",
   "contact_telegram_linked",
   "contact_updated",
+  "contact_write_failed",
   "availability_presented",
   "availability_cache_hit",
   "booking_date_selected",

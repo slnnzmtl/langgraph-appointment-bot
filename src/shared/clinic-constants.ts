@@ -51,6 +51,9 @@ export const BOOKING_PHONE_QUESTION_UK =
 /** Graph-owned reply when the typed phone matches a Contact linked to another Telegram user. */
 export const BOOKING_PHONE_OCCUPIED_UK =
   "Цей номер уже прив’язаний до іншого акаунта. Надішліть, будь ласка, інший номер.";
+/** Patient-safe copy when create/update/link contact fails operationally (no CRM details). */
+export const BOOKING_CONTACT_SAVE_FAILED_UK =
+  "Не вдалося зберегти контактні дані. Спробуйте, будь ласка, трохи пізніше або зверніться до клініки.";
 export const CLINIC_OPEN_HOUR = 9;
 export const CLINIC_CLOSE_HOUR = 18;
 export const CLINIC_SLOT_MINUTES = 30;

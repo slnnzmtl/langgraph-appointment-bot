@@ -6,7 +6,9 @@ import {
   bookingAvailabilityScope,
   bookingVisitDurationMinutes,
   createEmptyBookingDraft,
+  effectiveBookingContactDetails,
   isEmptyLegacyBookingDraft,
+  nextMissingContactField,
   reduceBookingDraft,
   type BookingEvent,
 } from "../booking-draft.js";
@@ -1474,5 +1476,116 @@ describe("booking availability scope", () => {
       },
       draft,
     )).toBe(true);
+  });
+});
+
+describe("BookingDraft contactDetails", () => {
+  const detailsReady = () => {
+    const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+      accepted: true,
+    });
+    return reduceBookingDraft(
+      reduceBookingDraft(
+        reduceBookingDraft(accepted, { type: "date_selected", date: "2026-10-17" }),
+        {
+          type: "slot_selected",
+          slot: {
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+            label: "11:30",
+          },
+        },
+      ),
+      { type: "note_status", status: "skipped" },
+    );
+  };
+
+  it("stores normalized E.164 phone on contact_field_submitted", () => {
+    const next = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "phoneNumber",
+      value: "0501112233",
+    });
+    expect(next.contactDetails).toEqual({ phoneNumber: "+380501112233" });
+  });
+
+  it("persists names independently and clears them on contact_resolved", () => {
+    let draft = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "phoneNumber",
+      value: "+380501112233",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: " Олена ",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "Коваль",
+    });
+    expect(draft.contactDetails).toEqual({
+      phoneNumber: "+380501112233",
+      firstName: "Олена",
+      lastName: "Коваль",
+    });
+    const resolved = reduceBookingDraft(draft, {
+      type: "contact_resolved",
+      contactId: "c-1",
+    });
+    expect(resolved.contactId).toBe("c-1");
+    expect(resolved.contactDetails).toBeNull();
+  });
+
+  it("keeps contactDetails across contact_unresolved and abandons with the draft", () => {
+    const withPhone = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "phoneNumber",
+      value: "+380501112233",
+    });
+    const unresolved = reduceBookingDraft(withPhone, { type: "contact_unresolved" });
+    expect(unresolved.contactDetails).toEqual({ phoneNumber: "+380501112233" });
+    expect(reduceBookingDraft(withPhone, { type: "draft_abandoned" })).toBeNull();
+  });
+
+  it("folds individual missing fields from legacy collected", () => {
+    const effective = effectiveBookingContactDetails({
+      contactDetails: { phoneNumber: "+380501112233", firstName: "Олена" },
+      collected: { lastName: "Коваль" },
+    });
+    expect(effective).toEqual({
+      phoneNumber: "+380501112233",
+      firstName: "Олена",
+      lastName: "Коваль",
+    });
+    expect(nextMissingContactField(effective)).toBeNull();
+  });
+
+  it("overlays CRM with draft so owned incomplete contact asks only the missing field", () => {
+    const effective = effectiveBookingContactDetails({
+      crmContact: {
+        id: "c-1",
+        phoneNumber: "+380501112233",
+        firstName: "Олена",
+        lastName: "",
+      },
+      contactDetails: null,
+    });
+    expect(nextMissingContactField(effective)).toBe("lastName");
+  });
+
+  it("reads drafts without contactDetails as null and keeps schema v1", () => {
+    const empty = createEmptyBookingDraft();
+    expect(empty.contactDetails).toBeNull();
+    expect(BOOKING_SCHEMA_VERSION).toBe(1);
+    const withService = reduceBookingDraft(empty, {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+      accepted: true,
+    });
+    expect(withService.contactDetails ?? null).toBeNull();
   });
 });

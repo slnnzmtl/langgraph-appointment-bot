@@ -1,7 +1,8 @@
-import { contactMissingFields } from "../tools/contact-tools.js";
 import type { AvailabilityContext } from "../tools/availability-tools.js";
 import {
   bookingDraftCanPresentAvailability,
+  effectiveBookingContactDetails,
+  nextMissingContactField,
   type BookingDraft,
 } from "./booking-draft.js";
 import {
@@ -97,14 +98,20 @@ export const restorePendingInteraction = (
     && (draft.note.status === "skipped" || draft.note.status === "answered")
   ) {
     const contacts = input.contactContext?.contacts ?? [];
-    if (contacts.length === 0 || input.contactContext?.ownership !== "telegram") {
-      return openContactFieldInteraction("phoneNumber");
+    const owned = input.contactContext?.ownership === "telegram" && contacts.length > 0
+      ? contacts[0]!
+      : null;
+    // pendingInteraction is null in this branch (early return above); fold only draft∪CRM.
+    const effective = effectiveBookingContactDetails({
+      crmContact: owned,
+      contactDetails: draft.contactDetails ?? null,
+    });
+    const missing = nextMissingContactField(effective);
+    if (missing == null) {
+      // Complete accepted identity — do not reopen phoneNumber after a failed write.
+      return null;
     }
-    const contact = contacts[0]!;
-    const missing = contactMissingFields(contact)[0];
-    if (missing === "firstName" || missing === "lastName" || missing === "phoneNumber") {
-      return openContactFieldInteraction(missing);
-    }
+    return openContactFieldInteraction(missing);
   }
 
   return null;

@@ -153,6 +153,7 @@ import {
   resetBookingNoteState,
   resolveContactIdentity,
   resolveFaqCatalogChoices,
+  terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
   toolRanThisTurn,
 } from "./shared.js";
@@ -580,14 +581,33 @@ export const createAgentPrepareNode = (
           contactId,
         });
       }
-      if (
-        options?.classifyContactName
-        && pendingInteraction?.kind === "contact_field"
-        && (pendingInteraction.field === "firstName" || pendingInteraction.field === "lastName")
-      ) {
+      if (pendingInteraction?.kind === "contact_field") {
         const patientText = lastPatientText(state).trim();
-        if (
-          patientText.length > 0
+        if (pendingInteraction.field === "phoneNumber" && patientText.length > 0) {
+          const phone = normalizeClinicPhone(patientText);
+          if (phone != null) {
+            const session = reduceBookingSession(
+              {
+                bookingDraft: bookingDraft ?? null,
+                pendingInteraction,
+              },
+              {
+                type: "contact_field_submitted",
+                field: "phoneNumber",
+                value: phone,
+              },
+            );
+            bookingDraft = session.bookingDraft;
+            pendingInteraction = session.pendingInteraction;
+            update.pendingInteraction = pendingInteraction;
+            if (session.bookingDraft !== undefined) {
+              update.bookingDraft = session.bookingDraft;
+            }
+          }
+        } else if (
+          options?.classifyContactName
+          && (pendingInteraction.field === "firstName" || pendingInteraction.field === "lastName")
+          && patientText.length > 0
           && normalizeClinicPhone(patientText) == null
         ) {
           const classified = await options.classifyContactName({
@@ -601,7 +621,7 @@ export const createAgentPrepareNode = (
                 pendingInteraction,
               },
               {
-                type: "contact_name_submitted",
+                type: "contact_field_submitted",
                 field: pendingInteraction.field,
                 value: classified.value,
               },
@@ -609,6 +629,9 @@ export const createAgentPrepareNode = (
             bookingDraft = session.bookingDraft;
             pendingInteraction = session.pendingInteraction;
             update.pendingInteraction = pendingInteraction;
+            if (session.bookingDraft !== undefined) {
+              update.bookingDraft = session.bookingDraft;
+            }
           }
         }
       }
@@ -739,14 +762,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     // Full days[] lives in the slots tool result / checkpoint — do not also bill Gemini for it.
     // BookingDraft is the single compact projection of the selected slot.
     if (agent.id === BOOKING_AGENT_ID) {
-      dynamicParts.push(
-        formatBookingDraftContext(
-          state.bookingDraft,
-          state.pendingInteraction?.kind === "contact_field"
-            ? state.pendingInteraction.collected ?? null
-            : null,
-        ),
-      );
+      dynamicParts.push(formatBookingDraftContext(state.bookingDraft));
     }
     if (
       (agent.id === FAQ_AGENT_ID || agent.id === BOOKING_AGENT_ID)
@@ -919,18 +935,41 @@ export const createAgentToolsNode = (
         }
 
         if (PHONE_GROUNDED_TOOLS.has(call.name)) {
+          const draftDetails = state.bookingDraft?.contactDetails;
+          const collected = state.pendingInteraction?.kind === "contact_field"
+            ? state.pendingInteraction.collected
+            : undefined;
+          const matchesCanonicalPhone = (wanted: string): boolean => {
+            const accepted = draftDetails?.phoneNumber;
+            return typeof accepted === "string"
+              && normalizeClinicPhone(accepted) === wanted;
+          };
+          const matchesCanonicalName = (
+            field: "firstName" | "lastName",
+            raw: string,
+          ): boolean => {
+            const fromDraft = draftDetails?.[field];
+            const fromCollected = collected?.[field];
+            const accepted = typeof fromDraft === "string" && fromDraft.trim() !== ""
+              ? fromDraft
+              : fromCollected;
+            return typeof accepted === "string"
+              && normalizeNameForMatch(accepted) === normalizeNameForMatch(raw);
+          };
           const rawPhone = (call.args ?? {}).phoneNumber;
           if (typeof rawPhone === "string" && rawPhone.trim() !== "") {
             const wanted = normalizeClinicPhone(rawPhone);
             if (
               wanted != null
               && !humanProvidedPhone(state.messages ?? [], wanted)
+              && !matchesCanonicalPhone(wanted)
             ) {
               trackToolError(call.name, PHONE_NOT_PROVIDED_ERROR);
               synthetic.push(
                 new ToolMessage({
                   content: JSON.stringify({
                     error: PHONE_NOT_PROVIDED_ERROR,
+                    field: "phoneNumber",
                     hint:
                       "Ask the patient for their clinic phone, then retry with the number they typed.",
                   }),
@@ -945,24 +984,13 @@ export const createAgentToolsNode = (
           if (call.name === "create_contact" || call.name === "update_contact") {
             const args = call.args ?? {};
             const nameFields = ["firstName", "lastName"] as const;
-            const collected = state.pendingInteraction?.kind === "contact_field"
-              ? state.pendingInteraction.collected
-              : undefined;
-            const matchesCollected = (
-              field: "firstName" | "lastName",
-              raw: string,
-            ): boolean => {
-              const accepted = collected?.[field];
-              return typeof accepted === "string"
-                && normalizeNameForMatch(accepted) === normalizeNameForMatch(raw);
-            };
             const invented = nameFields.find((field) => {
               const raw = args[field];
               return (
                 typeof raw === "string"
                 && raw.trim() !== ""
                 && !humanProvidedName(state.messages ?? [], raw)
-                && !matchesCollected(field, raw)
+                && !matchesCanonicalName(field, raw)
               );
             });
             if (invented) {
@@ -971,6 +999,7 @@ export const createAgentToolsNode = (
                 new ToolMessage({
                   content: JSON.stringify({
                     error: NAME_NOT_PROVIDED_ERROR,
+                    field: invented,
                     hint:
                       "Ask the patient for their name, then retry with the value they typed.",
                   }),
@@ -994,6 +1023,7 @@ export const createAgentToolsNode = (
               new ToolMessage({
                 content: JSON.stringify({
                   error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+                  field: "phoneNumber",
                   hint:
                     "This phone belongs to another Telegram account. Ask for a different number; do not create a Contact with it.",
                 }),
@@ -1834,6 +1864,11 @@ export const routeAfterAgentTools = (
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  // Failed contact writes are terminal for this turn — code owns the patient reply.
+  if (finalizeName && terminalContactWriteOutcome(state) != null) {
+    return finalizeName;
   }
 
   if (bookingMutationNeedsModelRecovery(state)) {

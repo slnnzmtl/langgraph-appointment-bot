@@ -29,7 +29,7 @@ import {
   MAIN_MENU_LABEL,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
 } from "../../shared/clinic-constants.js";
-import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
+import { asJsonRecord, committedMeetingEntityId, jsonEntityId } from "../../shared/json-record.js";
 import {
   extractMessageTextContent,
   extractRawMessageText,
@@ -95,6 +95,25 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "cancel_meeting",
   "reschedule_meeting",
 ]);
+
+/** Contact CRM writes that must not same-turn retry after known_field / operational failure. */
+export const CONTACT_WRITE_TOOLS = new Set([
+  "create_contact",
+  "update_contact",
+  "link_telegram_to_contact",
+]);
+
+export type ContactWriteOutcome = "success" | "known_field" | "operational" | null;
+
+export type ContactWriteClassification = {
+  outcome: ContactWriteOutcome;
+  tool: string;
+  /** Present for known_field when the synthetic error names a specific identity field. */
+  field?: "phoneNumber" | "firstName" | "lastName";
+  /** Structured synthetic error constant when outcome is known_field. */
+  error?: string;
+  category?: "known_field" | "operational";
+};
 
 /**
  * Choose-other catalog browse: exact «Обрати іншу процедуру» chip always, or
@@ -1003,6 +1022,85 @@ export const PHONE_GROUNDED_TOOLS = new Set([
 export const PHONE_NOT_PROVIDED_ERROR = "Phone not provided";
 
 export const NAME_NOT_PROVIDED_ERROR = "Name not provided";
+
+const KNOWN_CONTACT_FIELD_ERRORS = new Set([
+  PHONE_NOT_PROVIDED_ERROR,
+  NAME_NOT_PROVIDED_ERROR,
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+]);
+
+const contactWriteFieldFromRecord = (
+  record: Record<string, unknown>,
+  error: string,
+): ContactWriteClassification["field"] => {
+  const raw = record.field;
+  if (raw === "phoneNumber" || raw === "firstName" || raw === "lastName") {
+    return raw;
+  }
+  if (error === PHONE_NOT_PROVIDED_ERROR || error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR) {
+    return "phoneNumber";
+  }
+  return undefined;
+};
+
+/**
+ * Classify create_contact / update_contact / link_telegram_to_contact results.
+ * Never branches on free-form Espo text — only structured error constants or missing entity id.
+ */
+export const classifyContactWriteToolMessage = (
+  message: ToolMessage,
+): ContactWriteClassification | null => {
+  const name = message.name;
+  if (!name || !CONTACT_WRITE_TOOLS.has(name)) {
+    return null;
+  }
+  const body = extractMessageTextContent(message.content).trim();
+  if (body.startsWith("Error:")) {
+    return { outcome: "operational", tool: name, category: "operational" };
+  }
+  const record = asJsonRecord(body);
+  if (!record) {
+    return { outcome: "operational", tool: name, category: "operational" };
+  }
+  if (typeof record.error === "string") {
+    if (KNOWN_CONTACT_FIELD_ERRORS.has(record.error)) {
+      const field = contactWriteFieldFromRecord(record, record.error);
+      return {
+        outcome: "known_field",
+        tool: name,
+        category: "known_field",
+        error: record.error,
+        ...(field != null ? { field } : {}),
+      };
+    }
+    return { outcome: "operational", tool: name, category: "operational" };
+  }
+  if (jsonEntityId(body) != null) {
+    return { outcome: "success", tool: name };
+  }
+  // Malformed "success" without an entity id is operational, not projected.
+  return { outcome: "operational", tool: name, category: "operational" };
+};
+
+/** Latest non-success contact write this turn (known_field or operational). */
+export const terminalContactWriteOutcome = (
+  state: ClinicState,
+): { message: ToolMessage; classification: ContactWriteClassification } | null => {
+  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = state.agentMessages?.[index];
+    if (!(message instanceof ToolMessage) || !CONTACT_WRITE_TOOLS.has(message.name ?? "")) {
+      continue;
+    }
+    const classification = classifyContactWriteToolMessage(message);
+    if (
+      classification != null
+      && (classification.outcome === "known_field" || classification.outcome === "operational")
+    ) {
+      return { message, classification };
+    }
+  }
+  return null;
+};
 
 /** True when some HumanMessage in `messages` normalizes to the same E.164 as `wanted`. */
 export const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boolean =>

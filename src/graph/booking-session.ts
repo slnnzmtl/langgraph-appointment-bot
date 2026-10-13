@@ -12,10 +12,13 @@ import {
 import { matchesReplyLabel } from "../shared/message-content.js";
 import {
   bookingDraftCanPresentAvailability,
+  effectiveBookingContactDetails,
+  nextMissingContactField,
   reduceBookingDraft,
   upgradeBookingDraftCheckpoint,
   type BookingCheckpointLegacyState,
   type BookingCheckpointUpgradeResult,
+  type BookingContactField,
   type BookingDraft,
   type BookingService,
 } from "./booking-draft.js";
@@ -439,8 +442,9 @@ export type BookingSessionEvent =
       occupied?: boolean;
     }
   | {
-      type: "contact_name_submitted";
-      field: "firstName" | "lastName";
+      /** Persist accepted identity on the draft and advance/clear the open contact_field. */
+      type: "contact_field_submitted";
+      field: BookingContactField;
       value: string;
     }
   | {
@@ -1101,6 +1105,8 @@ export const reduceBookingSession = (
       });
     }
     case "contact_field_required": {
+      // Preserve leftover collected only for checkpoint compatibility reads;
+      // new identity writes go to bookingDraft.contactDetails.
       const prevCollected = interaction?.kind === "contact_field"
         ? interaction.collected
         : undefined;
@@ -1113,30 +1119,60 @@ export const reduceBookingSession = (
         ),
       });
     }
-    case "contact_name_submitted": {
+    case "contact_field_submitted": {
       if (interaction?.kind !== "contact_field") {
         return noEffect(current);
       }
       if (interaction.field !== event.field) {
         return noEffect(current);
       }
-      const value = event.value.trim();
-      if (value.length === 0) {
+      if (draft == null) {
         return noEffect(current);
       }
-      const collected: ContactFieldCollected = {
-        ...(interaction.collected ?? {}),
-        [event.field]: value,
-      };
-      if (event.field === "firstName") {
+      let nextDraft = reduceBookingDraft(draft, {
+        type: "contact_field_submitted",
+        field: event.field,
+        value: event.value,
+      });
+      if (nextDraft == null || nextDraft === draft) {
+        return noEffect(current);
+      }
+      // Persist leftover collected names onto the draft so clearing the UI
+      // cannot drop accepted identity (checkpoint compatibility).
+      const collected = interaction.collected;
+      if (collected != null) {
+        for (const nameField of ["firstName", "lastName"] as const) {
+          const leftover = collected[nameField];
+          if (
+            typeof leftover === "string"
+            && leftover.trim().length > 0
+            && nextDraft.contactDetails?.[nameField] == null
+          ) {
+            const folded = reduceBookingDraft(nextDraft, {
+              type: "contact_field_submitted",
+              field: nameField,
+              value: leftover,
+            });
+            if (folded != null) {
+              nextDraft = folded;
+            }
+          }
+        }
+      }
+      const effective = effectiveBookingContactDetails({
+        contactDetails: nextDraft.contactDetails ?? null,
+        ...(collected != null ? { collected } : {}),
+      });
+      const missing = nextMissingContactField(effective);
+      if (missing == null) {
         return noEffect({
-          bookingDraft: draft,
-          pendingInteraction: openContactFieldInteraction("lastName", false, collected),
+          bookingDraft: nextDraft,
+          pendingInteraction: null,
         });
       }
       return noEffect({
-        bookingDraft: draft,
-        pendingInteraction: openContactFieldInteraction("lastName", false, collected),
+        bookingDraft: nextDraft,
+        pendingInteraction: openContactFieldInteraction(missing),
       });
     }
     case "mutation_confirm_opened": {

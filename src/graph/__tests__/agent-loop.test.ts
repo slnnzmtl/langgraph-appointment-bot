@@ -14,6 +14,7 @@ import {
   createAgentPrepareNode,
   captureAvailabilityFromMessages,
   captureServicesFromMessages,
+  classifyContactWriteToolMessage,
   classifyMeetingMutationToolMessage,
   createAgentToolsNode,
   crmWriteDirtiesPrefetch,
@@ -34,6 +35,7 @@ import { committedMeetingEntityId } from "../../shared/json-record.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   BOOKING_AWAITING_CONFIRM_UK,
+  BOOKING_CONTACT_SAVE_FAILED_UK,
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU,
   BOOKING_PHONE_OCCUPIED_UK,
@@ -60,6 +62,11 @@ import {
   serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
+import {
+  formatKyivDayLabel,
+  kyivToday,
+  shortDayMonthLabel,
+} from "../../tools/availability-slots.js";
 import {
   formatAvailabilityContext,
   formatBookingMeetingsContext,
@@ -2933,6 +2940,52 @@ describe("availability context helpers", () => {
     stepMinutes: 30,
   };
 
+  it("classifies contact write outcomes including link and malformed success", () => {
+    expect(
+      classifyContactWriteToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-1" }),
+          tool_call_id: "1",
+          name: "create_contact",
+        }),
+      ),
+    ).toMatchObject({ outcome: "success", tool: "create_contact" });
+    expect(
+      classifyContactWriteToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ success: true }),
+          tool_call_id: "2",
+          name: "create_contact",
+        }),
+      ),
+    ).toMatchObject({ outcome: "operational", tool: "create_contact" });
+    expect(
+      classifyContactWriteToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({ error: "MCP shut down" }),
+          tool_call_id: "3",
+          name: "link_telegram_to_contact",
+        }),
+      ),
+    ).toMatchObject({ outcome: "operational", tool: "link_telegram_to_contact" });
+    expect(
+      classifyContactWriteToolMessage(
+        new ToolMessage({
+          content: JSON.stringify({
+            error: "Name not provided",
+            field: "lastName",
+          }),
+          tool_call_id: "4",
+          name: "update_contact",
+        }),
+      ),
+    ).toMatchObject({
+      outcome: "known_field",
+      tool: "update_contact",
+      field: "lastName",
+    });
+  });
+
   it("classifies meeting mutation outcomes", async () => {
     expect(
       classifyMeetingMutationToolMessage(
@@ -5168,6 +5221,262 @@ describe("createAgentFinalizeNode", () => {
     );
   });
 
+  it("leftover mutation_confirm cannot attach ✅/❌ on the phone details step", async () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = await finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "mutation_confirm",
+          action: "create",
+          choices: [
+            { id: "confirm", label: CONFIRM_YES_LABEL },
+            { id: "decline", label: CONFIRM_NO_LABEL },
+          ],
+        },
+        agentMessages: [
+          new HumanMessage("Продовжити без коментаря"),
+          new AIMessage("Готово! Запис створено."),
+        ],
+      }),
+    );
+
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_QUESTION_UK);
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "phoneNumber",
+    });
+    expect(update.lastHandoff?.replyButtons).toBeUndefined();
+  });
+
+  it("routes create_contact operational failure to finalize with patient-safe copy", async () => {
+    const draft = canonicalBookingDraft({
+      phase: "details",
+      contactId: null,
+      contactDetails: {
+        phoneNumber: "+380501112233",
+        firstName: "Дар'я",
+        lastName: "Тест",
+      },
+    });
+    const state = clinicState({
+      bookingDraft: draft,
+      pendingInteraction: null,
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "cc-fail",
+            name: "create_contact",
+            args: {
+              phoneNumber: "+380501112233",
+              firstName: "Дар'я",
+              lastName: "Тест",
+            },
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ error: "cTelegram uniqueness conflict" }),
+          tool_call_id: "cc-fail",
+          name: "create_contact",
+        }),
+      ],
+    });
+    expect(
+      routeAfterAgentTools(
+        state as never,
+        "booking__llm",
+        "booking__tools",
+        "booking__mutation_finalize",
+        "booking__command_prepare",
+        "booking__note_orchestrator",
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+
+    const finalize = createAgentFinalizeNode(agent);
+    const update = await finalize(state);
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.bookingDraft ?? draft).toMatchObject({
+      contactDetails: {
+        phoneNumber: "+380501112233",
+        firstName: "Дар'я",
+        lastName: "Тест",
+      },
+      selectedSlot: draft.selectedSlot,
+    });
+    expect(update.lastHandoff?.replyText).not.toContain("cTelegram");
+  });
+
+  it("routes link_telegram_to_contact failure to finalize as operational", async () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "details",
+        contactId: null,
+        contactDetails: {
+          phoneNumber: "+380501112233",
+          firstName: "Олена",
+          lastName: "Коваль",
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ error: "MCP shut down" }),
+          tool_call_id: "link-1",
+          name: "link_telegram_to_contact",
+        }),
+      ],
+    });
+    expect(
+      routeAfterAgentTools(
+        state as never,
+        "booking__llm",
+        "booking__tools",
+        undefined,
+        undefined,
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+    const update = await createAgentFinalizeNode(agent)(state);
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
+  });
+
+  it("treats malformed contact-write success without id as operational", async () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "details",
+        contactId: null,
+        contactDetails: {
+          phoneNumber: "+380501112233",
+          firstName: "Олена",
+          lastName: "Коваль",
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ success: true }),
+          tool_call_id: "cc-bad",
+          name: "create_contact",
+        }),
+      ],
+    });
+    expect(
+      routeAfterAgentTools(
+        state as never,
+        "booking__llm",
+        "booking__tools",
+        undefined,
+        undefined,
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+    const update = await createAgentFinalizeNode(agent)(state);
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
+    expect(update.contactContext).toBeUndefined();
+  });
+
+  it("asks only lastName for an owned contact missing lastName", async () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = await finalize(
+      clinicState({
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{
+            id: "c-owned",
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+            lastName: "",
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: "c-owned",
+        }),
+        agentMessages: [
+          new HumanMessage("Продовжити без коментаря"),
+          new AIMessage("Готово!"),
+        ],
+      }),
+    );
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+    expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше прізвище.");
+  });
+
+  it("known_field Name not provided reopens only lastName when still missing", async () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = await finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+          contactDetails: {
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+          },
+        }),
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "Name not provided",
+              field: "lastName",
+            }),
+            tool_call_id: "cc-name",
+            name: "create_contact",
+          }),
+        ],
+      }),
+    );
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+    expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше прізвище.");
+  });
+
+  it("never reopens an already accepted field after known_field naming it", async () => {
+    const finalize = createAgentFinalizeNode(agent);
+    const update = await finalize(
+      clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+          contactDetails: {
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+            lastName: "Коваль",
+          },
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          choices: [],
+        },
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              error: "Name not provided",
+              field: "firstName",
+            }),
+            tool_call_id: "cc-stale",
+            name: "create_contact",
+          }),
+        ],
+      }),
+    );
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
+  });
+
   it("code-owns the occupied-phone reply and clears the phone candidate", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = await finalize(
@@ -5226,8 +5535,8 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("advances unresolved contact_field from phone to firstName after a valid phone", async () => {
-    const finalize = createAgentFinalizeNode(agent);
-    const update = await finalize(
+    const prepare = createAgentPrepareNode("booking");
+    const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("+380501112233")],
         bookingDraft: canonicalBookingDraft({
@@ -5239,6 +5548,22 @@ describe("createAgentFinalizeNode", () => {
           field: "phoneNumber",
           choices: [],
         },
+      }),
+    );
+    expect(prepared.bookingDraft).toMatchObject({
+      contactDetails: { phoneNumber: "+380501112233" },
+    });
+    expect(prepared.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+
+    const finalize = createAgentFinalizeNode(agent);
+    const update = await finalize(
+      clinicState({
+        messages: [new HumanMessage("+380501112233")],
+        bookingDraft: prepared.bookingDraft as BookingDraft,
+        pendingInteraction: prepared.pendingInteraction,
         agentMessages: [
           new HumanMessage("+380501112233"),
           new AIMessage("Дякую, записала номер."),
@@ -5261,6 +5586,7 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: { phoneNumber: "+380501112233" },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5288,6 +5614,7 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: { phoneNumber: "+380501112233", firstName: "Олена" },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5305,7 +5632,6 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",
       field: "lastName",
-      collected: { firstName: "Олена" },
     });
   });
 
@@ -5317,6 +5643,7 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: { phoneNumber: "+380501112233" },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5334,7 +5661,6 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",
       field: "lastName",
-      collected: { firstName: "Smoke" },
     });
     expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше прізвище.");
   });
@@ -5347,6 +5673,11 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: {
+            phoneNumber: "+380501112233",
+            firstName: "Smoke",
+            lastName: "Tester",
+          },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5374,6 +5705,7 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: { phoneNumber: "+380501112233" },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5383,10 +5715,15 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
+    expect(update.bookingDraft).toMatchObject({
+      contactDetails: {
+        phoneNumber: "+380501112233",
+        firstName: "Олена",
+      },
+    });
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",
       field: "lastName",
-      collected: { firstName: "Олена" },
     });
   });
 
@@ -5413,7 +5750,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction).toBeUndefined();
   });
 
-  it("prepare stores classified lastName on collected", async () => {
+  it("prepare stores classified lastName on contactDetails and clears the field", async () => {
     const prepare = createAgentPrepareNode("booking", {
       classifyContactName: async () => ({ kind: "name", value: "Коваль" }),
     });
@@ -5423,6 +5760,7 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: { phoneNumber: "+380501112233", firstName: "Олена" },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5433,14 +5771,17 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
-    expect(update.pendingInteraction).toMatchObject({
-      kind: "contact_field",
-      field: "lastName",
-      collected: { firstName: "Олена", lastName: "Коваль" },
+    expect(update.bookingDraft).toMatchObject({
+      contactDetails: {
+        phoneNumber: "+380501112233",
+        firstName: "Олена",
+        lastName: "Коваль",
+      },
     });
+    expect(update.pendingInteraction).toBeNull();
   });
 
-  it("prepare preserves Дарʼя apostrophe glyph exactly on collected (DDD-206)", async () => {
+  it("prepare preserves Дарʼя apostrophe glyph exactly on contactDetails (DDD-206)", async () => {
     const prepare = createAgentPrepareNode("booking", {
       classifyContactName: async () => ({ kind: "name", value: DARYA_MODIFIER }),
     });
@@ -5450,6 +5791,7 @@ describe("createAgentFinalizeNode", () => {
         bookingDraft: canonicalBookingDraft({
           phase: "details",
           contactId: null,
+          contactDetails: { phoneNumber: "+380501112233" },
         }),
         pendingInteraction: {
           kind: "contact_field",
@@ -5462,11 +5804,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",
       field: "lastName",
-      collected: { firstName: DARYA_MODIFIER },
     });
     expect(
-      (update.pendingInteraction as { collected?: { firstName?: string } })
-        .collected?.firstName,
+      (update.bookingDraft as BookingDraft).contactDetails?.firstName,
     ).toBe(DARYA_MODIFIER);
   });
 
@@ -11697,17 +12037,26 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("aligns present_availability_slots date year to the snapshot so TIME cache can hit", async () => {
-    const oct13: AvailabilityContext = {
+    const today = kyivToday();
+    const future = (() => {
+      const value = new Date(`${today}T12:00:00Z`);
+      value.setUTCDate(value.getUTCDate() + 14);
+      return value.toISOString().slice(0, 10);
+    })();
+    const wrongYear = `${String(Number(future.slice(0, 4)) - 1)}${future.slice(4)}`;
+    const dayLabel = formatKyivDayLabel(future, today);
+    const spoken = shortDayMonthLabel(dayLabel);
+    const snapshotDay: AvailabilityContext = {
       days: [
         {
-          date: "2026-10-13",
-          dayLabel: "13 жовтня (вівторок)",
+          date: future,
+          dayLabel,
           slots: [
             {
               id: "a",
               label: "14:00",
-              dateStart: "2026-10-13T14:00:00",
-              dateEnd: "2026-10-13T14:30:00",
+              dateStart: `${future}T14:00:00`,
+              dateEnd: `${future}T14:30:00`,
             },
           ],
         },
@@ -11733,17 +12082,17 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolsNode = createAgentToolsNode([slotsTool], "booking");
     const update = await toolsNode(
       availabilityClinicState({
-        messages: [new HumanMessage("13 жовтня")],
-        availabilityContext: oct13,
+        messages: [new HumanMessage(spoken)],
+        availabilityContext: snapshotDay,
         agentMessages: [
-          new HumanMessage("13 жовтня"),
+          new HumanMessage(spoken),
           new AIMessage({
             content: "",
             tool_calls: [
               {
                 id: "s1",
                 name: "present_availability_slots",
-                args: { durationMinutes: 60, date: "2025-10-13" },
+                args: { durationMinutes: 60, date: wrongYear },
                 type: "tool_call",
               },
             ],
@@ -11756,7 +12105,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
     const body = JSON.parse(String(toolMsg.content)) as { date: string; cacheHit: boolean };
     expect(body.cacheHit).toBe(true);
-    expect(body.date).toBe("2026-10-13");
+    expect(body.date).toBe(future);
   });
 
   it("drops an invalid model-only date and searches nearest before CRM", async () => {
@@ -12909,6 +13258,7 @@ describe("DDD-87: phone must appear in patient messages", () => {
     const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
     expect(JSON.parse(String(toolMsg.content))).toEqual({
       error: "Phone not provided",
+      field: "phoneNumber",
       hint: "Ask the patient for their clinic phone, then retry with the number they typed.",
     });
     expect(seen).toContainEqual(
@@ -12956,6 +13306,59 @@ describe("DDD-87: phone must appear in patient messages", () => {
       {
         name: "create_contact",
         args: { firstName: "Ada", phoneNumber: "+380501112233" },
+      },
+    ]);
+    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
+      id: "c-1",
+    });
+  });
+
+  it("allows create_contact from canonical contactDetails after checkpoint trim", async () => {
+    const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolsNode = createAgentToolsNode(
+      phoneTools((name, args) => {
+        invoked.push({ name, args });
+      }),
+      "booking",
+    );
+    const update = await toolsNode(
+      clinicState({
+        // History trimmed — grounding must use bookingDraft.contactDetails.
+        messages: [],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+          contactDetails: {
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+          },
+        }),
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "p1",
+                name: "create_contact",
+                args: {
+                  phoneNumber: "+380501112233",
+                  firstName: "Олена",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      {
+        name: "create_contact",
+        args: {
+          phoneNumber: "+380501112233",
+          firstName: "Олена",
+        },
       },
     ]);
     expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
@@ -13152,6 +13555,7 @@ describe("DDD-59: name must appear in patient messages", () => {
       const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
       expect(JSON.parse(String(toolMsg.content))).toEqual({
         error: "Name not provided",
+        field: "firstName",
         hint: "Ask the patient for their name, then retry with the value they typed.",
       });
       expect(seen).toContainEqual(
