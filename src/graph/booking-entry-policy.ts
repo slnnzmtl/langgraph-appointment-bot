@@ -14,10 +14,7 @@ import {
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "./service-resolution.js";
-import {
-  isSupervisorOwnedLabel,
-  labelIdFor,
-} from "../shared/message-content.js";
+import { labelIdFor } from "../shared/message-content.js";
 import type { ClinicRoutingDecision, SupervisorIntent } from "./routing.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "./types.js";
 import type { ServicesContext } from "../tools/service-tools.js";
@@ -208,26 +205,28 @@ export type NamedBookingPolicyResult = {
 };
 
 /**
+ * Free-text only: registered reply labels («Записатись», «Послуги», …)
+ * are never CRM catalog evidence.
+ */
+export const isCatalogEvidenceEligibleText = (text: string): boolean => {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && labelIdFor(trimmed) == null;
+};
+
+/**
  * CRM vocabulary evidence via lexical stems (terminal `?` allowed).
  * Multi-stem families count when rows hit — no family selector.
- * Main-menu / supervisor-owned chips («Записатись», …) are never CRM evidence.
+ * Main-menu chips («Записатись», …) are never CRM evidence.
  */
 export const utteranceHasCatalogCrmEvidence = (input: {
   text: string;
   services: ServicesContext["list"];
 }): boolean => {
-  const text = input.text.trim();
-  if (text.length === 0) {
-    return false;
-  }
-  if (labelIdFor(text) != null || isSupervisorOwnedLabel(text)) {
-    return false;
-  }
-  if (input.services.length === 0) {
+  if (!isCatalogEvidenceEligibleText(input.text) || input.services.length === 0) {
     return false;
   }
   return resolveCatalogLexicalEvidence(
-    text,
+    input.text.trim(),
     input.services,
     { allowTerminalQuestion: true },
   ).rows.length > 0;
@@ -275,11 +274,8 @@ export const refineSupervisorNamedBooking = async (input: {
     return { decision };
   }
 
-  // Keyboard «Записатись» / other owned chips: keep model book, skip catalog.
-  if (
-    labelIdFor(input.patientText.trim()) != null
-    || isSupervisorOwnedLabel(input.patientText.trim())
-  ) {
+  // Keyboard «Записатись» / other reply chips: keep model book, skip catalog.
+  if (!isCatalogEvidenceEligibleText(input.patientText)) {
     return { decision };
   }
 

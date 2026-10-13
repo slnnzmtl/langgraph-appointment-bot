@@ -13,6 +13,7 @@ import {
   routeAfterAgentPrepare,
 } from "../agent-loop.js";
 import {
+  isCatalogEvidenceEligibleText,
   refineSupervisorNamedBooking,
   utteranceHasCatalogCrmEvidence,
 } from "../booking-entry-policy.js";
@@ -967,6 +968,8 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
         ...botoxServices.list,
       ],
     };
+    expect(isCatalogEvidenceEligibleText("Записатись")).toBe(false);
+    expect(isCatalogEvidenceEligibleText("хочу ботокс")).toBe(true);
     expect(
       utteranceHasCatalogCrmEvidence({
         text: "Записатись",
