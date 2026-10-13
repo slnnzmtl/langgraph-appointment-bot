@@ -26,7 +26,7 @@ export const CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION = `You classify one patien
 The open field is either firstName (given name / ім'я) or lastName (surname / прізвище). The bot just asked for that field.
 
 Return exactly one kind:
-- name — the message is answering with that name (possibly with light punctuation). Put the cleaned name in value (letters, spaces, hyphen, apostrophe only; strip titles). Uncommon, foreign, or unusual given names still count as name when they are clearly the answer to the open field.
+- name — the message is answering with that name (possibly with light punctuation). Put the cleaned name in value (letters, spaces, hyphen, apostrophe only; strip titles). Apostrophes are valid and must stay in value: ASCII ', curly ’, and Ukrainian ʼ (e.g. Дар'я, O'Brien). Uncommon, foreign, or unusual given names still count as name when they are clearly the answer to the open field.
 - aside — the message is not answering the name field: a question, greeting, price/FAQ ask, booking/service request, decline, phone number, or multi-sentence chat. Omit value.
 
 Rules:
@@ -34,10 +34,13 @@ Rules:
 - Prefer aside only when the message clearly is not a name submission (question mark, greeting phrase, service request, price ask).
 - Do not invent a name that is not in the patient message.
 - Ukrainian, English, and mixed language are valid.
+- Keep apostrophes in value; do not strip them, do not transliterate into Latin-only, and do not return aside just because the name contains an apostrophe.
 - Do not use word lists or greeting dictionaries; decide from whether the message answers the open name field.
 
 Examples (open field firstName):
 - Patient: Олена → name value Олена
+- Patient: Дар'я → name value Дар'я
+- Patient: O'Brien → name value O'Brien
 - Patient: Smoke → name value Smoke
 - Patient: скільки коштує → aside
 - Patient: добрий день → aside

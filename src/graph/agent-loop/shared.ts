@@ -1014,11 +1014,23 @@ export const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boo
   });
 
 /**
- * True when some HumanMessage equals `wanted` (trim + casefold), or is two whitespace
+ * Compare-only name fold for DDD-59 grounding (DDD-206).
+ * Trims, lowercases, and maps documented apostrophe glyphs to ASCII `'`.
+ * Does not rewrite values stored on collected or forwarded to CRM.
+ */
+export const normalizeNameForMatch = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    // U+0027 apostrophe, U+2019 right single quotation, U+2018 left single quotation, U+02BC modifier letter apostrophe
+    .replace(/['’‘ʼ]/g, "'");
+
+/**
+ * True when some HumanMessage equals `wanted` (normalizeNameForMatch), or is two whitespace
  * tokens and `wanted` equals token 0 or 1 (DDD-59 name grounding).
  */
 export const humanProvidedName = (messages: BaseMessage[], wanted: string): boolean => {
-  const target = wanted.trim().toLowerCase();
+  const target = normalizeNameForMatch(wanted);
   if (target.length === 0) {
     return false;
   }
@@ -1026,7 +1038,7 @@ export const humanProvidedName = (messages: BaseMessage[], wanted: string): bool
     if (!(message instanceof HumanMessage)) {
       return false;
     }
-    const text = extractMessageTextContent(message.content).trim().toLowerCase();
+    const text = normalizeNameForMatch(extractMessageTextContent(message.content));
     if (text === target) {
       return true;
     }

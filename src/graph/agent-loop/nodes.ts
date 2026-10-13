@@ -140,6 +140,7 @@ import {
   crmWriteDirtiesPrefetch,
   humanProvidedName,
   humanProvidedPhone,
+  normalizeNameForMatch,
   lastPatientText,
   latestCreateMeetingError,
   matchAvailabilityDay,
@@ -953,7 +954,7 @@ export const createAgentToolsNode = (
             ): boolean => {
               const accepted = collected?.[field];
               return typeof accepted === "string"
-                && accepted.trim().toLocaleLowerCase() === raw.trim().toLocaleLowerCase();
+                && normalizeNameForMatch(accepted) === normalizeNameForMatch(raw);
             };
             const invented = nameFields.find((field) => {
               const raw = args[field];
