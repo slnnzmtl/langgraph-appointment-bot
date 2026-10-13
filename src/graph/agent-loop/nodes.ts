@@ -91,7 +91,10 @@ import {
   bookingOfferLabels,
   inferConversationLocaleFromText,
 } from "../../shared/conversation-locale.js";
-import { openRootFaqCatalog } from "../booking-entry-policy.js";
+import {
+  faqNamedProcedureEntryForTurn,
+  openRootFaqCatalog,
+} from "../booking-entry-policy.js";
 
 import {
   bookingCommandContinuesAfterTools,
@@ -320,7 +323,44 @@ export const createAgentPrepareNode = (
           update.pendingInteraction = session.pendingInteraction;
         }
       }
-      // Idle FAQ: no utterance matcher — FAQ LLM may emit open_catalog.
+      // Named-procedure book (supervisor intent): open catalog without the FAQ LLM.
+      const namedProcedureIdle =
+        !handledCatalogChoice
+        && !browseShortcut
+        && state.supervisorIntent === "named_procedure"
+        && !(
+          interaction?.kind === "service_candidate" && interaction.owner === "faq"
+        );
+      if (namedProcedureIdle) {
+        let namedServices = state.servicesContext?.list ?? [];
+        if (namedServices.length === 0 && options?.loadServices != null) {
+          const loaded = await options.loadServices().catch(() => null);
+          if (loaded != null && loaded.list.length > 0) {
+            update.servicesContext = loaded;
+            namedServices = loaded.list;
+          }
+        }
+        const namedSession = await faqNamedProcedureEntryForTurn({
+          supervisorIntent: state.supervisorIntent,
+          patientText,
+          services: namedServices,
+          session: {
+            bookingDraft: state.bookingDraft ?? null,
+            pendingInteraction: state.pendingInteraction ?? null,
+          },
+          alreadyHandled: false,
+          ...(options?.partitionCandidates != null
+            ? { partitionCandidates: options.partitionCandidates }
+            : {}),
+          ...(options?.selectCandidates != null
+            ? { selectCandidates: options.selectCandidates }
+            : {}),
+        });
+        if (namedSession?.pendingInteraction != null) {
+          update.bookingDraft = namedSession.bookingDraft;
+          update.pendingInteraction = namedSession.pendingInteraction;
+        }
+      }
     }
     if (agentId === BOOKING_AGENT_ID) {
       const scheduleRepair = repairInvalidScheduleInteraction(
@@ -1663,9 +1703,9 @@ export const routeAfterAgentPrepare = (
   ) {
     return finalizeName;
   }
-  // FAQ chips opened/narrowed by a chip tap or browse shortcut in prepare —
-  // skip LLM. Free text on an already-open catalog reaches the FAQ model
-  // (may emit open_catalog).
+  // FAQ chips opened/narrowed by a chip tap, browse shortcut, or named_procedure
+  // entry in prepare — skip LLM. Free text on an already-open catalog reaches
+  // the FAQ model (may emit open_catalog).
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_candidate"
@@ -1676,13 +1716,18 @@ export const routeAfterAgentPrepare = (
       state.pendingInteraction,
       catalogText,
     );
-    // Only catalog chips skip the FAQ LLM. Bare «ні» must not wipe drill-down.
+    // Catalog chips skip the FAQ LLM. Bare «ні» must not wipe drill-down.
     if (chipMatch.kind === "choice") {
       return finalizeName;
     }
+    // Named-procedure entry just opened these chips from the patient line.
+    if (state.supervisorIntent === "named_procedure") {
+      return finalizeName;
+    }
   }
-  // Consultation opened in prepare from mainBook chip or owned-contact idle
-  // book (checkpoint state). Do not skip when the patient is accepting («Так»).
+  // Graph-owned service_confirm from prepare. Do not skip when accepting («Так»).
+  // FAQ: only named_procedure (just opened the card) — price/info free text must
+  // reach the FAQ LLM. Booking: mainBook / owned-idle consultation open.
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_confirm"
@@ -1695,11 +1740,18 @@ export const routeAfterAgentPrepare = (
       bookText,
     );
     if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
+      const faqFinalize = finalizeName.includes("faq");
+      if (faqFinalize && state.supervisorIntent === "named_procedure") {
+        return finalizeName;
+      }
       if (
-        labelIdFor(bookText) === "mainBook"
-        || (
-          (state.bookingContext?.meetings.length ?? 0) === 0
-          && resolveContactIdentity(state.contactContext).kind === "owned"
+        !faqFinalize
+        && (
+          labelIdFor(bookText) === "mainBook"
+          || (
+            (state.bookingContext?.meetings.length ?? 0) === 0
+            && resolveContactIdentity(state.contactContext).kind === "owned"
+          )
         )
       ) {
         return finalizeName;

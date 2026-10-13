@@ -444,6 +444,7 @@ export const createAgentFinalizeNode = (
           return {
             ...cleared,
             ...confirmationCleanup,
+            supervisorIntent: null,
             pendingInteraction: interaction,
             messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
             lastHandoff: {
@@ -461,6 +462,7 @@ export const createAgentFinalizeNode = (
           return {
             ...cleared,
             ...confirmationCleanup,
+            supervisorIntent: null,
             pendingInteraction: interaction,
             messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
             lastHandoff: {
@@ -469,6 +471,7 @@ export const createAgentFinalizeNode = (
               status: "ok",
               replyText,
               replyButtons,
+              yieldToSupervisor: true,
             },
           };
         }
@@ -1148,6 +1151,8 @@ export const createAgentFinalizeNode = (
     };
     const serviceChangeNoticeClear: { serviceChangeNotice?: null } =
       clearServiceChangeNotice ? { serviceChangeNotice: null } : {};
+    // One-turn named_procedure gate — consume after FAQ (or any) finalize.
+    const supervisorIntentClear: { supervisorIntent: null } = { supervisorIntent: null };
 
     if (status === "empty") {
       return {
@@ -1161,6 +1166,7 @@ export const createAgentFinalizeNode = (
         ...confirmationCleanup,
         ...clearOccupiedPhoneCandidate,
         ...serviceChangeNoticeClear,
+        ...supervisorIntentClear,
       };
     }
 
@@ -1181,6 +1187,7 @@ export const createAgentFinalizeNode = (
         ...confirmationCleanup,
         ...clearOccupiedPhoneCandidate,
         ...serviceChangeNoticeClear,
+        ...supervisorIntentClear,
         messages: [
           replyText.length > 0
             ? replyMessage
@@ -1200,6 +1207,7 @@ export const createAgentFinalizeNode = (
       ...confirmationCleanup,
       ...clearOccupiedPhoneCandidate,
       ...serviceChangeNoticeClear,
+      ...supervisorIntentClear,
       messages: [replyMessage],
     };
   };

@@ -40,6 +40,7 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   agentMessages: [],
   stepCount: 0,
   next: undefined,
+  supervisorIntent: null,
   lastHandoff: null,
   bookingContext: null,
   contactContext: null,

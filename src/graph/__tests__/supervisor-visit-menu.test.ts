@@ -877,7 +877,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   });
 
   it("routes named-procedure booking with no visit to faq without seeding consultation", async () => {
-    invoke.mockResolvedValue({ next: "faq", intent: "faq" });
+    invoke.mockResolvedValue({ next: "faq", intent: "named_procedure" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("запиши на ботокс")],
@@ -885,6 +885,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
+    expect(update.supervisorIntent).toBe("named_procedure");
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
     expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });

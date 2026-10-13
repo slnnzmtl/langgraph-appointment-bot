@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  matchingCatalogRows,
-  normalizeCatalogUtterance,
-} from "../agent-loop/shared.js";
+import { matchingCatalogRows } from "../agent-loop/shared.js";
 
 const catalog = [
   {
@@ -23,26 +20,13 @@ const catalog = [
   },
 ];
 
-describe("normalizeCatalogUtterance", () => {
-  it.each([
-    ["запиши на коллаген", "коллаген"],
-    ["ні, запиши на колагеностимуляцію", "колагеностимуляцію"],
-    ["НІ, запиши на колагеностимуляцію", "колагеностимуляцію"],
-    ["хочу на ботокс", "ботокс"],
-    ["book me for botox", "botox"],
-    ["не треба ботокс", "ботокс"],
-  ])("strips lead-ins from %j → %j", (input, expected) => {
-    expect(normalizeCatalogUtterance(input)).toBe(expected);
-  });
-});
-
 describe("matchingCatalogRows", () => {
-  it("matches collagen after book-intent and doubled-letter typo", () => {
+  it("matches collagen after book-intent and doubled-letter typo via stems", () => {
     const rows = matchingCatalogRows("запиши на коллаген", catalog);
     expect(rows.map((row) => row.id)).toEqual(["svc-collagen"]);
   });
 
-  it("matches collagen after bare negation + book-intent", () => {
+  it("matches collagen after bare negation + book-intent via stems", () => {
     const rows = matchingCatalogRows(
       "ні, запиши на колагеностимуляцію",
       catalog,

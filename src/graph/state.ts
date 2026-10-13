@@ -9,6 +9,7 @@ import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 import type { BookingDraft } from "./booking-draft.js";
 import type { PendingInteraction } from "./booking-session.js";
+import type { SupervisorIntent } from "./routing.js";
 
 export type CancellationPurpose = "direct" | "replacement";
 
@@ -43,6 +44,15 @@ export const createClinicStateAnnotation = ({
     next: Annotation<string | undefined>({
       reducer: (_left, right) => right,
       default: () => undefined,
+    }),
+    /**
+     * One-turn supervisor free-text intent for the specialist that runs next.
+     * FAQ prepare opens the catalog when this is \`named_procedure\`. Cleared
+     * after FAQ finalize (or when the supervisor routes elsewhere).
+     */
+    supervisorIntent: Annotation<SupervisorIntent | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
     }),
     lastHandoff: Annotation<ClinicHandoff | null>({
       reducer: (_left, right) => right ?? null,

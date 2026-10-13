@@ -25,6 +25,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   agentMessages: [],
   stepCount: 0,
   next: undefined,
+  supervisorIntent: null,
   lastHandoff: null,
   bookingContext: null,
   contactContext: null,
@@ -229,8 +230,103 @@ describe("booking prepare entry (state)", () => {
   });
 });
 
-describe("FAQ idle (no utterance matcher)", () => {
-  it("does not open catalog chips from idle FAQ prepare on free text", async () => {
+describe("FAQ idle named_procedure catalog entry", () => {
+  it("opens family chips from idle FAQ prepare on named_procedure + ботокс", async () => {
+    const faq = await createAgentPrepareNode("faq", {
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      servicesContext: botoxServices,
+      supervisorIntent: "named_procedure",
+    }));
+    expect(faq.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+    });
+    expect(
+      faq.pendingInteraction?.kind === "service_candidate"
+        ? faq.pendingInteraction.choices.map((c) => c.label)
+        : [],
+    ).toEqual(["Botox, Disport", "Nabota"]);
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("запиши на ботокс")],
+          servicesContext: botoxServices,
+          supervisorIntent: "named_procedure",
+          bookingDraft: faq.bookingDraft ?? null,
+          pendingInteraction: faq.pendingInteraction ?? null,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__finalize");
+  });
+
+  it("opens service_confirm for a unique collagen row on named_procedure", async () => {
+    const faq = await createAgentPrepareNode("faq")(clinicState({
+      messages: [new HumanMessage("запиши на колаген")],
+      servicesContext: {
+        list: [
+          {
+            id: "svc-collagen",
+            name: "Колагеностимуляція Полімолочна кислота",
+            duration: 60,
+          },
+          { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+        ],
+      },
+      supervisorIntent: "named_procedure",
+    }));
+    expect(faq.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: {
+        id: "svc-collagen",
+        name: "Колагеностимуляція Полімолочна кислота",
+      },
+    });
+    expect(faq.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: "svc-collagen" },
+    });
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("запиши на колаген")],
+          supervisorIntent: "named_procedure",
+          bookingDraft: faq.bookingDraft ?? null,
+          pendingInteraction: faq.pendingInteraction ?? null,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__finalize");
+  });
+
+  it("does not open catalog on idle FAQ without named_procedure (price/info)", async () => {
+    const faq = await createAgentPrepareNode("faq", {
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("скільки коштує колаген")],
+      servicesContext: {
+        list: [
+          {
+            id: "svc-collagen",
+            name: "Колагеностимуляція Полімолочна кислота",
+          },
+        ],
+      },
+      supervisorIntent: "faq",
+    }));
+    expect(faq.pendingInteraction).toBeUndefined();
+    expect(faq.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+  });
+
+  it("does not open catalog on idle FAQ free text without supervisorIntent", async () => {
     const faq = await createAgentPrepareNode("faq", {
       selectCandidates: familySelector,
     })(clinicState({
@@ -241,7 +337,24 @@ describe("FAQ idle (no utterance matcher)", () => {
     expect(faq.bookingDraft?.serviceAcceptance ?? null).toBeNull();
   });
 
-  it("does not fetch the catalog on idle FAQ when servicesContext is empty", async () => {
+  it("loads the catalog on named_procedure when servicesContext is empty", async () => {
+    let loadCalls = 0;
+    const faq = await createAgentPrepareNode("faq", {
+      loadServices: async () => {
+        loadCalls += 1;
+        return botoxServices;
+      },
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      servicesContext: null,
+      supervisorIntent: "named_procedure",
+    }));
+    expect(loadCalls).toBe(1);
+    expect(faq.pendingInteraction?.kind).toBe("service_candidate");
+  });
+
+  it("does not fetch the catalog on idle FAQ when servicesContext is empty without named_procedure", async () => {
     let loadCalls = 0;
     const faq = await createAgentPrepareNode("faq", {
       loadServices: async () => {
@@ -256,11 +369,69 @@ describe("FAQ idle (no utterance matcher)", () => {
     expect(loadCalls).toBe(0);
     expect(faq.pendingInteraction).toBeUndefined();
   });
+
+  it("accepts Так on FAQ-opened collagen service_confirm in booking prepare", async () => {
+    const offered = await createAgentPrepareNode("faq")(clinicState({
+      messages: [new HumanMessage("запиши на колаген")],
+      servicesContext: {
+        list: [
+          {
+            id: "svc-collagen",
+            name: "Колагеностимуляція Полімолочна кислота",
+            duration: 60,
+          },
+        ],
+      },
+      supervisorIntent: "named_procedure",
+    }));
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const rendered = await createAgentFinalizeNode(faqAgent)(
+      clinicState({
+        messages: [new HumanMessage("запиши на колаген")],
+        bookingDraft: offered.bookingDraft ?? null,
+        pendingInteraction: offered.pendingInteraction ?? null,
+        supervisorIntent: "named_procedure",
+        agentMessages: [new HumanMessage("запиши на колаген")],
+      }),
+    );
+    expect(rendered.lastHandoff?.replyText).toContain(
+      "Колагеностимуляція Полімолочна кислота",
+    );
+    expect(rendered.lastHandoff?.replyText).toContain(
+      "Бажаєте записатися на цю процедуру?",
+    );
+    expect(rendered.lastHandoff?.replyText).not.toContain(
+      "Підібрати вільний час на консультацію?",
+    );
+    expect(rendered.lastHandoff?.replyButtons).toEqual(["Так", "Обрати іншу процедуру"]);
+    expect(rendered.supervisorIntent).toBeNull();
+
+    const accepted = await createAgentPrepareNode("booking")(clinicState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: offered.bookingDraft ?? null,
+      pendingInteraction: offered.pendingInteraction ?? null,
+      contactContext: ownedContact,
+      bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+    }));
+    expect(accepted.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "accepted",
+      service: { id: "svc-collagen" },
+    });
+    expect(accepted.bookingDraft?.serviceAcceptance?.service.id).not.toBe(
+      CONSULTATION_SERVICE_ID,
+    );
+  });
 });
 
 describe("supervisor idle free text (no booking_entry pre-LLM)", () => {
   it("calls the supervisor LLM for named booking free text", async () => {
-    const invoke = vi.fn(async () => ({ next: "faq", intent: "faq" }));
+    const invoke = vi.fn(async () => ({ next: "faq", intent: "named_procedure" }));
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm: {
@@ -277,6 +448,7 @@ describe("supervisor idle free text (no booking_entry pre-LLM)", () => {
     );
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
+    expect(update.supervisorIntent).toBe("named_procedure");
   });
 
   it("still skips the LLM for keyboard «Записатись» via sticky/chip paths when applicable", async () => {

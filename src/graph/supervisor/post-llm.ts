@@ -154,6 +154,9 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
       ...routed,
       ...ctx.prefetchUpdate,
       ...seed.update,
+      // One-turn gate for FAQ prepare catalog open — not a phrase matcher.
+      supervisorIntent:
+        effectiveDecision.intent === "named_procedure" ? "named_procedure" : null,
       ...(abandonDraft ? closedBookingSessionUpdate() : {}),
       ...(keepAvailability
         ? {}

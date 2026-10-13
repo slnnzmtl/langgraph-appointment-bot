@@ -114,6 +114,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   agentMessages: [],
   stepCount: 0,
   next: undefined,
+  supervisorIntent: null,
   lastHandoff: null,
   bookingContext: null,
   contactContext: null,

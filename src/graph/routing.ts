@@ -30,6 +30,7 @@ export const SUPERVISOR_INTENT_VALUES = [
   "visit_reschedule",
   "book",
   "consultation_request",
+  "named_procedure",
   "faq",
   "abandon_booking",
   "other",
@@ -77,7 +78,7 @@ export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
       .enum(SUPERVISOR_INTENT_VALUES)
       .optional()
       .describe(
-        "Patient intent for free text. visit_status = read-only «what is booked»; visit_cancel / visit_reschedule = change a visit; abandon_booking = leave an in-progress booking without a slot; book = generic new booking, or named-procedure booking when visits=has (REPLACE); consultation_request = explicitly wants consultation; faq = clinic info (prices, what a procedure is, location, hours), or named-procedure booking when visits=none. Omit when delegating via next only.",
+        "Patient intent for free text. visit_status = read-only «what is booked»; visit_cancel / visit_reschedule = change a visit; abandon_booking = leave an in-progress booking without a slot; book = generic new booking, or named-procedure booking when visits=has (REPLACE); consultation_request = explicitly wants consultation; named_procedure = book a named procedure/family when visits=none (FAQ opens the catalog); faq = clinic info (prices, what a procedure is, location, hours). Omit when delegating via next only.",
       ),
     choiceId: z
       .string()

@@ -589,23 +589,6 @@ const FAQ_CATALOG_NAME_MIN_LEN = 3;
 /** Stem tokens shorter than this are too ambiguous for prefix matching. */
 const FAQ_CATALOG_STEM_MIN_LEN = 5;
 
-/** Strip leading negation / book-intent lead-ins before catalog name matching. */
-export const normalizeCatalogUtterance = (text: string): string => {
-  let normalized = normalizeReplyLabel(text);
-  // Leading bare/soft negation («ні, …», «no …», «не треба …»).
-  normalized = normalized
-    .replace(/^(?:ні|нi|no|не\s+треба)\s*[,:]?\s+/u, "")
-    .trim();
-  // Book-intent prefixes: «запиши на», «хочу на», «book me for», …
-  normalized = normalized
-    .replace(
-      /^(?:запиши(?:ть)?(?:\s+мене)?|записатись|записатися|хочу|бажаю|book(?:\s+me)?(?:\s+for)?)\s+(?:на\s+)?/u,
-      "",
-    )
-    .trim();
-  return normalized;
-};
-
 /** Collapse doubled letters so «коллаген» aligns with «колаген…». */
 const collapseDoubledLetters = (token: string): string =>
   token.replace(/(.)\1+/gu, "$1");
@@ -656,7 +639,7 @@ export const matchingCatalogRows = (
   text: string,
   services: ServicesContext["list"],
 ): ServicesContext["list"] => {
-  const normalized = normalizeCatalogUtterance(text);
+  const normalized = normalizeReplyLabel(text);
   if (
     normalized.length < FAQ_CATALOG_NAME_MIN_LEN
     || normalized.includes("?")
@@ -708,7 +691,7 @@ export const resolveCatalogFreeText = async (input: {
   ) {
     return { kind: "none" };
   }
-  const normalized = normalizeCatalogUtterance(trimmed);
+  const normalized = normalizeReplyLabel(trimmed);
   if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
     return { kind: "none" };
   }
@@ -727,8 +710,9 @@ export const resolveCatalogFreeText = async (input: {
 
   const allowlist = new Map(input.rows.map((row) => [row.id, row]));
   if (input.selectCandidates != null) {
+    // Raw patient line — the selector LLM ignores wrappers in any language.
     const selection = await safeSelect(input.selectCandidates, {
-      utterance: normalized,
+      utterance: trimmed,
       query: CATALOG_FAMILY_SELECTOR_QUERY,
       candidates: input.rows.map((row) => ({
         id: row.id,

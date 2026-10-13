@@ -4,7 +4,6 @@ import {
   type PendingInteraction,
 } from "./booking-session.js";
 import {
-  normalizeCatalogUtterance,
   resolveCatalogFreeText,
   resolveFaqCatalogChoices,
   type CatalogFreeTextResult,
@@ -14,6 +13,7 @@ import {
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "./service-resolution.js";
+import type { SupervisorIntent } from "./routing.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 
 const catalogRowToBookingService = (
@@ -35,7 +35,7 @@ const applyCatalogFreeTextResolution = async (input: {
   resolved: CatalogFreeTextResult;
   services: ServicesContext["list"];
   utterance: string;
-  selectedLabel: string;
+  selectedLabel?: string;
   session: BookingSessionSnapshot;
   consultationDeclined?: boolean;
   partitionCandidates?: PartitionServiceCandidates;
@@ -55,7 +55,9 @@ const applyCatalogFreeTextResolution = async (input: {
     remainingIds: resolved.ids,
     utterance: input.utterance,
     ...(resolved.groups != null ? { groups: resolved.groups } : {}),
-    ...(input.selectedLabel.length > 0 ? { selectedLabel: input.selectedLabel } : {}),
+    ...(input.selectedLabel != null && input.selectedLabel.length > 0
+      ? { selectedLabel: input.selectedLabel }
+      : {}),
     ...(input.partitionCandidates != null
       ? { partitionCandidates: input.partitionCandidates }
       : {}),
@@ -75,6 +77,7 @@ const applyCatalogFreeTextResolution = async (input: {
 /**
  * Shared catalog open for FAQ free text and open-offer switches.
  * `text` is what the matcher sees; `utterance` is stored on the interaction.
+ * `selectedLabel` is only a tapped CRM chip path — never a patient sentence.
  */
 export const openCatalogFromFreeText = async (input: {
   text: string;
@@ -97,13 +100,51 @@ export const openCatalogFromFreeText = async (input: {
     resolved,
     services: input.services,
     utterance: input.utterance ?? input.text,
-    selectedLabel: input.selectedLabel ?? normalizeCatalogUtterance(input.text),
+    ...(input.selectedLabel != null && input.selectedLabel.length > 0
+      ? { selectedLabel: input.selectedLabel }
+      : {}),
     session: input.session,
     ...(input.consultationDeclined === true
       ? { consultationDeclined: true }
       : {}),
     ...(input.partitionCandidates != null
       ? { partitionCandidates: input.partitionCandidates }
+      : {}),
+  });
+};
+
+/**
+ * Idle FAQ named-procedure book: supervisor intent gates catalog open — no
+ * book-prefix regex. Singleton → service_confirm; family → FAQ chips.
+ */
+export const faqNamedProcedureEntryForTurn = async (input: {
+  supervisorIntent: SupervisorIntent | null | undefined;
+  patientText: string;
+  services: ServicesContext["list"];
+  session: BookingSessionSnapshot;
+  /** True when browse shortcut or an open FAQ picker already handled this turn. */
+  alreadyHandled: boolean;
+  partitionCandidates?: PartitionServiceCandidates;
+  selectCandidates?: SelectServiceCandidates;
+}): Promise<ReturnType<typeof reduceBookingSession> | null> => {
+  if (
+    input.alreadyHandled
+    || input.supervisorIntent !== "named_procedure"
+    || input.patientText.trim().length === 0
+    || input.services.length === 0
+  ) {
+    return null;
+  }
+  return openCatalogFromFreeText({
+    text: input.patientText,
+    services: input.services,
+    session: input.session,
+    utterance: input.patientText,
+    ...(input.partitionCandidates != null
+      ? { partitionCandidates: input.partitionCandidates }
+      : {}),
+    ...(input.selectCandidates != null
+      ? { selectCandidates: input.selectCandidates }
       : {}),
   });
 };
