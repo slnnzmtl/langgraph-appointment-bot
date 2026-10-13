@@ -94,7 +94,7 @@ Voice notes ≤ 60s → Gemini transcription → same text graph. Longer / empty
 
 Reminder webhook: requires `WEBHOOK_SECRET` (`X-Webhook-Secret`, timing-safe); Zod + body-size checks. EspoCRM POSTs `telegramId` + meetings to `http://appointment-bot:8080/webhooks/tomorrow-reminder` on the shared Docker network (port not published). Time-aware Ukrainian copy from `dateStart` vs Kyiv now. HITL (Confirmed / Not Held) only for Planned + meeting `id`; pending lasts until visit start. Already-Confirmed or missing `id` → notify-only.
 
-Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph recursion limit 40. MCP HTTP ~30s; SIGINT/SIGTERM stops polling, aborts in-flight MCP, and flushes tracing (bounded). LangSmith chat I/O redacted by default; Langfuse (when `LANGFUSE_TRACING=true`) keeps conversation text for self-hosted review while masking secrets/CRM/checkpoint dumps. Tier 1 analytics in `src/analytics/` (`ANALYTICS_DISABLED=1` skips those events only).
+Internal failures → `PATIENT_FALLBACK_MESSAGE`; details stay in logs. Graph recursion limit 40. MCP HTTP ~30s; SIGINT/SIGTERM stops polling, aborts in-flight MCP, and flushes tracing (bounded). Langfuse (when `LANGFUSE_TRACING=true`) keeps conversation text for self-hosted review while masking secrets/CRM/checkpoint dumps. Tier 1 analytics in `src/analytics/` (`ANALYTICS_DISABLED=1` skips those events only).
 
 ## Menus
 

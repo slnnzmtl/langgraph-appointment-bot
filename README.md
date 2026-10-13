@@ -75,22 +75,17 @@ cp .env.example .env
 # optional: WEBHOOK_SECRET to enable POST /webhooks/tomorrow-reminder (Docker-internal :8080)
 # optional: SMOKE_KNOWN_TELEGRAM_ID for `--identity` known path (no CRM create without SMOKE_ALLOW_WRITES)
 # optional: SMOKE_ALLOW_WRITES=1 for `pnpm smoke -- --write` (refused when NODE_ENV=production)
-# optional LangSmith: LANGSMITH_TRACING=true LANGSMITH_API_KEY= LANGSMITH_PROJECT=clinic-appointment-bot
 # optional Langfuse (Docker): LANGFUSE_TRACING=true LANGFUSE_PUBLIC_KEY= LANGFUSE_SECRET_KEY= LANGFUSE_BASE_URL=http://langfuse-web:3000
 ```
 
-## LangSmith
-
-Set `LANGSMITH_TRACING=true` plus `LANGSMITH_API_KEY` to send LangGraph traces to LangSmith (`LANGCHAIN_TRACING_V2` / `LANGCHAIN_API_KEY` aliases also work). Optional `LANGSMITH_PROJECT` (example: `clinic-appointment-bot`) and `LANGSMITH_ENDPOINT` (EU / self-hosted). When tracing is on, LLM and tool **inputs/outputs are redacted** (empty payloads) so patient chat does not leave the process. Set `LANGSMITH_TRACE_CONTENT=true` only for a trusted, EU, or self-hosted project if you need the raw spans. Run metadata still includes `telegram_user_id` and `chat_id`. Telegram and smoke invokes tag each turn as `clinic-turn`. Tier 1 booking events (`meeting_created`, `contact_created`, `reminder_sent`, `reminder_approved`, `reminder_declined`, …) are posted as named runs with PII-safe props (ids, counts, dates, field names) and are not redacted. `ANALYTICS_DISABLED=1` skips those events only; LLM tracing still runs.
-
 ## Langfuse
 
-Self-hosted Langfuse dual-writes independently of LangSmith (`LANGFUSE_*` vs `LANGSMITH_*`). Set `LANGFUSE_TRACING=true` plus `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`.
+Self-hosted Langfuse is the tracing backend (`LANGFUSE_*`). Set `LANGFUSE_TRACING=true` plus `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`.
 
 - **Docker / production (appointment-bot container):** `LANGFUSE_BASE_URL=http://langfuse-web:3000` on the shared Compose network from the Langfuse deploy (DDD-92). Do **not** use the host-only bind for production ingest.
 - **Host-local development only:** `LANGFUSE_BASE_URL=http://127.0.0.1:3001` when the bot process runs on the host against the DDD-92 UI bind.
 
-Conversation text (user message + assistant reply) is exported for quality review. Credentials, auth headers, phones, emails, full CRM JSON, and checkpoint/graph state are filtered before export (`LangfuseSpanProcessor.mask` + Tier 1 property allowlist). Optional `LANGFUSE_TIMEOUT` (seconds, default 5) bounds export/flush so an unreachable Langfuse instance cannot hang SIGINT/SIGTERM or smoke exit. Tier 1 events use the same `trackEvent` API as LangSmith; `ANALYTICS_DISABLED=1` skips Tier 1 only.
+Conversation text (user message + assistant reply) is exported for quality review. Credentials, auth headers, phones, emails, full CRM JSON, and checkpoint/graph state are filtered before export (`LangfuseSpanProcessor.mask` + Tier 1 property allowlist). Optional `LANGFUSE_TIMEOUT` (seconds, default 5) bounds export/flush so an unreachable Langfuse instance cannot hang SIGINT/SIGTERM or smoke exit. Telegram and smoke invokes tag each turn as `clinic-turn`. Tier 1 booking events (`meeting_created`, `contact_created`, `reminder_sent`, `reminder_approved`, `reminder_declined`, …) go through `trackEvent` as Langfuse events with PII-safe props. `ANALYTICS_DISABLED=1` skips Tier 1 only; LLM tracing still runs.
 
 ## Docker
 
@@ -158,7 +153,7 @@ Smoke drives the real graph through `handleGraphTextTurn` (same path as Telegram
 - `src/tools/` — EspoCRM MCP LangChain tools, availability free/busy, telegram user context (ALS)
 - `src/adapter/` — telegraf (`telegram-bot.ts`), keyboards (`telegram-ui.ts`), `/start` welcome, reminder webhook
 - `src/shared/` — clinic constants (address, consultation id, menu labels), helpers
-- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → LangSmith child runs and/or Langfuse events; `reminder_sent` is a root from the tomorrow-reminder webhook; `reminder_approved` / `reminder_declined` fire after HITL CRM update)
+- `src/analytics/` — Tier 1 booking-funnel events (`trackEvent` → Langfuse events; `reminder_sent` is a root from the tomorrow-reminder webhook; `reminder_approved` / `reminder_declined` fire after HITL CRM update)
 - `packages/llm-gemini` — Gemini connector + explicit context cache (`GEMINI_CONTEXT_CACHE`, default on)
 
 ## FAQ / services
