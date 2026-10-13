@@ -15,8 +15,10 @@ import {
   lookupPlannedMeetings,
   normalizeContactLookupResult,
 } from "../tools/index.js";
+import { kyivToday } from "../tools/availability-slots.js";
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
+import { resolveBookingScheduleRequest } from "./booking-schedule.js";
 import {
   createAgentFinalizeNode,
   createAgentMutationFinalizeNode,
@@ -123,6 +125,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const callTool = options.bookingPrefetchCallTool;
   const prefetch = callTool ? () => prefetchBookingContext(callTool) : undefined;
 
+  const faqListServicesTool = options.agentTools[FAQ_AGENT_ID]
+    ?.find((entry) => entry.name === "list_services");
+  const loadServices = faqListServicesTool != null
+    ? async () => normalizeListServicesResult(String(await faqListServicesTool.invoke({})))
+    : undefined;
+
   const supervisorNode = createClinicSupervisorNode({
     agents: options.agents,
     supervisorLlm: options.supervisorLlm,
@@ -133,6 +141,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(prefetch ? { prefetch } : {}),
     prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
     ...(options.contextCache ? { contextCache: options.contextCache } : {}),
+    ...(loadServices != null ? { loadServices } : {}),
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- StateGraph generics are verbose for dynamic agent nodes
@@ -147,11 +156,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     : undefined;
   const faqSelectCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
     ? createServiceCandidateSelector(options.supervisorLlm)
-    : undefined;
-  const faqListServicesTool = options.agentTools[FAQ_AGENT_ID]
-    ?.find((entry) => entry.name === "list_services");
-  const loadServices = faqListServicesTool != null
-    ? async () => normalizeListServicesResult(String(await faqListServicesTool.invoke({})))
     : undefined;
 
   for (const agent of options.agents) {
@@ -231,7 +235,20 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       )
       .addNode(
         finalize,
-        createAgentFinalizeNode(agent),
+        createAgentFinalizeNode(
+          agent,
+          agent.id === FAQ_AGENT_ID
+            ? {
+                ...(faqPartitionCandidates != null
+                  ? { partitionCandidates: faqPartitionCandidates }
+                  : {}),
+                ...(faqSelectCandidates != null
+                  ? { selectCandidates: faqSelectCandidates }
+                  : {}),
+                ...(loadServices != null ? { loadServices } : {}),
+              }
+            : undefined,
+        ),
         // Safety-net path may return the same abandon Command as mutationFinalize.
         { ends: [END, "supervisor"] },
       );
@@ -269,7 +286,27 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
                 state.availabilityContext,
                 state.bookingDraft?.selectedDate,
               );
-              return slot != null ? { type: "slot_selected", slot } : null;
+              if (slot != null) {
+                // Same-slot reaffirm while visit_note is open → trusted no-op
+                // (skip classifier; keep skip chip via unresolved → interaction_render).
+                if (
+                  state.pendingInteraction?.kind === "visit_note"
+                  && state.bookingDraft?.selectedSlot?.dateStart === slot.dateStart
+                ) {
+                  return { type: "same_slot_ignored" };
+                }
+                return { type: "slot_selected", slot };
+              }
+              // Lexical exact date («завтра», «20 жовтня») while DATE/TIME/note open.
+              const schedule = resolveBookingScheduleRequest(text, kyivToday(), {
+                availabilityContext: state.availabilityContext,
+                availabilityCursor: state.availabilityCursor,
+                selectedDate: state.bookingDraft?.selectedDate,
+              });
+              if (schedule?.kind === "exact" && schedule.date != null) {
+                return { type: "date_selected", date: schedule.date };
+              }
+              return null;
             },
             nodes: {
               bookingLlm: llm,

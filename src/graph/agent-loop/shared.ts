@@ -22,22 +22,12 @@ import { resolveBookingScheduleRequest } from "../booking-schedule.js";
 import { normalizeListServicesResult, type ServicesContext } from "../../tools/service-tools.js";
 import { trackEvent } from "../../analytics/track.js";
 import {
-  BOOKING_OFFER_MENU,
-  BOOKING_OFFER_MENU_EN,
-  BOOKING_REPLACE_MENU,
-  BOOKING_REPLACE_MENU_EN,
   CONSULTATION_SERVICE_ID,
   CLINIC_SLOT_MINUTES,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
-  INTENT_SKIP_LABEL,
-  INTENT_SKIP_LABEL_EN,
   MAIN_MENU_LABEL,
-  OTHER_DATE_LABEL,
-  OTHER_DATE_LABEL_EN,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
-  VISIT_CHANGE_MENU,
-  VISIT_CHANGE_MENU_EN,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
 import {
@@ -47,8 +37,8 @@ import {
   labelIdFor,
   matchesReplyLabel,
   normalizeReplyLabel,
-  requestsConsultation,
 } from "../../shared/message-content.js";
+import { isOtherDateChip } from "../../shared/other-date-chip.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import { getTelegramUserId } from "../../tools/telegram-user-context.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -56,16 +46,19 @@ import {
   availabilityMatchesBooking,
   availabilityRequestFieldsFromDraft,
   reduceBookingDraft,
-  type BookingDraft,
   type BookingService,
   type ReplacementMeeting,
 } from "../booking-draft.js";
+
+export { isOtherDateChip };
 import {
   consultationService,
   interpretInteractionReply,
   reduceBookingSession,
+  visitMeetingChoiceLabel,
   type DateSelectInteraction,
   type InteractionChoice,
+  type PendingInteraction,
   type TimeSelectInteraction,
 } from "../booking-session.js";
 
@@ -103,18 +96,30 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "reschedule_meeting",
 ]);
 
-/** Browse shortcuts that open catalog chips even when list_services is reused. */
-export const FAQ_CATALOG_SHORTCUT_LABELS = new Set<string>([
-  BOOKING_OFFER_MENU[1],
-  BOOKING_OFFER_MENU_EN[1],
-]);
+/**
+ * Choose-other catalog browse: exact «Обрати іншу процедуру» chip always, or
+ * service_confirm aliases («ні» / «no») only while that offer keyboard is open.
+ * Bare «ні» must not wipe an open FAQ catalog drill-down.
+ */
+export const isFaqCatalogBrowseShortcut = (
+  text: string,
+  interaction?: PendingInteraction | null,
+): boolean => {
+  if (labelIdFor(text) === "offerChooseOther") {
+    return true;
+  }
+  if (interaction?.kind !== "service_confirm") {
+    return false;
+  }
+  const match = interpretInteractionReply(interaction, text);
+  return match.kind === "choice" && match.choiceId === "choose_other";
+};
 
-/** True for «Обрати іншу процедуру» / Choose another procedure / bare «Ні». */
-export const isFaqCatalogBrowseShortcut = (text: string): boolean =>
-  FAQ_CATALOG_SHORTCUT_LABELS.has(text)
-  || matchesReplyLabel(text, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES);
+/** Services-guide tap («Послуги» / Services) — prefer labelIdFor over string Sets. */
+export const isFaqServicesGuideLabel = (text: string): boolean =>
+  labelIdFor(text) === "mainServices";
 
-/** Services-guide taps: consultation offer, not catalog drill-down chips. */
+/** @deprecated Prefer {@link isFaqServicesGuideLabel}. */
 export const FAQ_SERVICES_GUIDE_LABELS = new Set<string>([
   DEFAULT_MENU_NO_VISITS[1],
   DEFAULT_MENU_HAS_VISITS[1],
@@ -557,56 +562,6 @@ const lastHumanText = (messages: BaseMessage[]): string => {
 export const lastPatientText = (state: ClinicState): string =>
   lastHumanText(state.messages) || lastHumanText(state.agentMessages ?? []);
 
-/** Known keyboard labels that must not collide with an «Інша дата» prefix tap. */
-const OTHER_DATE_COLLISION_LABELS = [
-  MAIN_MENU_LABEL,
-  ...DEFAULT_MENU_NO_VISITS,
-  ...DEFAULT_MENU_HAS_VISITS,
-  ...BOOKING_OFFER_MENU,
-  ...BOOKING_OFFER_MENU_EN,
-  ...BOOKING_REPLACE_MENU,
-  ...BOOKING_REPLACE_MENU_EN,
-  ...VISIT_CHANGE_MENU,
-  ...VISIT_CHANGE_MENU_EN,
-  INTENT_SKIP_LABEL,
-  INTENT_SKIP_LABEL_EN,
-  "Book",
-  "Services",
-  "Address",
-  "My visit",
-].map((label) => label.toLowerCase());
-
-const RUSSIAN_OTHER_DATE_RE =
-  /^(?:другая|другой|другую|другие)(?:\s+(?:дата|дату|даты|день|дни|вариант(?:ы)?))?$/i;
-
-/**
- * Exact Ukrainian/English keyboard label, its unique prefix (≥4 chars, e.g. «Інша»),
- * or a standalone Russian equivalent (e.g. «другая», «другой»).
- * Rejects a prefix that also prefixes another known keyboard label.
- */
-const isOtherDateHuman = (humanText: string): boolean => {
-  const normalized = humanText.trim().toLowerCase();
-  if (normalized.length < 4) {
-    return false;
-  }
-  if (RUSSIAN_OTHER_DATE_RE.test(normalized)) {
-    return true;
-  }
-  const targets = [OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map((label) => label.toLowerCase());
-  const matched = targets.find(
-    (target) => normalized === target || target.startsWith(normalized),
-  );
-  if (!matched) {
-    return false;
-  }
-  if (normalized === matched) {
-    return true;
-  }
-  return !OTHER_DATE_COLLISION_LABELS.some(
-    (label) => label.startsWith(normalized) && !targets.includes(label),
-  );
-};
-
 export const bookingDateAnchors = (state: ClinicState): string[] => [
   ...(state.bookingDraft?.selectedDate ? [state.bookingDraft.selectedDate] : []),
   ...(state.bookingDraft?.selectedSlot
@@ -633,23 +588,6 @@ export const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =
 const FAQ_CATALOG_NAME_MIN_LEN = 3;
 /** Stem tokens shorter than this are too ambiguous for prefix matching. */
 const FAQ_CATALOG_STEM_MIN_LEN = 5;
-
-/** Strip leading negation / book-intent lead-ins before catalog name matching. */
-export const normalizeCatalogUtterance = (text: string): string => {
-  let normalized = normalizeReplyLabel(text);
-  // Leading bare/soft negation («ні, …», «no …», «не треба …»).
-  normalized = normalized
-    .replace(/^(?:ні|нi|no|не\s+треба)\s*[,:]?\s+/u, "")
-    .trim();
-  // Book-intent prefixes: «запиши на», «хочу на», «book me for», …
-  normalized = normalized
-    .replace(
-      /^(?:запиши(?:ть)?(?:\s+мене)?|записатись|записатися|хочу|бажаю|book(?:\s+me)?(?:\s+for)?)\s+(?:на\s+)?/u,
-      "",
-    )
-    .trim();
-  return normalized;
-};
 
 /** Collapse doubled letters so «коллаген» aligns with «колаген…». */
 const collapseDoubledLetters = (token: string): string =>
@@ -694,14 +632,14 @@ const utteranceMatchesCatalogName = (
 };
 
 /**
- * CRM rows whose names match free-text (brand/family/full title). Shared by
- * offeredServiceForTurn (unique hit only) and catalog free-text narrowing.
+ * CRM rows whose names match free-text (brand/family/full title). Used by
+ * resolveCatalogFreeText for model `open_catalog` query / tag matching.
  */
 export const matchingCatalogRows = (
   text: string,
   services: ServicesContext["list"],
 ): ServicesContext["list"] => {
-  const normalized = normalizeCatalogUtterance(text);
+  const normalized = normalizeReplyLabel(text);
   if (
     normalized.length < FAQ_CATALOG_NAME_MIN_LEN
     || normalized.includes("?")
@@ -712,6 +650,30 @@ export const matchingCatalogRows = (
     const name = normalizeReplyLabel(row.name);
     return utteranceMatchesCatalogName(normalized, name);
   });
+};
+
+/**
+ * Strip optional trailing `?` and collect CRM lexical hits.
+ * Does not reject keyboard / supervisor / choose_other / FAQ-guide labels —
+ * those guards stay on {@link resolveCatalogFreeText}.
+ */
+export const resolveCatalogLexicalEvidence = (
+  text: string,
+  services: ServicesContext["list"],
+  options?: { allowTerminalQuestion?: boolean },
+): {
+  matcher: string;
+  rows: ServicesContext["list"];
+} => {
+  const trimmed = text.trim();
+  const matcher =
+    options?.allowTerminalQuestion === true
+      ? trimmed.replace(/[?？]+\s*$/u, "").trim()
+      : trimmed;
+  return {
+    matcher,
+    rows: matchingCatalogRows(matcher, services),
+  };
 };
 
 export type CatalogFreeTextResult =
@@ -736,24 +698,34 @@ export const CATALOG_FAMILY_SELECTOR_QUERY =
  * Narrow free-text to a procedure-family catalog level. Exact CRM name → one
  * offer; otherwise the LLM selector expands slang («ботокс») to the full
  * family. Lexical substring hits alone must not skip the selector.
+ *
+ * `allowTerminalQuestion`: named_procedure only — strip trailing `?`/`？` into a
+ * local matcher string so rematch / model `open_catalog` keep rejecting `?`.
  */
 export const resolveCatalogFreeText = async (input: {
   text: string;
   rows: ServicesContext["list"];
   selectCandidates?: SelectServiceCandidates;
+  allowTerminalQuestion?: boolean;
 }): Promise<CatalogFreeTextResult> => {
-  const trimmed = input.text.trim();
+  const { matcher, rows: lexical } = resolveCatalogLexicalEvidence(
+    input.text,
+    input.rows,
+    input.allowTerminalQuestion === true
+      ? { allowTerminalQuestion: true }
+      : undefined,
+  );
   if (
-    trimmed.length === 0
-    || trimmed.includes("?")
-    || labelIdFor(trimmed) != null
-    || isSupervisorOwnedLabel(trimmed)
-    || isFaqCatalogBrowseShortcut(trimmed)
-    || matchesReplyLabel(trimmed, FAQ_SERVICES_GUIDE_LABELS)
+    matcher.length === 0
+    || matcher.includes("?")
+    || labelIdFor(matcher) != null
+    || isSupervisorOwnedLabel(matcher)
+    || matchesReplyLabel(matcher, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES)
+    || isFaqServicesGuideLabel(matcher)
   ) {
     return { kind: "none" };
   }
-  const normalized = normalizeCatalogUtterance(trimmed);
+  const normalized = normalizeReplyLabel(matcher);
   if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
     return { kind: "none" };
   }
@@ -761,7 +733,13 @@ export const resolveCatalogFreeText = async (input: {
     return { kind: "none" };
   }
 
-  const lexical = matchingCatalogRows(trimmed, input.rows);
+  // CRM stem evidence gates the family selector. Compare / price lines with no
+  // procedure stems must not call the selector on the full catalog (it invents
+  // a family). «ботокс» stems to a subset; the selector still sees all rows so
+  // it can expand to brand/zone siblings that do not share the patient token.
+  if (lexical.length === 0) {
+    return { kind: "none" };
+  }
   if (lexical.length === 1) {
     const row = lexical[0]!;
     // Exact CRM title only — substring/stem hits fall through to the family selector.
@@ -772,8 +750,9 @@ export const resolveCatalogFreeText = async (input: {
 
   const allowlist = new Map(input.rows.map((row) => [row.id, row]));
   if (input.selectCandidates != null) {
+    // Matcher line (trailing ? already stripped when named_procedure opts in).
     const selection = await safeSelect(input.selectCandidates, {
-      utterance: normalized,
+      utterance: matcher,
       query: CATALOG_FAMILY_SELECTOR_QUERY,
       candidates: input.rows.map((row) => ({
         id: row.id,
@@ -803,102 +782,10 @@ export const resolveCatalogFreeText = async (input: {
   return { kind: "none" };
 };
 
-const catalogServiceForText = (
-  text: string,
-  state: ClinicState,
-): { id: string; name: string; durationMinutes?: number; source: "catalog" } | null => {
-  const normalized = normalizeCatalogUtterance(text);
-  if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
-    return null;
-  }
-  const rows = state.servicesContext?.list ?? [];
-  const exact = rows.filter((row) => normalizeReplyLabel(row.name) === normalized);
-  if (exact.length !== 1) {
-    return null;
-  }
-  const service = exact[0]!;
-  return {
-    id: service.id,
-    name: service.name,
-    ...(service.duration != null ? { durationMinutes: service.duration } : {}),
-    source: "catalog",
-  };
-};
-
-/**
- * Resolve explicit service acceptance into a durable draft for this turn.
- * Direct consultation requests still accept immediately. Offer taps and dated
- * continuations go through pendingInteraction (service_confirm) when open.
- */
-export const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefined => {
-  const humanMessages = (state.messages ?? []).filter(
-    (message): message is HumanMessage => message instanceof HumanMessage,
-  );
-  const current = humanMessages.at(-1);
-  if (!current) {
-    return undefined;
-  }
-  const currentText = extractMessageTextContent(current.content).trim();
-  if (requestsConsultation(currentText)) {
-    return reduceBookingDraft(state.bookingDraft, {
-      type: "service_selected",
-      service: consultationService("direct"),
-      accepted: true,
-      turn: state.stepCount,
-    });
-  }
-
-  const interaction = state.pendingInteraction;
-  if (interaction?.kind === "service_confirm") {
-    const choice = interpretInteractionReply(interaction, currentText);
-    if (choice.kind === "choice" && choice.choiceId === "accept") {
-      const reduced = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: interaction,
-        },
-        { type: "interaction_choice", choiceId: "accept" },
-      );
-      return reduced.bookingDraft;
-    }
-    const isAvailabilityContinuation =
-      resolveBookingScheduleRequest(currentText, kyivToday()) != null
-      || /\b\d{1,2}(?::\d{2})?\b/.test(currentText);
-    if (isAvailabilityContinuation) {
-      const schedule = resolveBookingScheduleRequest(currentText, kyivToday());
-      if (schedule?.kind === "exact" && schedule.date != null) {
-        const reduced = reduceBookingSession(
-          {
-            bookingDraft: state.bookingDraft ?? null,
-            pendingInteraction: interaction,
-          },
-          {
-            type: "service_confirm_schedule",
-            schedule: { type: "date_selected", date: schedule.date },
-            turn: state.stepCount,
-          },
-        );
-        return reduced.bookingDraft;
-      }
-      const reduced = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: interaction,
-        },
-        { type: "interaction_choice", choiceId: "accept" },
-      );
-      return reduced.bookingDraft;
-    }
-    return undefined;
-  }
-
-  return undefined;
-};
-
 /**
  * Resolve which CRM service a specialist is offering this turn without reading
- * offer-question wording. Prefer a named catalog row from the latest human line;
- * otherwise consultation after list_services or an explicit book/services tap.
+ * offer-question wording. Keyboard chips open consultation; named CRM rows
+ * come from FAQ `open_catalog` (model query), not patient-line title matching.
  */
 export const offeredServiceForTurn = (
   state: ClinicState,
@@ -921,8 +808,8 @@ export const offeredServiceForTurn = (
   const lastHumanText = lastHuman != null
     ? extractMessageTextContent(lastHuman.content).trim()
     : "";
-  // «Обрати іншу процедуру» / bare «Ні» opens FAQ catalog — do not re-offer.
-  if (isFaqCatalogBrowseShortcut(lastHumanText)) {
+  // «Обрати іншу процедуру» / bare «Ні» on an open offer — do not re-offer.
+  if (isFaqCatalogBrowseShortcut(lastHumanText, state.pendingInteraction)) {
     return null;
   }
   if (state.bookingDraft?.serviceAcceptance?.status === "pending") {
@@ -931,22 +818,15 @@ export const offeredServiceForTurn = (
   if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
     return null;
   }
-  const service = catalogServiceForText(lastHumanText, state);
-  if (service != null) {
-    return service;
-  }
   // «Послуги» / «Записатись» → consultation even when list_services ran this turn.
   if (
     labelIdFor(lastHumanText) === "mainBook"
-    || matchesReplyLabel(lastHumanText, FAQ_SERVICES_GUIDE_LABELS)
+    || isFaqServicesGuideLabel(lastHumanText)
   ) {
     return consultationService("catalog");
   }
   if (toolRanThisTurn(agentMessages, "list_services")) {
     return null;
-  }
-  if (requestsConsultation(lastHumanText)) {
-    return consultationService("direct");
   }
   return null;
 };
@@ -973,6 +853,10 @@ export const rescheduleAvailabilityArgsFromBookingContext = (
   };
 };
 
+/**
+ * Fill a missing reschedule target. Prefer a single listed meeting, then an
+ * open visit_select chip / ordinal against that picker — never name substring.
+ */
 export const rescheduleTargetFromBookingContext = (
   state: ClinicState,
 ): ReplacementMeeting | null => {
@@ -984,22 +868,32 @@ export const rescheduleTargetFromBookingContext = (
   if (meetings.length === 1) return meetings[0] ?? null;
   if (meetings.length === 0) return null;
 
-  const human = lastPatientText(state).trim().toLocaleLowerCase();
+  const human = lastPatientText(state).trim();
+  const interaction = state.pendingInteraction;
+  if (
+    interaction?.kind === "visit_select"
+    && (interaction.stage === "meeting" || interaction.stage === "action")
+  ) {
+    const match = interpretInteractionReply(interaction, human);
+    if (match.kind === "choice") {
+      const byId = meetings.find((meeting) => meeting.id === match.choiceId);
+      if (byId != null) {
+        return byId;
+      }
+    }
+  }
   const ordinal = /^(\d+)$/.exec(human);
   if (ordinal && Number(ordinal[1]) <= meetings.length) {
     return meetings[Number(ordinal[1]) - 1] ?? null;
   }
-  const requestedDate = resolveBookingScheduleRequest(human, kyivToday());
-  const matches = meetings.filter((meeting) => {
-    const name = meeting.name.toLocaleLowerCase();
-    const day = meeting.dateStart.slice(0, 10);
-    const dayNumber = meeting.dateStart.slice(8, 10).replace(/^0/, "");
-    return human.includes(name)
-      || human.includes(day)
-      || (requestedDate?.kind === "exact" && requestedDate.date === day)
-      || human === dayNumber;
+  // Unique exact rendered meeting label (same as visit picker chips).
+  const normalized = normalizeReplyLabel(human);
+  const exactLabel = meetings.filter((meeting) => {
+    const chip = normalizeReplyLabel(visitMeetingChoiceLabel(meeting));
+    const name = normalizeReplyLabel(meeting.name ?? "");
+    return chip === normalized || (name.length > 0 && name === normalized);
   });
-  return matches.length === 1 ? matches[0]! : null;
+  return exactLabel.length === 1 ? exactLabel[0]! : null;
 };
 
 /** Match a patient day pick to a snapshot day (keyboard short label, dayLabel, or YYYY-MM-DD). */
@@ -1008,7 +902,7 @@ export const matchAvailabilityDay = (
   days: AvailabilityContext["days"],
 ): AvailabilityContext["days"][number] | null => {
   const trimmed = humanText.trim();
-  if (!trimmed || isOtherDateHuman(trimmed)) {
+  if (!trimmed || isOtherDateChip(trimmed)) {
     return null;
   }
   const normalized = trimmed.toLowerCase();
@@ -1062,7 +956,7 @@ export const matchAvailabilitySlot = (
     return null;
   }
   const trimmed = humanText.trim();
-  if (!trimmed || isOtherDateHuman(trimmed)) {
+  if (!trimmed || isOtherDateChip(trimmed)) {
     return null;
   }
   const normalized = trimmed.toLowerCase().replace(/\s+/g, "");
@@ -1091,16 +985,6 @@ export const matchAvailabilitySlot = (
   }
   return null;
 };
-
-const NOTE_SKIP_REPLIES = new Set(
-  [
-    INTENT_SKIP_LABEL,
-    INTENT_SKIP_LABEL_EN,
-  ].map((label) => label.toLowerCase()),
-);
-
-const isNoteSkipReply = (humanText: string): boolean =>
-  NOTE_SKIP_REPLIES.has(humanText.trim().toLowerCase());
 
 export const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boolean =>
   status !== "skipped" && status !== "answered";
@@ -1282,13 +1166,14 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return {};
   }
 
-  // Skip / same-slot reaffirm while a note is open. Free-text note answers are
-  // owned by the note orchestrator (classify → reduce), not this ladder.
+  // Chip skip while visit_note is open. Free-text synonyms belong to the note
+  // orchestrator classifier — never a phrase list here.
   if (
     (authoritativeSelectedSlot(state) != null && status === "unasked")
     || status === "awaiting"
   ) {
-    if (isNoteSkipReply(human) || (status === "awaiting" && sameSlot)) {
+    const skipMatch = interpretInteractionReply(state.pendingInteraction, human);
+    if (skipMatch.kind === "choice" && skipMatch.choiceId === "skip") {
       trackEvent("booking_note_step", { phase: "skipped" });
       const session = reduceBookingSession(
         {
@@ -1301,6 +1186,10 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
         bookingDraft: session.bookingDraft,
         pendingInteraction: session.pendingInteraction,
       };
+    }
+    // Same-slot reaffirm while awaiting — keep the note open (no auto-skip).
+    if (status === "awaiting" && sameSlot) {
+      return {};
     }
     if (status === "awaiting" && matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });

@@ -18,6 +18,26 @@ describe("nextAutopilotInput", () => {
     decision: "confirm" as const,
   };
 
+  it("does not choose an ambiguous service_candidate", () => {
+    expect(
+      nextAutopilotInput(
+        {
+          pendingInteraction: {
+            kind: "service_candidate",
+            owner: "faq",
+            utterance: "catalog",
+            consultationDeclined: true,
+            choices: [
+              { id: "svc-botox", label: "Ботокс" },
+              { id: "svc-peel", label: "Пілінг" },
+            ],
+          },
+        },
+        base,
+      ),
+    ).toBeNull();
+  });
+
   it("accepts service_confirm with Так", () => {
     expect(
       nextAutopilotInput(

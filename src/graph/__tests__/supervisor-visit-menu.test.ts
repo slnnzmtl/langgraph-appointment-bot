@@ -5,14 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import {
   ABANDON_BOOKING_REPLY_UK,
-  BOOKING_OFFER_MENU_EN,
   CONSULTATION_SERVICE_ID,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
   MAIN_MENU_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
-  SERVICE_CONFIRM_CONSULTATION_EN,
   VISIT_CHANGE_MENU,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
@@ -191,16 +189,18 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   it.each([
     "Мій запис",
-    "Я вже записалася — перевірте",
-    "I already booked an appointment",
-  ])("keeps appointment assertions as a pre-LLM status signal: %s", (text) => {
+    "My visit",
+  ])("keeps the mainMyVisit chip as a pre-LLM status signal: %s", (text) => {
     expect(isVisitStatusSignal(text)).toBe(true);
   });
 
   it.each([
+    "Я вже записалася — перевірте",
+    "I already booked an appointment",
+    "У мене вже є запис",
     "Do I have an appointment?",
     "What visits do I have?",
-  ])("defers soft visit-status questions to the model intent: %s", (text) => {
+  ])("defers appointment assertions and soft questions to the model intent: %s", (text) => {
     expect(isVisitStatusSignal(text)).toBe(false);
   });
 
@@ -228,8 +228,12 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     "Я же уже записалась на 16 число",
     "У мене вже є запис?",
     "I already booked an appointment",
-  ])("owns visit-status assertion %s even when the model routes to FAQ", async (text) => {
-    invoke.mockResolvedValue({ next: "faq", reply: "У вас точно є запис." });
+  ])("owns visit-status via intent=visit_status even when next=faq: %s", async (text) => {
+    invoke.mockResolvedValue({
+      next: "faq",
+      intent: "visit_status",
+      reply: "У вас точно є запис.",
+    });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -242,11 +246,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
     const update = await node(supervisorState({ messages: [new HumanMessage(text)] }));
 
+    expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyText).toContain("не знайдено");
     expect(update.lastHandoff?.replyText).not.toContain("точно є");
     expect(update.lastHandoff?.replyButtons).toEqual(DEFAULT_MENU_NO_VISITS);
-    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("handles soft visit-status via model intent=visit_status after a forced refetch", async () => {
@@ -277,7 +281,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it("reports unverifiable status when the fresh prefetch fails", async () => {
+  it("reports unverifiable status when the fresh prefetch fails on «Мій запис»", async () => {
     invoke.mockResolvedValue({ next: "faq", reply: "Так, ваш запис підтверджено." });
     const node = createClinicSupervisorNode({
       agents,
@@ -287,7 +291,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
 
     const update = await node(supervisorState({
-      messages: [new HumanMessage("I already booked an appointment")],
+      messages: [new HumanMessage("Мій запис")],
     }));
 
     expect(update.next).toBe("FINISH");
@@ -817,39 +821,29 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
-  it("FINISH-renders a canonical consultation offer for a fresh generic book intent", async () => {
+  it("routes a fresh generic book intent to booking via the supervisor LLM", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "book" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
       }),
     );
-    expect(update.next).toBe("FINISH");
-    expect(update.pendingInteraction?.kind).toBe("service_confirm");
-    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-      status: "pending",
-      service: { id: CONSULTATION_SERVICE_ID },
-    });
-    expect(update.lastHandoff?.replyButtons).toEqual(
-      expect.arrayContaining(["Так", "Обрати іншу процедуру"]),
-    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
   });
 
-  it("FINISH-renders an English consultation offer for English free-text book", async () => {
+  it("routes English free-text book to booking via the supervisor LLM", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "book" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("Can I book an appointment?")],
       }),
     );
-    expect(update.next).toBe("FINISH");
-    expect(update.pendingInteraction?.kind).toBe("service_confirm");
-    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-      status: "pending",
-      service: { id: CONSULTATION_SERVICE_ID },
-    });
-    expect(update.lastHandoff?.replyText).toBe(SERVICE_CONFIRM_CONSULTATION_EN);
-    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU_EN]);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });
 
   it("does not FINISH-offer consultation when planned visits exist", async () => {
@@ -882,14 +876,42 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
   });
 
-  it("routes named-procedure booking language to faq without seeding consultation", async () => {
-    invoke.mockResolvedValue({ next: "faq", intent: "faq" });
+  it("routes named-procedure booking with no visit to faq without seeding consultation", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "c1", name: "Корекція ботокс" },
+          ],
+        },
       }),
     );
+    expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
+    expect(update.supervisorIntent).toBe("named_procedure");
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+  });
+
+  it("routes named-procedure booking with a planned visit to booking without seeding consultation", async () => {
+    invoke.mockResolvedValue({ next: "faq", intent: "named_procedure" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "c1", name: "Корекція ботокс" },
+          ],
+        },
+      }),
+    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.supervisorIntent).toBeNull();
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
     expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });

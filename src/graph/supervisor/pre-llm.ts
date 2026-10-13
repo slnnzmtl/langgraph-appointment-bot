@@ -28,6 +28,7 @@ const pendingRescheduleDate: PreLlmRule = (ctx) => {
     path: "pending_reschedule",
     update: {
       next: BOOKING_AGENT_ID,
+      supervisorIntent: null,
       ...ctx.prefetchUpdate,
       ...seed.update,
       availabilityContext: null,
@@ -107,6 +108,7 @@ const sticky: PreLlmRule = (ctx) => {
     update: {
       next: stickyNext,
       lastHandoff: null,
+      supervisorIntent: null,
       ...ctx.prefetchUpdate,
       ...seed.update,
     },
@@ -124,6 +126,7 @@ const faqPredicates: PreLlmRule = (ctx) => {
     update: {
       next: FAQ_AGENT_ID,
       lastHandoff: null,
+      supervisorIntent: null,
       ...ctx.prefetchUpdate,
       availabilityContext: null,
       availabilityCursor: null,

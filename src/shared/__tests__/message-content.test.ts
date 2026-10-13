@@ -12,7 +12,6 @@ import {
   matchesReplyLabel,
   parseLeakedModelToolCalls,
   replyButtonLabels,
-  requestsConsultation,
   unescapeModelLineBreaks,
 } from "../message-content.js";
 
@@ -24,22 +23,11 @@ describe("matchesReplyLabel", () => {
   });
 });
 
-describe("isYesReply / requestsConsultation", () => {
+describe("isYesReply", () => {
   it("detects yes replies", () => {
     expect(isYesReply("Так")).toBe(true);
     expect(isYesReply("yes")).toBe(true);
     expect(isYesReply("запиши")).toBe(false);
-  });
-
-  it("detects consultation book requests, not topic questions or declines", () => {
-    expect(requestsConsultation("запиши на консультацію")).toBe(true);
-    expect(requestsConsultation("консультація")).toBe(true);
-    expect(requestsConsultation("чи є у вас консультація?")).toBe(false);
-    expect(requestsConsultation("не хочу консультацію")).toBe(false);
-    expect(requestsConsultation("запиши на ботокс")).toBe(false);
-    // Mixed note-step utterances still match — prepare must skip this when orch owns.
-    expect(requestsConsultation("потрібна консультація щодо ювідерм")).toBe(true);
-    expect(requestsConsultation("потрібна консультація щодо збільшення губ")).toBe(true);
   });
 });
 
@@ -97,6 +85,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Видимий текст.",
       action,
+      query: null,
     });
   });
 
@@ -112,6 +101,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Видимий текст.",
       action,
+      query: null,
     });
   });
 
@@ -120,7 +110,7 @@ describe("extractFaqCatalogAction", () => {
       extractFaqCatalogAction(
         `Текст.\n<faq_catalog_action   action='keep_catalog'  />`,
       ),
-    ).toEqual({ text: "Текст.", action: "keep_catalog" });
+    ).toEqual({ text: "Текст.", action: "keep_catalog", query: null });
   });
 
   it("returns null action when the tag is missing", () => {
@@ -129,6 +119,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "• Консультації та діагностика\n\nЯкий варіант вам підходить?",
       action: null,
+      query: null,
     });
   });
 
@@ -140,6 +131,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Текст.",
       action: null,
+      query: null,
     });
     expect(
       extractFaqCatalogAction(
@@ -148,6 +140,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Текст.",
       action: null,
+      query: null,
     });
   });
 
@@ -159,6 +152,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Текст.",
       action: "keep_catalog",
+      query: null,
     });
   });
 
@@ -171,7 +165,7 @@ describe("extractFaqCatalogAction", () => {
           '<faq_catalog_action action="keep_catalog"/>',
         ].join("\n"),
       ),
-    ).toEqual({ text: "Текст.", action: null });
+    ).toEqual({ text: "Текст.", action: null, query: null });
     expect(
       extractFaqCatalogAction(
         [
@@ -180,7 +174,7 @@ describe("extractFaqCatalogAction", () => {
           '<faq_catalog_action action="close_catalog"/>',
         ].join("\n"),
       ),
-    ).toEqual({ text: "Текст.", action: null });
+    ).toEqual({ text: "Текст.", action: null, query: null });
   });
 
   it("leaves no faq_catalog_action substring after stripping malformed tags", () => {
@@ -190,6 +184,28 @@ describe("extractFaqCatalogAction", () => {
     expect(result.text).not.toContain("faq_catalog_action");
     expect(result.text).toContain("Текст.");
     expect(result.action).toBe("keep_catalog");
+    expect(result.query).toBeNull();
+  });
+
+  it("extracts open_catalog with optional query", () => {
+    expect(
+      extractFaqCatalogAction(
+        'Ось ботокс.\n<faq_catalog_action action="open_catalog" query="ботокс"/>',
+      ),
+    ).toEqual({
+      text: "Ось ботокс.",
+      action: "open_catalog",
+      query: "ботокс",
+    });
+    expect(
+      extractFaqCatalogAction(
+        "Ось каталог.\n<faq_catalog_action>open_catalog</faq_catalog_action>",
+      ),
+    ).toEqual({
+      text: "Ось каталог.",
+      action: "open_catalog",
+      query: "",
+    });
   });
 });
 

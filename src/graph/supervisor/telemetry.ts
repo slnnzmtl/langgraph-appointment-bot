@@ -6,6 +6,7 @@ export type SupervisorRoutingPath =
   | "chip"
   | "sticky"
   | "faq_predicate"
+  | "named_booking_refine"
   | "status_pre_llm"
   | "pending_reschedule"
   | "abandon"
@@ -13,7 +14,6 @@ export type SupervisorRoutingPath =
   | "llm_choice"
   | "llm_status"
   | "llm_picker"
-  | "llm_book_offer"
   | "llm_intent_override"
   | "llm_abandon"
   | "routing_failure";
@@ -26,6 +26,8 @@ export type SupervisorRoutingTelemetry = {
   regexStatusSignal?: boolean;
   next?: string;
   draftDiscarded?: boolean;
+  /** Model `book` needed CRM evidence but catalog load failed/empty. */
+  catalogUnavailable?: boolean;
 };
 
 export type RouteOutcome = {

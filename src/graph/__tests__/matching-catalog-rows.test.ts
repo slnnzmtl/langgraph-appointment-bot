@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   matchingCatalogRows,
-  normalizeCatalogUtterance,
+  resolveCatalogFreeText,
+  resolveCatalogLexicalEvidence,
 } from "../agent-loop/shared.js";
 
 const catalog = [
@@ -17,32 +18,24 @@ const catalog = [
     duration: 30,
   },
   {
+    id: "svc-corr",
+    name: "Корекція ботокс",
+    duration: 30,
+  },
+  {
     id: "svc-consult",
     name: "Консультація первинна",
     duration: 30,
   },
 ];
 
-describe("normalizeCatalogUtterance", () => {
-  it.each([
-    ["запиши на коллаген", "коллаген"],
-    ["ні, запиши на колагеностимуляцію", "колагеностимуляцію"],
-    ["НІ, запиши на колагеностимуляцію", "колагеностимуляцію"],
-    ["хочу на ботокс", "ботокс"],
-    ["book me for botox", "botox"],
-    ["не треба ботокс", "ботокс"],
-  ])("strips lead-ins from %j → %j", (input, expected) => {
-    expect(normalizeCatalogUtterance(input)).toBe(expected);
-  });
-});
-
 describe("matchingCatalogRows", () => {
-  it("matches collagen after book-intent and doubled-letter typo", () => {
+  it("matches collagen after book-intent and doubled-letter typo via stems", () => {
     const rows = matchingCatalogRows("запиши на коллаген", catalog);
     expect(rows.map((row) => row.id)).toEqual(["svc-collagen"]);
   });
 
-  it("matches collagen after bare negation + book-intent", () => {
+  it("matches collagen after bare negation + book-intent via stems", () => {
     const rows = matchingCatalogRows(
       "ні, запиши на колагеностимуляцію",
       catalog,
@@ -62,5 +55,76 @@ describe("matchingCatalogRows", () => {
     expect(matchingCatalogRows("ні", catalog)).toEqual([]);
     expect(matchingCatalogRows("да", catalog)).toEqual([]);
     expect(matchingCatalogRows("що це?", catalog)).toEqual([]);
+    expect(matchingCatalogRows("можна записатись на ботокс?", catalog)).toEqual([]);
+  });
+
+  it("may stem-match «Записатись» to CRM titles starting with запис", () => {
+    const rows = matchingCatalogRows("Записатись", [
+      { id: "svc-zapis", name: "Запис консультації", duration: 30 },
+    ]);
+    expect(rows.map((row) => row.id)).toEqual(["svc-zapis"]);
+  });
+});
+
+describe("resolveCatalogLexicalEvidence", () => {
+  it("finds CRM rows when terminal ? is opted in", () => {
+    const evidence = resolveCatalogLexicalEvidence(
+      "можна записатись на ботокс?",
+      catalog,
+      { allowTerminalQuestion: true },
+    );
+    expect(evidence.matcher).toBe("можна записатись на ботокс");
+    expect(evidence.matcher.endsWith("?")).toBe(false);
+    expect(evidence.rows.map((row) => row.id)).toContain("svc-corr");
+  });
+
+  it("returns no rows for terminal ? without opt-in", () => {
+    const evidence = resolveCatalogLexicalEvidence(
+      "можна записатись на ботокс?",
+      catalog,
+    );
+    expect(evidence.matcher).toBe("можна записатись на ботокс?");
+    expect(evidence.rows).toEqual([]);
+  });
+
+  it("rejects embedded ? even with terminal opt-in", () => {
+    const evidence = resolveCatalogLexicalEvidence(
+      "ботокс? чи колаген",
+      catalog,
+      { allowTerminalQuestion: true },
+    );
+    expect(evidence.matcher).toContain("?");
+    expect(evidence.rows).toEqual([]);
+  });
+
+  it("can produce lexical evidence for a terminal price question when opted in", () => {
+    const evidence = resolveCatalogLexicalEvidence(
+      "Скільки коштує ботокс?",
+      catalog,
+      { allowTerminalQuestion: true },
+    );
+    expect(evidence.matcher).toBe("Скільки коштує ботокс");
+    expect(evidence.rows.length).toBeGreaterThan(0);
+    expect(evidence.rows.map((row) => row.id)).toContain("svc-corr");
+  });
+});
+
+describe("resolveCatalogFreeText label guards", () => {
+  it("rejects keyboard / supervisor / choose_other / FAQ guide labels", async () => {
+    for (const text of [
+      "Записатись",
+      "Послуги",
+      "Головне меню",
+      "Обрати іншу процедуру",
+      "ні",
+      "Services",
+    ]) {
+      const resolved = await resolveCatalogFreeText({
+        text,
+        rows: catalog,
+        allowTerminalQuestion: true,
+      });
+      expect(resolved, text).toEqual({ kind: "none" });
+    }
   });
 });

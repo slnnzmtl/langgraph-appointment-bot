@@ -40,6 +40,8 @@ export type ClassifyNoteTurn = (input: {
 export type NoteTurnScheduleMatch =
   | { type: "date_selected"; date: string }
   | { type: "slot_selected"; slot: SelectedBookingSlot }
+  /** Same clock as the selected slot while visit_note is open — keep the skip chip. */
+  | { type: "same_slot_ignored" }
   | null;
 
 export type InterpretNoteTurnInput = {
@@ -101,16 +103,13 @@ export const interpretNoteTurn = async (
   }
 
   const schedule = input.matchSchedule?.(patientText) ?? null;
+  if (schedule?.type === "same_slot_ignored") {
+    // Reaffirming the already-selected clock must not reach the note classifier
+    // (which could store "14:00" as the visit note).
+    return { source: "classified", classification: { kind: "unresolved" } };
+  }
   if (schedule != null) {
-    if (input.pendingInteraction?.kind === "service_confirm") {
-      return {
-        source: "trusted",
-        sessionEvent: {
-          type: "service_confirm_schedule",
-          schedule,
-        },
-      };
-    }
+    // service_confirm is never note-orch-owned; schedule events are date/slot only.
     return { source: "trusted", sessionEvent: schedule };
   }
 

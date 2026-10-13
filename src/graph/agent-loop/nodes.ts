@@ -35,6 +35,7 @@ import {
   reconcileRequestedTime,
   resolveBookingScheduleRequest,
 } from "../booking-schedule.js";
+import { parseScheduleIntent } from "../../shared/booking-schedule.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../tools/contact-tools.js";
 import {
   normalizeListServicesResult,
@@ -68,7 +69,6 @@ import {
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
-  type BookingService,
 } from "../booking-draft.js";
 import { cancelCommandFromStoredPayload } from "../cancel-command.js";
 import {
@@ -78,7 +78,6 @@ import {
   openVisitNoteInteraction,
   reduceBookingSession,
   repairInvalidScheduleInteraction,
-  type PendingInteraction,
 } from "../booking-session.js";
 import { restorePendingInteraction } from "../booking-interaction-restore.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
@@ -89,6 +88,15 @@ import {
   type SelectServiceCandidates,
 } from "../service-resolution.js";
 import { tagModelFailureMessage } from "../sub-agent-messages.js";
+import {
+  bookingOfferLabels,
+  inferConversationLocaleFromText,
+} from "../../shared/conversation-locale.js";
+import {
+  faqNamedProcedureEntryForTurn,
+  openCatalogFromFreeText,
+  openRootFaqCatalog,
+} from "../booking-entry-policy.js";
 
 import {
   bookingCommandContinuesAfterTools,
@@ -123,7 +131,6 @@ import {
   availabilitySlotsRanThisTurn,
   blocksConsultationWithoutAgreement,
   bookingDateAnchors,
-  bookingDraftForTurn,
   bookingMutationNeedsModelRecovery,
   captureAvailabilityFromMessages,
   captureLatestToolContext,
@@ -137,76 +144,19 @@ import {
   latestCreateMeetingError,
   matchAvailabilityDay,
   matchingCatalogRows,
-  normalizeCatalogUtterance,
   meetingMutationClearsAvailability,
   meetingMutationIsHitlDecline,
   noteStepBlocksCreate,
   phoneCandidateCanBeLinked,
   rescheduleTargetFromBookingContext,
   resetBookingNoteState,
-  resolveCatalogFreeText,
   resolveContactIdentity,
   resolveFaqCatalogChoices,
   terminalMeetingMutationOutcome,
   toolRanThisTurn,
-  type CatalogFreeTextResult,
 } from "./shared.js";
 
 import { coerceAvailabilityToolCalls } from "./tool-call-coercion.js";
-
-const catalogRowToBookingService = (
-  row: ServicesContext["list"][number],
-): BookingService => ({
-  id: row.id,
-  name: row.name,
-  ...(row.duration != null ? { durationMinutes: row.duration } : {}),
-  source: "catalog",
-});
-
-/** Apply resolveCatalogFreeText output to booking session (offer or FAQ chips). */
-const applyCatalogFreeTextResolution = async (input: {
-  resolved: CatalogFreeTextResult;
-  services: ServicesContext["list"];
-  utterance: string;
-  selectedLabel: string;
-  session: {
-    bookingDraft: BookingDraft | null;
-    pendingInteraction: PendingInteraction | null;
-  };
-  consultationDeclined?: boolean;
-  partitionCandidates?: PartitionServiceCandidates;
-}): Promise<ReturnType<typeof reduceBookingSession> | null> => {
-  const { resolved } = input;
-  if (resolved.kind === "one") {
-    return reduceBookingSession(input.session, {
-      type: "service_offered",
-      service: catalogRowToBookingService(resolved.row),
-    });
-  }
-  if (resolved.kind !== "many") {
-    return null;
-  }
-  const choices = await resolveFaqCatalogChoices({
-    services: input.services,
-    remainingIds: resolved.ids,
-    utterance: input.utterance,
-    ...(resolved.groups != null ? { groups: resolved.groups } : {}),
-    ...(input.selectedLabel.length > 0 ? { selectedLabel: input.selectedLabel } : {}),
-    ...(input.partitionCandidates != null
-      ? { partitionCandidates: input.partitionCandidates }
-      : {}),
-  });
-  if (choices.length === 0) {
-    return null;
-  }
-  return reduceBookingSession(input.session, {
-    type: "service_candidates_opened",
-    utterance: input.utterance,
-    owner: "faq",
-    ...(input.consultationDeclined === true ? { consultationDeclined: true } : {}),
-    choices,
-  });
-};
 
 export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
 
@@ -311,69 +261,42 @@ export const createAgentPrepareNode = (
             );
             update.pendingInteraction = session.pendingInteraction;
           }
-        } else {
-          // Free-text on open catalog («ботокс»): whole-family selector on full list.
-          const services = state.servicesContext?.list ?? [];
-          const resolved = await resolveCatalogFreeText({
-            text: patientText,
-            rows: services,
-            ...(options?.selectCandidates != null
-              ? { selectCandidates: options.selectCandidates }
-              : {}),
-          });
-          const session = await applyCatalogFreeTextResolution({
-            resolved,
-            services,
-            utterance: patientText,
-            selectedLabel: patientText,
-            session: {
-              bookingDraft: state.bookingDraft ?? null,
-              pendingInteraction: interaction,
-            },
-            ...(interaction.consultationDeclined === true
-              ? { consultationDeclined: true }
-              : {}),
-            ...(options?.partitionCandidates != null
-              ? { partitionCandidates: options.partitionCandidates }
-              : {}),
-          });
-          if (session != null) {
-            handledCatalogChoice = true;
-            update.bookingDraft = session.bookingDraft;
-            update.pendingInteraction = session.pendingInteraction;
+        } else if (patientText.length > 0) {
+          // Unmatched prose: rematch the full catalog (same helper as idle
+          // named_procedure / model open_catalog). one/many replaces the
+          // picker; none leaves chips for the FAQ LLM (price, compare, …).
+          let rematchServices = state.servicesContext?.list ?? [];
+          if (rematchServices.length === 0 && options?.loadServices != null) {
+            const loaded = await options.loadServices().catch(() => null);
+            if (loaded != null && loaded.list.length > 0) {
+              update.servicesContext = loaded;
+              rematchServices = loaded.list;
+            }
           }
-          // Zero rows / questions / «не знаю» reach the FAQ model with the open catalog.
-        }
-      } else if (interaction?.kind === "service_confirm") {
-        // Free-text brand/family pick after offer_consultation (e.g. «ботокс»)
-        // must reopen catalog chips — otherwise Так/Обрати stays stuck.
-        const offerMatch = interpretInteractionReply(interaction, patientText);
-        if (offerMatch.kind !== "choice") {
-          const services = state.servicesContext?.list ?? [];
-          const resolved = await resolveCatalogFreeText({
-            text: patientText,
-            rows: services,
-            ...(options?.selectCandidates != null
-              ? { selectCandidates: options.selectCandidates }
-              : {}),
-          });
-          const session = await applyCatalogFreeTextResolution({
-            resolved,
-            services,
-            utterance: patientText,
-            selectedLabel: patientText,
-            session: {
-              bookingDraft: state.bookingDraft ?? null,
-              pendingInteraction: interaction,
-            },
-            ...(options?.partitionCandidates != null
-              ? { partitionCandidates: options.partitionCandidates }
-              : {}),
-          });
-          if (session != null) {
-            handledCatalogChoice = true;
-            update.bookingDraft = session.bookingDraft;
-            update.pendingInteraction = session.pendingInteraction;
+          if (rematchServices.length > 0) {
+            const rematchSession = await openCatalogFromFreeText({
+              text: patientText,
+              services: rematchServices,
+              session: {
+                bookingDraft: state.bookingDraft ?? null,
+                pendingInteraction: interaction,
+              },
+              utterance: patientText,
+              ...(interaction.consultationDeclined === true
+                ? { consultationDeclined: true }
+                : {}),
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+              ...(options?.selectCandidates != null
+                ? { selectCandidates: options.selectCandidates }
+                : {}),
+            });
+            if (rematchSession?.pendingInteraction != null) {
+              handledCatalogChoice = true;
+              update.bookingDraft = rematchSession.bookingDraft;
+              update.pendingInteraction = rematchSession.pendingInteraction;
+            }
           }
         }
       } else if (interaction?.kind === "catalog_detour") {
@@ -391,7 +314,10 @@ export const createAgentPrepareNode = (
       }
       // Browse open: «Обрати іншу процедуру» / bare «Ні» (not «Послуги») — root partition.
       let browseServices = state.servicesContext?.list ?? [];
-      const browseShortcut = isFaqCatalogBrowseShortcut(patientText);
+      const browseShortcut = isFaqCatalogBrowseShortcut(
+        patientText,
+        state.pendingInteraction,
+      );
       if (
         !handledCatalogChoice
         && browseShortcut
@@ -433,6 +359,44 @@ export const createAgentPrepareNode = (
             },
           );
           update.pendingInteraction = session.pendingInteraction;
+        }
+      }
+      // Named-procedure book (supervisor intent): open catalog without the FAQ LLM.
+      const namedProcedureIdle =
+        !handledCatalogChoice
+        && !browseShortcut
+        && state.supervisorIntent === "named_procedure"
+        && !(
+          interaction?.kind === "service_candidate" && interaction.owner === "faq"
+        );
+      if (namedProcedureIdle) {
+        let namedServices = state.servicesContext?.list ?? [];
+        if (namedServices.length === 0 && options?.loadServices != null) {
+          const loaded = await options.loadServices().catch(() => null);
+          if (loaded != null && loaded.list.length > 0) {
+            update.servicesContext = loaded;
+            namedServices = loaded.list;
+          }
+        }
+        const namedSession = await faqNamedProcedureEntryForTurn({
+          supervisorIntent: state.supervisorIntent,
+          patientText,
+          services: namedServices,
+          session: {
+            bookingDraft: state.bookingDraft ?? null,
+            pendingInteraction: state.pendingInteraction ?? null,
+          },
+          alreadyHandled: false,
+          ...(options?.partitionCandidates != null
+            ? { partitionCandidates: options.partitionCandidates }
+            : {}),
+          ...(options?.selectCandidates != null
+            ? { selectCandidates: options.selectCandidates }
+            : {}),
+        });
+        if (namedSession?.pendingInteraction != null) {
+          update.bookingDraft = namedSession.bookingDraft;
+          update.pendingInteraction = namedSession.pendingInteraction;
         }
       }
     }
@@ -543,72 +507,31 @@ export const createAgentPrepareNode = (
             );
             bookingDraft = session.bookingDraft;
             pendingInteraction = session.pendingInteraction;
-          } else {
-            const schedule = resolveBookingScheduleRequest(
-              patientText,
-              kyivToday(),
-              {
-                availabilityContext: rescheduleState.availabilityContext,
-                availabilityCursor: rescheduleState.availabilityCursor,
-                selectedDate: bookingDraft?.selectedDate,
-              },
-            );
-            const isAvailabilityContinuation =
-              schedule != null || /\b\d{1,2}(?::\d{2})?\b/.test(patientText);
-            if (isAvailabilityContinuation) {
-              if (schedule?.kind === "exact" && schedule.date != null) {
-                const session = reduceBookingSession(
-                  { bookingDraft: bookingDraft ?? null, pendingInteraction },
-                  {
-                    type: "service_confirm_schedule",
-                    schedule: { type: "date_selected", date: schedule.date },
-                    turn: state.stepCount,
-                  },
-                );
-                bookingDraft = session.bookingDraft;
-                pendingInteraction = session.pendingInteraction;
-              } else {
-                const session = reduceBookingSession(
-                  { bookingDraft: bookingDraft ?? null, pendingInteraction },
-                  { type: "interaction_choice", choiceId: "accept" },
-                );
-                bookingDraft = session.bookingDraft;
-                pendingInteraction = session.pendingInteraction;
-              }
-            } else {
-              // Unique named procedure on an open offer (e.g. «ні, на колаген»)
-              // switches the pending service — same matcher as FAQ, no N-row copy.
-              const matchingRows = matchingCatalogRows(
-                patientText,
-                rescheduleState.servicesContext?.list ?? [],
-              );
-              const currentServiceId = pendingInteraction.service.id;
-              if (
-                matchingRows.length === 1
-                && matchingRows[0]!.id !== currentServiceId
-              ) {
-                const row = matchingRows[0]!;
-                const session = reduceBookingSession(
-                  { bookingDraft: bookingDraft ?? null, pendingInteraction },
-                  {
-                    type: "service_offered",
-                    service: {
-                      id: row.id,
-                      name: row.name,
-                      ...(row.duration != null
-                        ? { durationMinutes: row.duration }
-                        : {}),
-                      source: "catalog",
-                    },
-                  },
-                );
-                bookingDraft = session.bookingDraft;
-                pendingInteraction = session.pendingInteraction;
-              }
+            if (session.clearAvailability) {
+              Object.assign(update, {
+                availabilityContext: null,
+                availabilityCursor: null,
+              });
             }
+          } else {
+            // Lexical exact date only (shared resolver — no snapshot-anchored
+            // bare day). Anchored "14" on a DATE page must not auto-accept.
+            const schedule = parseScheduleIntent(patientText, kyivToday());
+            if (schedule?.kind === "exact" && schedule.date != null) {
+              const session = reduceBookingSession(
+                { bookingDraft: bookingDraft ?? null, pendingInteraction },
+                {
+                  type: "service_confirm_schedule",
+                  schedule: { type: "date_selected", date: schedule.date },
+                  turn: state.stepCount,
+                },
+              );
+              bookingDraft = session.bookingDraft;
+              pendingInteraction = session.pendingInteraction;
+            }
+            // Unmatched prose on an open offer reaches the booking LLM — no
+            // stem routing / catalog open from patient text.
           }
-        } else if (bookingDraft?.mode !== "reschedule") {
-          bookingDraft = bookingDraftForTurn(rescheduleState) ?? bookingDraft;
         }
         const scheduleRequest = resolveBookingScheduleRequest(
           lastPatientText(rescheduleState),
@@ -709,8 +632,10 @@ export const createAgentPrepareNode = (
           },
         );
       } else if (bookingEntry?.kind === "offer_consultation") {
-        // Fresh «Записатись»: open consultation offer without the LLM, so a
-        // prior declined create in history cannot replay create_meeting.
+        // «Записатись» or idle booking with owned contact: consultation without LLM.
+        const labels = bookingOfferLabels(
+          inferConversationLocaleFromText(lastPatientText(blockingState)),
+        );
         const session = reduceBookingSession(
           {
             bookingDraft: bookingDraft ?? null,
@@ -719,57 +644,13 @@ export const createAgentPrepareNode = (
           {
             type: "service_offered",
             service: consultationService("catalog"),
+            acceptLabel: labels.acceptLabel,
+            chooseOtherLabel: labels.chooseOtherLabel,
           },
         );
         bookingDraft = session.bookingDraft;
         pendingInteraction = session.pendingInteraction;
         update.pendingInteraction = pendingInteraction;
-      } else if (
-        pendingInteraction == null
-        && (bookingDraft == null || bookingDraft.serviceAcceptance == null)
-        && bookingDraft?.replacement == null
-        && bookingDraft?.pendingCommand == null
-      ) {
-        // Book-intent naming a procedure family («запиши на ботокс») → FAQ chips.
-        const bookText = lastPatientText(state).trim();
-        if (bookText.length > 0) {
-          let services = state.servicesContext?.list ?? [];
-          if (services.length === 0 && options?.loadServices != null) {
-            const loaded = await options.loadServices().catch(() => null);
-            if (loaded != null && loaded.list.length > 0) {
-              update.servicesContext = loaded;
-              services = loaded.list;
-            }
-          }
-          if (services.length > 0) {
-            const resolved = await resolveCatalogFreeText({
-              text: bookText,
-              rows: services,
-              ...(options?.selectCandidates != null
-                ? { selectCandidates: options.selectCandidates }
-                : {}),
-            });
-            const session = await applyCatalogFreeTextResolution({
-              resolved,
-              services,
-              utterance: bookText,
-              selectedLabel: normalizeCatalogUtterance(bookText),
-              session: {
-                bookingDraft: bookingDraft ?? null,
-                pendingInteraction: null,
-              },
-              consultationDeclined: true,
-              ...(options?.partitionCandidates != null
-                ? { partitionCandidates: options.partitionCandidates }
-                : {}),
-            });
-            if (session != null) {
-              bookingDraft = session.bookingDraft;
-              pendingInteraction = session.pendingInteraction;
-              update.pendingInteraction = pendingInteraction;
-            }
-          }
-        }
       }
       if (bookingDraft) {
         update.bookingDraft = bookingDraft;
@@ -1571,25 +1452,14 @@ export const createAgentToolsNode = (
             }
           }
           if (services.length > 0) {
-            const choices = await resolveFaqCatalogChoices({
+            const session = await openRootFaqCatalog({
               services,
-              utterance: "catalog",
-              query: FAQ_ROOT_PARTITION_QUERY,
+              bookingDraft: completed,
               ...(options?.partitionCandidates != null
                 ? { partitionCandidates: options.partitionCandidates }
                 : {}),
             });
-            if (choices.length > 0) {
-              const session = reduceBookingSession(
-                { bookingDraft: completed, pendingInteraction: null },
-                {
-                  type: "service_candidates_opened",
-                  utterance: "catalog",
-                  owner: "faq",
-                  consultationDeclined: true,
-                  choices,
-                },
-              );
+            if (session != null) {
               update.bookingDraft = session.bookingDraft;
               update.pendingInteraction = session.pendingInteraction;
             }
@@ -1871,33 +1741,80 @@ export const routeAfterAgentPrepare = (
   ) {
     return finalizeName;
   }
-  // Fresh «Записатись» consultation offer opened in prepare — skip the LLM.
-  if (
-    finalizeName
-    && labelIdFor(lastPatientText(state)) === "mainBook"
-    && state.pendingInteraction?.kind === "service_confirm"
-    && state.bookingDraft?.serviceAcceptance?.status === "pending"
-  ) {
-    return finalizeName;
-  }
-  // Book-intent family chips or unique-service offer opened in prepare — skip LLM.
+  // FAQ chips opened/narrowed by a chip tap, named_procedure, or mid-catalog
+  // rematch in prepare — skip LLM. Unmatched prose that did not rematch reaches
+  // the FAQ model (price / compare / keep_catalog).
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_candidate"
     && state.pendingInteraction.owner === "faq"
   ) {
-    return finalizeName;
+    const catalogText = lastPatientText(state);
+    const chipMatch = interpretInteractionReply(
+      state.pendingInteraction,
+      catalogText,
+    );
+    // Catalog chips skip the FAQ LLM. Bare «ні» must not wipe drill-down.
+    if (chipMatch.kind === "choice") {
+      return finalizeName;
+    }
+    // Named-procedure entry or rematch just opened these chips from this line.
+    if (
+      state.supervisorIntent === "named_procedure"
+      || (
+        catalogText.length > 0
+        && normalizeReplyLabel(state.pendingInteraction.utterance)
+          === normalizeReplyLabel(catalogText)
+      )
+    ) {
+      return finalizeName;
+    }
   }
+  // Graph-owned service_confirm from prepare. Do not skip when accepting («Так»).
+  // FAQ: skip LLM only when this turn opened the card (named_procedure or
+  // patient line has CRM stems for the offered service). Price / compare on an
+  // already-open confirm reach faq__llm. Booking: mainBook / owned-idle.
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_confirm"
     && state.bookingDraft?.serviceAcceptance?.status === "pending"
+    && state.bookingDraft.replacement == null
   ) {
     const bookText = lastPatientText(state);
-    if (
-      normalizeCatalogUtterance(bookText) !== normalizeReplyLabel(bookText)
-    ) {
-      return finalizeName;
+    const offerMatch = interpretInteractionReply(
+      state.pendingInteraction,
+      bookText,
+    );
+    if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
+      const faqFinalize = finalizeName.includes("faq");
+      if (faqFinalize) {
+        const offered = state.pendingInteraction.service;
+        const offeredName = offered.name;
+        const openedThisTurn =
+          state.supervisorIntent === "named_procedure"
+          || (
+            offeredName != null
+            && offeredName.length > 0
+            && matchingCatalogRows(bookText, [{
+              id: offered.id,
+              name: offeredName,
+              ...(offered.durationMinutes != null
+                ? { duration: offered.durationMinutes }
+                : {}),
+            }]).length > 0
+          );
+        if (openedThisTurn) {
+          return finalizeName;
+        }
+      } else if (
+        labelIdFor(bookText) === "mainBook"
+        || (
+          (state.bookingContext?.meetings.length ?? 0) === 0
+          && resolveContactIdentity(state.contactContext).kind === "owned"
+        )
+      ) {
+        return finalizeName;
+      }
     }
   }
   return commandPrepareName && bookingTurnNeedsCommandPreparation(state)

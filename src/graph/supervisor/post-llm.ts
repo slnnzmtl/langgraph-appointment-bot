@@ -1,14 +1,8 @@
-import { isSupervisorOwnedLabel, labelIdFor } from "../../shared/message-content.js";
-import {
-  bookingOfferLabels,
-  inferConversationLocaleFromText,
-} from "../../shared/conversation-locale.js";
+import { isSupervisorOwnedLabel } from "../../shared/message-content.js";
 import {
   closedBookingSessionUpdate,
-  consultationService,
-  isBookingOwnedInteraction,
+  interpretInteractionReply,
   openVisitMeetingInteraction,
-  reduceBookingSession,
 } from "../booking-session.js";
 import {
   renderBookingInteractionMessage,
@@ -35,21 +29,6 @@ import {
   buildVisitStatusMenuUpdate,
   visitSelectMeetingsFromContext,
 } from "./visit-status.js";
-
-const draftBlocksFreshBookOffer = (
-  draft: SupervisorTurnContext["workingDraft"],
-): boolean =>
-  draft != null
-  && (
-    draft.serviceAcceptance != null
-    || draft.selectedSlot != null
-    || draft.selectedDate != null
-    || draft.pendingCommand != null
-    || draft.replacement != null
-    || draft.note.status === "answered"
-    || draft.note.status === "awaiting"
-    || draft.mode === "reschedule"
-  );
 
 type PostLlmRule = (
   ctx: SupervisorTurnContext,
@@ -120,57 +99,6 @@ const multiVisitPicker: PostLlmRule = (ctx, decision) => {
   };
 };
 
-/**
- * Fresh generic `book` with no planned visit and no active draft: FINISH with a
- * canonical consultation service_confirm. Exact «Записатись» stays in booking prepare.
- */
-const freshGenericBookOffer: PostLlmRule = (ctx, decision) => {
-  if (decision.intent !== "book") {
-    return null;
-  }
-  if (labelIdFor(ctx.lastHumanLine) === "mainBook") {
-    return null;
-  }
-  if ((ctx.bookingContext?.meetings.length ?? 0) > 0) {
-    return null;
-  }
-  if (draftBlocksFreshBookOffer(ctx.workingDraft)) {
-    return null;
-  }
-  if (isBookingOwnedInteraction(ctx.state.pendingInteraction)) {
-    return null;
-  }
-  const locale = inferConversationLocaleFromText(ctx.lastHumanText);
-  const labels = bookingOfferLabels(locale);
-  const session = reduceBookingSession(
-    {
-      bookingDraft: ctx.workingDraft ?? null,
-      pendingInteraction: ctx.state.pendingInteraction ?? null,
-    },
-    {
-      type: "service_offered",
-      service: consultationService("catalog"),
-      acceptLabel: labels.acceptLabel,
-      chooseOtherLabel: labels.chooseOtherLabel,
-    },
-  );
-  if (session.pendingInteraction?.kind !== "service_confirm") {
-    return null;
-  }
-  return {
-    path: "llm_book_offer",
-    update: supervisorFinishReply(
-      {
-        ...ctx.prefetchUpdate,
-        bookingDraft: session.bookingDraft,
-      },
-      String(renderBookingInteractionMessage(session.pendingInteraction).content),
-      replyButtonsForInteraction(session.pendingInteraction),
-      session.pendingInteraction,
-    ),
-  };
-};
-
 const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
   // «Головне меню» must stay on FINISH with the default keyboard even when the
   // model returns next=booking / intent=book from nearby booking history.
@@ -208,8 +136,17 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
     ctx.state.lastHandoff?.agentId === BOOKING_AGENT_ID
     && routed.next === BOOKING_AGENT_ID
     && !isSupervisorOwnedLabel(ctx.lastHumanLine);
-  const abandonDraft = mainMenuLine
-    || labelIdFor(ctx.lastHumanLine) === "offerChooseOther";
+  const chooseOtherOnOpenOffer =
+    ctx.state.pendingInteraction?.kind === "service_confirm"
+    && (() => {
+      const match = interpretInteractionReply(
+        ctx.state.pendingInteraction,
+        ctx.lastHumanText,
+      );
+      return match.kind === "choice" && match.choiceId === "choose_other";
+    })();
+  // Only main menu or choose_other while the offer keyboard is open.
+  const abandonDraft = mainMenuLine || chooseOtherOnOpenOffer;
 
   const outcome: RouteOutcome = {
     path,
@@ -217,6 +154,9 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
       ...routed,
       ...ctx.prefetchUpdate,
       ...seed.update,
+      // One-turn gate for FAQ prepare catalog open — not a phrase matcher.
+      supervisorIntent:
+        effectiveDecision.intent === "named_procedure" ? "named_procedure" : null,
       ...(abandonDraft ? closedBookingSessionUpdate() : {}),
       ...(keepAvailability
         ? {}
@@ -239,7 +179,6 @@ export const POST_LLM_RULES: readonly PostLlmRule[] = [
   modelAbandon,
   modelStatus,
   multiVisitPicker,
-  freshGenericBookOffer,
   intentOverride,
 ];
 

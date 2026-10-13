@@ -111,4 +111,40 @@ describe("resumeConfirmBookingHitl", () => {
       }).resume,
     ).toEqual({ confirmed: false });
   });
+
+  it("maps ✅ / ❌ without mutation_confirm (version-0 interrupt path)", () => {
+    expect(
+      resumeConfirmBookingHitl({
+        text: "✅",
+        bookingDraft: confirmingDraft,
+        pendingInteraction: null,
+      }),
+    ).toEqual({
+      resume: { confirmed: true },
+      update: {},
+    });
+    expect(
+      resumeConfirmBookingHitl({
+        text: "❌",
+        bookingDraft: confirmingDraft,
+        pendingInteraction: null,
+        bookingUpdate: { bookingSchemaVersion: 1 },
+      }),
+    ).toEqual({
+      resume: { confirmed: false },
+      update: { bookingSchemaVersion: 1 },
+    });
+  });
+
+  it("keeps NL affirm as userReply when mutation_confirm is absent", () => {
+    const result = resumeConfirmBookingHitl({
+      text: "Так, підтверджую",
+      bookingDraft: confirmingDraft,
+      pendingInteraction: null,
+    });
+    expect(result.resume).toEqual({ userReply: "Так, підтверджую" });
+    expect(result.update.messages).toEqual([
+      new HumanMessage("Так, підтверджую"),
+    ]);
+  });
 });

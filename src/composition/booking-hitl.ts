@@ -57,8 +57,21 @@ export const resumeConfirmBookingHitl = (
   const bookingUpdate = input.bookingUpdate ?? {};
   const mutationInteraction = asMutationConfirm(input.pendingInteraction);
   const text = input.text;
-
   const tap = classifyConfirmReply(text);
+
+  // Main-menu leave works even if mutation_confirm was cleared mid-interrupt.
+  if (tap.kind === "leave") {
+    return {
+      resume: { left: true },
+      update: {
+        ...bookingUpdate,
+        messages: [new HumanMessage(text)],
+      },
+    };
+  }
+
+  // Exact ✅/❌ taps are authoritative on the interrupt path even when the
+  // checkpoint lacks mutation_confirm (e.g. version-0 migration).
   if (tap.kind === "confirmed") {
     return {
       resume: { confirmed: true },
@@ -71,9 +84,11 @@ export const resumeConfirmBookingHitl = (
       update: bookingUpdate,
     };
   }
-  if (tap.kind === "leave") {
+
+  // NL affirm/decline still require an open mutation_confirm card.
+  if (mutationInteraction == null) {
     return {
-      resume: { left: true },
+      resume: { userReply: text },
       update: {
         ...bookingUpdate,
         messages: [new HumanMessage(text)],
@@ -81,29 +96,27 @@ export const resumeConfirmBookingHitl = (
     };
   }
 
-  if (mutationInteraction != null) {
-    const match = interpretInteractionReply(mutationInteraction, text);
-    const action = mutationInteraction.kind === "mutation_confirm"
-      ? mutationInteraction.action
-      : undefined;
-    if (
-      match.kind === "choice" && match.choiceId === "confirm"
-      || (action != null && isConfirmationAffirmation(text, action))
-    ) {
-      return {
-        resume: { confirmed: true },
-        update: bookingUpdate,
-      };
-    }
-    if (
-      match.kind === "choice" && match.choiceId === "decline"
-      || isConfirmationDecline(text)
-    ) {
-      return {
-        resume: { confirmed: false },
-        update: bookingUpdate,
-      };
-    }
+  const match = interpretInteractionReply(mutationInteraction, text);
+  const action = mutationInteraction.kind === "mutation_confirm"
+    ? mutationInteraction.action
+    : undefined;
+  if (
+    match.kind === "choice" && match.choiceId === "confirm"
+    || (action != null && isConfirmationAffirmation(text, action))
+  ) {
+    return {
+      resume: { confirmed: true },
+      update: bookingUpdate,
+    };
+  }
+  if (
+    match.kind === "choice" && match.choiceId === "decline"
+    || isConfirmationDecline(text)
+  ) {
+    return {
+      resume: { confirmed: false },
+      update: bookingUpdate,
+    };
   }
 
   return {

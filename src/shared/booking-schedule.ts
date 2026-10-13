@@ -4,6 +4,12 @@ export type BookingScheduleRequest =
   | { kind: "later" }
   | { kind: "nearest" };
 
+/** Unified patient schedule intent for sticky / prepare / coerce / note orch. */
+export type ScheduleIntent =
+  | BookingScheduleRequest
+  | { kind: "clock_only"; time: string }
+  | { kind: "other_date" };
+
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTHS: Record<string, number> = {
   січня: 1, січень: 1, лютого: 2, лютий: 2, березня: 3, березень: 3,
@@ -126,4 +132,41 @@ export const resolveBookingScheduleRequest = (text: string, today: string): Book
     || /^(?:інш(?:а|у|і)|друг(?:ая|ую|ие|ой))(?:\s+(?:дат[ауые]|день|дни))?$/iu.test(normalized)) return { kind: "later" };
   if (/(?:найближч|ближч|ближайш|nearest|closest)/iu.test(normalized)) return { kind: "nearest" };
   return null;
+};
+
+const CLOCK_ONLY_RE = /^(\d{1,2})(?::(\d{2}))?$/;
+
+/**
+ * Lexical schedule intent (no availability snapshot). Used by sticky routing,
+ * open-offer prepare accept, and day/time sticky replies. Snapshot-anchored
+ * bare days stay on the graph schedule resolver for coerce / note orch.
+ * `other_date` is the DATE/TIME chip («Інша дата» / Another date) only — direction
+ * paraphrases already return `{ kind: "later" }` from {@link resolveBookingScheduleRequest}.
+ */
+export const parseScheduleIntent = (
+  text: string,
+  today: string,
+  options?: {
+    /** Exact chip / unique prefix / RU bare forms for «Інша дата». */
+    isOtherDateChip?: (human: string) => boolean;
+  },
+): ScheduleIntent | null => {
+  const schedule = resolveBookingScheduleRequest(text, today);
+  if (schedule != null) {
+    return schedule;
+  }
+  if (options?.isOtherDateChip?.(text) === true) {
+    return { kind: "other_date" };
+  }
+  const clock = CLOCK_ONLY_RE.exec(text.trim());
+  if (clock == null) {
+    return null;
+  }
+  const hour = Number(clock[1]);
+  const minute = clock[2] != null ? Number(clock[2]) : 0;
+  if (hour > 23 || minute > 59) {
+    return null;
+  }
+  const time = `${hour.toString().padStart(2, "0")}:${(clock[2] ?? "00").padStart(2, "0")}`;
+  return { kind: "clock_only", time };
 };

@@ -15,6 +15,7 @@ import {
   buildCachedMessages,
   buildUncachedMessages,
 } from "../gemini-cache-messages.js";
+import { refineSupervisorNamedBooking } from "../booking-entry-policy.js";
 import {
   type ClinicRoutingDecision,
   buildClinicRoutingSchema,
@@ -25,6 +26,7 @@ import {
   type ClinicAgentDefinition,
   type ILLMConnector,
 } from "../types.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import {
   buildSupervisorTurnContext,
   refetchForVisitStatus,
@@ -54,6 +56,8 @@ export type CreateClinicSupervisorNodeOptions = {
   buildSupervisorDynamicContext?: () => string;
   prefetch?: () => Promise<AgentPrefetchResult>;
   prefetchTtlMs?: number;
+  /** Lazy CRM catalog for post-LLM `book` refinement; same loader as FAQ prepare. */
+  loadServices?: () => Promise<ServicesContext | null>;
   contextCache?: SupervisorContextCacheOptions;
 };
 
@@ -63,6 +67,7 @@ const finalize = (
   ctx: SupervisorTurnContext,
   outcome: RouteOutcome,
   decision?: ClinicRoutingDecision,
+  catalogUnavailable?: boolean,
 ): ClinicStateUpdate => {
   emitSupervisorRoutingDecision({
     path: outcome.path,
@@ -72,6 +77,7 @@ const finalize = (
     regexStatusSignal: ctx.visitStatusIntent,
     ...(typeof outcome.update.next === "string" ? { next: outcome.update.next } : {}),
     ...(outcome.draftDiscarded != null ? { draftDiscarded: outcome.draftDiscarded } : {}),
+    ...(catalogUnavailable === true ? { catalogUnavailable: true } : {}),
   });
   return outcome.update;
 };
@@ -173,6 +179,32 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       ctx = await refetchForVisitStatus(ctx, options.prefetch);
     }
 
-    return finalize(ctx, applyModelDecision(ctx, decision, enabledIds), decision);
+    const modelDecision = decision;
+    const refined = await refineSupervisorNamedBooking({
+      decision,
+      patientText: ctx.lastHumanText,
+      hasVisit: (ctx.bookingContext?.meetings.length ?? 0) > 0,
+      services: ctx.state.servicesContext?.list,
+      ...(options.loadServices != null ? { loadServices: options.loadServices } : {}),
+    });
+    if (refined.servicesContext != null) {
+      ctx = {
+        ...ctx,
+        state: { ...ctx.state, servicesContext: refined.servicesContext },
+        prefetchUpdate: {
+          ...ctx.prefetchUpdate,
+          servicesContext: refined.servicesContext,
+        },
+      };
+    }
+    decision = refined.decision;
+    const outcome = applyModelDecision(ctx, decision, enabledIds);
+    if (
+      modelDecision.intent !== decision.intent
+      || modelDecision.next !== decision.next
+    ) {
+      outcome.path = "named_booking_refine";
+    }
+    return finalize(ctx, outcome, decision, refined.catalogUnavailable === true);
   };
 };

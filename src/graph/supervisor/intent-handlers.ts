@@ -11,6 +11,7 @@ export const specialistForSupervisorIntent = (
     case "book":
     case "consultation_request":
       return BOOKING_AGENT_ID;
+    case "named_procedure":
     case "faq":
       return FAQ_AGENT_ID;
     default:

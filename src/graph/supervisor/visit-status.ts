@@ -19,18 +19,12 @@ export const isVisitStatusMenuLabel = (text: string): boolean =>
   labelIdFor(text) === "mainMyVisit";
 
 /**
- * Pre-LLM visit-status signal: menu taps plus appointment assertions/disputes
- * that must force a CRM refetch before any model sees them. Softer “what visits
- * do I have?” paraphrases are classified by the supervisor `intent` field.
+ * Pre-LLM visit-status signal: only the «Мій запис» / My visit chip.
+ * Appointment assertions and soft “what visits?” paraphrases are classified by
+ * the supervisor `intent: visit_status` field (not patient-phrase regex).
  */
-export const isVisitStatusSignal = (line: string): boolean => {
-  const trimmed = line.trim();
-  if (isVisitStatusMenuLabel(trimmed)) {
-    return true;
-  }
-  return /(?:^|\s)(?:у\s+мене\s+(?:вже\s+|уже\s+)?є\s+запис|(?:я\s+)?(?:вже|уже)\s+запис[\p{L}]*|already\s+booked|booked\s+(?:an?\s+)?appointment|i\s+already\s+booked)(?:\s|$|[?!.,])/iu
-    .test(trimmed);
-};
+export const isVisitStatusSignal = (line: string): boolean =>
+  isVisitStatusMenuLabel(line);
 
 export const visitSelectMeetingsFromContext = (
   bookingContext: ClinicState["bookingContext"],

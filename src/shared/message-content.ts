@@ -178,13 +178,6 @@ const CONFIRMATION_DECLINE = [
   /^(?:do\s+not|don['’]?t)\s+(?:book|reschedule|move|cancel)(?:\s+it)?[\s.!]*$/iu,
   /^не\s+(?:записывайте|переносите|отменяйте)[\s.!]*$/iu,
 ];
-const MENTIONS_CONSULTATION = /консультац|consultation/i;
-/** Declines — avoid `\b` before Cyrillic (JS word chars are ASCII-only without `u`). */
-const CONSULTATION_NEGATION =
-  /(?:(?:^|\s)не\s+(?:хочу|треба|потрібно|бажаю|буду)|без\s+консультац|(?:^|\s)(?:not|don'?t|no)(?:\s|$))/i;
-/** Book/browse request naming consultation — not a topic question or decline. */
-const CONSULTATION_REQUEST =
-  /(?:запиш\w*|записат\w*|хочу|бажаю|потрібн\w*|треба|book|want|need).{0,40}(?:консультац|consultation)|(?:консультац|consultation).{0,40}(?:запиш\w*|записат\w*|будь\s*ласка|please)|^(?:консультація|consultation)$/i;
 /** Exact «Так» / Yes / Да (booking-offer keyboard). */
 export const isYesReply = (text: string): boolean => YES_REPLY.test(text.trim());
 
@@ -208,6 +201,9 @@ export const matchesReplyLabel = (
   }
   return false;
 };
+
+/** Alias for chip matching — same exact-normalized equality as {@link matchesReplyLabel}. */
+export const matchChip = matchesReplyLabel;
 
 /** Map a patient tap/typed shortcut to a stable {@link ReplyLabelId}. */
 export const labelIdFor = (text: string): ReplyLabelId | null => {
@@ -253,24 +249,6 @@ export const isConfirmationAffirmation = (
 /** Explicit free-text decline for an already displayed mutation confirmation. */
 export const isConfirmationDecline = (text: string): boolean =>
   CONFIRMATION_DECLINE.some((pattern) => pattern.test(text.trim()));
-
-/**
- * True when the patient asks to book «Консультація» (not a topic question or decline).
- * Bare «консультація» counts; «чи є консультація?» and «не хочу консультацію» do not.
- */
-export const requestsConsultation = (text: string): boolean => {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed.includes("?")) {
-    return false;
-  }
-  if (CONSULTATION_NEGATION.test(trimmed)) {
-    return false;
-  }
-  if (!MENTIONS_CONSULTATION.test(trimmed)) {
-    return false;
-  }
-  return CONSULTATION_REQUEST.test(trimmed);
-};
 
 /**
  * Defensive strip of accidental yield / `<reply_buttons>` tags so they never reach Telegram.
@@ -341,12 +319,20 @@ const FAQ_CATALOG_ACTION_TAG_GLOBAL =
 const FAQ_CATALOG_ACTION_ATTR =
   /\baction\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 
-export type FaqCatalogAction = "keep_catalog" | "offer_consultation" | "close_catalog";
+const FAQ_CATALOG_QUERY_ATTR =
+  /\bquery\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+
+export type FaqCatalogAction =
+  | "keep_catalog"
+  | "offer_consultation"
+  | "close_catalog"
+  | "open_catalog";
 
 const FAQ_CATALOG_ACTIONS = new Set<FaqCatalogAction>([
   "keep_catalog",
   "offer_consultation",
   "close_catalog",
+  "open_catalog",
 ]);
 
 export type ExtractedFaqCatalogAction = {
@@ -354,6 +340,11 @@ export type ExtractedFaqCatalogAction = {
   text: string;
   /** Validated action, or null when missing/invalid/conflicting. */
   action: FaqCatalogAction | null;
+  /**
+   * Model-authored catalog query for {@link FaqCatalogAction} `open_catalog`.
+   * Empty/omitted → root catalog. Null when action is not open_catalog.
+   */
+  query: string | null;
 };
 
 const parseFaqCatalogActionValue = (raw: string | undefined): FaqCatalogAction | null => {
@@ -366,21 +357,38 @@ const parseFaqCatalogActionValue = (raw: string | undefined): FaqCatalogAction |
     : null;
 };
 
+const parseFaqCatalogQueryAttr = (attrs: string): string | null => {
+  const match = FAQ_CATALOG_QUERY_ATTR.exec(attrs ?? "");
+  FAQ_CATALOG_QUERY_ATTR.lastIndex = 0;
+  const value = match?.[1] ?? match?.[2];
+  if (value == null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "";
+};
+
 /**
  * Extract a validated FAQ catalog control action.
  * Strips every paired and self-closing tag. One valid action is returned;
  * zero, invalid-only, or multiple/conflicting valid actions yield action null.
+ * Optional `query` is kept only for a single `open_catalog` action.
  */
 export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction => {
   const validActions: FaqCatalogAction[] = [];
+  const queries: Array<string | null> = [];
   const text = raw
     .replace(FAQ_CATALOG_ACTION_TAG_GLOBAL, (_full, attrs: string, body?: string) => {
       const fromAttr = FAQ_CATALOG_ACTION_ATTR.exec(attrs ?? "");
+      FAQ_CATALOG_ACTION_ATTR.lastIndex = 0;
       const attrValue = fromAttr?.[1] ?? fromAttr?.[2];
       const parsed = parseFaqCatalogActionValue(attrValue)
         ?? parseFaqCatalogActionValue(body);
       if (parsed != null) {
         validActions.push(parsed);
+        queries.push(
+          parsed === "open_catalog" ? parseFaqCatalogQueryAttr(attrs ?? "") : null,
+        );
       }
       return "";
     })
@@ -391,5 +399,6 @@ export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction 
 
   // Zero, duplicate, or conflicting valid tags → null (do not pick the first).
   const action = validActions.length === 1 ? validActions[0]! : null;
-  return { text, action };
+  const query = action === "open_catalog" ? (queries[0] ?? "") : null;
+  return { text, action, query };
 };
