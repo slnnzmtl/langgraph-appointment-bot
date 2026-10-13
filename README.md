@@ -97,6 +97,19 @@ docker compose up -d --build
 
 Compose sets `ESPOCRM_MCP_URL=http://espocrm-mcp-server:3000`. Bot `.env` still needs `GOOGLE_API_KEY`, `ESPOCRM_API_KEY`, `ESPOCRM_ASSIGNED_USER_ID`, and `TELEGRAM_BOT_TOKEN`. The image runs as the non-root `node` user on a digest-pinned `node:20.20-alpine3.22` base. Compose mounts `./data` to `/app/data` so SqliteSaver checkpoints (`CHECKPOINT_DB_PATH`, default `data/checkpoints.sqlite`) survive container restarts.
 
+### Image build
+
+The Dockerfile is a four-stage BuildKit build: **base** (Alpine toolchain + pnpm 10.13.1), **deps** (lockfile-only `pnpm install` with a pnpm store cache mount), **bundle** (`pnpm deploy --prod --legacy` of the workspace, still lockfile-only), **build** (`pnpm build` / tsc). The **runtime** image copies the prod tree and `dist/` only — no compilers, no second `pnpm install`, no `chown` of `node_modules`. Source edits invalidate **build**, not **deps** or **bundle**. `better-sqlite3` compiles once during install.
+
+Measured on this host (`docker build --progress=plain`):
+
+| Rebuild | Before | After |
+| --- | --- | --- |
+| Cold `--no-cache` | 859s | 475s |
+| Source-only (edit under `src/`) | 443s (`pnpm install` ran again, ~343s) | 74s (install + deploy cached; tsc ~60s) |
+
+Cold bottlenecks on the old image were two `pnpm install`s (~340s each), compiling `better-sqlite3` twice, `tsc` (~90s), and `chown -R` of the whole `/app` tree (~235s). The remaining cold cost is mostly the single install (~302s) plus `tsc` (~84s).
+
 **Production clinic branding:** public git keeps demo placeholders for address, Maps URL, consultation CRM id, clinic name, and welcome copy. Set `CLINIC_ADDRESS`, `CLINIC_MAPS_URL`, `CONSULTATION_SERVICE_ID`, `CLINIC_NAME_UK`, `CLINIC_NAME_EN`, `CLINIC_WELCOME_VENUE_UK`, and `CLINIC_DOCTOR_REF_UK` in the host `.env` before `docker compose up -d --build`. With `NODE_ENV=production` (Compose default), missing any of these vars makes the process exit on boot instead of greeting as a demo clinic or booking a fake service id.
 
 ### Tomorrow-reminder webhook
