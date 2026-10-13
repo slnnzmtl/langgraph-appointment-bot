@@ -99,6 +99,7 @@ import {
   bookingOutcomeRiskState,
   classifyMeetingMutationToolMessage,
   createMeetingAlreadyBooked,
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   lastPatientText,
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
@@ -140,6 +141,44 @@ const effectiveIdentityForState = (state: ClinicState) => {
   };
 };
 
+/**
+ * Occupied-phone HITL: retry linking when the candidate row is free,
+ * otherwise reopen phoneNumber as occupied (never advance to names).
+ */
+const reopenOccupiedPhoneOrRetryLink = (
+  state: ClinicState,
+): { replyText: string; interaction: PendingInteraction } | null => {
+  const draft = state.bookingDraft;
+  if (draft == null) {
+    return null;
+  }
+  const { identity } = effectiveIdentityForState(state);
+  if (identity.kind === "phone_candidate" && phoneCandidateHasLinkableRow(identity)) {
+    return {
+      replyText: PATIENT_FALLBACK_MESSAGE,
+      interaction: state.pendingInteraction ?? {
+        kind: "contact_field",
+        field: "phoneNumber",
+        choices: [],
+      },
+    };
+  }
+  const session = reduceBookingSession(
+    {
+      bookingDraft: draft,
+      pendingInteraction: state.pendingInteraction ?? null,
+    },
+    { type: "contact_field_required", field: "phoneNumber", occupied: true },
+  );
+  if (session.pendingInteraction == null) {
+    return null;
+  }
+  return {
+    replyText: String(renderBookingInteractionMessage(session.pendingInteraction).content),
+    interaction: session.pendingInteraction,
+  };
+};
+
 /** Runtime-owned contact ladder once service, slot, and note are complete. */
 const bookingDetailsInteraction = (
   state: ClinicState,
@@ -149,25 +188,10 @@ const bookingDetailsInteraction = (
   }
   const draft = state.bookingDraft!;
   const { identity, details } = effectiveIdentityForState(state);
-  let field: "phoneNumber" | "firstName" | "lastName" | null = null;
-  let occupied = false;
   if (identity.kind === "phone_candidate") {
-    if (phoneCandidateHasLinkableRow(identity)) {
-      return {
-        replyText: PATIENT_FALLBACK_MESSAGE,
-        interaction: state.pendingInteraction ?? {
-          kind: "contact_field",
-          field: "phoneNumber",
-          choices: [],
-        },
-      };
-    }
-    field = "phoneNumber";
-    occupied = true;
-  } else {
-    // Unresolved or owned-incomplete: next missing field from CRM∪draft∪collected.
-    field = nextMissingContactField(details);
+    return reopenOccupiedPhoneOrRetryLink(state);
   }
+  const field = nextMissingContactField(details);
   if (field == null) {
     return null;
   }
@@ -176,7 +200,7 @@ const bookingDetailsInteraction = (
       bookingDraft: draft,
       pendingInteraction: state.pendingInteraction ?? null,
     },
-    { type: "contact_field_required", field, occupied },
+    { type: "contact_field_required", field },
   );
   if (session.pendingInteraction == null) {
     return null;
@@ -318,30 +342,34 @@ export const createAgentFinalizeNode = (
           let replyText = BOOKING_CONTACT_SAVE_FAILED_UK;
           let replyButtons: string[] = [];
           if (classification.outcome === "known_field") {
-            // Same ladder as details-step: never reopen a field already on CRM∪draft∪collected.
-            const reopen = nextMissingContactField(details);
-            if (reopen != null) {
-              const session = reduceBookingSession(
-                {
-                  bookingDraft: state.bookingDraft ?? null,
-                  pendingInteraction,
-                },
-                {
-                  type: "contact_field_required",
-                  field: reopen,
-                  occupied: classification.error === "Contact link candidate required"
-                    && reopen === "phoneNumber",
-                },
-              );
-              pendingInteraction = session.pendingInteraction;
-              if (pendingInteraction != null) {
-                replyText = String(
-                  renderBookingInteractionMessage(pendingInteraction).content,
-                );
-                replyButtons = replyButtonsForInteraction(pendingInteraction);
+            if (classification.error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR) {
+              const occupied = reopenOccupiedPhoneOrRetryLink(state);
+              if (occupied != null) {
+                replyText = occupied.replyText;
+                pendingInteraction = occupied.interaction;
+                replyButtons = replyButtonsForInteraction(occupied.interaction);
               }
             } else {
-              pendingInteraction = null;
+              // Same ladder as details-step: never reopen a field already on CRM∪draft∪collected.
+              const reopen = nextMissingContactField(details);
+              if (reopen != null) {
+                const session = reduceBookingSession(
+                  {
+                    bookingDraft: state.bookingDraft ?? null,
+                    pendingInteraction,
+                  },
+                  { type: "contact_field_required", field: reopen },
+                );
+                pendingInteraction = session.pendingInteraction;
+                if (pendingInteraction != null) {
+                  replyText = String(
+                    renderBookingInteractionMessage(pendingInteraction).content,
+                  );
+                  replyButtons = replyButtonsForInteraction(pendingInteraction);
+                }
+              } else {
+                pendingInteraction = null;
+              }
             }
           } else {
             // Operational: clear completed contact_field; keep contactDetails + slot.
@@ -353,6 +381,7 @@ export const createAgentFinalizeNode = (
             ...cleared,
             ...confirmationCleanup,
             pendingInteraction,
+            ...(replyText === BOOKING_PHONE_OCCUPIED_UK ? { contactContext: null } : {}),
             messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
             lastHandoff: {
               agentId: agent.id,

@@ -1082,7 +1082,10 @@ export const classifyContactWriteToolMessage = (
   return { outcome: "operational", tool: name, category: "operational" };
 };
 
-/** Latest non-success contact write this turn (known_field or operational). */
+/**
+ * Newest contact-write result this turn when it is known_field or operational.
+ * A later success supersedes an earlier failure in the same tape.
+ */
 export const terminalContactWriteOutcome = (
   state: ClinicState,
 ): { message: ToolMessage; classification: ContactWriteClassification } | null => {
@@ -1092,10 +1095,13 @@ export const terminalContactWriteOutcome = (
       continue;
     }
     const classification = classifyContactWriteToolMessage(message);
-    if (
-      classification != null
-      && (classification.outcome === "known_field" || classification.outcome === "operational")
-    ) {
+    if (classification == null) {
+      continue;
+    }
+    if (classification.outcome === "success") {
+      return null;
+    }
+    if (classification.outcome === "known_field" || classification.outcome === "operational") {
       return { message, classification };
     }
   }

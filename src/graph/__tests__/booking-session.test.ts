@@ -1086,6 +1086,33 @@ describe("contact_field_submitted session event", () => {
     expect(session.pendingInteraction).toBeNull();
   });
 
+  it("overlays owned CRM fields so lastName submit does not reopen phone", () => {
+    const session = reduceBookingSession(
+      {
+        bookingDraft: detailsDraft(),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          choices: [],
+        },
+      },
+      {
+        type: "contact_field_submitted",
+        field: "lastName",
+        value: "Коваль",
+        crmContact: {
+          id: "c-owned",
+          phoneNumber: "+380501112233",
+          firstName: "Олена",
+        },
+      },
+    );
+    expect(session.bookingDraft?.contactDetails).toEqual({
+      lastName: "Коваль",
+    });
+    expect(session.pendingInteraction).toBeNull();
+  });
+
   it("keeps contactDetails after the open contact_field is cleared as complete", () => {
     const withNames = reduceBookingDraft(
       reduceBookingDraft(detailsDraft(), {

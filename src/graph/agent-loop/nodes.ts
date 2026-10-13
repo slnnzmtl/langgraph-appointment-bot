@@ -606,6 +606,10 @@ export const createAgentPrepareNode = (
           }
         }
         if (submitted != null) {
+          const owned = resolveContactIdentity(
+            state.contactContext,
+            bookingDraft?.contactId,
+          );
           const session = reduceBookingSession(
             {
               bookingDraft: bookingDraft ?? null,
@@ -615,6 +619,7 @@ export const createAgentPrepareNode = (
               type: "contact_field_submitted",
               field: submitted.field,
               value: submitted.value,
+              ...(owned.kind === "owned" ? { crmContact: owned.contact } : {}),
             },
           );
           bookingDraft = session.bookingDraft;

@@ -87,9 +87,11 @@ import {
 import type { BookingDraft } from "../booking-draft.js";
 import { reduceBookingSession } from "../booking-session.js";
 import {
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   humanProvidedName,
   normalizeNameForMatch,
   offeredServiceForTurn,
+  terminalContactWriteOutcome,
 } from "../agent-loop/shared.js";
 import {
   CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION,
@@ -5477,6 +5479,130 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
   });
 
+  it("Contact link candidate required reopens occupied phone, not firstName", async () => {
+    const state = clinicState({
+      contactContext: {
+        ownership: "phone",
+        contacts: [{
+          id: "c-phone",
+          phoneNumber: "+380501112233",
+          cTelegram: "tg-other",
+        }],
+      },
+      bookingDraft: canonicalBookingDraft({
+        phase: "details",
+        contactId: null,
+        contactDetails: {
+          phoneNumber: "+380501112233",
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+            field: "phoneNumber",
+          }),
+          tool_call_id: "cc-link",
+          name: "create_contact",
+        }),
+      ],
+    });
+    expect(
+      routeAfterAgentTools(
+        state as never,
+        "booking__llm",
+        "booking__tools",
+        undefined,
+        undefined,
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__finalize");
+    const update = await createAgentFinalizeNode(agent)(state);
+    expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_OCCUPIED_UK);
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "phoneNumber",
+      occupied: true,
+    });
+    expect(update.contactContext).toBeNull();
+  });
+
+  it("Contact link candidate required retries linking when the candidate is free", async () => {
+    const update = await createAgentFinalizeNode(agent)(
+      clinicState({
+        contactContext: {
+          ownership: "phone",
+          contacts: [{
+            id: "c-phone",
+            phoneNumber: "+380501112233",
+            cTelegram: null,
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+          contactDetails: {
+            phoneNumber: "+380501112233",
+          },
+        }),
+        agentMessages: [
+          new ToolMessage({
+            content: JSON.stringify({
+              error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+              field: "phoneNumber",
+            }),
+            tool_call_id: "cc-link",
+            name: "create_contact",
+          }),
+        ],
+      }),
+    );
+    expect(update.lastHandoff?.replyText).toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.contactContext).toBeUndefined();
+  });
+
+  it("a later successful contact write supersedes an earlier failure", () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "details",
+        contactId: null,
+        contactDetails: {
+          phoneNumber: "+380501112233",
+          firstName: "Олена",
+          lastName: "Коваль",
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            error: "Name not provided",
+            field: "lastName",
+          }),
+          tool_call_id: "w1",
+          name: "create_contact",
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-ok" }),
+          tool_call_id: "w2",
+          name: "create_contact",
+        }),
+      ],
+    });
+    expect(terminalContactWriteOutcome(state)).toBeNull();
+    expect(
+      routeAfterAgentTools(
+        state as never,
+        "booking__llm",
+        "booking__tools",
+        undefined,
+        undefined,
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__llm");
+  });
+
   it("code-owns the occupied-phone reply and clears the phone candidate", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const update = await finalize(
@@ -5692,6 +5818,40 @@ describe("createAgentFinalizeNode", () => {
       }),
     );
 
+    expect(update.pendingInteraction).toBeNull();
+  });
+
+  it("prepare lastName on owned CRM with phone and firstName clears contact_field", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      classifyContactName: async () => ({ kind: "name", value: "Коваль" }),
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Коваль")],
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{
+            id: "c-owned",
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+            lastName: "",
+          }],
+        },
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: "c-owned",
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "lastName",
+          choices: [],
+        },
+      }),
+    );
+    expect(update.bookingDraft).toMatchObject({
+      contactId: "c-owned",
+      contactDetails: { lastName: "Коваль" },
+    });
     expect(update.pendingInteraction).toBeNull();
   });
 

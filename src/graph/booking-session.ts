@@ -12,6 +12,7 @@ import {
 import { matchesReplyLabel } from "../shared/message-content.js";
 import {
   bookingDraftCanPresentAvailability,
+  effectiveBookingContactDetails,
   nextMissingContactField,
   reduceBookingDraft,
   upgradeBookingDraftCheckpoint,
@@ -445,6 +446,8 @@ export type BookingSessionEvent =
       type: "contact_field_submitted";
       field: BookingContactField;
       value: string;
+      /** Owned CRM row so progression overlays phone/name already on the contact. */
+      crmContact?: Record<string, unknown> | null;
     }
   | {
       type: "mutation_confirm_opened";
@@ -1158,7 +1161,12 @@ export const reduceBookingSession = (
           }
         }
       }
-      const missing = nextMissingContactField(nextDraft.contactDetails ?? {});
+      const missing = nextMissingContactField(
+        effectiveBookingContactDetails({
+          ...(event.crmContact !== undefined ? { crmContact: event.crmContact } : {}),
+          contactDetails: nextDraft.contactDetails ?? null,
+        }),
+      );
       if (missing == null) {
         return noEffect({
           bookingDraft: nextDraft,
