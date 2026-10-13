@@ -652,6 +652,30 @@ export const matchingCatalogRows = (
   });
 };
 
+/**
+ * Strip optional trailing `?` and collect CRM lexical hits.
+ * Does not reject keyboard / supervisor / choose_other / FAQ-guide labels —
+ * those guards stay on {@link resolveCatalogFreeText}.
+ */
+export const resolveCatalogLexicalEvidence = (
+  text: string,
+  services: ServicesContext["list"],
+  options?: { allowTerminalQuestion?: boolean },
+): {
+  matcher: string;
+  rows: ServicesContext["list"];
+} => {
+  const trimmed = text.trim();
+  const matcher =
+    options?.allowTerminalQuestion === true
+      ? trimmed.replace(/[?？]+\s*$/u, "").trim()
+      : trimmed;
+  return {
+    matcher,
+    rows: matchingCatalogRows(matcher, services),
+  };
+};
+
 export type CatalogFreeTextResult =
   | { kind: "none" }
   | { kind: "one"; row: ServicesContext["list"][number] }
@@ -684,11 +708,13 @@ export const resolveCatalogFreeText = async (input: {
   selectCandidates?: SelectServiceCandidates;
   allowTerminalQuestion?: boolean;
 }): Promise<CatalogFreeTextResult> => {
-  const trimmed = input.text.trim();
-  const matcher =
+  const { matcher, rows: lexical } = resolveCatalogLexicalEvidence(
+    input.text,
+    input.rows,
     input.allowTerminalQuestion === true
-      ? trimmed.replace(/[?？]+\s*$/u, "").trim()
-      : trimmed;
+      ? { allowTerminalQuestion: true }
+      : undefined,
+  );
   if (
     matcher.length === 0
     || matcher.includes("?")
@@ -711,7 +737,6 @@ export const resolveCatalogFreeText = async (input: {
   // procedure stems must not call the selector on the full catalog (it invents
   // a family). «ботокс» stems to a subset; the selector still sees all rows so
   // it can expand to brand/zone siblings that do not share the patient token.
-  const lexical = matchingCatalogRows(matcher, input.rows);
   if (lexical.length === 0) {
     return { kind: "none" };
   }

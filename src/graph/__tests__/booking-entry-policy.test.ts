@@ -12,8 +12,12 @@ import {
   createAgentPrepareNode,
   routeAfterAgentPrepare,
 } from "../agent-loop.js";
-import { refineSupervisorNamedBooking } from "../booking-entry-policy.js";
+import {
+  refineSupervisorNamedBooking,
+  utteranceHasCatalogCrmEvidence,
+} from "../booking-entry-policy.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
+import { resolveCatalogLexicalEvidence } from "../agent-loop/shared.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 import {
@@ -791,6 +795,24 @@ describe("refineSupervisorNamedBooking (post-LLM policy)", () => {
     });
     expect(refined.decision).toEqual({ next: "faq", intent: "faq" });
     expect(loadServices).not.toHaveBeenCalled();
+  });
+
+  it("terminal price question yields lexical evidence only when explicitly requested", () => {
+    const price = "Скільки коштує ботокс?";
+    expect(
+      resolveCatalogLexicalEvidence(price, botoxServices.list).rows,
+    ).toEqual([]);
+    expect(
+      resolveCatalogLexicalEvidence(price, botoxServices.list, {
+        allowTerminalQuestion: true,
+      }).rows.length,
+    ).toBeGreaterThan(0);
+    expect(
+      utteranceHasCatalogCrmEvidence({
+        text: price,
+        services: botoxServices.list,
+      }),
+    ).toBe(true);
   });
 
   it("named_procedure → direct FAQ route when idle", async () => {

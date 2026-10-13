@@ -4,8 +4,8 @@ import {
   type PendingInteraction,
 } from "./booking-session.js";
 import {
-  matchingCatalogRows,
   resolveCatalogFreeText,
+  resolveCatalogLexicalEvidence,
   resolveFaqCatalogChoices,
   type CatalogFreeTextResult,
 } from "./agent-loop/shared.js";
@@ -203,38 +203,28 @@ export type NamedBookingPolicyResult = {
   catalogUnavailable?: boolean;
 };
 
-const stripTerminalQuestion = (text: string): string =>
-  text.trim().replace(/[?？]+\s*$/u, "").trim();
-
 /**
- * CRM vocabulary evidence via the shared catalog resolver (terminal `?` allowed).
- * Multi-stem families without a selector still count when lexical rows hit.
+ * CRM vocabulary evidence via lexical stems (terminal `?` allowed).
+ * Multi-stem families count when rows hit — no family selector.
  */
-export const utteranceHasCatalogCrmEvidence = async (input: {
+export const utteranceHasCatalogCrmEvidence = (input: {
   text: string;
   services: ServicesContext["list"];
-  selectCandidates?: SelectServiceCandidates;
-}): Promise<boolean> => {
+}): boolean => {
   if (input.services.length === 0 || input.text.trim().length === 0) {
     return false;
   }
-  const resolved = await resolveCatalogFreeText({
-    text: input.text,
-    rows: input.services,
-    allowTerminalQuestion: true,
-    ...(input.selectCandidates != null
-      ? { selectCandidates: input.selectCandidates }
-      : {}),
-  });
-  if (resolved.kind !== "none") {
-    return true;
-  }
-  return matchingCatalogRows(stripTerminalQuestion(input.text), input.services).length > 0;
+  return resolveCatalogLexicalEvidence(
+    input.text,
+    input.services,
+    { allowTerminalQuestion: true },
+  ).rows.length > 0;
 };
 
 /**
  * Refine the supervisor LLM decision with CRM catalog evidence.
  * Does not guess a service id — only next agent + intent for FAQ prepare / REPLACE.
+ * Async only because book may lazy-load services.
  */
 export const refineSupervisorNamedBooking = async (input: {
   decision: ClinicRoutingDecision;
@@ -242,7 +232,6 @@ export const refineSupervisorNamedBooking = async (input: {
   hasVisit: boolean;
   services: ServicesContext["list"] | null | undefined;
   loadServices?: () => Promise<ServicesContext | null>;
-  selectCandidates?: SelectServiceCandidates;
 }): Promise<NamedBookingPolicyResult> => {
   const { decision } = input;
   const intent = decision.intent;
@@ -293,12 +282,9 @@ export const refineSupervisorNamedBooking = async (input: {
     };
   }
 
-  const hasCrm = await utteranceHasCatalogCrmEvidence({
+  const hasCrm = utteranceHasCatalogCrmEvidence({
     text: input.patientText,
     services: servicesList,
-    ...(input.selectCandidates != null
-      ? { selectCandidates: input.selectCandidates }
-      : {}),
   });
   if (!hasCrm) {
     return {
