@@ -29,7 +29,7 @@ import {
   MAIN_MENU_LABEL,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
 } from "../../shared/clinic-constants.js";
-import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
+import { asJsonRecord, committedMeetingEntityId, jsonEntityId } from "../../shared/json-record.js";
 import {
   extractMessageTextContent,
   extractRawMessageText,
@@ -95,6 +95,25 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "cancel_meeting",
   "reschedule_meeting",
 ]);
+
+/** Contact CRM writes that must not same-turn retry after known_field / operational failure. */
+export const CONTACT_WRITE_TOOLS = new Set([
+  "create_contact",
+  "update_contact",
+  "link_telegram_to_contact",
+]);
+
+export type ContactWriteOutcome = "success" | "known_field" | "operational" | null;
+
+export type ContactWriteClassification = {
+  outcome: ContactWriteOutcome;
+  tool: string;
+  /** Present for known_field when the synthetic error names a specific identity field. */
+  field?: "phoneNumber" | "firstName" | "lastName";
+  /** Structured synthetic error constant when outcome is known_field. */
+  error?: string;
+  category?: "known_field" | "operational";
+};
 
 /**
  * Choose-other catalog browse: exact «Обрати іншу процедуру» chip always, or
@@ -1004,6 +1023,91 @@ export const PHONE_NOT_PROVIDED_ERROR = "Phone not provided";
 
 export const NAME_NOT_PROVIDED_ERROR = "Name not provided";
 
+const KNOWN_CONTACT_FIELD_ERRORS = new Set([
+  PHONE_NOT_PROVIDED_ERROR,
+  NAME_NOT_PROVIDED_ERROR,
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+]);
+
+const contactWriteFieldFromRecord = (
+  record: Record<string, unknown>,
+  error: string,
+): ContactWriteClassification["field"] => {
+  const raw = record.field;
+  if (raw === "phoneNumber" || raw === "firstName" || raw === "lastName") {
+    return raw;
+  }
+  if (error === PHONE_NOT_PROVIDED_ERROR || error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR) {
+    return "phoneNumber";
+  }
+  return undefined;
+};
+
+/**
+ * Classify create_contact / update_contact / link_telegram_to_contact results.
+ * Never branches on free-form Espo text — only structured error constants or missing entity id.
+ */
+export const classifyContactWriteToolMessage = (
+  message: ToolMessage,
+): ContactWriteClassification | null => {
+  const name = message.name;
+  if (!name || !CONTACT_WRITE_TOOLS.has(name)) {
+    return null;
+  }
+  const body = extractMessageTextContent(message.content).trim();
+  if (body.startsWith("Error:")) {
+    return { outcome: "operational", tool: name, category: "operational" };
+  }
+  const record = asJsonRecord(body);
+  if (!record) {
+    return { outcome: "operational", tool: name, category: "operational" };
+  }
+  if (typeof record.error === "string") {
+    if (KNOWN_CONTACT_FIELD_ERRORS.has(record.error)) {
+      const field = contactWriteFieldFromRecord(record, record.error);
+      return {
+        outcome: "known_field",
+        tool: name,
+        category: "known_field",
+        error: record.error,
+        ...(field != null ? { field } : {}),
+      };
+    }
+    return { outcome: "operational", tool: name, category: "operational" };
+  }
+  if (jsonEntityId(body) != null) {
+    return { outcome: "success", tool: name };
+  }
+  // Malformed "success" without an entity id is operational, not projected.
+  return { outcome: "operational", tool: name, category: "operational" };
+};
+
+/**
+ * Newest contact-write result this turn when it is known_field or operational.
+ * A later success supersedes an earlier failure in the same tape.
+ */
+export const terminalContactWriteOutcome = (
+  state: ClinicState,
+): { message: ToolMessage; classification: ContactWriteClassification } | null => {
+  for (let index = (state.agentMessages?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = state.agentMessages?.[index];
+    if (!(message instanceof ToolMessage) || !CONTACT_WRITE_TOOLS.has(message.name ?? "")) {
+      continue;
+    }
+    const classification = classifyContactWriteToolMessage(message);
+    if (classification == null) {
+      continue;
+    }
+    if (classification.outcome === "success") {
+      return null;
+    }
+    if (classification.outcome === "known_field" || classification.outcome === "operational") {
+      return { message, classification };
+    }
+  }
+  return null;
+};
+
 /** True when some HumanMessage in `messages` normalizes to the same E.164 as `wanted`. */
 export const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boolean =>
   messages.some((message) => {
@@ -1014,11 +1118,23 @@ export const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boo
   });
 
 /**
- * True when some HumanMessage equals `wanted` (trim + casefold), or is two whitespace
+ * Compare-only name fold for DDD-59 grounding (DDD-206).
+ * Trims, lowercases, and maps documented apostrophe glyphs to ASCII `'`.
+ * Does not rewrite values stored on collected or forwarded to CRM.
+ */
+export const normalizeNameForMatch = (value: string): string =>
+  value
+    .trim()
+    .toLowerCase()
+    // U+0027 apostrophe, U+2019 right single quotation, U+2018 left single quotation, U+02BC modifier letter apostrophe
+    .replace(/['’‘ʼ]/g, "'");
+
+/**
+ * True when some HumanMessage equals `wanted` (normalizeNameForMatch), or is two whitespace
  * tokens and `wanted` equals token 0 or 1 (DDD-59 name grounding).
  */
 export const humanProvidedName = (messages: BaseMessage[], wanted: string): boolean => {
-  const target = wanted.trim().toLowerCase();
+  const target = normalizeNameForMatch(wanted);
   if (target.length === 0) {
     return false;
   }
@@ -1026,7 +1142,7 @@ export const humanProvidedName = (messages: BaseMessage[], wanted: string): bool
     if (!(message instanceof HumanMessage)) {
       return false;
     }
-    const text = extractMessageTextContent(message.content).trim().toLowerCase();
+    const text = normalizeNameForMatch(extractMessageTextContent(message.content));
     if (text === target) {
       return true;
     }

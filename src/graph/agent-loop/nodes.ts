@@ -66,6 +66,7 @@ import {
   availabilityMatchesBooking,
   bookingAvailabilityScope,
   createEmptyBookingDraft,
+  effectiveBookingContactDetails,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -140,6 +141,7 @@ import {
   crmWriteDirtiesPrefetch,
   humanProvidedName,
   humanProvidedPhone,
+  normalizeNameForMatch,
   lastPatientText,
   latestCreateMeetingError,
   matchAvailabilityDay,
@@ -152,6 +154,7 @@ import {
   resetBookingNoteState,
   resolveContactIdentity,
   resolveFaqCatalogChoices,
+  terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
   toolRanThisTurn,
 } from "./shared.js";
@@ -579,35 +582,51 @@ export const createAgentPrepareNode = (
           contactId,
         });
       }
-      if (
-        options?.classifyContactName
-        && pendingInteraction?.kind === "contact_field"
-        && (pendingInteraction.field === "firstName" || pendingInteraction.field === "lastName")
-      ) {
+      if (pendingInteraction?.kind === "contact_field") {
         const patientText = lastPatientText(state).trim();
-        if (
-          patientText.length > 0
+        const openField = pendingInteraction.field;
+        let submitted: { field: typeof openField; value: string } | null = null;
+        if (openField === "phoneNumber" && patientText.length > 0) {
+          const phone = normalizeClinicPhone(patientText);
+          if (phone != null) {
+            submitted = { field: "phoneNumber", value: phone };
+          }
+        } else if (
+          options?.classifyContactName
+          && (openField === "firstName" || openField === "lastName")
+          && patientText.length > 0
           && normalizeClinicPhone(patientText) == null
         ) {
           const classified = await options.classifyContactName({
             patientText,
-            field: pendingInteraction.field,
+            field: openField,
           });
           if (classified.kind === "name") {
-            const session = reduceBookingSession(
-              {
-                bookingDraft: bookingDraft ?? null,
-                pendingInteraction,
-              },
-              {
-                type: "contact_name_submitted",
-                field: pendingInteraction.field,
-                value: classified.value,
-              },
-            );
-            bookingDraft = session.bookingDraft;
-            pendingInteraction = session.pendingInteraction;
-            update.pendingInteraction = pendingInteraction;
+            submitted = { field: openField, value: classified.value };
+          }
+        }
+        if (submitted != null) {
+          const owned = resolveContactIdentity(
+            state.contactContext,
+            bookingDraft?.contactId,
+          );
+          const session = reduceBookingSession(
+            {
+              bookingDraft: bookingDraft ?? null,
+              pendingInteraction,
+            },
+            {
+              type: "contact_field_submitted",
+              field: submitted.field,
+              value: submitted.value,
+              ...(owned.kind === "owned" ? { crmContact: owned.contact } : {}),
+            },
+          );
+          bookingDraft = session.bookingDraft;
+          pendingInteraction = session.pendingInteraction;
+          update.pendingInteraction = pendingInteraction;
+          if (session.bookingDraft !== undefined) {
+            update.bookingDraft = session.bookingDraft;
           }
         }
       }
@@ -738,14 +757,7 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     // Full days[] lives in the slots tool result / checkpoint — do not also bill Gemini for it.
     // BookingDraft is the single compact projection of the selected slot.
     if (agent.id === BOOKING_AGENT_ID) {
-      dynamicParts.push(
-        formatBookingDraftContext(
-          state.bookingDraft,
-          state.pendingInteraction?.kind === "contact_field"
-            ? state.pendingInteraction.collected ?? null
-            : null,
-        ),
-      );
+      dynamicParts.push(formatBookingDraftContext(state.bookingDraft));
     }
     if (
       (agent.id === FAQ_AGENT_ID || agent.id === BOOKING_AGENT_ID)
@@ -918,18 +930,30 @@ export const createAgentToolsNode = (
         }
 
         if (PHONE_GROUNDED_TOOLS.has(call.name)) {
+          const openCollected = state.pendingInteraction?.kind === "contact_field"
+            ? state.pendingInteraction.collected
+            : undefined;
+          const canonicalIdentity = effectiveBookingContactDetails({
+            contactDetails: state.bookingDraft?.contactDetails ?? null,
+            ...(openCollected != null ? { collected: openCollected } : {}),
+          });
           const rawPhone = (call.args ?? {}).phoneNumber;
           if (typeof rawPhone === "string" && rawPhone.trim() !== "") {
             const wanted = normalizeClinicPhone(rawPhone);
+            const acceptedPhone = canonicalIdentity.phoneNumber != null
+              ? normalizeClinicPhone(canonicalIdentity.phoneNumber)
+              : null;
             if (
               wanted != null
               && !humanProvidedPhone(state.messages ?? [], wanted)
+              && acceptedPhone !== wanted
             ) {
               trackToolError(call.name, PHONE_NOT_PROVIDED_ERROR);
               synthetic.push(
                 new ToolMessage({
                   content: JSON.stringify({
                     error: PHONE_NOT_PROVIDED_ERROR,
+                    field: "phoneNumber",
                     hint:
                       "Ask the patient for their clinic phone, then retry with the number they typed.",
                   }),
@@ -944,24 +968,17 @@ export const createAgentToolsNode = (
           if (call.name === "create_contact" || call.name === "update_contact") {
             const args = call.args ?? {};
             const nameFields = ["firstName", "lastName"] as const;
-            const collected = state.pendingInteraction?.kind === "contact_field"
-              ? state.pendingInteraction.collected
-              : undefined;
-            const matchesCollected = (
-              field: "firstName" | "lastName",
-              raw: string,
-            ): boolean => {
-              const accepted = collected?.[field];
-              return typeof accepted === "string"
-                && accepted.trim().toLocaleLowerCase() === raw.trim().toLocaleLowerCase();
-            };
             const invented = nameFields.find((field) => {
               const raw = args[field];
+              const accepted = canonicalIdentity[field];
               return (
                 typeof raw === "string"
                 && raw.trim() !== ""
                 && !humanProvidedName(state.messages ?? [], raw)
-                && !matchesCollected(field, raw)
+                && !(
+                  typeof accepted === "string"
+                  && normalizeNameForMatch(accepted) === normalizeNameForMatch(raw)
+                )
               );
             });
             if (invented) {
@@ -970,6 +987,7 @@ export const createAgentToolsNode = (
                 new ToolMessage({
                   content: JSON.stringify({
                     error: NAME_NOT_PROVIDED_ERROR,
+                    field: invented,
                     hint:
                       "Ask the patient for their name, then retry with the value they typed.",
                   }),
@@ -993,6 +1011,7 @@ export const createAgentToolsNode = (
               new ToolMessage({
                 content: JSON.stringify({
                   error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
+                  field: "phoneNumber",
                   hint:
                     "This phone belongs to another Telegram account. Ask for a different number; do not create a Contact with it.",
                 }),
@@ -1833,6 +1852,11 @@ export const routeAfterAgentTools = (
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  // Failed contact writes are terminal for this turn — code owns the patient reply.
+  if (finalizeName && terminalContactWriteOutcome(state) != null) {
+    return finalizeName;
   }
 
   if (bookingMutationNeedsModelRecovery(state)) {

@@ -35,6 +35,25 @@ describe("interpretInvokeResult reply selection", () => {
     expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
   });
 
+  it("details-step phone with omitted replyButtons never attaches leftover ✅/❌", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "Для завершення запису надішліть, будь ласка, ваш номер телефону.",
+      },
+      messages: [
+        new HumanMessage("Продовжити без коментаря"),
+        new AIMessage("Для завершення запису надішліть, будь ласка, ваш номер телефону."),
+      ],
+    });
+
+    expect(asReply(result.reply_markup).keyboard).toEqual([[{ text: MAIN_MENU_LABEL }]]);
+    expect(asReply(result.reply_markup).keyboard.flat()).not.toContain(CONFIRM_YES_LABEL);
+    expect(asReply(result.reply_markup).keyboard.flat()).not.toContain(CONFIRM_NO_LABEL);
+  });
+
   it("falls back to longest visible AI text when lastHandoff has no replyText", () => {
     const result = interpretInvokeResult({
       messages: [

@@ -51,6 +51,9 @@ export const BOOKING_PHONE_QUESTION_UK =
 /** Graph-owned reply when the typed phone matches a Contact linked to another Telegram user. */
 export const BOOKING_PHONE_OCCUPIED_UK =
   "Цей номер уже прив’язаний до іншого акаунта. Надішліть, будь ласка, інший номер.";
+/** Patient-safe copy when create/update/link contact fails operationally (no CRM details). */
+export const BOOKING_CONTACT_SAVE_FAILED_UK =
+  "Не вдалося зберегти контактні дані. Спробуйте, будь ласка, трохи пізніше або зверніться до клініки.";
 export const CLINIC_OPEN_HOUR = 9;
 export const CLINIC_CLOSE_HOUR = 18;
 export const CLINIC_SLOT_MINUTES = 30;
@@ -172,7 +175,7 @@ export const INTENT_SKIP_LABEL_EN = "Continue with no comments";
 
 /** Patient-facing note question when create_meeting is blocked before INTENT (DDD-49/51). */
 export const BOOKING_NOTE_QUESTION_UK =
-  "Чи можете поділитися деталями перед записом — що вас турбує або яку процедуру маєте на увазі? Якщо ні — запишу без коментаря.";
+  "Чи можете поділитися деталями перед записом — що вас турбує? Якщо ні — запишу без коментаря.";
 
 /** Code-owned service-or-note clarification choices (ids are stable; labels are snapshotted). */
 export const SERVICE_OR_NOTE_KEEP_LABEL_UK = "Продовжити з обраною послугою";

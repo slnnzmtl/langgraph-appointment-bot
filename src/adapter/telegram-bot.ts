@@ -245,7 +245,7 @@ export const hasPendingConfirmBooking = (
 };
 
 export type GraphTextTurnOptions = {
-  /** LangSmith / LangChain / Langfuse tags (default `["telegram"]`). */
+  /** Langfuse tags (default `["telegram"]`). */
   tags?: string[];
   /** Run metadata.source (default `"telegram"`). */
   source?: string;

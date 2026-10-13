@@ -1,10 +1,8 @@
 import "dotenv/config";
-import { getDefaultProjectName, isTracingEnabled } from "langsmith";
 
 import { launchReminderWebhook } from "./adapter/reminder-webhook.js";
 import { launchClinicBot } from "./adapter/telegram-bot.js";
 import {
-  applyTracingPrivacyDefaults,
   flushTracing,
   isLangfuseTracingEnabled,
   startLangfuseTracing,
@@ -19,15 +17,8 @@ import { createClinicRuntime } from "./composition/clinic-runtime.js";
  */
 const main = async (): Promise<void> => {
   const config = loadConfig();
-  applyTracingPrivacyDefaults();
   startLangfuseTracing();
-  const tracingOn = isTracingEnabled();
-  const chatContent =
-    process.env.LANGSMITH_TRACE_CONTENT === "true" ? "included" : "redacted";
   const langfuseOn = isLangfuseTracingEnabled();
-  console.log(
-    `LangSmith tracing: ${tracingOn ? "on" : "off"} (project: ${getDefaultProjectName()}${tracingOn ? `, chat content: ${chatContent}` : ""})`,
-  );
   console.log(
     `Langfuse tracing: ${langfuseOn ? "on" : "off"}${langfuseOn ? ` (base: ${process.env.LANGFUSE_BASE_URL ?? "?"}, conversation capture: on)` : ""}`,
   );

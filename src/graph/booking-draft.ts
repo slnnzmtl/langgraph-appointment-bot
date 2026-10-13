@@ -1,8 +1,19 @@
 import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
+import { normalizeClinicPhone } from "../shared/phone.js";
+import { contactMissingFields } from "../tools/contact-tools.js";
 import { kyivLocalIsoToUtcMs } from "../tools/availability-slots.js";
 import type { SelectedBookingSlot } from "./types.js";
 
 export const BOOKING_SCHEMA_VERSION = 1;
+
+export type BookingContactField = "phoneNumber" | "firstName" | "lastName";
+
+/** Accepted patient identity pending CRM create/update/link. Cleared on contact_resolved. */
+export type BookingContactDetails = {
+  phoneNumber?: string; // normalized E.164
+  firstName?: string;
+  lastName?: string;
+};
 
 /** Allowed visit lengths for availability search and command guards (tool schema). */
 const MIN_VISIT_DURATION_MINUTES = 15;
@@ -70,6 +81,8 @@ export type BookingDraft = {
   requestedTime: RequestedBookingTime | null;
   note: BookingNote;
   contactId: string | null;
+  /** Durable accepted identity until CRM contact resolves. Optional on older checkpoints. */
+  contactDetails?: BookingContactDetails | null;
   pendingCommand: PendingBookingCommand | null;
   /** CRM-owned meeting selected as the target of a direct reschedule. */
   rescheduleTarget?: ReplacementMeeting | null;
@@ -85,6 +98,11 @@ export type BookingEvent =
   | { type: "slot_selected"; slot: SelectedBookingSlot }
   | { type: "requested_time_unavailable" }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
+  | {
+      type: "contact_field_submitted";
+      field: BookingContactField;
+      value: string;
+    }
   | { type: "contact_resolved"; contactId: string }
   | { type: "contact_unresolved" }
   | { type: "command_prepared"; command: PendingBookingCommand }
@@ -97,6 +115,76 @@ export type BookingEvent =
   | { type: "slot_invalidated"; keepDate?: boolean }
   | { type: "draft_abandoned" }
   | { type: "draft_resumed" };
+
+const trimContactName = (value: string): string | null => {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+/** Ladder order for patient identity collection (phone before names). */
+const CONTACT_LADDER_FIELDS = ["phoneNumber", "firstName", "lastName"] as const;
+
+const contactFieldFromUnknown = (
+  value: unknown,
+  field: BookingContactField,
+): string | undefined => {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  if (field === "phoneNumber") {
+    return normalizeClinicPhone(value) ?? undefined;
+  }
+  return trimContactName(value) ?? undefined;
+};
+
+const mergeContactFields = (
+  target: BookingContactDetails,
+  source: Record<string, unknown> | BookingContactDetails | null | undefined,
+  fields: readonly BookingContactField[],
+  onlyGaps: boolean,
+): void => {
+  if (source == null) {
+    return;
+  }
+  for (const field of fields) {
+    if (onlyGaps && target[field] != null) {
+      continue;
+    }
+    const value = contactFieldFromUnknown(source[field], field);
+    if (value != null) {
+      target[field] = value;
+    }
+  }
+};
+
+/**
+ * Effective accepted identity: owned CRM row, then draft contactDetails (wins),
+ * then per-field gaps from leftover contact_field.collected.
+ */
+export const effectiveBookingContactDetails = (input: {
+  crmContact?: Record<string, unknown> | null;
+  contactDetails?: BookingContactDetails | null;
+  collected?: { firstName?: string; lastName?: string } | null;
+}): BookingContactDetails => {
+  const merged: BookingContactDetails = {};
+  mergeContactFields(merged, input.crmContact, CONTACT_LADDER_FIELDS, false);
+  mergeContactFields(merged, input.contactDetails, CONTACT_LADDER_FIELDS, false);
+  mergeContactFields(merged, input.collected, ["firstName", "lastName"], true);
+  return merged;
+};
+
+/** First required identity field still missing/invalid on the effective details. */
+export const nextMissingContactField = (
+  details: BookingContactDetails,
+): BookingContactField | null => {
+  const missing = new Set(contactMissingFields(details as Record<string, unknown>));
+  for (const field of CONTACT_LADDER_FIELDS) {
+    if (missing.has(field)) {
+      return field;
+    }
+  }
+  return null;
+};
 
 /**
  * Authoritative availability query scope derived from the booking draft.
@@ -509,6 +597,13 @@ const hasCreatePendingCommandViolation = (draft: BookingDraft): boolean => {
 const hasExecutableCommandViolation = (draft: BookingDraft): boolean =>
   hasPendingCommandViolation(draft) || hasCreatePendingCommandViolation(draft);
 
+const copyContactDetails = (
+  details: BookingContactDetails | null | undefined,
+): BookingContactDetails | null => {
+  const copied = effectiveBookingContactDetails({ contactDetails: details ?? null });
+  return Object.keys(copied).length > 0 ? copied : null;
+};
+
 /** Copy only known BookingDraft keys so unknown legacy fields cannot leak. */
 const constructBookingDraft = (fields: {
   version: number;
@@ -520,6 +615,7 @@ const constructBookingDraft = (fields: {
   requestedTime: RequestedBookingTime | null;
   note: BookingNote;
   contactId: string | null;
+  contactDetails?: BookingContactDetails | null;
   pendingCommand: PendingBookingCommand | null;
   rescheduleTarget?: ReplacementMeeting | null;
   replacement?: ReplacementState | null;
@@ -533,6 +629,7 @@ const constructBookingDraft = (fields: {
   requestedTime: fields.requestedTime,
   note: fields.note,
   contactId: fields.contactId,
+  contactDetails: copyContactDetails(fields.contactDetails),
   pendingCommand: fields.pendingCommand,
   rescheduleTarget: fields.rescheduleTarget ?? null,
   replacement: fields.replacement ?? null,
@@ -825,14 +922,12 @@ export const upgradeBookingDraftCheckpoint = (
         requestedTime: draft.requestedTime ?? null,
         note: draft.note,
         contactId: trimmedNonblank(draft.contactId),
+        contactDetails: draft.contactDetails ?? null,
         pendingCommand: null,
         rescheduleTarget: keptReschedule,
         replacement: keptReplacement,
       });
-      const kept = constructBookingDraft({
-        ...keptBase,
-        phase: bookingDraftPhase(keptBase),
-      });
+      const kept = { ...keptBase, phase: bookingDraftPhase(keptBase) };
       return {
         update: {
           ...stamp,
@@ -889,14 +984,12 @@ export const upgradeBookingDraftCheckpoint = (
     requestedTime: draft.requestedTime ?? null,
     note: draft.note,
     contactId: trimmedNonblank(draft.contactId),
+    contactDetails: draft.contactDetails ?? null,
     pendingCommand,
     rescheduleTarget,
     replacement,
   });
-  const canonical = constructBookingDraft({
-    ...withCommands,
-    phase: bookingDraftPhase(withCommands),
-  });
+  const canonical = { ...withCommands, phase: bookingDraftPhase(withCommands) };
   return {
     update: {
       ...stamp,
@@ -921,6 +1014,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   requestedTime: null,
   note: { status: "unasked" },
   contactId: null,
+  contactDetails: null,
   pendingCommand: null,
   rescheduleTarget: null,
   replacement: null,
@@ -1140,8 +1234,27 @@ export const reduceBookingDraft = (
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
     }
+    case "contact_field_submitted": {
+      const accepted = event.field === "phoneNumber"
+        ? normalizeClinicPhone(event.value)
+        : trimContactName(event.value);
+      if (accepted == null) {
+        return draft;
+      }
+      return withVersion(draft, {
+        ...draft,
+        contactDetails: {
+          ...(draft.contactDetails ?? {}),
+          [event.field]: accepted,
+        },
+      });
+    }
     case "contact_resolved":
-      return withVersion(draft, { ...draft, contactId: event.contactId });
+      return withVersion(draft, {
+        ...draft,
+        contactId: event.contactId,
+        contactDetails: null,
+      });
     case "contact_unresolved": {
       const next = {
         ...draft,

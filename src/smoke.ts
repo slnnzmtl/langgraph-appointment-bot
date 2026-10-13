@@ -1,7 +1,6 @@
 import "dotenv/config";
 
 import {
-  applyTracingPrivacyDefaults,
   flushTracing,
   startLangfuseTracing,
 } from "./analytics/track.js";
@@ -125,7 +124,6 @@ const main = async (): Promise<void> => {
       "✓ Write smoke isolated: telegram ids 9998…, contacts named Smoke Tester, reminder seeds use [SMOKE] meeting names",
     );
   }
-  applyTracingPrivacyDefaults();
   startLangfuseTracing();
   const runtime = await createClinicRuntime(config);
   let supportsDeleteEntity = false;

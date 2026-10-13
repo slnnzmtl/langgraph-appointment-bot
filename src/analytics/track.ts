@@ -1,6 +1,3 @@
-import { Client, getDefaultProjectName, isTracingEnabled } from "langsmith";
-import { getCurrentRunTree } from "langsmith/traceable";
-
 import { errorMessage, jsonEntityId, jsonErrorMessage, asJsonRecord } from "../shared/json-record.js";
 import { getTelegramUserId } from "../tools/telegram-user-context.js";
 import { emitLangfuseEvent, flushLangfuseTracing } from "./langfuse.js";
@@ -11,6 +8,7 @@ export const TIER1_EVENTS = [
   "contact_created",
   "contact_telegram_linked",
   "contact_updated",
+  "contact_write_failed",
   "availability_presented",
   "availability_cache_hit",
   "booking_date_selected",
@@ -45,7 +43,6 @@ export type BookingAction = "create" | "cancel" | "reschedule";
 export type TrackEventFn = (name: Tier1EventName, props: Record<string, unknown>) => void;
 
 let trackEventSpy: TrackEventFn | null = null;
-let sharedClient: Client | undefined;
 
 export const setTrackEventForTests = (fn: TrackEventFn | null): void => {
   trackEventSpy = fn;
@@ -62,53 +59,6 @@ const optionalTelegramUserId = (): string | undefined => {
   }
 };
 
-/**
- * When LangSmith tracing is on, hide LLM/tool inputs and outputs unless the operator opted in.
- * Call once at process start, before any LangSmith Client is constructed.
- * Does not hide metadata (telegram_user_id / chat_id stay). Explicit
- * LANGSMITH_HIDE_INPUTS / LANGSMITH_HIDE_OUTPUTS win via ??= .
- * Langfuse conversation capture is independent (on when LANGFUSE_TRACING is configured).
- */
-export const applyTracingPrivacyDefaults = (): void => {
-  if (!isTracingEnabled()) {
-    return;
-  }
-  if (process.env.LANGSMITH_TRACE_CONTENT === "true") {
-    return;
-  }
-  process.env.LANGSMITH_HIDE_INPUTS ??= "true";
-  process.env.LANGSMITH_HIDE_OUTPUTS ??= "true";
-};
-
-const getClient = (): Client => {
-  sharedClient ??= new Client({ hideInputs: false, hideOutputs: false });
-  return sharedClient;
-};
-
-const emitLangSmithRun = (name: Tier1EventName, props: Record<string, unknown>): void => {
-  if (!isTracingEnabled()) {
-    return;
-  }
-  const now = Date.now();
-  const parent = getCurrentRunTree(true);
-  const outcome = typeof props.outcome === "string" ? props.outcome : "success";
-  void getClient()
-    .createRun({
-      name,
-      run_type: "chain",
-      inputs: { event: name, ...props },
-      outputs: { outcome },
-      extra: { metadata: props },
-      project_name: getDefaultProjectName(),
-      start_time: now,
-      end_time: now,
-      ...(parent?.id ? { parent_run_id: parent.id } : {}),
-    })
-    .catch((error: unknown) => {
-      console.warn(`trackEvent LangSmith post failed (${name}): ${errorMessage(error)}`);
-    });
-};
-
 /** Named booking-funnel event. Never throws. PII-safe props only (ids, counts, dates, field names). */
 export const trackEvent: TrackEventFn = (name, props) => {
   try {
@@ -121,7 +71,6 @@ export const trackEvent: TrackEventFn = (name, props) => {
       trackEventSpy(name, merged);
       return;
     }
-    emitLangSmithRun(name, merged);
     emitLangfuseEvent(name, merged);
   } catch (error: unknown) {
     console.warn(`trackEvent failed (${name}): ${errorMessage(error)}`);
@@ -175,30 +124,11 @@ export const finishTrackedWrite = (
 };
 
 /**
- * Flush Langfuse (bounded) and LangSmith pending runs. Never throws past a warn.
+ * Flush Langfuse (bounded). Never throws past a warn.
  * Safe for SIGINT/SIGTERM and smoke finally — unreachable Langfuse must not hang exit.
  */
 export const flushTracing = async (): Promise<void> => {
   await flushLangfuseTracing();
-  if (!isTracingEnabled() || !sharedClient) {
-    return;
-  }
-  try {
-    const client = sharedClient as Client & {
-      flush?: () => Promise<void>;
-      flushPending?: () => Promise<void>;
-      awaitPendingTraceBatches?: () => Promise<void>;
-    };
-    if (typeof client.flush === "function") {
-      await client.flush();
-    } else if (typeof client.awaitPendingTraceBatches === "function") {
-      await client.awaitPendingTraceBatches();
-    } else if (typeof client.flushPending === "function") {
-      await client.flushPending();
-    }
-  } catch (error: unknown) {
-    console.warn(`LangSmith flush failed: ${errorMessage(error)}`);
-  }
 };
 
 export {

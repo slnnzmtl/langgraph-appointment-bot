@@ -16,10 +16,10 @@ import {
   formatKyivDayLabel,
   kyivToday,
 } from "../../tools/availability-slots.js";
-import { contactMissingFields } from "../../tools/contact-tools.js";
 import { trackEvent } from "../../analytics/track.js";
 import {
   BOOKING_AWAITING_CONFIRM_UK,
+  BOOKING_CONTACT_SAVE_FAILED_UK,
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_REPLACE_MENU,
   BOOKING_SCHEDULE_RESELECT_UK,
@@ -38,13 +38,16 @@ import {
   extractReplyButtons,
 } from "../../shared/message-content.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
-import { normalizeClinicPhone } from "../../shared/phone.js";
 import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
 import type { ServicesContext } from "../../tools/service-tools.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { reduceBookingDraft } from "../booking-draft.js";
+import {
+  bookingDraftCanPresentAvailability,
+  effectiveBookingContactDetails,
+  nextMissingContactField,
+  reduceBookingDraft,
+} from "../booking-draft.js";
 import { meetingServiceLabel } from "../context-blocks.js";
-import { bookingDraftCanPresentAvailability } from "../booking-draft.js";
 import {
   openCatalogFromFreeText,
   openRootFaqCatalog,
@@ -96,6 +99,7 @@ import {
   bookingOutcomeRiskState,
   classifyMeetingMutationToolMessage,
   createMeetingAlreadyBooked,
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   lastPatientText,
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
@@ -103,6 +107,7 @@ import {
   phoneCandidateHasLinkableRow,
   resolveAvailabilityOffer,
   resolveContactIdentity,
+  terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
 } from "./shared.js";
 
@@ -118,6 +123,62 @@ const bookingDetailsReady = (state: ClinicState): boolean => {
     && (draft.note.status === "skipped" || draft.note.status === "answered");
 };
 
+/** Effective identity for details / restore / known-field reopen. */
+const effectiveIdentityForState = (state: ClinicState) => {
+  const draft = state.bookingDraft;
+  const identity = resolveContactIdentity(state.contactContext, draft?.contactId);
+  const open =
+    state.pendingInteraction?.kind === "contact_field"
+      ? state.pendingInteraction
+      : null;
+  return {
+    identity,
+    details: effectiveBookingContactDetails({
+      crmContact: identity.kind === "owned" ? identity.contact : null,
+      contactDetails: draft?.contactDetails ?? null,
+      ...(open?.collected != null ? { collected: open.collected } : {}),
+    }),
+  };
+};
+
+/**
+ * Occupied-phone HITL: retry linking when the candidate row is free,
+ * otherwise reopen phoneNumber as occupied (never advance to names).
+ */
+const reopenOccupiedPhoneOrRetryLink = (
+  state: ClinicState,
+): { replyText: string; interaction: PendingInteraction } | null => {
+  const draft = state.bookingDraft;
+  if (draft == null) {
+    return null;
+  }
+  const { identity } = effectiveIdentityForState(state);
+  if (identity.kind === "phone_candidate" && phoneCandidateHasLinkableRow(identity)) {
+    return {
+      replyText: PATIENT_FALLBACK_MESSAGE,
+      interaction: state.pendingInteraction ?? {
+        kind: "contact_field",
+        field: "phoneNumber",
+        choices: [],
+      },
+    };
+  }
+  const session = reduceBookingSession(
+    {
+      bookingDraft: draft,
+      pendingInteraction: state.pendingInteraction ?? null,
+    },
+    { type: "contact_field_required", field: "phoneNumber", occupied: true },
+  );
+  if (session.pendingInteraction == null) {
+    return null;
+  }
+  return {
+    replyText: String(renderBookingInteractionMessage(session.pendingInteraction).content),
+    interaction: session.pendingInteraction,
+  };
+};
+
 /** Runtime-owned contact ladder once service, slot, and note are complete. */
 const bookingDetailsInteraction = (
   state: ClinicState,
@@ -126,50 +187,11 @@ const bookingDetailsInteraction = (
     return null;
   }
   const draft = state.bookingDraft!;
-  const identity = resolveContactIdentity(state.contactContext, draft.contactId);
-  let field: "phoneNumber" | "firstName" | "lastName" | null = null;
-  let occupied = false;
-  if (identity.kind === "unresolved") {
-    const open =
-      state.pendingInteraction?.kind === "contact_field"
-        ? state.pendingInteraction
-        : null;
-    const collected = open?.collected;
-    const latest = lastPatientText(state);
-    const latestPhone = normalizeClinicPhone(latest);
-    if (open?.field === "firstName") {
-      // Prepare stores accepted names on collected; asides leave the field open.
-      field = collected?.firstName ? "lastName" : "firstName";
-    } else if (open?.field === "lastName") {
-      if (collected?.lastName) {
-        // All three values are ready — release the field for create_contact.
-        return null;
-      }
-      field = "lastName";
-    } else if (latestPhone != null) {
-      field = "firstName";
-    } else {
-      field = "phoneNumber";
-    }
-  } else if (identity.kind === "phone_candidate") {
-    if (phoneCandidateHasLinkableRow(identity)) {
-      return {
-        replyText: PATIENT_FALLBACK_MESSAGE,
-        interaction: state.pendingInteraction ?? {
-          kind: "contact_field",
-          field: "phoneNumber",
-          choices: [],
-        },
-      };
-    }
-    field = "phoneNumber";
-    occupied = true;
-  } else {
-    const missingField = contactMissingFields(identity.contact)[0];
-    if (missingField === "firstName" || missingField === "lastName" || missingField === "phoneNumber") {
-      field = missingField;
-    }
+  const { identity, details } = effectiveIdentityForState(state);
+  if (identity.kind === "phone_candidate") {
+    return reopenOccupiedPhoneOrRetryLink(state);
   }
+  const field = nextMissingContactField(details);
   if (field == null) {
     return null;
   }
@@ -178,7 +200,7 @@ const bookingDetailsInteraction = (
       bookingDraft: draft,
       pendingInteraction: state.pendingInteraction ?? null,
     },
-    { type: "contact_field_required", field, occupied },
+    { type: "contact_field_required", field },
   );
   if (session.pendingInteraction == null) {
     return null;
@@ -306,6 +328,71 @@ export const createAgentFinalizeNode = (
     }
 
     if (!(lastMessage instanceof AIMessage)) {
+      // Failed contact write: terminal this turn; preserve identity; patient-safe copy.
+      if (agent.id === BOOKING_AGENT_ID) {
+        const contactWrite = terminalContactWriteOutcome(state);
+        if (contactWrite != null) {
+          const { classification } = contactWrite;
+          trackEvent("contact_write_failed", {
+            tool: classification.tool,
+            category: classification.category ?? classification.outcome,
+          });
+          const { details } = effectiveIdentityForState(state);
+          let pendingInteraction = state.pendingInteraction ?? null;
+          let replyText = BOOKING_CONTACT_SAVE_FAILED_UK;
+          let replyButtons: string[] = [];
+          if (classification.outcome === "known_field") {
+            if (classification.error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR) {
+              const occupied = reopenOccupiedPhoneOrRetryLink(state);
+              if (occupied != null) {
+                replyText = occupied.replyText;
+                pendingInteraction = occupied.interaction;
+                replyButtons = replyButtonsForInteraction(occupied.interaction);
+              }
+            } else {
+              // Same ladder as details-step: never reopen a field already on CRM∪draft∪collected.
+              const reopen = nextMissingContactField(details);
+              if (reopen != null) {
+                const session = reduceBookingSession(
+                  {
+                    bookingDraft: state.bookingDraft ?? null,
+                    pendingInteraction,
+                  },
+                  { type: "contact_field_required", field: reopen },
+                );
+                pendingInteraction = session.pendingInteraction;
+                if (pendingInteraction != null) {
+                  replyText = String(
+                    renderBookingInteractionMessage(pendingInteraction).content,
+                  );
+                  replyButtons = replyButtonsForInteraction(pendingInteraction);
+                }
+              } else {
+                pendingInteraction = null;
+              }
+            }
+          } else {
+            // Operational: clear completed contact_field; keep contactDetails + slot.
+            if (pendingInteraction?.kind === "contact_field") {
+              pendingInteraction = null;
+            }
+          }
+          return {
+            ...cleared,
+            ...confirmationCleanup,
+            pendingInteraction,
+            ...(replyText === BOOKING_PHONE_OCCUPIED_UK ? { contactContext: null } : {}),
+            messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
+            lastHandoff: {
+              agentId: agent.id,
+              agentName: agent.name,
+              status: "ok",
+              replyText,
+              ...(replyButtons.length > 0 ? { replyButtons } : {}),
+            },
+          };
+        }
+      }
       // Graph-owned REPLACE after prepare (no LLM turn): still open the menu.
       if (
         agent.id === BOOKING_AGENT_ID
@@ -897,8 +984,13 @@ export const createAgentFinalizeNode = (
           replyButtons = [returnLabel];
         }
       }
-    } else if (agent.id === BOOKING_AGENT_ID && replyText.length > 0) {
+    } else if (
+      agent.id === BOOKING_AGENT_ID
+      && replyText.length > 0
+      && detailsStep == null
+    ) {
       // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
+      // When detailsStep owns the handoff, do not reattach leftover mutation_confirm ✅/❌.
       const idle = agentMessages.some(
         (message) =>
           message instanceof ToolMessage
@@ -1080,7 +1172,9 @@ export const createAgentFinalizeNode = (
               renderBookingInteractionMessage(session.pendingInteraction).content,
             );
           }
-          replyButtons = replyButtonsForInteraction(session.pendingInteraction);
+          if (detailsStep == null) {
+            replyButtons = replyButtonsForInteraction(session.pendingInteraction);
+          }
           if (agent.id === FAQ_AGENT_ID) {
             yieldFlag = true;
           }
@@ -1089,6 +1183,7 @@ export const createAgentFinalizeNode = (
       }
     } else if (
       state.pendingInteraction?.kind === "service_confirm"
+      && detailsStep == null
       && !alreadyBooked
       && !slotOffer
       && replyButtons.length === 0
