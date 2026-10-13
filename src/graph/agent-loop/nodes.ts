@@ -48,6 +48,7 @@ import { asJsonRecord } from "../../shared/json-record.js";
 import {
   extractMessageTextContent,
   labelIdFor,
+  normalizeReplyLabel,
 } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import {
@@ -93,6 +94,7 @@ import {
 } from "../../shared/conversation-locale.js";
 import {
   faqNamedProcedureEntryForTurn,
+  openCatalogFromFreeText,
   openRootFaqCatalog,
 } from "../booking-entry-policy.js";
 
@@ -141,6 +143,7 @@ import {
   lastPatientText,
   latestCreateMeetingError,
   matchAvailabilityDay,
+  matchingCatalogRows,
   meetingMutationClearsAvailability,
   meetingMutationIsHitlDecline,
   noteStepBlocksCreate,
@@ -258,9 +261,44 @@ export const createAgentPrepareNode = (
             );
             update.pendingInteraction = session.pendingInteraction;
           }
+        } else if (patientText.length > 0) {
+          // Unmatched prose: rematch the full catalog (same helper as idle
+          // named_procedure / model open_catalog). one/many replaces the
+          // picker; none leaves chips for the FAQ LLM (price, compare, …).
+          let rematchServices = state.servicesContext?.list ?? [];
+          if (rematchServices.length === 0 && options?.loadServices != null) {
+            const loaded = await options.loadServices().catch(() => null);
+            if (loaded != null && loaded.list.length > 0) {
+              update.servicesContext = loaded;
+              rematchServices = loaded.list;
+            }
+          }
+          if (rematchServices.length > 0) {
+            const rematchSession = await openCatalogFromFreeText({
+              text: patientText,
+              services: rematchServices,
+              session: {
+                bookingDraft: state.bookingDraft ?? null,
+                pendingInteraction: interaction,
+              },
+              utterance: patientText,
+              ...(interaction.consultationDeclined === true
+                ? { consultationDeclined: true }
+                : {}),
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+              ...(options?.selectCandidates != null
+                ? { selectCandidates: options.selectCandidates }
+                : {}),
+            });
+            if (rematchSession?.pendingInteraction != null) {
+              handledCatalogChoice = true;
+              update.bookingDraft = rematchSession.bookingDraft;
+              update.pendingInteraction = rematchSession.pendingInteraction;
+            }
+          }
         }
-        // Unmatched prose on an open catalog reaches the FAQ LLM
-        // (`open_catalog` / keep_catalog / answer). No stem routing here.
       } else if (interaction?.kind === "catalog_detour") {
         const match = interpretInteractionReply(interaction, patientText);
         if (match.kind === "choice" && match.choiceId === "return_to_booking") {
@@ -1703,9 +1741,9 @@ export const routeAfterAgentPrepare = (
   ) {
     return finalizeName;
   }
-  // FAQ chips opened/narrowed by a chip tap, browse shortcut, or named_procedure
-  // entry in prepare — skip LLM. Free text on an already-open catalog reaches
-  // the FAQ model (may emit open_catalog).
+  // FAQ chips opened/narrowed by a chip tap, named_procedure, or mid-catalog
+  // rematch in prepare — skip LLM. Unmatched prose that did not rematch reaches
+  // the FAQ model (price / compare / keep_catalog).
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_candidate"
@@ -1720,14 +1758,22 @@ export const routeAfterAgentPrepare = (
     if (chipMatch.kind === "choice") {
       return finalizeName;
     }
-    // Named-procedure entry just opened these chips from the patient line.
-    if (state.supervisorIntent === "named_procedure") {
+    // Named-procedure entry or rematch just opened these chips from this line.
+    if (
+      state.supervisorIntent === "named_procedure"
+      || (
+        catalogText.length > 0
+        && normalizeReplyLabel(state.pendingInteraction.utterance)
+          === normalizeReplyLabel(catalogText)
+      )
+    ) {
       return finalizeName;
     }
   }
   // Graph-owned service_confirm from prepare. Do not skip when accepting («Так»).
-  // FAQ: only named_procedure (just opened the card) — price/info free text must
-  // reach the FAQ LLM. Booking: mainBook / owned-idle consultation open.
+  // FAQ: skip LLM only when this turn opened the card (named_procedure or
+  // patient line has CRM stems for the offered service). Price / compare on an
+  // already-open confirm reach faq__llm. Booking: mainBook / owned-idle.
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_confirm"
@@ -1741,17 +1787,25 @@ export const routeAfterAgentPrepare = (
     );
     if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
       const faqFinalize = finalizeName.includes("faq");
-      if (faqFinalize && state.supervisorIntent === "named_procedure") {
-        return finalizeName;
-      }
-      if (
-        !faqFinalize
-        && (
-          labelIdFor(bookText) === "mainBook"
-          || (
-            (state.bookingContext?.meetings.length ?? 0) === 0
-            && resolveContactIdentity(state.contactContext).kind === "owned"
-          )
+      if (faqFinalize) {
+        const offered = state.pendingInteraction.service;
+        const openedThisTurn =
+          state.supervisorIntent === "named_procedure"
+          || matchingCatalogRows(bookText, [{
+            id: offered.id,
+            name: offered.name,
+            ...(offered.durationMinutes != null
+              ? { duration: offered.durationMinutes }
+              : {}),
+          }]).length > 0;
+        if (openedThisTurn) {
+          return finalizeName;
+        }
+      } else if (
+        labelIdFor(bookText) === "mainBook"
+        || (
+          (state.bookingContext?.meetings.length ?? 0) === 0
+          && resolveContactIdentity(state.contactContext).kind === "owned"
         )
       ) {
         return finalizeName;

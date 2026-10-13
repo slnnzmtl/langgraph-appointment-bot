@@ -12,6 +12,7 @@ import {
   createAgentPrepareNode,
   routeAfterAgentPrepare,
 } from "../agent-loop.js";
+import { createEmptyBookingDraft } from "../booking-draft.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
 import {
@@ -368,6 +369,203 @@ describe("FAQ idle named_procedure catalog entry", () => {
     }));
     expect(loadCalls).toBe(0);
     expect(faq.pendingInteraction).toBeUndefined();
+  });
+
+  it("rematches collagen off open Botox chips without named_procedure", async () => {
+    const botoxChips = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "запиши на ботокс",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+        { id: "g1", label: "Nabota", serviceIds: ["n1", "n2"] },
+      ],
+    };
+    const services = {
+      list: [
+        ...botoxServices.list,
+        {
+          id: "svc-collagen",
+          name: "Колагеностимуляція Полімолочна кислота",
+          duration: 60,
+        },
+      ],
+    };
+    // Lexical-only (no family selector) — unique CRM stem hit → service_confirm.
+    const faq = await createAgentPrepareNode("faq")(clinicState({
+      messages: [new HumanMessage("запиши на колаген")],
+      servicesContext: services,
+      pendingInteraction: botoxChips,
+    }));
+    expect(faq.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: {
+        id: "svc-collagen",
+        name: "Колагеностимуляція Полімолочна кислота",
+      },
+    });
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("запиши на колаген")],
+          servicesContext: services,
+          bookingDraft: faq.bookingDraft ?? null,
+          pendingInteraction: faq.pendingInteraction ?? null,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__finalize");
+  });
+
+  it("keeps Botox chips and hits FAQ LLM on a price question", async () => {
+    const botoxChips = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "запиши на ботокс",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+        { id: "g1", label: "Nabota", serviceIds: ["n1", "n2"] },
+      ],
+    };
+    const faq = await createAgentPrepareNode("faq", {
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("Скільки коштує?")],
+      servicesContext: botoxServices,
+      pendingInteraction: botoxChips,
+    }));
+    expect(faq.pendingInteraction).toBeUndefined();
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("Скільки коштує?")],
+          servicesContext: botoxServices,
+          pendingInteraction: botoxChips,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+  });
+
+  it("does not call the family selector on compare prose with no CRM stems", async () => {
+    const botoxChips = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "запиши на ботокс",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+        { id: "g1", label: "Nabota", serviceIds: ["n1", "n2"] },
+      ],
+    };
+    const selectCandidates = vi.fn(async () => ({
+      serviceIds: ["z1", "z2", "n1", "n2"],
+      groups: [
+        { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+        { label: "Nabota", serviceIds: ["n1", "n2"] },
+      ],
+    }));
+    const faq = await createAgentPrepareNode("faq", {
+      selectCandidates,
+    })(clinicState({
+      messages: [new HumanMessage("Порівняй ціни цих варіантів")],
+      servicesContext: botoxServices,
+      pendingInteraction: botoxChips,
+    }));
+    expect(selectCandidates).not.toHaveBeenCalled();
+    expect(faq.pendingInteraction).toBeUndefined();
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("Порівняй ціни цих варіантів")],
+          servicesContext: botoxServices,
+          pendingInteraction: botoxChips,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+  });
+
+  it("hits FAQ LLM on a price question over an already-open service_confirm", () => {
+    const openConfirm = {
+      kind: "service_confirm" as const,
+      service: {
+        id: "z1",
+        name: "Ботулінотерапія Botox, Disport 1 зона",
+        source: "catalog" as const,
+      },
+      choices: [
+        { id: "accept", label: "Так" },
+        { id: "choose_other", label: "Обрати іншу процедуру" },
+      ],
+    };
+    const draft = {
+      ...createEmptyBookingDraft(),
+      serviceAcceptance: {
+        status: "pending" as const,
+        service: openConfirm.service,
+      },
+    };
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("Скільки коштує?")],
+          bookingDraft: draft,
+          pendingInteraction: openConfirm,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+  });
+
+  it("skips FAQ LLM when this turn opened service_confirm via CRM stems", () => {
+    const collagenConfirm = {
+      kind: "service_confirm" as const,
+      service: {
+        id: "svc-collagen",
+        name: "Колагеностимуляція Полімолочна кислота",
+        source: "catalog" as const,
+        durationMinutes: 60,
+      },
+      choices: [
+        { id: "accept", label: "Так" },
+        { id: "choose_other", label: "Обрати іншу процедуру" },
+      ],
+    };
+    const draft = {
+      ...createEmptyBookingDraft(),
+      serviceAcceptance: {
+        status: "pending" as const,
+        service: collagenConfirm.service,
+      },
+    };
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("запиши на колаген")],
+          bookingDraft: draft,
+          pendingInteraction: collagenConfirm,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__finalize");
   });
 
   it("accepts Так on FAQ-opened collagen service_confirm in booking prepare", async () => {

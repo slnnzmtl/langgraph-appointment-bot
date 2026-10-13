@@ -1769,7 +1769,7 @@ describe("createAgentPrepareNode", () => {
     expect(prepared.pendingInteraction).toBeUndefined();
   });
 
-  it("opens Ботулінотерапія brand chips via open_catalog query (not patient-stem prepare)", async () => {
+  it("rematches Ботулінотерапія brand chips from open root catalog free text", async () => {
     const familyIds = ["corr", "meso", "z1", "z2", "n1", "n2"] as const;
     let selectCalls = 0;
     let selectCandidateCount = 0;
@@ -1830,9 +1830,23 @@ describe("createAgentPrepareNode", () => {
         },
       }),
     );
-    // Prepare no longer stems free text — catalog unchanged in the update.
-    expect(selectCalls).toBe(0);
-    expect(prepared.pendingInteraction).toBeUndefined();
+    // Mid-catalog rematch: unmatched prose → openCatalogFromFreeText.
+    expect(selectCalls).toBe(1);
+    expect(selectCandidateCount).toBe(services.list.length);
+    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    const preparedNarrowed =
+      prepared.pendingInteraction?.kind === "service_candidate"
+        ? prepared.pendingInteraction
+        : null;
+    expect(preparedNarrowed?.owner).toBe("faq");
+    expect(preparedNarrowed?.consultationDeclined).toBe(true);
+    const preparedLabels = preparedNarrowed?.choices.map((c) => c.label) ?? [];
+    expect(preparedLabels).toEqual(
+      expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]),
+    );
+    expect(preparedLabels).not.toContain("Корекція ботокс");
+    expect(preparedLabels).not.toContain("Мезоботокс");
+    expect(preparedLabels).not.toContain(BOOKING_OFFER_MENU[0]);
 
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -1862,8 +1876,7 @@ describe("createAgentPrepareNode", () => {
         ],
       }),
     );
-    expect(selectCalls).toBe(1);
-    expect(selectCandidateCount).toBe(services.list.length);
+    expect(selectCalls).toBe(2);
     expect(update.pendingInteraction?.kind).toBe("service_candidate");
     const narrowed =
       update.pendingInteraction?.kind === "service_candidate"
@@ -2000,7 +2013,7 @@ describe("createAgentPrepareNode", () => {
     };
     const update = await createAgentFinalizeNode(faqAgent, {
       selectCandidates: async () => ({
-        serviceIds: ["z1", "z2", "n1", "n2"],
+        serviceIds: ["z1", "z2", "n1", "n2", "corr", "meso"],
         groups: [
           { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
           { label: "Nabota", serviceIds: ["n1", "n2"] },
@@ -2011,6 +2024,9 @@ describe("createAgentPrepareNode", () => {
         messages: [new HumanMessage("ботокс")],
         servicesContext: {
           list: [
+            // Stem «ботокс» hits these; selector expands to brand/zone siblings.
+            { id: "corr", name: "Корекція ботокс" },
+            { id: "meso", name: "Мезоботокс" },
             { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
             { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
             { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },

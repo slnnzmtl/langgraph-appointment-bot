@@ -699,7 +699,14 @@ export const resolveCatalogFreeText = async (input: {
     return { kind: "none" };
   }
 
+  // CRM stem evidence gates the family selector. Compare / price lines with no
+  // procedure stems must not call the selector on the full catalog (it invents
+  // a family). «ботокс» stems to a subset; the selector still sees all rows so
+  // it can expand to brand/zone siblings that do not share the patient token.
   const lexical = matchingCatalogRows(trimmed, input.rows);
+  if (lexical.length === 0) {
+    return { kind: "none" };
+  }
   if (lexical.length === 1) {
     const row = lexical[0]!;
     // Exact CRM title only — substring/stem hits fall through to the family selector.
