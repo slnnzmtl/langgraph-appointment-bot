@@ -205,6 +205,14 @@ export const stickyContinueAgentId = (
   }
   const human = lastHumanTextFromMessages(state.messages);
   const humanLine = lastHumanLineFromMessages(state.messages);
+  // «Так» on an open service offer always continues in booking (accept), even
+  // when FAQ opened the card after a REPLACE cancel catalog pick.
+  if (state.pendingInteraction?.kind === "service_confirm") {
+    const offerMatch = interpretInteractionReply(state.pendingInteraction, human);
+    if (offerMatch.kind === "choice" && offerMatch.choiceId === "accept") {
+      return BOOKING_AGENT_ID;
+    }
+  }
   // REPLACE cancel may open an FAQ-owned catalog while lastHandoff is still
   // booking — keep chip taps / free text on FAQ prepare.
   if (

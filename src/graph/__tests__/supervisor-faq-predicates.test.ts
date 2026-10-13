@@ -393,12 +393,12 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     expect(update.next).toBe("faq");
   });
 
-  it("routes free-text catalog browse via model intent=faq", async () => {
+  it("routes named booking free text via the supervisor LLM (no visit → faq)", async () => {
     const invoke = vi.fn();
     const supervisorLlm = {
       bindRoutingTools: vi.fn(() => ({ invoke })),
     } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({ next: "booking", intent: "faq" });
+    invoke.mockResolvedValue({ next: "faq", intent: "faq" });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -423,7 +423,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     );
 
     expect(invoke).toHaveBeenCalledOnce();
-    expect(update).toMatchObject({ next: "faq", lastHandoff: null });
+    expect(update.next).toBe("faq");
   });
 });
 

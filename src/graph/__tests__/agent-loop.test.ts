@@ -194,11 +194,11 @@ const faqCatalogAi = (
 };
 
 describe("formatBookingMeetingsContext", () => {
-  it("returns an empty string when context is missing", () => {
+  it("returns an empty string when context is missing", async () => {
     expect(formatBookingMeetingsContext(null)).toBe("");
   });
 
-  it("renders an empty meetings list so the model does not re-fetch", () => {
+  it("renders an empty meetings list so the model does not re-fetch", async () => {
     const block = formatBookingMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain('"meetings":[]');
@@ -206,7 +206,7 @@ describe("formatBookingMeetingsContext", () => {
     expect(block).not.toContain("When moving or cancelling");
   });
 
-  it("wraps the list payload for uncached system metadata", () => {
+  it("wraps the list payload for uncached system metadata", async () => {
     const block = formatBookingMeetingsContext(listedMeetings);
     expect(block).toContain("<list_planned_meetings>");
     expect(block).toContain("</list_planned_meetings>");
@@ -216,7 +216,7 @@ describe("formatBookingMeetingsContext", () => {
     expect(block).toContain('"latestHeld":null');
   });
 
-  it("includes latestHeld without visitLabel when prefetch set a past visit", () => {
+  it("includes latestHeld without visitLabel when prefetch set a past visit", async () => {
     const block = formatBookingMeetingsContext({
       ...listedMeetings,
       latestHeld: {
@@ -231,7 +231,7 @@ describe("formatBookingMeetingsContext", () => {
     expect(block).not.toMatch(/"latestHeld":\{[^}]*"visitLabel"/);
   });
 
-  it("adds a ready-to-quote Ukrainian visitLabel so the model does not format dates", () => {
+  it("adds a ready-to-quote Ukrainian visitLabel so the model does not format dates", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
@@ -249,7 +249,7 @@ describe("formatBookingMeetingsContext", () => {
     }
   });
 
-  it("adds visitLabel from CRM name (service before last ' - '), not chat", () => {
+  it("adds visitLabel from CRM name (service before last ' - '), not chat", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
@@ -280,7 +280,7 @@ describe("formatBookingMeetingsContext", () => {
 });
 
 describe("formatPlannedVisitsFlag", () => {
-  it("emits visits has/none under the meetings tag", () => {
+  it("emits visits has/none under the meetings tag", async () => {
     expect(formatPlannedVisitsFlag(null)).toBe(
       '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
     );
@@ -292,7 +292,7 @@ describe("formatPlannedVisitsFlag", () => {
     );
   });
 
-  it("ignores latestHeld — visits stays none when only history exists", () => {
+  it("ignores latestHeld — visits stays none when only history exists", async () => {
     expect(
       formatPlannedVisitsFlag({
         meetings: [],
@@ -309,7 +309,7 @@ describe("formatPlannedVisitsFlag", () => {
 });
 
 describe("attachPrefetchVisits", () => {
-  it("replaces visit-ask with formatMyVisitReply", () => {
+  it("replaces visit-ask with formatMyVisitReply", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
@@ -321,7 +321,7 @@ describe("attachPrefetchVisits", () => {
     }
   });
 
-  it("injects prefetch lines on greeting even without a visit heading", () => {
+  it("injects prefetch lines on greeting even without a visit heading", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
@@ -338,7 +338,7 @@ describe("attachPrefetchVisits", () => {
     }
   });
 
-  it("does not inject a list on other FINISH (thanks)", () => {
+  it("does not inject a list on other FINISH (thanks)", async () => {
     const out = attachPrefetchVisits(
       "Будь ласка! Чим ще можу допомогти?",
       listedMeetings,
@@ -350,7 +350,7 @@ describe("attachPrefetchVisits", () => {
 });
 
 describe("formatMyVisitReply", () => {
-  it("lists prefetch labels and asks to move or cancel", () => {
+  it("lists prefetch labels and asks to move or cancel", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
@@ -364,24 +364,24 @@ describe("formatMyVisitReply", () => {
 });
 
 describe("formatContactContext", () => {
-  it("returns an empty string when context is missing", () => {
+  it("returns an empty string when context is missing", async () => {
     expect(formatContactContext(null)).toBe("");
   });
 
-  it("renders an empty contacts list so the model does not re-fetch", () => {
+  it("renders an empty contacts list so the model does not re-fetch", async () => {
     const block = formatContactContext({ contacts: [] });
     expect(block).toContain("<contact_info>");
     expect(block).toContain('"contacts":[]');
   });
 
-  it("renders error lookups as a completed prefetch block", () => {
+  it("renders error lookups as a completed prefetch block", async () => {
     const block = formatContactContext({ contacts: [], error: "CRM down" });
     expect(block).toContain("<contact_info>");
     expect(block).toContain('"lookupFailed":true');
     expect(block).not.toContain("CRM down");
   });
 
-  it("wraps the contact payload for uncached system metadata", () => {
+  it("wraps the contact payload for uncached system metadata", async () => {
     const block = formatContactContext(listedContact);
     expect(block).toContain("<contact_info>");
     expect(block).toContain("</contact_info>");
@@ -487,7 +487,7 @@ describe("createAgentPrepareNode", () => {
       ),
     ).toBe("booking__finalize");
 
-    const finalized = createAgentFinalizeNode(bookingAgent)(effectiveState);
+    const finalized = await createAgentFinalizeNode(bookingAgent)(effectiveState);
     expect(finalized.pendingInteraction).toMatchObject({
       kind: "visit_select",
       stage: "replacement",
@@ -711,7 +711,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
 
     const finalize = createAgentFinalizeNode(bookingAgent);
-    const rendered = finalize(
+    const rendered = await finalize(
       clinicState({
         messages: [new HumanMessage("запиши на колаген")],
         bookingContext: listedMeetings,
@@ -799,7 +799,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.pendingInteraction).toBeNull();
   });
 
-  it("switches an open consultation offer to collagen on booking free-text", async () => {
+  it("leaves unmatched free text on an open booking offer for the booking LLM", async () => {
     const prepare = createAgentPrepareNode("booking");
     const offered = reduceBookingSession(
       { bookingDraft: null, pendingInteraction: null },
@@ -832,27 +832,23 @@ describe("createAgentPrepareNode", () => {
         }),
       );
 
-      expect(update.pendingInteraction).toMatchObject({
+      // No stem routing — offer stays pending for the booking LLM.
+      expect(update.pendingInteraction ?? offered.pendingInteraction).toMatchObject({
         kind: "service_confirm",
-        service: {
-          id: "svc-collagen",
-          name: "Колагеностимуляція Полімолочна кислота",
-        },
+        service: { id: CONSULTATION_SERVICE_ID },
       });
-      expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-        status: "pending",
-        service: { id: "svc-collagen" },
-      });
+      expect(update.bookingDraft?.serviceAcceptance?.service.id ?? offered.bookingDraft?.serviceAcceptance?.service.id)
+        .toBe(CONSULTATION_SERVICE_ID);
     }
   });
 
-  it("finalize renders REPLACE after prepare offers an existing visit", () => {
+  it("finalize renders REPLACE after prepare offers an existing visit", async () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "existing_booking_detected",
       meeting: listedMeetings.meetings[0]!,
     });
     const finalize = createAgentFinalizeNode(bookingAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Записатись")],
         bookingContext: listedMeetings,
@@ -1020,7 +1016,7 @@ describe("createAgentPrepareNode", () => {
     ).toBe("booking__finalize");
 
     const finalize = createAgentFinalizeNode(bookingAgent);
-    const rendered = finalize(
+    const rendered = await finalize(
       clinicState({
         bookingDraft: update.bookingDraft,
         pendingInteraction: update.pendingInteraction,
@@ -1085,7 +1081,7 @@ describe("createAgentPrepareNode", () => {
     expect(update.pendingCancellationPurpose).toBeUndefined();
   });
 
-  it("routes post-slots replacement cancel to finalize, not mutation finalize", () => {
+  it("routes post-slots replacement cancel to finalize, not mutation finalize", async () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",
       service: {
@@ -1172,7 +1168,7 @@ describe("createAgentPrepareNode", () => {
     ).toBe("booking__finalize");
   });
 
-  it("finalize after replacement cancel+slots shows cancel note and date menu", () => {
+  it("finalize after replacement cancel+slots shows cancel note and date menu", async () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",
       service: {
@@ -1241,7 +1237,7 @@ describe("createAgentPrepareNode", () => {
         name: "present_availability_slots",
       }),
     ];
-    const update = createAgentFinalizeNode(bookingAgent)(
+    const update = await createAgentFinalizeNode(bookingAgent)(
       clinicState({
         bookingDraft: draft,
         pendingInteraction: null,
@@ -1378,21 +1374,28 @@ describe("createAgentPrepareNode", () => {
     });
   });
 
-  it("offers the collagen procedure when patient types запиши на коллаген on an open offer", async () => {
-    const prepare = createAgentPrepareNode("faq");
-    const update = await prepare(
+  it("offers collagen via open_catalog when the FAQ model names the procedure", async () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const services = {
+      list: [
+        {
+          id: "svc-collagen",
+          name: "Колагеностимуляція Полімолочна кислота",
+          duration: 60,
+        },
+        { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
+      ],
+    };
+    const update = await createAgentFinalizeNode(faqAgent)(
       clinicState({
         messages: [new HumanMessage("запиши на коллаген")],
-        servicesContext: {
-          list: [
-            {
-              id: "svc-collagen",
-              name: "Колагеностимуляція Полімолочна кислота",
-              duration: 60,
-            },
-            { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
-          ],
-        },
+        servicesContext: services,
         pendingInteraction: {
           kind: "service_confirm",
           service: {
@@ -1405,6 +1408,11 @@ describe("createAgentPrepareNode", () => {
             { id: "choose_other", label: "Обрати іншу процедуру" },
           ],
         },
+        agentMessages: [
+          new AIMessage(
+            'Обрано колаген.\n<faq_catalog_action action="open_catalog" query="колаген"/>',
+          ),
+        ],
       }),
     );
 
@@ -1417,9 +1425,15 @@ describe("createAgentPrepareNode", () => {
     });
   });
 
-  it("offers collagen when patient declines consultation and names the procedure", async () => {
-    const prepare = createAgentPrepareNode("faq");
-    const update = await prepare(
+  it("offers collagen via open_catalog after a named decline line", async () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const update = await createAgentFinalizeNode(faqAgent)(
       clinicState({
         messages: [new HumanMessage("ні, запиши на колагеностимуляцію")],
         servicesContext: {
@@ -1447,6 +1461,11 @@ describe("createAgentPrepareNode", () => {
             },
           ],
         },
+        agentMessages: [
+          new AIMessage(
+            'Обрано.\n<faq_catalog_action action="open_catalog" query="колагеностимуляцію"/>',
+          ),
+        ],
       }),
     );
 
@@ -1585,6 +1604,16 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("leaves unmatched mid-catalog text for the FAQ model (no phrase matcher)", async () => {
+    const openCatalog = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "Botox, Disport",
+      choices: [
+        { id: "z1", label: "1 зона", serviceIds: ["z1"] },
+        { id: "z2", label: "2 зони", serviceIds: ["z2"] },
+        { id: "ff", label: "Full Face", serviceIds: ["z1", "z2"] },
+      ],
+    };
     const prepare = createAgentPrepareNode("faq");
     const prepared = await prepare(
       clinicState({
@@ -1595,41 +1624,32 @@ describe("createAgentPrepareNode", () => {
             { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
           ],
         },
-        pendingInteraction: {
-          kind: "service_candidate",
-          owner: "faq",
-          utterance: "Botox, Disport",
-          choices: [
-            { id: "z1", label: "1 зона", serviceIds: ["z1"] },
-            { id: "z2", label: "2 зони", serviceIds: ["z2"] },
-            { id: "ff", label: "Full Face", serviceIds: ["z1", "z2"] },
-          ],
-        },
+        pendingInteraction: openCatalog,
       }),
     );
 
-    // Questions / hedge text stay model-owned — catalog unchanged.
+    // Hedge text is not chip-matched — prepare leaves the open catalog alone.
     expect(prepared.pendingInteraction).toBeUndefined();
   });
 
-  it("opens Ботулінотерапія brand chips for «ботокс» despite lexical «ботокс» titles", async () => {
+  it("opens Ботулінотерапія brand chips via open_catalog query (not patient-stem prepare)", async () => {
     const familyIds = ["corr", "meso", "z1", "z2", "n1", "n2"] as const;
     let selectCalls = 0;
     let selectCandidateCount = 0;
-    const prepare = createAgentPrepareNode("faq", {
-      selectCandidates: async (input) => {
-        selectCalls += 1;
-        selectCandidateCount = input.candidates.length;
-        return {
-          serviceIds: [...familyIds],
-          groups: [
-            { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
-            { label: "Nabota", serviceIds: ["n1", "n2"] },
-            { label: "Інше", serviceIds: ["corr", "meso"] },
-          ],
-        };
-      },
-    });
+    const selectCandidates = async (input: {
+      candidates: Array<{ id: string }>;
+    }) => {
+      selectCalls += 1;
+      selectCandidateCount = input.candidates.length;
+      return {
+        serviceIds: [...familyIds],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+          { label: "Інше", serviceIds: ["corr", "meso"] },
+        ],
+      };
+    };
     const services = {
       list: [
         { id: "c1", name: "Консультація первинна" },
@@ -1659,6 +1679,7 @@ describe("createAgentPrepareNode", () => {
         serviceIds: ["p1"],
       },
     ];
+    const prepare = createAgentPrepareNode("faq", { selectCandidates });
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("ботокс")],
@@ -1672,21 +1693,9 @@ describe("createAgentPrepareNode", () => {
         },
       }),
     );
-
-    expect(selectCalls).toBe(1);
-    expect(selectCandidateCount).toBe(services.list.length);
-    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
-    const narrowed =
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction
-        : null;
-    expect(narrowed?.owner).toBe("faq");
-    expect(narrowed?.consultationDeclined).toBe(true);
-    const labels = narrowed?.choices.map((c) => c.label) ?? [];
-    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
-    expect(labels).not.toContain("Корекція ботокс");
-    expect(labels).not.toContain("Мезоботокс");
-    expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
+    // Prepare no longer stems free text — catalog unchanged in the update.
+    expect(selectCalls).toBe(0);
+    expect(prepared.pendingInteraction).toBeUndefined();
 
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -1695,40 +1704,59 @@ describe("createAgentPrepareNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const finalize = createAgentFinalizeNode(faqAgent, { selectCandidates });
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("ботокс")],
         servicesContext: services,
-        pendingInteraction: prepared.pendingInteraction ?? null,
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          consultationDeclined: true,
+          choices: rootChoices,
+        },
         agentMessages: [
-          faqCatalogAi(
-            "В ін'єкційній косметології доступні такі варіанти ботулінотерапії:",
-            "keep_catalog",
+          new AIMessage(
+            'В ін\'єкційній косметології доступні такі варіанти ботулінотерапії:\n'
+            + '<faq_catalog_action action="open_catalog" query="ботокс"/>',
           ),
         ],
       }),
     );
+    expect(selectCalls).toBe(1);
+    expect(selectCandidateCount).toBe(services.list.length);
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
+    const narrowed =
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction
+        : null;
+    expect(narrowed?.owner).toBe("faq");
+    expect(narrowed?.consultationDeclined).toBe(true);
+    const labels = narrowed?.choices.map((c) => c.label) ?? [];
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
+    expect(labels).not.toContain("Корекція ботокс");
+    expect(labels).not.toContain("Мезоботокс");
+    expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
     expect(update.lastHandoff?.replyButtons).toEqual(labels);
-    expect(update.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
   });
 
-  it("expands already-narrow «ботокс» chips via full-catalog selector", async () => {
+  it("expands already-narrow chips via open_catalog query on full catalog", async () => {
     let selectCandidateIds: string[] = [];
-    const prepare = createAgentPrepareNode("faq", {
-      selectCandidates: async (input) => {
-        selectCandidateIds = input.candidates.map((row) => row.id);
-        return {
-          serviceIds: ["corr", "meso", "z1", "z2", "n1", "n2"],
-          groups: [
-            { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
-            { label: "Nabota", serviceIds: ["n1", "n2"] },
-            { label: "Інше", serviceIds: ["corr", "meso"] },
-          ],
-        };
-      },
-    });
+    const selectCandidates = async (input: {
+      candidates: Array<{ id: string }>;
+    }) => {
+      selectCandidateIds = input.candidates.map((row) => row.id);
+      return {
+        serviceIds: ["corr", "meso", "z1", "z2", "n1", "n2"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+          { label: "Інше", serviceIds: ["corr", "meso"] },
+        ],
+      };
+    };
     const services = {
       list: [
         { id: "corr", name: "Корекція ботокс" },
@@ -1739,7 +1767,14 @@ describe("createAgentPrepareNode", () => {
         { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
       ],
     };
-    const prepared = await prepare(
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const update = await createAgentFinalizeNode(faqAgent, { selectCandidates })(
       clinicState({
         messages: [new HumanMessage("ботулінотерапія")],
         servicesContext: services,
@@ -1753,26 +1788,37 @@ describe("createAgentPrepareNode", () => {
             { id: "meso", label: "Мезоботокс", serviceIds: ["meso"] },
           ],
         },
+        agentMessages: [
+          new AIMessage(
+            'Ось бренди:\n<faq_catalog_action action="open_catalog" query="ботулінотерапія"/>',
+          ),
+        ],
       }),
     );
     expect(selectCandidateIds).toEqual(["corr", "meso", "z1", "z2", "n1", "n2"]);
     const labels =
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction.choices.map((c) => c.label)
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
         : [];
     expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota", "Інше"]));
     expect(labels).not.toEqual(["Корекція ботокс", "Мезоботокс"]);
   });
 
-  it("offers exact CRM name without calling selectCandidates", async () => {
+  it("offers exact CRM name via open_catalog without calling selectCandidates", async () => {
     let selectCalls = 0;
-    const prepare = createAgentPrepareNode("faq", {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const update = await createAgentFinalizeNode(faqAgent, {
       selectCandidates: async () => {
         selectCalls += 1;
         return { serviceIds: ["z1", "n1"] };
       },
-    });
-    const prepared = await prepare(
+    })(
       clinicState({
         messages: [new HumanMessage("Корекція ботокс")],
         servicesContext: {
@@ -1791,19 +1837,31 @@ describe("createAgentPrepareNode", () => {
             { id: "g0", label: "Ін'єкційна", serviceIds: ["corr", "z1", "n1"] },
           ],
         },
+        agentMessages: [
+          new AIMessage(
+            'Обрано:\n<faq_catalog_action action="open_catalog" query="Корекція ботокс"/>',
+          ),
+        ],
       }),
     );
     expect(selectCalls).toBe(0);
-    expect(prepared.pendingInteraction?.kind).toBe("service_confirm");
+    expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(
-      prepared.pendingInteraction?.kind === "service_confirm"
-        ? prepared.pendingInteraction.service.id
+      update.pendingInteraction?.kind === "service_confirm"
+        ? update.pendingInteraction.service.id
         : null,
     ).toBe("corr");
   });
 
-  it("narrows open service_confirm on Cyrillic «ботокс» via selectCandidates", async () => {
-    const prepare = createAgentPrepareNode("faq", {
+  it("narrows open service_confirm via open_catalog query", async () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const update = await createAgentFinalizeNode(faqAgent, {
       selectCandidates: async () => ({
         serviceIds: ["z1", "z2", "n1", "n2"],
         groups: [
@@ -1811,8 +1869,7 @@ describe("createAgentPrepareNode", () => {
           { label: "Nabota", serviceIds: ["n1", "n2"] },
         ],
       }),
-    });
-    const prepared = await prepare(
+    })(
       clinicState({
         messages: [new HumanMessage("ботокс")],
         servicesContext: {
@@ -1835,13 +1892,18 @@ describe("createAgentPrepareNode", () => {
             { id: "choose_other", label: "Обрати іншу процедуру" },
           ],
         },
+        agentMessages: [
+          new AIMessage(
+            'Варіанти ботоксу:\n<faq_catalog_action action="open_catalog" query="ботокс"/>',
+          ),
+        ],
       }),
     );
 
-    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
     const labels =
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction.choices.map((c) => c.label)
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
         : [];
     expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
     expect(labels).not.toContain(BOOKING_OFFER_MENU[0]);
@@ -1880,7 +1942,95 @@ describe("createAgentPrepareNode", () => {
     expect(prepared.pendingInteraction).toBeUndefined();
   });
 
-  it("opens FAQ family chips from booking prepare on «запиши на ботокс»", async () => {
+  it("opens FAQ family chips from open_catalog tag (idle browse)", async () => {
+    const services = {
+      list: [
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
+        { id: "c1", name: "Корекція ботокс" },
+        { id: "m1", name: "Мезоботокс" },
+      ],
+    };
+    const prepare = createAgentPrepareNode("faq", {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2", "n1", "n2", "c1", "m1"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+        ],
+      }),
+    });
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: services,
+      }),
+    );
+    expect(prepared.pendingInteraction).toBeUndefined();
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("запиши на ботокс")],
+          servicesContext: services,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 6,
+    };
+    const finalize = createAgentFinalizeNode(faqAgent, {
+      selectCandidates: async () => ({
+        serviceIds: ["z1", "z2", "n1", "n2", "c1", "m1"],
+        groups: [
+          { label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+          { label: "Nabota", serviceIds: ["n1", "n2"] },
+        ],
+      }),
+    });
+    const update = await finalize(
+      clinicState({
+        messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: services,
+        agentMessages: [
+          new AIMessage(
+            'Можу показати варіанти.\n<faq_catalog_action action="open_catalog" query="ботокс"/>',
+          ),
+        ],
+      }),
+    );
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.owner
+        : null,
+    ).toBe("faq");
+    expect(
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.consultationDeclined
+        : null,
+    ).toBe(true);
+    const labels =
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(update.lastHandoff?.replyButtons).toEqual(labels);
+    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
+    expect(update.lastHandoff?.replyButtons).not.toContain(BOOKING_OFFER_MENU[0]);
+    expect(update.lastHandoff?.replyText).toContain("•");
+  });
+
+  it("does not open catalog chips from idle booking prepare on «запиши на ботокс»", async () => {
     const prepare = createAgentPrepareNode("booking", {
       selectCandidates: async () => ({
         serviceIds: ["z1", "z2", "n1", "n2"],
@@ -1890,71 +2040,24 @@ describe("createAgentPrepareNode", () => {
         ],
       }),
     });
-    const services = {
-      list: [
-        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
-        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
-        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
-        { id: "n2", name: "Ботулінотерапія Nabota 2 зони" },
-      ],
-    };
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("запиши на ботокс")],
-        servicesContext: services,
+        servicesContext: {
+          list: [
+            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+          ],
+        },
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+        contactContext: { contacts: [] },
       }),
     );
-    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
-    expect(
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction.owner
-        : null,
-    ).toBe("faq");
-    expect(
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction.consultationDeclined
-        : null,
-    ).toBe(true);
+    expect(prepared.pendingInteraction?.kind ?? null).not.toBe("service_candidate");
     expect(prepared.bookingDraft?.serviceAcceptance ?? null).toBeNull();
-
-    const merged = clinicState({
-      messages: [new HumanMessage("запиши на ботокс")],
-      servicesContext: services,
-      pendingInteraction: prepared.pendingInteraction ?? null,
-      bookingDraft: prepared.bookingDraft ?? null,
-      agentMessages: [],
-    });
-    expect(
-      routeAfterAgentPrepare(
-        merged,
-        "booking__llm",
-        "booking__command_prepare",
-        undefined,
-        "booking__finalize",
-      ),
-    ).toBe("booking__finalize");
-
-    const bookingAgent: ClinicAgentDefinition = {
-      id: "booking",
-      name: "Booking",
-      description: "Books",
-      systemPrompt: "booking",
-      maxSteps: 6,
-    };
-    const finalize = createAgentFinalizeNode(bookingAgent);
-    const update = finalize(merged);
-    const labels =
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction.choices.map((c) => c.label)
-        : [];
-    expect(update.lastHandoff?.replyButtons).toEqual(labels);
-    expect(labels).toEqual(expect.arrayContaining(["Botox, Disport", "Nabota"]));
-    expect(update.lastHandoff?.replyButtons).not.toContain(BOOKING_OFFER_MENU[0]);
-    expect(update.lastHandoff?.replyText).toContain("•");
-    expect(update.lastHandoff?.replyText).not.toContain("Запис скасовано.");
   });
 
-  it("offeredServiceForTurn returns null when several rows match lexically", () => {
+  it("offeredServiceForTurn returns null when several rows match lexically", async () => {
     const offered = offeredServiceForTurn(
       clinicState({
         messages: [new HumanMessage("botox")],
@@ -1972,31 +2075,26 @@ describe("createAgentPrepareNode", () => {
     expect(offered).toBeNull();
   });
 
-  it("reopens FAQ catalog chips when patient types a brand after consultation offer", async () => {
-    const prepare = createAgentPrepareNode("faq", {
-      selectCandidates: async () => ({
-        serviceIds: ["z1", "z2"],
-        groups: [
-          { label: "1 зона", serviceIds: ["z1"] },
-          { label: "2 зони", serviceIds: ["z2"] },
-        ],
-      }),
-      partitionCandidates: async () => [
+  it("reopens FAQ catalog chips via open_catalog after a brand on consultation offer", async () => {
+    const selectCandidates = async () => ({
+      serviceIds: ["z1", "z2"],
+      groups: [
         { label: "1 зона", serviceIds: ["z1"] },
         { label: "2 зони", serviceIds: ["z2"] },
-        { label: "FULL FACE", serviceIds: ["z1", "z2"] },
       ],
     });
+    const services = {
+      list: [
+        { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я)" },
+        { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
+        { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+      ],
+    };
+    const prepare = createAgentPrepareNode("faq", { selectCandidates });
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("botox")],
-        servicesContext: {
-          list: [
-            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я)" },
-            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
-            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
-          ],
-        },
+        servicesContext: services,
         pendingInteraction: {
           kind: "service_confirm",
           service: {
@@ -2011,14 +2109,7 @@ describe("createAgentPrepareNode", () => {
         },
       }),
     );
-
-    expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
-    const preparedLabels =
-      prepared.pendingInteraction?.kind === "service_candidate"
-        ? prepared.pendingInteraction.choices.map((c) => c.label)
-        : [];
-    expect(preparedLabels.length).toBeGreaterThan(1);
-    expect(preparedLabels).not.toEqual([...BOOKING_OFFER_MENU]);
+    expect(prepared.pendingInteraction).toBeUndefined();
 
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -2027,33 +2118,44 @@ describe("createAgentPrepareNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const finalize = createAgentFinalizeNode(faqAgent, { selectCandidates });
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("botox")],
-        servicesContext: {
-          list: [
-            { id: "z1", name: "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я)" },
-            { id: "z2", name: "Ботулінотерапія Botox, Disport 2 зони" },
-            { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
+        servicesContext: services,
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
           ],
         },
-        pendingInteraction: prepared.pendingInteraction ?? null,
         agentMessages: [
-          faqCatalogAi(
+          new AIMessage(
             [
               "Для Botox/Disport доступні варіанти за зонами:",
               "• 1 зона (очі або міжбрів'я)",
               "• 2 зони",
               "",
-              "Яка зона вас цікавить?",
+              '<faq_catalog_action action="open_catalog" query="botox"/>',
             ].join("\n"),
-            "keep_catalog",
           ),
         ],
       }),
     );
+    expect(update.pendingInteraction?.kind).toBe("service_candidate");
+    const preparedLabels =
+      update.pendingInteraction?.kind === "service_candidate"
+        ? update.pendingInteraction.choices.map((c) => c.label)
+        : [];
+    expect(preparedLabels.length).toBeGreaterThan(1);
+    expect(preparedLabels).not.toEqual([...BOOKING_OFFER_MENU]);
 
     expect(update.lastHandoff?.replyButtons).toEqual(preparedLabels);
     expect(update.lastHandoff?.replyButtons).not.toEqual([...BOOKING_OFFER_MENU]);
@@ -2384,7 +2486,7 @@ describe("booking session mutation lifecycle", () => {
     }),
   ];
 
-  it("closes create and reschedule sessions on committed or declined outcomes", () => {
+  it("closes create and reschedule sessions on committed or declined outcomes", async () => {
     const finalize = createAgentMutationFinalizeNode(agent);
     for (const [name, content] of [
       ["create_meeting", { id: "m-1", success: true }],
@@ -2392,7 +2494,7 @@ describe("booking session mutation lifecycle", () => {
       ["reschedule_meeting", { id: "m-1", success: true }],
       ["reschedule_meeting", { cancelled: true }],
     ] as const) {
-      const update = finalize(clinicState({
+      const update = await finalize(clinicState({
         bookingDraft: canonicalBookingDraft(),
         agentMessages: mutationMessages(name, content),
       }));
@@ -2446,13 +2548,13 @@ describe("booking session mutation lifecycle", () => {
     });
   });
 
-  it("closes direct cancel on failed or blocked outcomes", () => {
+  it("closes direct cancel on failed or blocked outcomes", async () => {
     const finalize = createAgentMutationFinalizeNode(agent);
     for (const content of [
       { error: "CRM unavailable" },
       { error: "Contact incomplete" },
     ]) {
-      const update = finalize(clinicState({
+      const update = await finalize(clinicState({
         bookingDraft: {
           ...createEmptyBookingDraft(),
           phase: "confirming",
@@ -2468,7 +2570,7 @@ describe("booking session mutation lifecycle", () => {
     }
   });
 
-  it("closes replacement cancel failures without replaying originalCommand", () => {
+  it("closes replacement cancel failures without replaying originalCommand", async () => {
     const finalize = createAgentMutationFinalizeNode(agent);
     const originalCommand = {
       action: "create" as const,
@@ -2479,7 +2581,7 @@ describe("booking session mutation lifecycle", () => {
         dateEnd: "2026-09-10T14:30:00",
       },
     };
-    const update = finalize(clinicState({
+    const update = await finalize(clinicState({
       bookingDraft: canonicalBookingDraft({
         mode: "replace",
         phase: "confirming",
@@ -2553,7 +2655,7 @@ describe("booking session mutation lifecycle", () => {
     expect(finalUpdate.bookingDraft).toBeNull();
   });
 
-  it("ignores main-menu text while advancing the note step", () => {
+  it("ignores main-menu text while advancing the note step", async () => {
     expect(advanceBookingNoteStep(clinicState({
       messages: [new HumanMessage(MAIN_MENU_LABEL)],
       bookingDraft: canonicalBookingDraft({
@@ -2564,7 +2666,7 @@ describe("booking session mutation lifecycle", () => {
 });
 
 describe("crmWriteDirtiesPrefetch", () => {
-  it("is true for a successful CRM write tool result", () => {
+  it("is true for a successful CRM write tool result", async () => {
     expect(
       crmWriteDirtiesPrefetch([
         new ToolMessage({
@@ -2576,7 +2678,7 @@ describe("crmWriteDirtiesPrefetch", () => {
     ).toBe(true);
   });
 
-  it("is false for HITL pending, errors, and read tools", () => {
+  it("is false for HITL pending, errors, and read tools", async () => {
     expect(
       crmWriteDirtiesPrefetch([
         new ToolMessage({
@@ -2644,7 +2746,7 @@ describe("availability context helpers", () => {
     stepMinutes: 30,
   };
 
-  it("classifies meeting mutation outcomes", () => {
+  it("classifies meeting mutation outcomes", async () => {
     expect(
       classifyMeetingMutationToolMessage(
         new ToolMessage({
@@ -2748,7 +2850,7 @@ describe("availability context helpers", () => {
     ).toBe("failed");
   });
 
-  it("clears availability on committed, failed, or HITL decline", () => {
+  it("clears availability on committed, failed, or HITL decline", async () => {
     expect(
       meetingMutationClearsAvailability([
         new ToolMessage({
@@ -2805,7 +2907,7 @@ describe("availability context helpers", () => {
     ).toBe(false);
   });
 
-  it("captures present_availability_slots from tool messages", () => {
+  it("captures present_availability_slots from tool messages", async () => {
     expect(
       captureAvailabilityFromMessages([
         new ToolMessage({
@@ -2825,7 +2927,7 @@ describe("availability context helpers", () => {
     });
   });
 
-  it("formatAvailabilityContext wraps JSON in availability tags", () => {
+  it("formatAvailabilityContext wraps JSON in availability tags", async () => {
     const block = formatAvailabilityContext(sampleAvailability);
     expect(block).toContain("<availability>");
     expect(block).toContain("2026-08-25T11:00:00");
@@ -2841,7 +2943,7 @@ describe("services context helpers", () => {
     total: 2,
   };
 
-  it("captures list_services payloads that contain JSON-escaped newlines", () => {
+  it("captures list_services payloads that contain JSON-escaped newlines", async () => {
     const payload = {
       list: [
         {
@@ -2866,7 +2968,7 @@ describe("services context helpers", () => {
     ).toEqual(payload);
   });
 
-  it("captures list_services from tool messages", () => {
+  it("captures list_services from tool messages", async () => {
     expect(
       captureServicesFromMessages([
         new ToolMessage({
@@ -2878,7 +2980,7 @@ describe("services context helpers", () => {
     ).toEqual(sampleServices);
   });
 
-  it("returns undefined for list_services error payloads", () => {
+  it("returns undefined for list_services error payloads", async () => {
     expect(
       captureServicesFromMessages([
         new ToolMessage({
@@ -2890,7 +2992,7 @@ describe("services context helpers", () => {
     ).toBeUndefined();
   });
 
-  it("formatServicesContext wraps JSON in list_services tags", () => {
+  it("formatServicesContext wraps JSON in list_services tags", async () => {
     const block = formatServicesContext(sampleServices);
     expect(block).toContain("<list_services>");
     expect(block).toContain("svc-1");
@@ -3346,7 +3448,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     });
   });
 
-  it("keeps an incomplete linked contact in the model path until details are updated", () => {
+  it("keeps an incomplete linked contact in the model path until details are updated", async () => {
     const state = clinicState({
       contactContext: {
         ownership: "telegram",
@@ -4229,7 +4331,7 @@ describe("createAgentLlmNode context cache", () => {
 });
 
 describe("routeAfterAgentLlm", () => {
-  it("routes a direct cancellation to runtime command preparation even after plain model text", () => {
+  it("routes a direct cancellation to runtime command preparation even after plain model text", async () => {
     expect(
       routeAfterAgentLlm(
         clinicState({
@@ -4253,7 +4355,7 @@ describe("routeAfterAgentLlm", () => {
     ).toBe("booking__command_prepare");
   });
 
-  it("routes a ready draft to runtime command preparation before the step limit", () => {
+  it("routes a ready draft to runtime command preparation before the step limit", async () => {
     expect(
       routeAfterAgentLlm(
         clinicState({
@@ -4272,7 +4374,7 @@ describe("routeAfterAgentLlm", () => {
 });
 
 describe("runtime-owned booking routing", () => {
-  it("bypasses the LLM when prepare has a complete booking draft", () => {
+  it("bypasses the LLM when prepare has a complete booking draft", async () => {
     expect(
       routeAfterAgentPrepare(
         clinicState({
@@ -4285,7 +4387,7 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__command_prepare");
   });
 
-  it("uses the LLM while canonical booking facts are still missing", () => {
+  it("uses the LLM while canonical booking facts are still missing", async () => {
     expect(
       routeAfterAgentPrepare(
         clinicState({
@@ -4375,7 +4477,7 @@ describe("runtime-owned booking routing", () => {
     });
   });
 
-  it("continues successful slot revalidation directly to command preparation", () => {
+  it("continues successful slot revalidation directly to command preparation", async () => {
     expect(
       routeAfterAgentTools(
         clinicState({
@@ -4421,7 +4523,7 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__command_prepare");
   });
 
-  it("does not continue command preparation when fresh revalidation fails", () => {
+  it("does not continue command preparation when fresh revalidation fails", async () => {
     expect(
       routeAfterAgentTools(
         clinicState({
@@ -4448,7 +4550,7 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__llm");
   });
 
-  it("routes incomplete-contact booking errors to the model without retrying the mutation", () => {
+  it("routes incomplete-contact booking errors to the model without retrying the mutation", async () => {
     const state = clinicState({
       contactContext: {
         ownership: "telegram",
@@ -4478,7 +4580,7 @@ describe("runtime-owned booking routing", () => {
     )).toBe("booking__finalize");
   });
 
-  it("does not rebuild a reschedule after authorization failure until identity is refreshed", () => {
+  it("does not rebuild a reschedule after authorization failure until identity is refreshed", async () => {
     const state = clinicState({
       contactContext: null,
       bookingContext: null,
@@ -4527,10 +4629,10 @@ describe("runtime-owned booking routing", () => {
 });
 
 describe("createAgentFinalizeNode", () => {
-  it("replaces model prose with the service-change notice while DATE reselection is open", () => {
+  it("replaces model prose with the service-change notice while DATE reselection is open", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         serviceChangeNotice: notice,
         bookingDraft: canonicalBookingDraft({
@@ -4557,9 +4659,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.serviceChangeNotice).toBeNull();
   });
 
-  it("replaces any-language model prose with the code-owned DATE prompt", () => {
+  it("replaces any-language model prose with the code-owned DATE prompt", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "date",
@@ -4574,7 +4676,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons ?? []).toEqual([]);
   });
 
-  it("recovers the TIME card from checkpoint when selectedDate is still open", () => {
+  it("recovers the TIME card from checkpoint when selectedDate is still open", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const days: AvailabilityContext["days"] = [
       {
@@ -4603,7 +4705,7 @@ describe("createAgentFinalizeNode", () => {
         ],
       },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("все ж таки запиши на консультацію")],
         bookingDraft: canonicalBookingDraft({
@@ -4643,7 +4745,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("booked");
   });
 
-  it("recovers the DATE card from checkpoint when selectedDate is cleared", () => {
+  it("recovers the DATE card from checkpoint when selectedDate is cleared", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const days: AvailabilityContext["days"] = [
       {
@@ -4672,7 +4774,7 @@ describe("createAgentFinalizeNode", () => {
         coverageComplete: true,
       },
     };
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "date",
@@ -4689,9 +4791,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(expected.replyButtons);
   });
 
-  it("does not reuse a checkpoint snapshot for a different accepted service", () => {
+  it("does not reuse a checkpoint snapshot for a different accepted service", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "date",
@@ -4733,7 +4835,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons ?? []).toEqual([]);
   });
 
-  it("prefixes a recovered TIME card with the service-change notice", () => {
+  it("prefixes a recovered TIME card with the service-change notice", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const notice = serviceChangedNoticeUk("Консультація");
     const day: AvailabilityContext["days"][number] = {
@@ -4744,7 +4846,7 @@ describe("createAgentFinalizeNode", () => {
         { id: "s2", label: "12:00", dateStart: "2026-10-22T12:00:00", dateEnd: "2026-10-22T12:30:00" },
       ],
     };
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         serviceChangeNotice: notice,
         bookingDraft: canonicalBookingDraft({
@@ -4767,7 +4869,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.serviceChangeNotice).toBeNull();
   });
 
-  it("prefixes the DATE card with the service-change notice and then clears it", () => {
+  it("prefixes the DATE card with the service-change notice and then clears it", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
     const days: AvailabilityContext["days"] = [
@@ -4796,7 +4898,7 @@ describe("createAgentFinalizeNode", () => {
         ],
       },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         serviceChangeNotice: notice,
         bookingDraft: canonicalBookingDraft({
@@ -4861,9 +4963,9 @@ describe("createAgentFinalizeNode", () => {
     "Вас записано на консультацію.",
     "Ви записані на процедуру.",
     "Бронювання підтверджено.",
-  ])("code-owns the unresolved-contact question regardless of model prose: %s", (claim) => {
+  ])("code-owns the unresolved-contact question regardless of model prose: %s", async (claim) => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "details",
@@ -4879,9 +4981,9 @@ describe("createAgentFinalizeNode", () => {
     );
   });
 
-  it("code-owns the occupied-phone reply and clears the phone candidate", () => {
+  it("code-owns the occupied-phone reply and clears the phone candidate", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         contactContext: {
           ownership: "phone",
@@ -4909,9 +5011,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.contactContext).toBeNull();
   });
 
-  it("keeps the linkable phone-candidate fallback until link succeeds", () => {
+  it("keeps the linkable phone-candidate fallback until link succeeds", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         contactContext: {
           ownership: "phone",
@@ -4936,9 +5038,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.contactContext).toBeUndefined();
   });
 
-  it("advances unresolved contact_field from phone to firstName after a valid phone", () => {
+  it("advances unresolved contact_field from phone to firstName after a valid phone", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("+380501112233")],
         bookingDraft: canonicalBookingDraft({
@@ -4964,9 +5066,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше ім’я.");
   });
 
-  it("stays on firstName when collected has no firstName (aside)", () => {
+  it("stays on firstName when collected has no firstName (aside)", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("скільки коштує")],
         bookingDraft: canonicalBookingDraft({
@@ -4991,9 +5093,9 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("stays on lastName when collected has no lastName (aside)", () => {
+  it("stays on lastName when collected has no lastName (aside)", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("добрий день")],
         bookingDraft: canonicalBookingDraft({
@@ -5020,9 +5122,9 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("advances unresolved contact_field from firstName to lastName after collected firstName", () => {
+  it("advances unresolved contact_field from firstName to lastName after collected firstName", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Smoke")],
         bookingDraft: canonicalBookingDraft({
@@ -5050,9 +5152,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше прізвище.");
   });
 
-  it("clears contact_field after collected lastName so create_contact can run", () => {
+  it("clears contact_field after collected lastName so create_contact can run", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Tester")],
         bookingDraft: canonicalBookingDraft({
@@ -5151,9 +5253,9 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("clears create mutation_confirm and invalidates the slot after awaitingConfirmation chat-other", () => {
+  it("clears create mutation_confirm and invalidates the slot after awaitingConfirmation chat-other", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft({
@@ -5195,9 +5297,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.bookingDraft?.pendingCommand).toBeNull();
   });
 
-  it("keeps ✅/❌ after cancel chat-other instead of a stale visit menu", () => {
+  it("keeps ✅/❌ after cancel chat-other instead of a stale visit menu", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         bookingContext: listedMeetings,
         bookingDraft: {
@@ -5243,9 +5345,9 @@ describe("createAgentFinalizeNode", () => {
     maxSteps: 8,
   };
 
-  it("strips reply_buttons from checkpointed history and code-owns consultation shortcuts", () => {
+  it("strips reply_buttons from checkpointed history and code-owns consultation shortcuts", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Записатись")],
@@ -5268,9 +5370,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
-  it("persists the consultation as a pending service when the offer is shown", () => {
+  it("persists the consultation as a pending service when the offer is shown", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Записатись")],
         agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
@@ -5283,9 +5385,9 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("does not send leaked Gemini tool XML as the patient reply", () => {
+  it("does not send leaked Gemini tool XML as the patient reply", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         agentMessages: [
@@ -5302,9 +5404,9 @@ describe("createAgentFinalizeNode", () => {
     );
   });
 
-  it("DDD-53: attaches BOOKING OFFER when the consultation question has no trailer", () => {
+  it("DDD-53: attaches BOOKING OFFER when the consultation question has no trailer", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Записатись")],
@@ -5317,9 +5419,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBeUndefined();
   });
 
-  it("replaces a wrong consultation trailer with BOOKING OFFER", () => {
+  it("replaces a wrong consultation trailer with BOOKING OFFER", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Записатись")],
@@ -5336,9 +5438,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
-  it("strips an empty reply_buttons trailer and omits DEFAULT MENU for mid-flow booking", () => {
+  it("strips an empty reply_buttons trailer and omits DEFAULT MENU for mid-flow booking", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         agentMessages: [
@@ -5356,9 +5458,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("attaches REPLACE when create_meeting returned Already booked and no trailer", () => {
+  it("attaches REPLACE when create_meeting returned Already booked and no trailer", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         agentMessages: [
@@ -5385,9 +5487,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.status).toBe("ok");
   });
 
-  it("attaches DEFAULT has-visits after a committed create_meeting", () => {
+  it("attaches DEFAULT has-visits after a committed create_meeting", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         agentMessages: [
@@ -5416,9 +5518,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("attaches DEFAULT no-visits after cancelling the only planned meeting", () => {
+  it("attaches DEFAULT no-visits after cancelling the only planned meeting", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         bookingContext: listedMeetings,
@@ -5446,7 +5548,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
-  it("keeps DEFAULT has-visits after cancelling one of several meetings", () => {
+  it("keeps DEFAULT has-visits after cancelling one of several meetings", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const twoMeetings: BookingContext = {
       meetings: [
@@ -5460,7 +5562,7 @@ describe("createAgentFinalizeNode", () => {
       ],
       dateFrom: listedMeetings.dateFrom,
     };
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         bookingContext: twoMeetings,
@@ -5485,9 +5587,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("DDD-54: attaches DEFAULT MENU after HITL decline on create_meeting", () => {
+  it("DDD-54: attaches DEFAULT MENU after HITL decline on create_meeting", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         agentMessages: [
@@ -5508,9 +5610,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
-  it("DDD-54: attaches DEFAULT has-visits after a committed reschedule_meeting", () => {
+  it("DDD-54: attaches DEFAULT has-visits after a committed reschedule_meeting", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         bookingContext: listedMeetings,
@@ -5539,14 +5641,14 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("DDD-54: emits reply_menu_filled when attaching DEFAULT MENU on idle", () => {
+  it("DDD-54: emits reply_menu_filled when attaching DEFAULT MENU on idle", async () => {
     const seen: { name: string; props: Record<string, unknown> }[] = [];
     setTrackEventForTests((name, props) => {
       seen.push({ name, props });
     });
     try {
       const finalize = createAgentFinalizeNode(agent);
-      finalize(
+      await finalize(
         clinicState({
           stepCount: 2,
           agentMessages: [
@@ -5577,7 +5679,7 @@ describe("createAgentFinalizeNode", () => {
     }
   });
 
-  it("keeps REPLACE when Already booked and present_availability_slots ran same turn", () => {
+  it("keeps REPLACE when Already booked and present_availability_slots ran same turn", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const days = [
       {
@@ -5593,7 +5695,7 @@ describe("createAgentFinalizeNode", () => {
         ],
       },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 3,
         availabilityContext: { days, stepMinutes: 60 },
@@ -5629,7 +5731,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
   });
 
-  it("keeps Готово + DEFAULT when committed create and present_availability_slots ran same turn", () => {
+  it("keeps Готово + DEFAULT when committed create and present_availability_slots ran same turn", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const days = [
       {
@@ -5645,7 +5747,7 @@ describe("createAgentFinalizeNode", () => {
         ],
       },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 3,
         availabilityContext: { days, stepMinutes: 60 },
@@ -5684,7 +5786,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-  it("prefixes DATE offer when create_meeting overlaps and slots ran same turn", () => {
+  it("prefixes DATE offer when create_meeting overlaps and slots ran same turn", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const days = [
       {
@@ -5718,7 +5820,7 @@ describe("createAgentFinalizeNode", () => {
         ],
       },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 3,
         availabilityContext: { days, stepMinutes: 30 },
@@ -5754,7 +5856,7 @@ describe("createAgentFinalizeNode", () => {
     expect(text).not.toContain("Готово");
   });
 
-  it("prefixes TIME offer when create_meeting overlaps and same-day slots ran this turn", () => {
+  it("prefixes TIME offer when create_meeting overlaps and same-day slots ran this turn", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const day = {
       date: "2026-09-15",
@@ -5768,7 +5870,7 @@ describe("createAgentFinalizeNode", () => {
         },
       ],
     };
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 3,
         availabilityContext: { days: [day], stepMinutes: 30 },
@@ -5833,7 +5935,7 @@ describe("createAgentFinalizeNode", () => {
       clinicState({ agentMessages: [new HumanMessage("hi")], next: "booking" }),
     );
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: llmUpdate.stepCount ?? 1,
         agentMessages: llmUpdate.agentMessages as never,
@@ -5849,7 +5951,7 @@ describe("createAgentFinalizeNode", () => {
     });
   });
 
-  it("code-owns FAQ consultation yield and BOOKING OFFER without tags", () => {
+  it("code-owns FAQ consultation yield and BOOKING OFFER without tags", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -5858,7 +5960,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("запиши на консультацію")],
@@ -5879,7 +5981,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.bookingDraft?.serviceAcceptance?.status).toBe("pending");
   });
 
-  it("stores yieldToSupervisor and strips the yield tag from checkpointed history", () => {
+  it("stores yieldToSupervisor and strips the yield tag from checkpointed history", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -5888,7 +5990,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("запиши на консультацію")],
@@ -5915,7 +6017,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
-  it("strips a yield-only trailer and omits DEFAULT MENU for faq", () => {
+  it("strips a yield-only trailer and omits DEFAULT MENU for faq", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -5924,7 +6026,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
@@ -5944,7 +6046,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("does not open FAQ catalog chips from list_services alone in finalize", () => {
+  it("does not open FAQ catalog chips from list_services alone in finalize", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -5953,7 +6055,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
@@ -5983,7 +6085,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("attaches BOOKING OFFER on Послуги (not catalog chips) even with leftover mutation_confirm", () => {
+  it("attaches BOOKING OFFER on Послуги (not catalog chips) even with leftover mutation_confirm", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -5992,7 +6094,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Послуги")],
@@ -6027,7 +6129,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText?.trimStart().startsWith("•")).toBe(false);
   });
 
-  it("appends a consultation offer on Послуги when the model only asked which direction", () => {
+  it("appends a consultation offer on Послуги when the model only asked which direction", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6036,7 +6138,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Послуги")],
@@ -6068,7 +6170,7 @@ describe("createAgentFinalizeNode", () => {
     expect((update.lastHandoff?.replyText ?? "").match(/\?/g)?.length).toBe(1);
   });
 
-  it("replaces divergent model FAQ catalog prose with structured-choice bullets", () => {
+  it("replaces divergent model FAQ catalog prose with structured-choice bullets", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6089,7 +6191,7 @@ describe("createAgentFinalizeNode", () => {
       "",
       "Який варіант вам підходить?",
     ].join("\n");
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
@@ -6120,7 +6222,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
   });
 
-  it("keep_catalog retains a sanitized model explanation ahead of structured bullets", () => {
+  it("keep_catalog retains a sanitized model explanation ahead of structured bullets", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6133,7 +6235,7 @@ describe("createAgentFinalizeNode", () => {
       { id: "g0", label: "Neotiva", serviceIds: ["n"] },
       { id: "g1", label: "Juvederm", serviceIds: ["j"] },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6161,7 +6263,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(["Neotiva", "Juvederm"]);
   });
 
-  it("keep_catalog falls back to the graph intro when the model only asked a question", () => {
+  it("keep_catalog falls back to the graph intro when the model only asked a question", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6174,7 +6276,7 @@ describe("createAgentFinalizeNode", () => {
       { id: "g0", label: "Neotiva", serviceIds: ["n"] },
       { id: "g1", label: "Juvederm", serviceIds: ["j"] },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6195,7 +6297,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(["Neotiva", "Juvederm"]);
   });
 
-  it("keeps FAQ catalog chips when draft still has a pending serviceAcceptance", () => {
+  it("keeps FAQ catalog chips when draft still has a pending serviceAcceptance", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6204,7 +6306,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Обрати іншу процедуру")],
@@ -6306,7 +6408,7 @@ describe("createAgentFinalizeNode", () => {
     expect(prepared.pendingInteraction?.kind).toBe("service_candidate");
 
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Обрати іншу процедуру")],
@@ -6353,7 +6455,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("зона");
   });
 
-  it("keeps FAQ catalog choice ids when narrowing remaining CRM rows", () => {
+  it("keeps FAQ catalog choice ids when narrowing remaining CRM rows", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6363,7 +6465,7 @@ describe("createAgentFinalizeNode", () => {
     };
     const finalize = createAgentFinalizeNode(faqAgent);
 
-    const families = finalize(
+    const families = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6394,7 +6496,7 @@ describe("createAgentFinalizeNode", () => {
     expect(families.lastHandoff?.replyText).toContain("Який варіант вам підходить?");
     expect(families.lastHandoff?.replyText).toContain("В ін'єкційних є кілька процедур:");
 
-    const zones = finalize(
+    const zones = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6423,7 +6525,7 @@ describe("createAgentFinalizeNode", () => {
     expect(zones.lastHandoff?.replyButtons).toEqual(["1 зона", "2 зони"]);
     expect(zones.lastHandoff?.replyText).toContain("1 зона");
 
-    const brands = finalize(
+    const brands = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6456,7 +6558,7 @@ describe("createAgentFinalizeNode", () => {
     expect(brands.lastHandoff?.replyText).not.toContain("faq_catalog_action");
   });
 
-  it("opens FAQ catalog choices for consultation service names from CRM", () => {
+  it("opens FAQ catalog choices for consultation service names from CRM", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6465,7 +6567,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6487,7 +6589,7 @@ describe("createAgentFinalizeNode", () => {
     ]);
   });
 
-  it("attaches BOOKING OFFER (not catalog bullets) on a consultation offer without a trailer", () => {
+  it("attaches BOOKING OFFER (not catalog bullets) on a consultation offer without a trailer", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6496,7 +6598,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("запиши на консультацію")],
@@ -6516,9 +6618,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
-  it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", () => {
+  it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         bookingNoteStatus: "unasked",
@@ -6540,9 +6642,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction?.kind).toBe("service_confirm");
   });
 
-  it("DDD-54: booking omits DEFAULT MENU for non-offer mid-flow replies without a trailer", () => {
+  it("DDD-54: booking omits DEFAULT MENU for non-offer mid-flow replies without a trailer", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         agentMessages: [
@@ -6555,7 +6657,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("prefers open FAQ catalog interaction over an accidental leftover trailer", () => {
+  it("prefers open FAQ catalog interaction over an accidental leftover trailer", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6564,7 +6666,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6607,7 +6709,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
   });
 
-  it("replaces a model catalog list with one structured list from choices", () => {
+  it("replaces a model catalog list with one structured list from choices", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6631,7 +6733,7 @@ describe("createAgentFinalizeNode", () => {
       "Який варіант вам підходить?",
       "<faq_catalog_action>keep_catalog</faq_catalog_action>",
     ].join("\n");
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6656,7 +6758,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(update.messages?.[0]?.content)).not.toContain("faq_catalog_action");
   });
 
-  it("falls back to the catalog template when the model reply is empty", () => {
+  it("falls back to the catalog template when the model reply is empty", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6669,7 +6771,7 @@ describe("createAgentFinalizeNode", () => {
       { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
       { id: "g1", label: "Ін'єкційні процедури", serviceIds: ["b"] },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -6690,7 +6792,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(choices.map((c) => c.label));
   });
 
-  it("offer_consultation preserves model explanation and appends one consultation question", () => {
+  it("offer_consultation preserves model explanation and appends one consultation question", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6701,7 +6803,7 @@ describe("createAgentFinalizeNode", () => {
     const finalize = createAgentFinalizeNode(faqAgent);
     const explanation =
       "Для губ ми використовуємо кілька якісних препаратів — лікар під час консультації підбере той, що найкраще підійде саме вам 🌿";
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("який краще?")],
@@ -6735,7 +6837,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
   });
 
-  it("offer_consultation after consultationDeclined keeps catalog chips", () => {
+  it("offer_consultation after consultationDeclined keeps catalog chips", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6748,7 +6850,7 @@ describe("createAgentFinalizeNode", () => {
       { id: "inj", label: "Ін'єкційна косметологія", serviceIds: ["c1", "c2"] },
       { id: "derm", label: "Дерматологія", serviceIds: ["d1"] },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("запиши на коллаген")],
@@ -6782,7 +6884,7 @@ describe("createAgentFinalizeNode", () => {
     );
   });
 
-  it("finalize prepends Запис скасовано. when REPLACE cancel continues with consultation offer", () => {
+  it("finalize prepends Запис скасовано. when REPLACE cancel continues with consultation offer", async () => {
     const finalize = createAgentFinalizeNode({
       id: "booking",
       name: "Booking",
@@ -6799,7 +6901,7 @@ describe("createAgentFinalizeNode", () => {
       },
       accepted: false,
     });
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         messages: [new HumanMessage("✅")],
         bookingDraft: draft,
@@ -6828,7 +6930,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
   });
 
-  it("offer_consultation keeps mid-text questions and only strips a trailing yes/no", () => {
+  it("offer_consultation keeps mid-text questions and only strips a trailing yes/no", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6839,7 +6941,7 @@ describe("createAgentFinalizeNode", () => {
     const finalize = createAgentFinalizeNode(faqAgent);
     const explanation =
       "Що таке Disport? Це препарат для ботулінотерапії; дозування підбирає лікар.";
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("що таке Disport?")],
@@ -6869,7 +6971,7 @@ describe("createAgentFinalizeNode", () => {
     ).toBe(1);
   });
 
-  it("offer_consultation drops a trailing allergy question and keeps the intro prose", () => {
+  it("offer_consultation drops a trailing allergy question and keeps the intro prose", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6879,7 +6981,7 @@ describe("createAgentFinalizeNode", () => {
     };
     const finalize = createAgentFinalizeNode(faqAgent);
     const allergy = "Чи є у вас алергія на лідокаїн?";
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("який краще?")],
@@ -6904,7 +7006,7 @@ describe("createAgentFinalizeNode", () => {
     expect((update.lastHandoff?.replyText ?? "").match(/\?/g)?.length).toBe(1);
   });
 
-  it("close_catalog clears chips and keeps hours/location answers", () => {
+  it("close_catalog clears chips and keeps hours/location answers", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6914,7 +7016,7 @@ describe("createAgentFinalizeNode", () => {
     };
     const finalize = createAgentFinalizeNode(faqAgent);
     const hours = "Ми працюємо щодня з 9:00 до 20:00.";
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("який у вас графік?")],
@@ -6937,7 +7039,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("preserves product/price/comparison answers while the catalog is open", () => {
+  it("preserves product/price/comparison answers while the catalog is open", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -6957,7 +7059,7 @@ describe("createAgentFinalizeNode", () => {
       choices,
     };
 
-    const product = finalize(
+    const product = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("що таке Disport?")],
@@ -6971,7 +7073,7 @@ describe("createAgentFinalizeNode", () => {
     expect(product.lastHandoff?.replyText).not.toMatch(/^Доступні такі варіанти:/);
     expect(product.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
 
-    const price = finalize(
+    const price = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("скільки це коштує?")],
@@ -6984,7 +7086,7 @@ describe("createAgentFinalizeNode", () => {
     expect(price.lastHandoff?.replyText).toContain("4500 грн");
     expect(price.lastHandoff?.replyText).not.toMatch(/^Доступні такі варіанти:/);
 
-    const comparison = finalize(
+    const comparison = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("яка різниця між цими препаратами?")],
@@ -6998,7 +7100,7 @@ describe("createAgentFinalizeNode", () => {
     expect(comparison.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
   });
 
-  it("keeps consultation service_confirm and BOOKING_OFFER_MENU on price follow-ups", () => {
+  it("keeps consultation service_confirm and BOOKING_OFFER_MENU on price follow-ups", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7009,7 +7111,7 @@ describe("createAgentFinalizeNode", () => {
     const finalize = createAgentFinalizeNode(faqAgent);
     const priceAnswer =
       "Вартість залежить від обраного препарату:\n• Neotiva — 8500 грн\n• Juvederm — 9200 грн";
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("а скільки це коштує?")],
@@ -7038,7 +7140,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
   });
 
-  it("keeps procedure service_confirm and BOOKING_OFFER_MENU after Скільки коштує", () => {
+  it("keeps procedure service_confirm and BOOKING_OFFER_MENU after Скільки коштує", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7049,7 +7151,7 @@ describe("createAgentFinalizeNode", () => {
     const finalize = createAgentFinalizeNode(faqAgent);
     const priceAnswer =
       "Вартість процедури «Лікування гіпергідрозу» — 8071 грн.\n\nБажаєте записатися на цю процедуру?";
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         messages: [new HumanMessage("Скільки коштує")],
@@ -7075,7 +7177,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.yieldToSupervisor).toBe(true);
   });
 
-  it("keeps catalog chips on missing or invalid faq_catalog_action via deterministic body", () => {
+  it("keeps catalog chips on missing or invalid faq_catalog_action via deterministic body", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7103,7 +7205,7 @@ describe("createAgentFinalizeNode", () => {
       "Який варіант вам підходить?",
     ].join("\n");
 
-    const missing = finalize(
+    const missing = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: pending,
@@ -7114,7 +7216,7 @@ describe("createAgentFinalizeNode", () => {
     expect(missing.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota"]);
     expect(String(missing.messages?.[0]?.content)).not.toContain("faq_catalog_action");
 
-    const invalid = finalize(
+    const invalid = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: pending,
@@ -7129,7 +7231,7 @@ describe("createAgentFinalizeNode", () => {
     expect(String(invalid.messages?.[0]?.content)).not.toContain("faq_catalog_action");
   });
 
-  it("shows displayLabel in prose while shortened label stays on the keyboard", () => {
+  it("shows displayLabel in prose while shortened label stays on the keyboard", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7153,7 +7255,7 @@ describe("createAgentFinalizeNode", () => {
         serviceIds: ["z2"],
       },
     ];
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         pendingInteraction: {
@@ -7181,7 +7283,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyText).not.toContain("faq_catalog_action");
   });
 
-  it("preserves FAQ service_confirm prose when the model already confirmed the procedure", () => {
+  it("preserves FAQ service_confirm prose when the model already confirmed the procedure", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7190,7 +7292,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         bookingContext: listedMeetings,
@@ -7216,7 +7318,7 @@ describe("createAgentFinalizeNode", () => {
     );
   });
 
-  it("strips an accidental catalog trailer when no FAQ catalog interaction is open", () => {
+  it("strips an accidental catalog trailer when no FAQ catalog interaction is open", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7225,7 +7327,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         agentMessages: [
@@ -7242,7 +7344,7 @@ describe("createAgentFinalizeNode", () => {
     expect(update.pendingInteraction ?? null).toBeNull();
   });
 
-  it("does not attach buttons for faq location-only replies", () => {
+  it("does not attach buttons for faq location-only replies", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",
@@ -7251,7 +7353,7 @@ describe("createAgentFinalizeNode", () => {
       maxSteps: 4,
     };
     const finalize = createAgentFinalizeNode(faqAgent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         agentMessages: [
@@ -7306,9 +7408,9 @@ describe("createAgentFinalizeNode", () => {
     excludeMeetingIds: ["6a95fe6e5b90474bc"],
   };
 
-  it("replaces invented 09:00–18:00 with DATE offer (hours in text, date keyboard)", () => {
+  it("replaces invented 09:00–18:00 with DATE offer (hours in text, date keyboard)", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 2,
         availabilityContext: moveSnapshot,
@@ -7356,9 +7458,9 @@ describe("createAgentFinalizeNode", () => {
     expect(String(update.messages?.[0]?.content)).toBe(text);
   });
 
-  it("on day pick without a new tool call, rewrites to TIME from availabilityContext", () => {
+  it("on day pick without a new tool call, rewrites to TIME from availabilityContext", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         availabilityContext: moveSnapshot,
@@ -7383,9 +7485,9 @@ describe("createAgentFinalizeNode", () => {
     expect(update.lastHandoff?.replyButtons).toEqual(["14:00", OTHER_DATE_LABEL]);
   });
 
-  it("omits DEFAULT MENU when availability snapshot is empty and there is no trailer", () => {
+  it("omits DEFAULT MENU when availability snapshot is empty and there is no trailer", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         stepCount: 1,
         availabilityContext: { days: [], stepMinutes: 60 },
@@ -7433,7 +7535,7 @@ describe("booking outcome risk: no model success text without a committed entity
     }),
   ];
 
-  it("treats non-committed mutation turns, details/confirming, and open confirm as risk", () => {
+  it("treats non-committed mutation turns, details/confirming, and open confirm as risk", async () => {
     expect(bookingOutcomeRiskState(clinicState({
       agentMessages: [...mutationTool("create_meeting", { error: "CRM down" })],
     }))).toBe(true);
@@ -7471,8 +7573,8 @@ describe("booking outcome risk: no model success text without a committed entity
     }))).toBe(false);
   });
 
-  it.each(claims)("drops model claim on Already booked: %s", (claim) => {
-    const update = finalize(clinicState({
+  it.each(claims)("drops model claim on Already booked: %s", async (claim) => {
+    const update = await finalize(clinicState({
       stepCount: 2,
       agentMessages: [
         ...mutationTool("create_meeting", {
@@ -7489,8 +7591,8 @@ describe("booking outcome risk: no model success text without a committed entity
     expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_REPLACE_MENU]);
   });
 
-  it.each(claims)("drops model claim while HITL confirmation is pending: %s", (claim) => {
-    const update = finalize(clinicState({
+  it.each(claims)("drops model claim while HITL confirmation is pending: %s", async (claim) => {
+    const update = await finalize(clinicState({
       stepCount: 2,
       contactContext: ownedContactContext(),
       bookingDraft: canonicalBookingDraft({
@@ -7514,8 +7616,8 @@ describe("booking outcome risk: no model success text without a committed entity
     expect(update.lastHandoff?.replyButtons).toEqual([CONFIRM_YES_LABEL, CONFIRM_NO_LABEL]);
   });
 
-  it.each(claims)("drops model claim after blocked Contact incomplete: %s", (claim) => {
-    const update = finalize(clinicState({
+  it.each(claims)("drops model claim after blocked Contact incomplete: %s", async (claim) => {
+    const update = await finalize(clinicState({
       stepCount: 2,
       bookingDraft: canonicalBookingDraft({ phase: "confirming", contactId: null }),
       agentMessages: [
@@ -7528,8 +7630,8 @@ describe("booking outcome risk: no model success text without a committed entity
     expect(update.lastHandoff?.replyText).not.toContain("Готово");
   });
 
-  it.each(claims)("drops model claim after Not authorized block: %s", (claim) => {
-    const update = finalize(clinicState({
+  it.each(claims)("drops model claim after Not authorized block: %s", async (claim) => {
+    const update = await finalize(clinicState({
       stepCount: 2,
       bookingDraft: canonicalBookingDraft({ phase: "confirming" }),
       contactContext: ownedContactContext(),
@@ -7542,15 +7644,15 @@ describe("booking outcome risk: no model success text without a committed entity
     expect(update.lastHandoff?.replyText).not.toContain("Готово");
   });
 
-  it.each(claims)("code-owns details-phase claim without a mutation: %s", (claim) => {
-    const update = finalize(clinicState({
+  it.each(claims)("code-owns details-phase claim without a mutation: %s", async (claim) => {
+    const update = await finalize(clinicState({
       bookingDraft: canonicalBookingDraft({ phase: "details", contactId: null }),
       agentMessages: [new HumanMessage("Продовжити без коментаря"), new AIMessage(claim)],
     }));
     expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_QUESTION_UK);
   });
 
-  it("ships address-only FAQ prose without false_success_claim rewrite", () => {
+  it("ships address-only FAQ prose without false_success_claim rewrite", async () => {
     const seen: { name: string; props: Record<string, unknown> }[] = [];
     setTrackEventForTests((name, props) => {
       seen.push({ name, props });
@@ -7564,7 +7666,7 @@ describe("booking outcome risk: no model success text without a committed entity
         maxSteps: 4,
       };
       const address = `Ми за адресою:\n\n${CLINIC_ADDRESS}`;
-      const update = createAgentFinalizeNode(faqAgent)(clinicState({
+      const update = await createAgentFinalizeNode(faqAgent)(clinicState({
         stepCount: 1,
         agentMessages: [new AIMessage(address)],
       }));
@@ -7575,13 +7677,13 @@ describe("booking outcome risk: no model success text without a committed entity
     }
   });
 
-  it("emits false_success_claim telemetry when idle model prose claims an outcome", () => {
+  it("emits false_success_claim telemetry when idle model prose claims an outcome", async () => {
     const seen: { name: string; props: Record<string, unknown> }[] = [];
     setTrackEventForTests((name, props) => {
       seen.push({ name, props });
     });
     try {
-      const update = finalize(clinicState({
+      const update = await finalize(clinicState({
         stepCount: 1,
         bookingDraft: null,
         agentMessages: [new AIMessage("Готово! Запис створено.")],
@@ -7599,8 +7701,8 @@ describe("booking outcome risk: no model success text without a committed entity
     }
   });
 
-  it("renders a code-owned Already booked label from the tool payload", () => {
-    const update = finalize(clinicState({
+  it("renders a code-owned Already booked label from the tool payload", async () => {
+    const update = await finalize(clinicState({
       stepCount: 2,
       agentMessages: [
         ...mutationTool("create_meeting", {
@@ -7640,7 +7742,7 @@ describe("runtime-owned cancellation outcomes", () => {
     }),
   ];
 
-  it("classifies cancellation decline separately from pending confirmation", () => {
+  it("classifies cancellation decline separately from pending confirmation", async () => {
     expect(classifyMeetingMutationToolMessage(cancellationMessages({ cancelled: true })[1]))
       .toBe("declined");
     expect(classifyMeetingMutationToolMessage(new ToolMessage({
@@ -7650,7 +7752,7 @@ describe("runtime-owned cancellation outcomes", () => {
     }))).toBe("pending_confirmation");
   });
 
-  it("renders a declined cancellation with an actionable visit-change menu", () => {
+  it("renders a declined cancellation with an actionable visit-change menu", async () => {
     const update = createAgentMutationFinalizeNode(agent)(clinicState({
       messages: [new HumanMessage("❌")],
       bookingContext: listedMeetings,
@@ -7665,7 +7767,7 @@ describe("runtime-owned cancellation outcomes", () => {
     expect(update.bookingDraft).toBeNull();
   });
 
-  it("renders committed cancellation without model-authored success text", () => {
+  it("renders committed cancellation without model-authored success text", async () => {
     const update = createAgentMutationFinalizeNode(agent)(clinicState({
       bookingContext: listedMeetings,
       agentMessages: cancellationMessages({ id: "m-1", success: true }),
@@ -7675,7 +7777,7 @@ describe("runtime-owned cancellation outcomes", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
-  it("renders a replacement cancellation decline with the default booking menu", () => {
+  it("renders a replacement cancellation decline with the default booking menu", async () => {
     const update = createAgentMutationFinalizeNode(agent)(clinicState({
       bookingContext: listedMeetings,
       pendingCancellationPurpose: "replacement",
@@ -7689,7 +7791,7 @@ describe("runtime-owned cancellation outcomes", () => {
     });
   });
 
-  it("routes terminal direct cancellation outcomes around the booking LLM", () => {
+  it("routes terminal direct cancellation outcomes around the booking LLM", async () => {
     expect(routeAfterAgentTools(
       clinicState({
         bookingContext: listedMeetings,
@@ -7701,7 +7803,7 @@ describe("runtime-owned cancellation outcomes", () => {
     )).toBe("booking__mutation_finalize");
   });
 
-  it("routes a declined replacement cancellation to runtime finalization", () => {
+  it("routes a declined replacement cancellation to runtime finalization", async () => {
     expect(routeAfterAgentTools(
       clinicState({
         bookingContext: listedMeetings,
@@ -7714,7 +7816,7 @@ describe("runtime-owned cancellation outcomes", () => {
     )).toBe("booking__mutation_finalize");
   });
 
-  it("routes a typed reschedule decline directly to deterministic finalization", () => {
+  it("routes a typed reschedule decline directly to deterministic finalization", async () => {
     // Adapter maps NL decline to { confirmed: false } → cancelled tool result.
     const state = clinicState({
       bookingContext: listedMeetings,
@@ -7766,7 +7868,7 @@ describe("runtime-owned cancellation outcomes", () => {
       .not.toContain("вільні");
   });
 
-  it("routes main-menu leave to mutation finalize, which hands off to the supervisor", () => {
+  it("routes main-menu leave to mutation finalize, which hands off to the supervisor", async () => {
     for (const [mutationName, draft, purpose] of [
       [
         "reschedule_meeting",
@@ -7851,7 +7953,7 @@ describe("runtime-owned cancellation outcomes", () => {
     }
   });
 
-  it("routes an abandoned replacement cancellation to the supervisor", () => {
+  it("routes an abandoned replacement cancellation to the supervisor", async () => {
     const state = clinicState({
       bookingContext: listedMeetings,
       pendingCancellationPurpose: "replacement",
@@ -7896,7 +7998,7 @@ describe("runtime-owned cancellation outcomes", () => {
     expect((finalized as Command).goto).toEqual(["supervisor"]);
   });
 
-  it("routes HITL other-reply after skip to the booking LLM, not the note orchestrator", () => {
+  it("routes HITL other-reply after skip to the booking LLM, not the note orchestrator", async () => {
     const state = clinicState({
       messages: [new HumanMessage("запиши на ботокс")],
       contactContext: ownedContactContext(),
@@ -7935,7 +8037,7 @@ describe("runtime-owned cancellation outcomes", () => {
     )).toBe("booking__llm");
   });
 
-  it("still routes HITL other-reply to note orch while keep/switch is open", () => {
+  it("still routes HITL other-reply to note orch while keep/switch is open", async () => {
     const state = clinicState({
       messages: [new HumanMessage("Змінити послугу")],
       bookingDraft: canonicalBookingDraft({
@@ -7978,7 +8080,7 @@ describe("runtime-owned cancellation outcomes", () => {
     )).toBe("booking__note_orch");
   });
 
-  it("still sends declined HITL chat to mutation finalize, not the note orch", () => {
+  it("still sends declined HITL chat to mutation finalize, not the note orch", async () => {
     const state = clinicState({
       bookingDraft: canonicalBookingDraft({
         phase: "confirming",
@@ -8020,8 +8122,8 @@ describe("replacement offer menu precedence", () => {
     maxSteps: 8,
   };
 
-  it("keeps replacement consent buttons when the note step is still awaiting", () => {
-    const update = createAgentFinalizeNode(agent)(clinicState({
+  it("keeps replacement consent buttons when the note step is still awaiting", async () => {
+    const update = await createAgentFinalizeNode(agent)(clinicState({
       bookingDraft: {
         version: 3,
         mode: "replace",
@@ -8087,14 +8189,14 @@ describe("availability offer helpers", () => {
     },
   ];
 
-  it("formatAvailabilityDateOffer lists hours and keeps date-only shortcuts", () => {
+  it("formatAvailabilityDateOffer lists hours and keeps date-only shortcuts", async () => {
     const offer = formatAvailabilityDateOffer(days);
     expect(offer.replyText).toContain("10 вересня (четвер): 14:00, 15:00");
     expect(offer.replyText).toContain("11 вересня (п'ятниця): 12:00");
     expect(offer.replyButtons).toEqual(["10 вересня", "11 вересня", OTHER_DATE_LABEL]);
   });
 
-  it("uses the canonical search query to describe paginated date pages", () => {
+  it("uses the canonical search query to describe paginated date pages", async () => {
     const base: AvailabilityContext = { days, stepMinutes: 30 };
 
     expect(formatAvailabilityHeading({
@@ -8129,7 +8231,7 @@ describe("availability offer helpers", () => {
     expect(formatAvailabilityHeading(base)).toBe("Доступні дні");
   });
 
-  it("uses the query-aware heading in paginated date offers", () => {
+  it("uses the query-aware heading in paginated date offers", async () => {
     const offer = formatAvailabilityDateOffer({
       days,
       stepMinutes: 30,
@@ -8148,14 +8250,14 @@ describe("availability offer helpers", () => {
     expect(offer.replyText).not.toContain("Найближчі вільні дні");
   });
 
-  it("formatAvailabilityTimeOffer lists all times and caps shortcuts at 3", () => {
+  it("formatAvailabilityTimeOffer lists all times and caps shortcuts at 3", async () => {
     const offer = formatAvailabilityTimeOffer(days[0]!);
     expect(offer.replyText).toContain("14:00");
     expect(offer.replyText).toContain("15:00");
     expect(offer.replyButtons).toEqual(["14:00", "15:00", OTHER_DATE_LABEL]);
   });
 
-  it("matchAvailabilityDay accepts short keyboard labels", () => {
+  it("matchAvailabilityDay accepts short keyboard labels", async () => {
     expect(matchAvailabilityDay("10 вересня", days)?.date).toBe("2026-09-10");
     expect(matchAvailabilityDay(OTHER_DATE_LABEL, days)).toBeNull();
     expect(matchAvailabilityDay("Інша", days)).toBeNull();
@@ -8163,7 +8265,7 @@ describe("availability offer helpers", () => {
     expect(matchAvailabilityDay("14:00", days)).toBeNull();
   });
 
-  it("resolveAvailabilityOffer prefers day pick TIME over this-turn multi-day DATE", () => {
+  it("resolveAvailabilityOffer prefers day pick TIME over this-turn multi-day DATE", async () => {
     const offer = resolveAvailabilityOffer(
       [
         new HumanMessage("10 вересня"),
@@ -8184,7 +8286,7 @@ describe("availability offer helpers", () => {
     expect(offer?.replyButtons).toEqual(["14:00", "15:00", OTHER_DATE_LABEL]);
   });
 
-  it("resolveAvailabilityOffer keeps DATE when human is not a day pick", () => {
+  it("resolveAvailabilityOffer keeps DATE when human is not a day pick", async () => {
     const offer = resolveAvailabilityOffer(
       [
         new HumanMessage(OTHER_DATE_LABEL),
@@ -8599,7 +8701,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     }
   });
 
-  it("records a reschedule time without entering the note step", () => {
+  it("records a reschedule time without entering the note step", async () => {
     const draft = reduceBookingDraft(
       reduceBookingDraft(createEmptyBookingDraft(), {
         type: "reschedule_started",
@@ -8623,7 +8725,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.note.status).toBe("unasked");
   });
 
-  it("reports an unavailable requested time and offers the remaining CRM slots", () => {
+  it("reports an unavailable requested time and offers the remaining CRM slots", async () => {
     const finalize = createAgentFinalizeNode(agent);
     const draft = reduceBookingDraft(
       reduceBookingDraft(createEmptyBookingDraft(), {
@@ -8641,7 +8743,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       stepMinutes: 30,
       startIntervalMinutes: 30,
     };
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         bookingDraft: unavailable,
         availabilityContext: remainingAvailability,
@@ -8669,7 +8771,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it("keeps consultation consent and the selected slot through note skip", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const offer = finalize(
+    const offer = await finalize(
       clinicState({
         messages: [new HumanMessage("Записатись")],
         agentMessages: [new AIMessage("Підібрати вільний час на консультацію?")],
@@ -9199,7 +9301,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
 
   it.each([undefined, true])(
     "rejects a mutation call after a non-affirmative chat reply (confirmationGiven=%s)",
-    (confirmationGiven) => {
+    async (confirmationGiven) => {
       const state = availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft(),
@@ -9233,14 +9335,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       });
 
       expect(routeAfterAgentLlm(state, 8, "tools", "finalize", "prepare")).toBe("finalize");
-      const finalized = createAgentFinalizeNode(agent)(state);
+      const finalized = await createAgentFinalizeNode(agent)(state);
       expect((finalized.messages as AIMessage[])[0]?.tool_calls).toHaveLength(0);
     },
   );
 
-  it("invalidates a create slot when chat confirmation remains unresolved", () => {
+  it("invalidates a create slot when chat confirmation remains unresolved", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft(),
@@ -9266,9 +9368,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it("does not drop the slot when keep/switch already cleared the confirm command", () => {
+  it("does not drop the slot when keep/switch already cleared the confirm command", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         bookingDraft: canonicalBookingDraft({
           phase: "details",
@@ -9305,9 +9407,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     ]);
   });
 
-  it("finalize keeps keep/switch labels in text and on the keyboard", () => {
+  it("finalize keeps keep/switch labels in text and on the keyboard", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         contactContext: ownedContactContext(),
         bookingDraft: canonicalBookingDraft({
@@ -9385,7 +9487,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       tool_call_id: "slots-22",
     });
 
-  it("ignores pre-HITL leftover slots for TIME overlay after unresolved confirmation", () => {
+  it("ignores pre-HITL leftover slots for TIME overlay after unresolved confirmation", async () => {
     const leftover = [
       oct20SlotsTool(),
       new ToolMessage({
@@ -9402,7 +9504,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(resolveAvailabilityOffer(leftover, null, false)).toBeNull();
   });
 
-  it("TIME-overlays only slots that ran after pending confirmation", () => {
+  it("TIME-overlays only slots that ran after pending confirmation", async () => {
     const offer = availabilityOfferFromToolTurn([
       oct20SlotsTool(),
       new ToolMessage({
@@ -9420,9 +9522,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(offer?.replyText).not.toContain("20 жовтня");
   });
 
-  it("does not rewrite HITL other-reply prose with leftover pre-confirm TIME", () => {
+  it("does not rewrite HITL other-reply prose with leftover pre-confirm TIME", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         messages: [new HumanMessage("запиши на 22 жовтня")],
         contactContext: ownedContactContext(),
@@ -9534,10 +9636,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it("abandons a create draft after an explicit chat decline", () => {
+  it("abandons a create draft after an explicit chat decline", async () => {
     // Adapter maps NL decline to { confirmed: false } → cancelled tool result.
     const finalize = createAgentMutationFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft(),
@@ -9558,9 +9660,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.lastHandoff?.replyText).toBe("Запис не було створено.");
   });
 
-  it("invalidates a reschedule slot when chat confirmation remains unresolved", () => {
+  it("invalidates a reschedule slot when chat confirmation remains unresolved", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         bookingDraft: {
           ...canonicalBookingDraft({
@@ -9595,9 +9697,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it("clears direct cancellation confirmation state when chat confirmation remains unresolved", () => {
+  it("clears direct cancellation confirmation state when chat confirmation remains unresolved", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         pendingCancellationPurpose: "direct",
         bookingDraft: {
@@ -9631,9 +9733,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.pendingCancellationPurpose).toBeNull();
   });
 
-  it("terminates replacement cancellation when chat confirmation remains unresolved", () => {
+  it("terminates replacement cancellation when chat confirmation remains unresolved", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         pendingCancellationPurpose: "replacement",
         bookingDraft: {
@@ -9894,14 +9996,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   };
 
-  it("matches clock-time picks from the availability snapshot", () => {
+  it("matches clock-time picks from the availability snapshot", async () => {
     expect(matchAvailabilitySlot("14:00", snapshot)?.dateStart).toBe("2026-09-10T14:00:00");
     expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
     expect(matchAvailabilitySlot(OTHER_DATE_LABEL, snapshot)).toBeNull();
     expect(matchAvailabilitySlot("Інша", snapshot)).toBeNull();
   });
 
-  it("matches a unique bare day only inside the trusted availability snapshot", () => {
+  it("matches a unique bare day only inside the trusted availability snapshot", async () => {
     const days: AvailabilityContext["days"] = [
       { ...snapshot.days[0]!, date: "2026-10-27", dayLabel: "27 жовтня (вівторок)" },
       { ...snapshot.days[0]!, date: "2026-10-28", dayLabel: "28 жовтня (середа)" },
@@ -9914,7 +10016,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     ])).toBeNull();
   });
 
-  it("never resolves a repeated clock time from the wrong day", () => {
+  it("never resolves a repeated clock time from the wrong day", async () => {
     const multiDaySnapshot: AvailabilityContext = {
       days: [
         {
@@ -9945,7 +10047,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       .toBe("2026-10-17T11:30:00");
   });
 
-  it("treats a bare hour as TIME even when another offered date has that day number", () => {
+  it("treats a bare hour as TIME even when another offered date has that day number", async () => {
     const availability: AvailabilityContext = {
       days: [
         {
@@ -9982,7 +10084,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-27T11:00:00");
   });
 
-  it("checkpoints the selected day before resolving its time", () => {
+  it("checkpoints the selected day before resolving its time", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-01T09:00:00Z"));
     try {
@@ -10105,7 +10207,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", () => {
+  it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", async () => {
     const update = advanceBookingNoteStep(
       availabilityClinicState({
         messages: [new HumanMessage("губи"), new HumanMessage("14:00")],
@@ -10122,7 +10224,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.selectedSlot?.label).toBe("14:00");
   });
 
-  it("checkpoints bare day, bare hour, and note skip as one canonical ladder", () => {
+  it("checkpoints bare day, bare hour, and note skip as one canonical ladder", async () => {
     const availability: AvailabilityContext = {
       days: [
         {
@@ -10182,7 +10284,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(skipped.note.status).toBe("skipped");
   });
 
-  it("advanceBookingNoteStep skips on INTENT shortcut; free text stays for the note orch", () => {
+  it("advanceBookingNoteStep skips on INTENT shortcut; free text stays for the note orch", async () => {
     expect(
       advanceBookingNoteStep(
         availabilityClinicState({
@@ -10209,7 +10311,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(freeText.pendingInteraction).toBeUndefined();
   });
 
-  it("treats a new explicit date as a date change while the note prompt is visible", () => {
+  it("treats a new explicit date as a date change while the note prompt is visible", async () => {
     const draft = {
       version: 3,
       mode: "create" as const,
@@ -10242,7 +10344,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.note.status).toBe("awaiting");
   });
 
-  it("selects the trusted interval without treating legacy step metadata as duration truth", () => {
+  it("selects the trusted interval without treating legacy step metadata as duration truth", async () => {
     const update = advanceBookingNoteStep(
       availabilityClinicState({
         messages: [new HumanMessage("12:30")],
@@ -10285,9 +10387,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.bookingDraft?.note.status).toBe("awaiting");
   });
 
-  it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", () => {
+  it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         stepCount: 1,
         bookingDraft: canonicalBookingDraft({
@@ -10334,7 +10436,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(toolsUpdate.bookingDraft?.note.status).toBe("awaiting");
 
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       availabilityClinicState({
         stepCount: 2,
         bookingDraft: canonicalBookingDraft({
@@ -10411,7 +10513,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const llmUpdate = await llm(state);
     expect(invoke).not.toHaveBeenCalled();
 
-    const update = createAgentFinalizeNode(agent)(availabilityClinicState({
+    const update = await createAgentFinalizeNode(agent)(availabilityClinicState({
       ...state,
       agentMessages: [
         ...state.agentMessages,
@@ -12278,9 +12380,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     ]);
   });
 
-  it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", () => {
+  it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const withTool = finalize(
+    const withTool = await finalize(
       availabilityClinicState({
         stepCount: 2,
         availabilityContext: {
@@ -12338,7 +12440,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       OTHER_DATE_LABEL,
     ]);
 
-    const proseOnly = finalize(
+    const proseOnly = await finalize(
       clinicState({
         stepCount: 1,
         availabilityContext: {
@@ -12368,9 +12470,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(proseOnly.lastHandoff?.replyButtons).toBeUndefined();
   });
 
-  it("does not attach navigation when an empty-date model reply has no validated tool result", () => {
+  it("does not attach navigation when an empty-date model reply has no validated tool result", async () => {
     const finalize = createAgentFinalizeNode(agent);
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         availabilityContext: {
           days: [
@@ -12941,7 +13043,7 @@ describe("availability draft invariant", () => {
     expect(String(toolMsg?.content)).toContain("Availability requires accepted service");
   });
 
-  it("finalize cannot build DATE/TIME UI from a null create draft", () => {
+  it("finalize cannot build DATE/TIME UI from a null create draft", async () => {
     const finalize = createAgentFinalizeNode({
       id: "booking",
       name: "Booking",
@@ -12949,7 +13051,7 @@ describe("availability draft invariant", () => {
       systemPrompt: "booking",
       maxSteps: 10,
     });
-    const update = finalize(
+    const update = await finalize(
       clinicState({
         bookingDraft: null,
         agentMessages: [

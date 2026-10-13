@@ -341,12 +341,20 @@ const FAQ_CATALOG_ACTION_TAG_GLOBAL =
 const FAQ_CATALOG_ACTION_ATTR =
   /\baction\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
 
-export type FaqCatalogAction = "keep_catalog" | "offer_consultation" | "close_catalog";
+const FAQ_CATALOG_QUERY_ATTR =
+  /\bquery\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+
+export type FaqCatalogAction =
+  | "keep_catalog"
+  | "offer_consultation"
+  | "close_catalog"
+  | "open_catalog";
 
 const FAQ_CATALOG_ACTIONS = new Set<FaqCatalogAction>([
   "keep_catalog",
   "offer_consultation",
   "close_catalog",
+  "open_catalog",
 ]);
 
 export type ExtractedFaqCatalogAction = {
@@ -354,6 +362,11 @@ export type ExtractedFaqCatalogAction = {
   text: string;
   /** Validated action, or null when missing/invalid/conflicting. */
   action: FaqCatalogAction | null;
+  /**
+   * Model-authored catalog query for {@link FaqCatalogAction} `open_catalog`.
+   * Empty/omitted → root catalog. Null when action is not open_catalog.
+   */
+  query: string | null;
 };
 
 const parseFaqCatalogActionValue = (raw: string | undefined): FaqCatalogAction | null => {
@@ -366,21 +379,38 @@ const parseFaqCatalogActionValue = (raw: string | undefined): FaqCatalogAction |
     : null;
 };
 
+const parseFaqCatalogQueryAttr = (attrs: string): string | null => {
+  const match = FAQ_CATALOG_QUERY_ATTR.exec(attrs ?? "");
+  FAQ_CATALOG_QUERY_ATTR.lastIndex = 0;
+  const value = match?.[1] ?? match?.[2];
+  if (value == null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : "";
+};
+
 /**
  * Extract a validated FAQ catalog control action.
  * Strips every paired and self-closing tag. One valid action is returned;
  * zero, invalid-only, or multiple/conflicting valid actions yield action null.
+ * Optional `query` is kept only for a single `open_catalog` action.
  */
 export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction => {
   const validActions: FaqCatalogAction[] = [];
+  const queries: Array<string | null> = [];
   const text = raw
     .replace(FAQ_CATALOG_ACTION_TAG_GLOBAL, (_full, attrs: string, body?: string) => {
       const fromAttr = FAQ_CATALOG_ACTION_ATTR.exec(attrs ?? "");
+      FAQ_CATALOG_ACTION_ATTR.lastIndex = 0;
       const attrValue = fromAttr?.[1] ?? fromAttr?.[2];
       const parsed = parseFaqCatalogActionValue(attrValue)
         ?? parseFaqCatalogActionValue(body);
       if (parsed != null) {
         validActions.push(parsed);
+        queries.push(
+          parsed === "open_catalog" ? parseFaqCatalogQueryAttr(attrs ?? "") : null,
+        );
       }
       return "";
     })
@@ -391,5 +421,6 @@ export const extractFaqCatalogAction = (raw: string): ExtractedFaqCatalogAction 
 
   // Zero, duplicate, or conflicting valid tags → null (do not pick the first).
   const action = validActions.length === 1 ? validActions[0]! : null;
-  return { text, action };
+  const query = action === "open_catalog" ? (queries[0] ?? "") : null;
+  return { text, action, query };
 };

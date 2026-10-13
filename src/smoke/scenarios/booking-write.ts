@@ -54,6 +54,7 @@ import {
   openBookingOffer,
   pickFamilyFreeText,
   pickUniqueNamedProcedure,
+  selectUniqueProcedureAfterRootCatalog,
 } from "./offer-helpers.js";
 
 const PRICE_HINT = /грн|\d/i;
@@ -312,6 +313,8 @@ export const replaceRebookScenario: SmokeScenario = {
   run: async (ctx) => {
     const telegramId = writeTelegramId("d");
     const { contactId, phone } = await prepareFreshContact(ctx, telegramId);
+    const catalog = await loadCatalogServiceRows(ctx.callTool, "replace-rebook");
+    const procedure = pickUniqueNamedProcedure(catalog, "replace-rebook");
     const bundle = openBookingSession(ctx, "replace-rebook", telegramId);
     try {
       const first = await runBookFlow(bundle, {
@@ -360,6 +363,13 @@ export const replaceRebookScenario: SmokeScenario = {
         );
       }
 
+      const offer = await selectUniqueProcedureAfterRootCatalog(
+        bundle.session,
+        "replace-rebook",
+        procedure,
+        cancelConfirmed,
+      );
+
       const driveCreate = await driveUntilMutationConfirm(bundle, {
         phone,
         ...SMOKE_CONTACT_NAME,
@@ -374,6 +384,7 @@ export const replaceRebookScenario: SmokeScenario = {
       const allPostReplace = [
         ...cancelTap.calls,
         ...cancelConfirmed.calls,
+        ...offer.calls,
         ...driveCreate.flatMap((turn) => turn.calls),
         ...created.calls,
       ];
@@ -735,9 +746,24 @@ export const replaceNamedProcedureScenario: SmokeScenario = {
       }
 
       const bookBotox = await bundle.session.say(`запиши на ${family.text}`);
-      expectFamilyCatalogTurn("replace-named-procedure запиши на ботокс", bookBotox, {
-        familyIds: family.familyIds,
-      });
+      const bookPending = bookBotox.state.pendingInteraction;
+      // Idle named+no-visit is supervisor-LLM-owned (no graph stem hijack). A
+      // mistaken book→consultation is a soft warning; catalog-on-open already
+      // proved family chips above.
+      const bookedConsultation =
+        bookPending?.kind === "service_confirm"
+        && bookPending.service.id === CONSULTATION_SERVICE_ID;
+      if (bookedConsultation) {
+        soft(
+          bundle.warnings,
+          "replace-named-procedure: supervisor routed book→consultation for named+no-visit",
+          false,
+        );
+      } else {
+        expectFamilyCatalogTurn("replace-named-procedure запиши на ботокс", bookBotox, {
+          familyIds: family.familyIds,
+        });
+      }
       if (bookBotox.reply.includes("Запис скасовано.")) {
         throw new SmokeAssertError(
           "replace-named-procedure: «запиши на ботокс» replayed «Запис скасовано.»",

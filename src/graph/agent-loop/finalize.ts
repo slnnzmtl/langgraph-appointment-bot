@@ -41,10 +41,15 @@ import {
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { reduceBookingDraft } from "../booking-draft.js";
 import { meetingServiceLabel } from "../context-blocks.js";
 import { bookingDraftCanPresentAvailability } from "../booking-draft.js";
+import {
+  openCatalogFromFreeText,
+  openRootFaqCatalog,
+} from "../booking-entry-policy.js";
 import {
   consultationService,
   isBookingOwnedInteraction,
@@ -63,6 +68,10 @@ import {
   faqCatalogIntroFromModel,
   renderFaqCatalogReply,
 } from "../faq-catalog.js";
+import type {
+  PartitionServiceCandidates,
+  SelectServiceCandidates,
+} from "../service-resolution.js";
 import { isModelFailureMessage, tagRuntimeAgentMessage } from "../sub-agent-messages.js";
 
 import {
@@ -263,8 +272,20 @@ const withServiceConfirmQuestion = (
   return `${explanation}\n\n${question}`;
 };
 
-export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
-  (state: ClinicState, config?: RunnableConfig): ClinicStateUpdate | Command => {
+export type CreateAgentFinalizeOptions = {
+  partitionCandidates?: PartitionServiceCandidates;
+  selectCandidates?: SelectServiceCandidates;
+  loadServices?: () => Promise<ServicesContext | null>;
+};
+
+export const createAgentFinalizeNode = (
+  agent: ClinicAgentDefinition,
+  options?: CreateAgentFinalizeOptions,
+) =>
+  async (
+    state: ClinicState,
+    config?: RunnableConfig,
+  ): Promise<ClinicStateUpdate | Command> => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
       // Includes main-menu leave → Command({ goto: "supervisor" }).
@@ -468,8 +489,11 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
     // Catalog control is the parsed tag only; every tag shape is stripped from text.
-    const { text: textWithoutCatalogAction, action: faqCatalogAction } =
-      extractFaqCatalogAction(rawText);
+    const {
+      text: textWithoutCatalogAction,
+      action: faqCatalogAction,
+      query: faqCatalogQuery,
+    } = extractFaqCatalogAction(rawText);
     const { text, buttons: accidentalButtons, yieldToSupervisor: yieldTag } =
       extractReplyButtons(textWithoutCatalogAction);
     let replyText = text.trim();
@@ -658,7 +682,80 @@ export const createAgentFinalizeNode = (agent: ClinicAgentDefinition) =>
         state.pendingInteraction?.kind === "service_candidate"
         && state.pendingInteraction.owner === "faq";
       const openCatalogDetour = state.pendingInteraction?.kind === "catalog_detour";
-      if (openFaqCatalog) {
+      if (faqCatalogAction === "open_catalog") {
+        // Model-authored open — matcher runs only on the tag query (not patient prose).
+        let services = state.servicesContext?.list ?? [];
+        let servicesUpdate: ClinicStateUpdate = {};
+        if (services.length === 0 && options?.loadServices != null) {
+          const loaded = await options.loadServices().catch(() => null);
+          if (loaded != null && loaded.list.length > 0) {
+            servicesUpdate = { servicesContext: loaded };
+            services = loaded.list;
+          }
+        }
+        const query = (faqCatalogQuery ?? "").trim();
+        const session = query.length > 0
+          ? await openCatalogFromFreeText({
+              text: query,
+              services,
+              utterance: query,
+              selectedLabel: query,
+              session: {
+                bookingDraft: state.bookingDraft ?? null,
+                pendingInteraction: state.pendingInteraction ?? null,
+              },
+              consultationDeclined: true,
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+              ...(options?.selectCandidates != null
+                ? { selectCandidates: options.selectCandidates }
+                : {}),
+            })
+          : await openRootFaqCatalog({
+              services,
+              bookingDraft: state.bookingDraft ?? null,
+              utterance: "catalog",
+              ...(options?.partitionCandidates != null
+                ? { partitionCandidates: options.partitionCandidates }
+                : {}),
+            });
+        if (session?.pendingInteraction != null) {
+          serviceOfferUpdate = {
+            ...servicesUpdate,
+            bookingDraft: session.bookingDraft,
+            pendingInteraction: session.pendingInteraction,
+          };
+          if (session.pendingInteraction.kind === "service_candidate") {
+            const modelIntro = faqCatalogIntroFromModel(replyText);
+            replyText = renderFaqCatalogReply(
+              session.pendingInteraction.choices,
+              services,
+              modelIntro,
+            );
+            replyButtons = replyButtonsForInteraction(session.pendingInteraction);
+            replySource = "runtime";
+            trackEvent("reply_menu_filled", {
+              menu: "service_candidate",
+              reason: "faq_open_catalog",
+            });
+          } else if (session.pendingInteraction.kind === "service_confirm") {
+            replyText = withServiceConfirmQuestion(
+              replyText,
+              session.pendingInteraction,
+            );
+            replyButtons = replyButtonsForInteraction(session.pendingInteraction);
+            replySource = "runtime";
+            yieldFlag = true;
+            trackEvent("reply_menu_filled", {
+              menu: "service_confirm",
+              reason: "faq_open_catalog",
+            });
+          }
+        } else if (Object.keys(servicesUpdate).length > 0) {
+          serviceOfferUpdate = servicesUpdate;
+        }
+      } else if (openFaqCatalog) {
         const catalog = state.pendingInteraction as PendingInteraction & {
           kind: "service_candidate";
           owner: "faq";

@@ -231,7 +231,20 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       )
       .addNode(
         finalize,
-        createAgentFinalizeNode(agent),
+        createAgentFinalizeNode(
+          agent,
+          agent.id === FAQ_AGENT_ID
+            ? {
+                ...(faqPartitionCandidates != null
+                  ? { partitionCandidates: faqPartitionCandidates }
+                  : {}),
+                ...(faqSelectCandidates != null
+                  ? { selectCandidates: faqSelectCandidates }
+                  : {}),
+                ...(loadServices != null ? { loadServices } : {}),
+              }
+            : undefined,
+        ),
         // Safety-net path may return the same abandon Command as mutationFinalize.
         { ends: [END, "supervisor"] },
       );

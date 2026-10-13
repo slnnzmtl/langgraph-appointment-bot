@@ -103,15 +103,9 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "reschedule_meeting",
 ]);
 
-/** Browse shortcuts that open catalog chips even when list_services is reused. */
-export const FAQ_CATALOG_SHORTCUT_LABELS = new Set<string>([
-  BOOKING_OFFER_MENU[1],
-  BOOKING_OFFER_MENU_EN[1],
-]);
-
-/** True for «Обрати іншу процедуру» / Choose another procedure / bare «Ні». */
+/** True for the choose-other chip (and its service_confirm aliases). */
 export const isFaqCatalogBrowseShortcut = (text: string): boolean =>
-  FAQ_CATALOG_SHORTCUT_LABELS.has(text)
+  labelIdFor(text) === "offerChooseOther"
   || matchesReplyLabel(text, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES);
 
 /** Services-guide taps: consultation offer, not catalog drill-down chips. */

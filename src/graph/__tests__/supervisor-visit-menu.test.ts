@@ -5,14 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import {
   ABANDON_BOOKING_REPLY_UK,
-  BOOKING_OFFER_MENU_EN,
   CONSULTATION_SERVICE_ID,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
   INTENT_SKIP_LABEL,
   MAIN_MENU_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
-  SERVICE_CONFIRM_CONSULTATION_EN,
   VISIT_CHANGE_MENU,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
@@ -817,39 +815,29 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
-  it("FINISH-renders a canonical consultation offer for a fresh generic book intent", async () => {
+  it("routes a fresh generic book intent to booking via the supervisor LLM", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "book" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
       }),
     );
-    expect(update.next).toBe("FINISH");
-    expect(update.pendingInteraction?.kind).toBe("service_confirm");
-    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-      status: "pending",
-      service: { id: CONSULTATION_SERVICE_ID },
-    });
-    expect(update.lastHandoff?.replyButtons).toEqual(
-      expect.arrayContaining(["Так", "Обрати іншу процедуру"]),
-    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
   });
 
-  it("FINISH-renders an English consultation offer for English free-text book", async () => {
+  it("routes English free-text book to booking via the supervisor LLM", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "book" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("Can I book an appointment?")],
       }),
     );
-    expect(update.next).toBe("FINISH");
-    expect(update.pendingInteraction?.kind).toBe("service_confirm");
-    expect(update.bookingDraft?.serviceAcceptance).toMatchObject({
-      status: "pending",
-      service: { id: CONSULTATION_SERVICE_ID },
-    });
-    expect(update.lastHandoff?.replyText).toBe(SERVICE_CONFIRM_CONSULTATION_EN);
-    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU_EN]);
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });
 
   it("does not FINISH-offer consultation when planned visits exist", async () => {
@@ -882,14 +870,28 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
   });
 
-  it("routes named-procedure booking language to faq without seeding consultation", async () => {
+  it("routes named-procedure booking with no visit to faq without seeding consultation", async () => {
     invoke.mockResolvedValue({ next: "faq", intent: "faq" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("запиши на ботокс")],
       }),
     );
+    expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+  });
+
+  it("routes named-procedure booking with a planned visit to booking without seeding consultation", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [new HumanMessage("запиши на ботокс")],
+      }),
+    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
     expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });

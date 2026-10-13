@@ -22,9 +22,6 @@ const WRITE_TOOLS = [
   "reschedule_meeting",
 ] as const;
 
-/** CRM rows in the botulinum therapy family (live catalog naming). */
-const BOTULINUM_FAMILY_LABEL = "ботулінотерап";
-
 export const isConsultationName = (name: string): boolean =>
   /консультац/i.test(name.trim());
 
@@ -93,37 +90,124 @@ export const pickUniqueNamedProcedure = (
   );
 };
 
+/** CRM titles in the botulinum family (Latin brand rows the LLM selector adds). */
+const BOTULINUM_FAMILY_LABEL = "ботулінотерап";
+
 export type FamilyFreeTextPick = {
   text: "ботокс";
   familyIds: string[];
 };
 
 /**
- * Live botulinum family for free-text «ботокс» smoke coverage. Requires ≥2 CRM
- * rows. Lexical may already hit brand titles containing «ботокс»; otherwise the
- * LLM selector path must resolve the family.
+ * Live family for free-text «ботокс» smoke coverage. Requires ≥2
+ * {@link matchingCatalogRows} hits (includes «Корекція ботокс» / «Мезоботокс»).
+ * Allowlist also unions botulinum CRM titles so brand chips the family
+ * selector expands to (Botox/Disport) are not rejected as non-family.
  */
 export const pickFamilyFreeText = (
   services: ServicesContext["list"],
   label: string,
 ): FamilyFreeTextPick => {
-  const familyIds = services
-    .filter((row) => normalizeReplyLabel(row.name).includes(BOTULINUM_FAMILY_LABEL))
-    .map((row) => row.id);
-  if (familyIds.length < 2) {
-    throw new SmokeAssertError(
-      `${label}: need ≥2 botulinum catalog rows for «ботокс» free-text, got ${familyIds.length}`,
-    );
-  }
-  const familySet = new Set(familyIds);
   const lexical = matchingCatalogRows("ботокс", services);
-  const lexicalOutsideFamily = lexical.filter((row) => !familySet.has(row.id));
-  if (lexicalOutsideFamily.length > 0) {
+  if (lexical.length < 2) {
     throw new SmokeAssertError(
-      `${label}: matchingCatalogRows(«ботокс») hit non-family rows ${lexicalOutsideFamily.map((r) => r.name).join(" | ")}`,
+      `${label}: matchingCatalogRows(«ботокс») need ≥2 rows, got ${lexical.length}`,
     );
   }
+  const familyIds = [
+    ...new Set([
+      ...lexical.map((row) => row.id),
+      ...services
+        .filter((row) => normalizeReplyLabel(row.name).includes(BOTULINUM_FAMILY_LABEL))
+        .map((row) => row.id),
+    ]),
+  ];
   return { text: "ботокс", familyIds };
+};
+
+/** Root FAQ catalog opened after a no-service replacement cancel. */
+export const assertFaqRootCatalog = (label: string, turn: TurnResult): void => {
+  const pending = turn.state.pendingInteraction;
+  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
+    throw new SmokeAssertError(
+      `${label}: expected faq service_candidate, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
+    );
+  }
+  if (pending.consultationDeclined !== true) {
+    throw new SmokeAssertError(
+      `${label}: root catalog must set consultationDeclined`,
+    );
+  }
+  if (pending.choices.length === 0) {
+    throw new SmokeAssertError(`${label}: root catalog has no choices`);
+  }
+  if (turn.buttons.includes(BOOKING_OFFER_MENU[0])) {
+    throw new SmokeAssertError(
+      `${label}: root catalog opened a consultation/service offer`,
+    );
+  }
+};
+
+/** service_confirm for one CRM row after a deterministic catalog token. */
+export const assertServiceOffer = (
+  label: string,
+  turn: TurnResult,
+  serviceId: string,
+): void => {
+  const pending = turn.state.pendingInteraction;
+  if (pending?.kind !== "service_confirm" || pending.service.id !== serviceId) {
+    throw new SmokeAssertError(
+      `${label}: expected service_confirm ${serviceId}, got ${pending?.kind ?? "null"}/${pending?.kind === "service_confirm" ? pending.service.id : "n/a"}`,
+    );
+  }
+};
+
+/**
+ * After a no-service cancel, submit the scenario's unique procedure token
+ * and require that service offer. When the FAQ model opens family chips via
+ * `open_catalog` instead of a single offer, drill to the unique row.
+ */
+export const selectUniqueProcedureAfterRootCatalog = async (
+  session: SmokeSession,
+  label: string,
+  procedure: NamedProcedurePick,
+  cancelTurn: TurnResult,
+): Promise<TurnResult> => {
+  assertFaqRootCatalog(label, cancelTurn);
+  let turn = await session.say(procedure.token);
+  for (let i = 0; i < 6; i += 1) {
+    const pending = turn.state.pendingInteraction;
+    if (pending?.kind === "service_confirm" && pending.service.id === procedure.id) {
+      return turn;
+    }
+    if (pending?.kind === "service_candidate" && pending.owner === "faq") {
+      const exact = pending.choices.find(
+        (choice) =>
+          choice.id !== "other"
+          && choice.id !== "return_to_booking"
+          && (choice.serviceIds?.length === 1 && choice.serviceIds[0] === procedure.id)
+          && turn.buttons.includes(choice.label),
+      );
+      const containing = pending.choices.find(
+        (choice) =>
+          choice.id !== "other"
+          && choice.id !== "return_to_booking"
+          && choice.serviceIds?.includes(procedure.id) === true
+          && turn.buttons.includes(choice.label),
+      );
+      const pick = exact ?? containing;
+      if (pick != null) {
+        turn = await session.tap(pick.label);
+        continue;
+      }
+      // Exact CRM title often collapses open_catalog to service_confirm.
+      turn = await session.say(procedure.name);
+      continue;
+    }
+    break;
+  }
+  assertServiceOffer(label, turn, procedure.id);
+  return turn;
 };
 
 /** Assert a turn opened narrowed FAQ family chips (not root, not Так/Обрати). */
@@ -136,6 +220,27 @@ export const expectFamilyCatalogTurn = (
   },
 ): void => {
   const pending = turn.state.pendingInteraction;
+  // Family selector may collapse slang to one CRM row — still a valid catalog hit.
+  if (pending?.kind === "service_confirm") {
+    const familySet = new Set(options.familyIds);
+    if (!familySet.has(pending.service.id)) {
+      throw new SmokeAssertError(
+        `${label}: service_confirm ${pending.service.id} (${pending.service.name ?? "?"}) not in family`,
+      );
+    }
+    if (turn.buttons.includes(BOOKING_OFFER_MENU[0]) === false) {
+      throw new SmokeAssertError(
+        `${label}: unique family offer missing «${BOOKING_OFFER_MENU[0]}»`,
+      );
+    }
+    if (turn.state.bookingDraft?.serviceAcceptance?.status === "accepted") {
+      throw new SmokeAssertError(
+        `${label}: must not auto-accept serviceAcceptance`,
+      );
+    }
+    expectNotCalled(label, turn.calls, [...WRITE_TOOLS]);
+    return;
+  }
   if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
     throw new SmokeAssertError(
       `${label}: expected faq service_candidate, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,

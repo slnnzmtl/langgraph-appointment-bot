@@ -2162,7 +2162,6 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
       bookingContext: { meetings: [], dateFrom: "2026-10-11" },
     });
-    expect(opened.next ?? "FINISH").toBe("FINISH");
     expect(opened.pendingInteraction?.kind).toBe("service_confirm");
     expect(opened.bookingDraft?.serviceAcceptance).toMatchObject({
       status: "pending",

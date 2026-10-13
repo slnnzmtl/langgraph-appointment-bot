@@ -15,6 +15,7 @@ import {
 } from "../../shared/clinic-constants.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
 import {
+  openServiceConfirmInteraction,
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
@@ -44,6 +45,31 @@ describe("cancel-and-rebook routing", () => {
     const state = supervisorState({
       messages: [new HumanMessage("Так")],
       bookingDraft: draft,
+    });
+
+    expect(stickyContinueAgentId(state)).toBe("booking");
+  });
+
+  it("routes Так on FAQ-opened service_confirm to booking (accept)", () => {
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "pending",
+      service: { id: "svc-proc", name: "Колаген", source: "catalog" },
+    };
+    const state = supervisorState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: draft,
+      pendingInteraction: openServiceConfirmInteraction({
+        id: "svc-proc",
+        name: "Колаген",
+        source: "catalog",
+      }),
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "offer",
+      },
     });
 
     expect(stickyContinueAgentId(state)).toBe("booking");
@@ -708,7 +734,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
   );
 
   it("nulls availabilityContext when FAQ routes to booking", async () => {
-    invoke.mockResolvedValue({ next: "booking", reply: "" });
+    invoke.mockResolvedValue({ next: "booking", intent: "consultation_request" });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,

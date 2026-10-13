@@ -6,7 +6,10 @@ import {
   SmokeAssertError,
 } from "../assert.js";
 import { writeTelegramId } from "../env.js";
-import { openBookingSession } from "./booking-helpers.js";
+import {
+  openBookingSession,
+  prepareFreshContact,
+} from "./booking-helpers.js";
 import type { CallRecord, SmokeScenario } from "../types.js";
 
 /** MCP writes that must never run in this read-only booking invoke smoke. */
@@ -26,6 +29,9 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
   tier: "invoke",
   run: async (ctx) => {
     const telegramId = writeTelegramId("g");
+    // Owned contact so idle generic book opens the consultation card (unknown
+    // identity leaves the booking LLM to ask for a phone instead).
+    await prepareFreshContact(ctx, telegramId);
     const bundle = openBookingSession(ctx, "booking-free-text-typed-slot", telegramId);
     try {
       const opened = await bundle.session.say(

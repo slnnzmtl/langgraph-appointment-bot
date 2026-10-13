@@ -97,6 +97,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Видимий текст.",
       action,
+      query: null,
     });
   });
 
@@ -112,6 +113,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Видимий текст.",
       action,
+      query: null,
     });
   });
 
@@ -120,7 +122,7 @@ describe("extractFaqCatalogAction", () => {
       extractFaqCatalogAction(
         `Текст.\n<faq_catalog_action   action='keep_catalog'  />`,
       ),
-    ).toEqual({ text: "Текст.", action: "keep_catalog" });
+    ).toEqual({ text: "Текст.", action: "keep_catalog", query: null });
   });
 
   it("returns null action when the tag is missing", () => {
@@ -129,6 +131,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "• Консультації та діагностика\n\nЯкий варіант вам підходить?",
       action: null,
+      query: null,
     });
   });
 
@@ -140,6 +143,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Текст.",
       action: null,
+      query: null,
     });
     expect(
       extractFaqCatalogAction(
@@ -148,6 +152,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Текст.",
       action: null,
+      query: null,
     });
   });
 
@@ -159,6 +164,7 @@ describe("extractFaqCatalogAction", () => {
     ).toEqual({
       text: "Текст.",
       action: "keep_catalog",
+      query: null,
     });
   });
 
@@ -171,7 +177,7 @@ describe("extractFaqCatalogAction", () => {
           '<faq_catalog_action action="keep_catalog"/>',
         ].join("\n"),
       ),
-    ).toEqual({ text: "Текст.", action: null });
+    ).toEqual({ text: "Текст.", action: null, query: null });
     expect(
       extractFaqCatalogAction(
         [
@@ -180,7 +186,7 @@ describe("extractFaqCatalogAction", () => {
           '<faq_catalog_action action="close_catalog"/>',
         ].join("\n"),
       ),
-    ).toEqual({ text: "Текст.", action: null });
+    ).toEqual({ text: "Текст.", action: null, query: null });
   });
 
   it("leaves no faq_catalog_action substring after stripping malformed tags", () => {
@@ -190,6 +196,28 @@ describe("extractFaqCatalogAction", () => {
     expect(result.text).not.toContain("faq_catalog_action");
     expect(result.text).toContain("Текст.");
     expect(result.action).toBe("keep_catalog");
+    expect(result.query).toBeNull();
+  });
+
+  it("extracts open_catalog with optional query", () => {
+    expect(
+      extractFaqCatalogAction(
+        'Ось ботокс.\n<faq_catalog_action action="open_catalog" query="ботокс"/>',
+      ),
+    ).toEqual({
+      text: "Ось ботокс.",
+      action: "open_catalog",
+      query: "ботокс",
+    });
+    expect(
+      extractFaqCatalogAction(
+        "Ось каталог.\n<faq_catalog_action>open_catalog</faq_catalog_action>",
+      ),
+    ).toEqual({
+      text: "Ось каталог.",
+      action: "open_catalog",
+      query: "",
+    });
   });
 });
 

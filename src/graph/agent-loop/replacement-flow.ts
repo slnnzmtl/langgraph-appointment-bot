@@ -7,7 +7,7 @@ import {
   openVisitReplacementInteraction,
 } from "../booking-session.js";
 
-import { lastPatientText } from "./shared.js";
+import { lastPatientText, resolveContactIdentity } from "./shared.js";
 
 export type BookingEntryTransition =
   | {
@@ -33,10 +33,11 @@ const isFreshCreateDraft = (state: ClinicState): boolean => {
 /**
  * Resolve graph-owned entry into the create flow once, before the LLM.
  *
+ * Decisions use checkpoint state (meetings, draft, contact ownership, keyboard
+ * labels) — not utterance regex for named vs generic booking.
+ *
  * A visit action/meeting menu is superseded only by the explicit main-book
- * shortcut. This distinction matters because schedule repair can open that
- * same menu internally on an unrelated turn. Replacement and mutation
- * confirmation are active write workflows and are never superseded here.
+ * shortcut. Replacement and mutation confirmation are never superseded here.
  */
 export const bookingEntryTransitionForTurn = (
   state: ClinicState,
@@ -63,9 +64,24 @@ export const bookingEntryTransitionForTurn = (
   }
 
   if (
-    explicitMainBook
-    && isFreshCreateDraft(state)
-    && interaction?.kind !== "service_confirm"
+    !isFreshCreateDraft(state)
+    || interaction?.kind === "service_confirm"
+  ) {
+    return null;
+  }
+
+  // Keyboard «Записатись»: consultation even when contact is unknown.
+  if (explicitMainBook && (!visitSelectionOpen || explicitMainBook)) {
+    return { kind: "offer_consultation" };
+  }
+
+  // Idle booking handoff with no planned visit: consultation only when the
+  // Telegram contact is already owned. Unknown identity leaves the booking LLM
+  // to ask for a phone.
+  if (
+    !visitSelectionOpen
+    && (state.bookingContext?.meetings.length ?? 0) === 0
+    && resolveContactIdentity(state.contactContext).kind === "owned"
   ) {
     return { kind: "offer_consultation" };
   }
