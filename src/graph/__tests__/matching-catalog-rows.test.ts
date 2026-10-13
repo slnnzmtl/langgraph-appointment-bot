@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  isNamedBookingUtterance,
-  matchingCatalogRows,
-} from "../agent-loop/shared.js";
+import { matchingCatalogRows } from "../agent-loop/shared.js";
 
 const catalog = [
   {
@@ -55,19 +52,5 @@ describe("matchingCatalogRows", () => {
     expect(matchingCatalogRows("да", catalog)).toEqual([]);
     expect(matchingCatalogRows("що це?", catalog)).toEqual([]);
     expect(matchingCatalogRows("можна записатись на ботокс?", catalog)).toEqual([]);
-  });
-});
-
-describe("isNamedBookingUtterance", () => {
-  it("is true when CRM stems remain beside leftover book tokens", () => {
-    expect(isNamedBookingUtterance("запиши на колаген", catalog)).toBe(true);
-    expect(isNamedBookingUtterance("запиши на ботокс", catalog)).toBe(true);
-    expect(isNamedBookingUtterance("можна записатись на ботокс?", catalog)).toBe(true);
-  });
-
-  it("is false for price questions and bare CRM names", () => {
-    expect(isNamedBookingUtterance("Скільки коштує ботокс?", catalog)).toBe(false);
-    expect(isNamedBookingUtterance("що таке ботокс", catalog)).toBe(false);
-    expect(isNamedBookingUtterance("Колагеностимуляція Полімолочна кислота", catalog)).toBe(false);
   });
 });

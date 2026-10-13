@@ -235,6 +235,7 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(update).toEqual({
       next: "booking",
       lastHandoff: null,
+      supervisorIntent: null,
       availabilityContext: null,
       availabilityCursor: null,
     });
@@ -300,6 +301,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
     expect(update.availabilityContext).toBeNull();
     expect(update.servicesContext).toBeUndefined();
+    expect(update.supervisorIntent).toBeNull();
   });
 
   it("reuses checkpointed prefetch when fresh and not dirty", async () => {

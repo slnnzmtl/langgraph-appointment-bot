@@ -6,7 +6,7 @@ export type SupervisorRoutingPath =
   | "chip"
   | "sticky"
   | "faq_predicate"
-  | "named_booking"
+  | "named_booking_refine"
   | "status_pre_llm"
   | "pending_reschedule"
   | "abandon"
@@ -26,6 +26,8 @@ export type SupervisorRoutingTelemetry = {
   regexStatusSignal?: boolean;
   next?: string;
   draftDiscarded?: boolean;
+  /** Model `book` needed CRM evidence but catalog load failed/empty. */
+  catalogUnavailable?: boolean;
 };
 
 export type RouteOutcome = {

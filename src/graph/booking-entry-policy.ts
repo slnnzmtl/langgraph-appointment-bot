@@ -4,6 +4,7 @@ import {
   type PendingInteraction,
 } from "./booking-session.js";
 import {
+  matchingCatalogRows,
   resolveCatalogFreeText,
   resolveFaqCatalogChoices,
   type CatalogFreeTextResult,
@@ -13,7 +14,8 @@ import {
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "./service-resolution.js";
-import type { SupervisorIntent } from "./routing.js";
+import type { ClinicRoutingDecision, SupervisorIntent } from "./routing.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "./types.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 
 const catalogRowToBookingService = (
@@ -190,4 +192,138 @@ export const openRootFaqCatalog = async (input: {
       choices,
     },
   );
+};
+
+/** Post-supervisor routing decision for named vs generic booking. */
+export type NamedBookingPolicyResult = {
+  decision: ClinicRoutingDecision;
+  /** Catalog loaded this turn for CRM evidence (checkpoint when set). */
+  servicesContext?: ServicesContext;
+  /** Model `book` needed CRM rows but the catalog could not be loaded. */
+  catalogUnavailable?: boolean;
+};
+
+const stripTerminalQuestion = (text: string): string =>
+  text.trim().replace(/[?？]+\s*$/u, "").trim();
+
+/**
+ * CRM vocabulary evidence via the shared catalog resolver (terminal `?` allowed).
+ * Multi-stem families without a selector still count when lexical rows hit.
+ */
+export const utteranceHasCatalogCrmEvidence = async (input: {
+  text: string;
+  services: ServicesContext["list"];
+  selectCandidates?: SelectServiceCandidates;
+}): Promise<boolean> => {
+  if (input.services.length === 0 || input.text.trim().length === 0) {
+    return false;
+  }
+  const resolved = await resolveCatalogFreeText({
+    text: input.text,
+    rows: input.services,
+    allowTerminalQuestion: true,
+    ...(input.selectCandidates != null
+      ? { selectCandidates: input.selectCandidates }
+      : {}),
+  });
+  if (resolved.kind !== "none") {
+    return true;
+  }
+  return matchingCatalogRows(stripTerminalQuestion(input.text), input.services).length > 0;
+};
+
+/**
+ * Refine the supervisor LLM decision with CRM catalog evidence.
+ * Does not guess a service id — only next agent + intent for FAQ prepare / REPLACE.
+ */
+export const refineSupervisorNamedBooking = async (input: {
+  decision: ClinicRoutingDecision;
+  patientText: string;
+  hasVisit: boolean;
+  services: ServicesContext["list"] | null | undefined;
+  loadServices?: () => Promise<ServicesContext | null>;
+  selectCandidates?: SelectServiceCandidates;
+}): Promise<NamedBookingPolicyResult> => {
+  const { decision } = input;
+  const intent = decision.intent;
+
+  if (intent === "faq") {
+    return { decision };
+  }
+
+  if (intent === "named_procedure") {
+    if (input.hasVisit) {
+      return {
+        decision: {
+          ...decision,
+          next: BOOKING_AGENT_ID,
+          intent: "book",
+        },
+      };
+    }
+    return {
+      decision: {
+        ...decision,
+        next: FAQ_AGENT_ID,
+        intent: "named_procedure",
+      },
+    };
+  }
+
+  if (intent !== "book") {
+    return { decision };
+  }
+
+  let servicesList = input.services ?? [];
+  let servicesContext: ServicesContext | undefined;
+  if (servicesList.length === 0 && input.loadServices != null) {
+    const loaded = await input.loadServices().catch(() => null);
+    if (loaded != null && loaded.list.length > 0) {
+      servicesContext = loaded;
+      servicesList = loaded.list;
+    } else {
+      return { decision, catalogUnavailable: true };
+    }
+  }
+  if (servicesList.length === 0) {
+    return {
+      decision,
+      ...(servicesContext != null ? { servicesContext } : {}),
+      catalogUnavailable: true,
+    };
+  }
+
+  const hasCrm = await utteranceHasCatalogCrmEvidence({
+    text: input.patientText,
+    services: servicesList,
+    ...(input.selectCandidates != null
+      ? { selectCandidates: input.selectCandidates }
+      : {}),
+  });
+  if (!hasCrm) {
+    return {
+      decision,
+      ...(servicesContext != null ? { servicesContext } : {}),
+    };
+  }
+
+  if (input.hasVisit) {
+    return {
+      decision: {
+        ...decision,
+        next: BOOKING_AGENT_ID,
+        intent: "book",
+      },
+      ...(servicesContext != null ? { servicesContext } : {}),
+    };
+  }
+
+  return {
+    decision: {
+      ...decision,
+      next: FAQ_AGENT_ID,
+      intent: "named_procedure",
+    },
+    ...(servicesContext != null ? { servicesContext } : {}),
+  };
 };

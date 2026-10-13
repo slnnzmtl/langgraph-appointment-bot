@@ -889,7 +889,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
         },
       }),
     );
-    expect(invoke).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
     expect(update.supervisorIntent).toBe("named_procedure");
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
@@ -909,7 +909,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
         },
       }),
     );
-    expect(invoke).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("booking");
     expect(update.supervisorIntent).toBeNull();
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();

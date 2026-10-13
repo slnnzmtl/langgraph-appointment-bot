@@ -1,4 +1,3 @@
-import { isNamedBookingUtterance } from "../agent-loop/shared.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
@@ -136,52 +135,6 @@ const faqPredicates: PreLlmRule = (ctx) => {
   };
 };
 
-/**
- * CRM stems + leftover booking tokens (not a phrase list). Existing visit →
- * booking REPLACE with no guessed service. Idle → FAQ named_procedure catalog.
- * Price/info (`?`) never match lexical rows.
- */
-const namedBooking: PreLlmRule = (ctx) => {
-  if (ctx.lastHumanText.length === 0) {
-    return null;
-  }
-  if (ctx.state.pendingInteraction != null) {
-    return null;
-  }
-  const services = ctx.state.servicesContext?.list ?? [];
-  if (services.length === 0) {
-    return null;
-  }
-  if (!isNamedBookingUtterance(ctx.lastHumanText, services)) {
-    return null;
-  }
-  const hasVisit = (ctx.bookingContext?.meetings.length ?? 0) > 0;
-  if (hasVisit) {
-    return {
-      path: "named_booking",
-      update: {
-        next: BOOKING_AGENT_ID,
-        lastHandoff: null,
-        supervisorIntent: null,
-        ...ctx.prefetchUpdate,
-        availabilityContext: null,
-        availabilityCursor: null,
-      },
-    };
-  }
-  return {
-    path: "named_booking",
-    update: {
-      next: FAQ_AGENT_ID,
-      lastHandoff: null,
-      supervisorIntent: "named_procedure",
-      ...ctx.prefetchUpdate,
-      availabilityContext: null,
-      availabilityCursor: null,
-    },
-  };
-};
-
 /** Ordered pre-LLM rules — first match wins. */
 export const PRE_LLM_RULES: readonly PreLlmRule[] = [
   pendingRescheduleDate,
@@ -190,7 +143,6 @@ export const PRE_LLM_RULES: readonly PreLlmRule[] = [
   openVisitMenu,
   sticky,
   faqPredicates,
-  namedBooking,
 ];
 
 export const resolvePreLlmRoute = (ctx: SupervisorTurnContext): RouteOutcome | null => {

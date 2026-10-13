@@ -652,51 +652,6 @@ export const matchingCatalogRows = (
   });
 };
 
-/**
- * True when the line names CRM rows *and* has leftover tokens that are not
- * those names (book verbs, “на”, “me”, …). Price/info questions keep `?` so
- * {@link matchingCatalogRows} returns empty — they stay FAQ LLM.
- */
-const leftoverIsCatalogNoise = (
-  token: string,
-  lexical: ServicesContext["list"],
-): boolean =>
-  lexical.some((row) => {
-    const nameTokens = catalogNameTokens(normalizeReplyLabel(row.name))
-      .map(collapseDoubledLetters);
-    return nameTokens.some(
-      (nameToken) =>
-        token === nameToken
-        || (
-          token.length >= FAQ_CATALOG_STEM_MIN_LEN
-          && sharedPrefixLength(token, nameToken) >= FAQ_CATALOG_STEM_MIN_LEN
-        ),
-    );
-  });
-
-/** Leftover token shares a book-verb stem (`запис`/`запиш` / `book`). */
-const leftoverIsBookingLanguage = (token: string): boolean =>
-  sharedPrefixLength(token, "запис") >= 4
-  || sharedPrefixLength(token, "запиш") >= 4
-  || token.startsWith("book");
-
-export const isNamedBookingUtterance = (
-  text: string,
-  services: ServicesContext["list"],
-): boolean => {
-  // Trailing ? only so «можна записатись на ботокс?» can stem-match.
-  const matcher = text.trim().replace(/[?？]+\s*$/u, "").trim();
-  const lexical = matchingCatalogRows(matcher, services);
-  if (lexical.length === 0) {
-    return false;
-  }
-  const leftover = catalogNameTokens(normalizeReplyLabel(matcher))
-    .map(collapseDoubledLetters)
-    .filter((token) => token.length > 0)
-    .filter((token) => !leftoverIsCatalogNoise(token, lexical));
-  return leftover.some(leftoverIsBookingLanguage);
-};
-
 export type CatalogFreeTextResult =
   | { kind: "none" }
   | { kind: "one"; row: ServicesContext["list"][number] }
