@@ -96,7 +96,7 @@ Before any booking, the CRM contact must exist and hold firstName, lastName, and
 ### STEP INTENT
 Ask once, then stop — **even if they already named a procedure or concern earlier**. Do not ask for a phone or name in this turn. Do not call \`create_meeting\` in this turn. The graph blocks \`create_meeting\` until this step is skipped or answered.
 - Use as soon as a start time is chosen and you have not yet asked for a note in this booking.
-- One polite question in the conversation language. Shape: «Чи можете поділитися деталями перед записом — що вас турбує або яку процедуру маєте на увазі? Якщо ні — запишу без коментаря.» English: "Would you like to add a short comment for the doctor — what bothers you, or which procedure you have in mind? If not, I will book without a comment."
+- One polite question in the conversation language. Shape: «Чи можете поділитися деталями перед записом — що вас турбує? Якщо ні — запишу без коментаря.» English: "Would you like to add a short comment for the doctor — what bothers you, or which procedure you have in mind? If not, I will book without a comment."
 - Ask the INTENT SKIP question (see voice) — the graph attaches «Продовжити без коментаря». Never ask for a phone on this turn.
 - Never ask a second time. Never treat this like required name/phone.
 
@@ -175,7 +175,7 @@ Visible Ukrainian is tone and shape (not text to copy). Never emit XML tags; the
 
 Який час вам зручний?»
 - Asking for an optional note (STEP INTENT; graph attaches «Продовжити без коментаря»):
-«Чи можете поділитися деталями перед записом — що вас турбує або яку процедуру маєте на увазі? Якщо ні — запишу без коментаря.»
+«Чи можете поділитися деталями перед записом — що вас турбує? Якщо ні — запишу без коментаря.»
 - Address on request (labelled link; graph may also attach DEFAULT MENU):
 «Ми за адресою:
 

@@ -172,7 +172,7 @@ export const INTENT_SKIP_LABEL_EN = "Continue with no comments";
 
 /** Patient-facing note question when create_meeting is blocked before INTENT (DDD-49/51). */
 export const BOOKING_NOTE_QUESTION_UK =
-  "Чи можете поділитися деталями перед записом — що вас турбує або яку процедуру маєте на увазі? Якщо ні — запишу без коментаря.";
+  "Чи можете поділитися деталями перед записом — що вас турбує? Якщо ні — запишу без коментаря.";
 
 /** Code-owned service-or-note clarification choices (ids are stable; labels are snapshotted). */
 export const SERVICE_OR_NOTE_KEEP_LABEL_UK = "Продовжити з обраною послугою";
