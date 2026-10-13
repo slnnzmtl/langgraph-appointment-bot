@@ -70,17 +70,8 @@ export const resumeConfirmBookingHitl = (
     };
   }
 
-  // ✅/❌ chips and NL affirm/decline require an open mutation_confirm card.
-  if (mutationInteraction == null) {
-    return {
-      resume: { userReply: text },
-      update: {
-        ...bookingUpdate,
-        messages: [new HumanMessage(text)],
-      },
-    };
-  }
-
+  // Exact ✅/❌ taps are authoritative on the interrupt path even when the
+  // checkpoint lacks mutation_confirm (e.g. version-0 migration).
   if (tap.kind === "confirmed") {
     return {
       resume: { confirmed: true },
@@ -91,6 +82,17 @@ export const resumeConfirmBookingHitl = (
     return {
       resume: { confirmed: false },
       update: bookingUpdate,
+    };
+  }
+
+  // NL affirm/decline still require an open mutation_confirm card.
+  if (mutationInteraction == null) {
+    return {
+      resume: { userReply: text },
+      update: {
+        ...bookingUpdate,
+        messages: [new HumanMessage(text)],
+      },
     };
   }
 

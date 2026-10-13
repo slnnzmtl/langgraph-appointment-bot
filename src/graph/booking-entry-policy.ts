@@ -86,12 +86,17 @@ export const openCatalogFromFreeText = async (input: {
   utterance?: string;
   selectedLabel?: string;
   consultationDeclined?: boolean;
+  /** named_procedure only — strip trailing ? for matching; rematch omits this. */
+  allowTerminalQuestion?: boolean;
   partitionCandidates?: PartitionServiceCandidates;
   selectCandidates?: SelectServiceCandidates;
 }): Promise<ReturnType<typeof reduceBookingSession> | null> => {
   const resolved = await resolveCatalogFreeText({
     text: input.text,
     rows: input.services,
+    ...(input.allowTerminalQuestion === true
+      ? { allowTerminalQuestion: true }
+      : {}),
     ...(input.selectCandidates != null
       ? { selectCandidates: input.selectCandidates }
       : {}),
@@ -140,6 +145,7 @@ export const faqNamedProcedureEntryForTurn = async (input: {
     services: input.services,
     session: input.session,
     utterance: input.patientText,
+    allowTerminalQuestion: true,
     ...(input.partitionCandidates != null
       ? { partitionCandidates: input.partitionCandidates }
       : {}),

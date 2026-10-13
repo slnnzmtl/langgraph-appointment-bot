@@ -652,6 +652,51 @@ export const matchingCatalogRows = (
   });
 };
 
+/**
+ * True when the line names CRM rows *and* has leftover tokens that are not
+ * those names (book verbs, “на”, “me”, …). Price/info questions keep `?` so
+ * {@link matchingCatalogRows} returns empty — they stay FAQ LLM.
+ */
+const leftoverIsCatalogNoise = (
+  token: string,
+  lexical: ServicesContext["list"],
+): boolean =>
+  lexical.some((row) => {
+    const nameTokens = catalogNameTokens(normalizeReplyLabel(row.name))
+      .map(collapseDoubledLetters);
+    return nameTokens.some(
+      (nameToken) =>
+        token === nameToken
+        || (
+          token.length >= FAQ_CATALOG_STEM_MIN_LEN
+          && sharedPrefixLength(token, nameToken) >= FAQ_CATALOG_STEM_MIN_LEN
+        ),
+    );
+  });
+
+/** Leftover token shares a book-verb stem (`запис`/`запиш` / `book`). */
+const leftoverIsBookingLanguage = (token: string): boolean =>
+  sharedPrefixLength(token, "запис") >= 4
+  || sharedPrefixLength(token, "запиш") >= 4
+  || token.startsWith("book");
+
+export const isNamedBookingUtterance = (
+  text: string,
+  services: ServicesContext["list"],
+): boolean => {
+  // Trailing ? only so «можна записатись на ботокс?» can stem-match.
+  const matcher = text.trim().replace(/[?？]+\s*$/u, "").trim();
+  const lexical = matchingCatalogRows(matcher, services);
+  if (lexical.length === 0) {
+    return false;
+  }
+  const leftover = catalogNameTokens(normalizeReplyLabel(matcher))
+    .map(collapseDoubledLetters)
+    .filter((token) => token.length > 0)
+    .filter((token) => !leftoverIsCatalogNoise(token, lexical));
+  return leftover.some(leftoverIsBookingLanguage);
+};
+
 export type CatalogFreeTextResult =
   | { kind: "none" }
   | { kind: "one"; row: ServicesContext["list"][number] }
@@ -674,24 +719,32 @@ export const CATALOG_FAMILY_SELECTOR_QUERY =
  * Narrow free-text to a procedure-family catalog level. Exact CRM name → one
  * offer; otherwise the LLM selector expands slang («ботокс») to the full
  * family. Lexical substring hits alone must not skip the selector.
+ *
+ * `allowTerminalQuestion`: named_procedure only — strip trailing `?`/`？` into a
+ * local matcher string so rematch / model `open_catalog` keep rejecting `?`.
  */
 export const resolveCatalogFreeText = async (input: {
   text: string;
   rows: ServicesContext["list"];
   selectCandidates?: SelectServiceCandidates;
+  allowTerminalQuestion?: boolean;
 }): Promise<CatalogFreeTextResult> => {
   const trimmed = input.text.trim();
+  const matcher =
+    input.allowTerminalQuestion === true
+      ? trimmed.replace(/[?？]+\s*$/u, "").trim()
+      : trimmed;
   if (
-    trimmed.length === 0
-    || trimmed.includes("?")
-    || labelIdFor(trimmed) != null
-    || isSupervisorOwnedLabel(trimmed)
-    || matchesReplyLabel(trimmed, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES)
-    || isFaqServicesGuideLabel(trimmed)
+    matcher.length === 0
+    || matcher.includes("?")
+    || labelIdFor(matcher) != null
+    || isSupervisorOwnedLabel(matcher)
+    || matchesReplyLabel(matcher, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES)
+    || isFaqServicesGuideLabel(matcher)
   ) {
     return { kind: "none" };
   }
-  const normalized = normalizeReplyLabel(trimmed);
+  const normalized = normalizeReplyLabel(matcher);
   if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
     return { kind: "none" };
   }
@@ -703,7 +756,7 @@ export const resolveCatalogFreeText = async (input: {
   // procedure stems must not call the selector on the full catalog (it invents
   // a family). «ботокс» stems to a subset; the selector still sees all rows so
   // it can expand to brand/zone siblings that do not share the patient token.
-  const lexical = matchingCatalogRows(trimmed, input.rows);
+  const lexical = matchingCatalogRows(matcher, input.rows);
   if (lexical.length === 0) {
     return { kind: "none" };
   }
@@ -717,9 +770,9 @@ export const resolveCatalogFreeText = async (input: {
 
   const allowlist = new Map(input.rows.map((row) => [row.id, row]));
   if (input.selectCandidates != null) {
-    // Raw patient line — the selector LLM ignores wrappers in any language.
+    // Matcher line (trailing ? already stripped when named_procedure opts in).
     const selection = await safeSelect(input.selectCandidates, {
-      utterance: trimmed,
+      utterance: matcher,
       query: CATALOG_FAMILY_SELECTOR_QUERY,
       candidates: input.rows.map((row) => ({
         id: row.id,

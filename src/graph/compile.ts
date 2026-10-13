@@ -125,6 +125,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const callTool = options.bookingPrefetchCallTool;
   const prefetch = callTool ? () => prefetchBookingContext(callTool) : undefined;
 
+  const faqListServicesTool = options.agentTools[FAQ_AGENT_ID]
+    ?.find((entry) => entry.name === "list_services");
+  const loadServices = faqListServicesTool != null
+    ? async () => normalizeListServicesResult(String(await faqListServicesTool.invoke({})))
+    : undefined;
+
   const supervisorNode = createClinicSupervisorNode({
     agents: options.agents,
     supervisorLlm: options.supervisorLlm,
@@ -135,6 +141,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(prefetch ? { prefetch } : {}),
     prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
     ...(options.contextCache ? { contextCache: options.contextCache } : {}),
+    ...(loadServices != null ? { loadServices } : {}),
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- StateGraph generics are verbose for dynamic agent nodes
@@ -149,11 +156,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     : undefined;
   const faqSelectCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
     ? createServiceCandidateSelector(options.supervisorLlm)
-    : undefined;
-  const faqListServicesTool = options.agentTools[FAQ_AGENT_ID]
-    ?.find((entry) => entry.name === "list_services");
-  const loadServices = faqListServicesTool != null
-    ? async () => normalizeListServicesResult(String(await faqListServicesTool.invoke({})))
     : undefined;
 
   for (const agent of options.agents) {

@@ -568,6 +568,107 @@ describe("FAQ idle named_procedure catalog entry", () => {
     ).toBe("faq__finalize");
   });
 
+  it("hits FAQ LLM when open service_confirm has no service name", () => {
+    const unnamedConfirm = {
+      kind: "service_confirm" as const,
+      service: {
+        id: "svc-collagen",
+        source: "catalog" as const,
+      },
+      choices: [
+        { id: "accept", label: "Так" },
+        { id: "choose_other", label: "Обрати іншу процедуру" },
+      ],
+    };
+    const draft = {
+      ...createEmptyBookingDraft(),
+      serviceAcceptance: {
+        status: "pending" as const,
+        service: unnamedConfirm.service,
+      },
+    };
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("запиши на колаген")],
+          bookingDraft: draft,
+          pendingInteraction: unnamedConfirm,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+  });
+
+  it("opens family chips for named_procedure with a trailing question mark", async () => {
+    const faq = await createAgentPrepareNode("faq", {
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("можна записатись на ботокс?")],
+      servicesContext: botoxServices,
+      supervisorIntent: "named_procedure",
+    }));
+    expect(faq.pendingInteraction?.kind).toBe("service_candidate");
+    expect(
+      faq.pendingInteraction?.kind === "service_candidate"
+        ? faq.pendingInteraction.choices.map((c) => c.label)
+        : [],
+    ).toEqual(["Botox, Disport", "Nabota"]);
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("можна записатись на ботокс?")],
+          servicesContext: botoxServices,
+          supervisorIntent: "named_procedure",
+          bookingDraft: faq.bookingDraft ?? null,
+          pendingInteraction: faq.pendingInteraction ?? null,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__finalize");
+  });
+
+  it("does not rematch open chips on a trailing-question book line without named_procedure", async () => {
+    const botoxChips = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "запиши на ботокс",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Botox, Disport", serviceIds: ["z1", "z2"] },
+        { id: "g1", label: "Nabota", serviceIds: ["n1", "n2"] },
+      ],
+    };
+    const selectCandidates = vi.fn(familySelector);
+    const faq = await createAgentPrepareNode("faq", {
+      selectCandidates,
+    })(clinicState({
+      messages: [new HumanMessage("можна записатись на ботокс?")],
+      servicesContext: botoxServices,
+      pendingInteraction: botoxChips,
+    }));
+    expect(selectCandidates).not.toHaveBeenCalled();
+    expect(faq.pendingInteraction).toBeUndefined();
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("можна записатись на ботокс?")],
+          servicesContext: botoxServices,
+          pendingInteraction: botoxChips,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+  });
+
   it("accepts Так on FAQ-opened collagen service_confirm in booking prepare", async () => {
     const offered = await createAgentPrepareNode("faq")(clinicState({
       messages: [new HumanMessage("запиши на колаген")],
@@ -627,9 +728,42 @@ describe("FAQ idle named_procedure catalog entry", () => {
   });
 });
 
-describe("supervisor idle free text (no booking_entry pre-LLM)", () => {
-  it("calls the supervisor LLM for named booking free text", async () => {
-    const invoke = vi.fn(async () => ({ next: "faq", intent: "named_procedure" }));
+describe("supervisor idle free text (named_booking pre-LLM)", () => {
+  it("loads the catalog and skips the LLM when servicesContext is empty", async () => {
+    const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
+    const loadServices = vi.fn(async () => ({
+      list: [{
+        id: "svc-collagen",
+        name: "Колагеностимуляція Полімолочна кислота",
+        duration: 60,
+      }],
+    }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: null,
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      }),
+      loadServices,
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("запиши на колаген")],
+      }),
+    );
+    expect(loadServices).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("faq");
+    expect(update.supervisorIntent).toBe("named_procedure");
+    expect(update.servicesContext?.list.map((row) => row.id)).toEqual(["svc-collagen"]);
+  });
+
+  it("skips the supervisor LLM for named booking when CRM stems match", async () => {
+    const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm: {
@@ -642,9 +776,18 @@ describe("supervisor idle free text (no booking_entry pre-LLM)", () => {
       }),
     });
     const update = await node(
-      supervisorState({ messages: [new HumanMessage("запиши на колагеностимуляцію")] }),
+      supervisorState({
+        messages: [new HumanMessage("запиши на колагеностимуляцію")],
+        servicesContext: {
+          list: [{
+            id: "svc-collagen",
+            name: "Колагеностимуляція Полімолочна кислота",
+            duration: 60,
+          }],
+        },
+      }),
     );
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("faq");
     expect(update.supervisorIntent).toBe("named_procedure");
   });
@@ -670,7 +813,7 @@ describe("supervisor idle free text (no booking_entry pre-LLM)", () => {
     expect(update.next).toBe("booking");
   });
 
-  it("keeps model book when visits=none even if services match a named procedure", async () => {
+  it("routes idle named booking to FAQ catalog, not booking consultation", async () => {
     const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
     const node = createClinicSupervisorNode({
       agents,
@@ -690,7 +833,58 @@ describe("supervisor idle free text (no booking_entry pre-LLM)", () => {
         bookingContext: { meetings: [], dateFrom: "2026-10-11" },
       }),
     );
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("faq");
+    expect(update.supervisorIntent).toBe("named_procedure");
+  });
+
+  it("routes named booking with an existing visit to REPLACE without guessing a service", async () => {
+    const invoke = vi.fn(async () => ({ next: "faq", intent: "named_procedure" }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: ownedContact,
+        bookingContext: listedMeetings,
+      }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("запиши на ботокс")],
+        servicesContext: botoxServices,
+        bookingContext: listedMeetings,
+      }),
+    );
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("booking");
+    expect(update.supervisorIntent).toBeNull();
+    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+  });
+
+  it("leaves price questions for the supervisor LLM even when CRM names appear", async () => {
+    const invoke = vi.fn(async () => ({ next: "faq", intent: "faq" }));
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => ({
+        contactContext: ownedContact,
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Скільки коштує ботокс?")],
+        servicesContext: botoxServices,
+      }),
+    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("faq");
+    expect(update.supervisorIntent).toBeNull();
   });
 });

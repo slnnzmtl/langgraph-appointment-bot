@@ -6,6 +6,7 @@ export type SupervisorRoutingPath =
   | "chip"
   | "sticky"
   | "faq_predicate"
+  | "named_booking"
   | "status_pre_llm"
   | "pending_reschedule"
   | "abandon"

@@ -746,24 +746,9 @@ export const replaceNamedProcedureScenario: SmokeScenario = {
       }
 
       const bookBotox = await bundle.session.say(`запиши на ${family.text}`);
-      const bookPending = bookBotox.state.pendingInteraction;
-      // Idle named+no-visit is supervisor-LLM-owned (no graph stem hijack). A
-      // mistaken book→consultation is a soft warning; catalog-on-open already
-      // proved family chips above.
-      const bookedConsultation =
-        bookPending?.kind === "service_confirm"
-        && bookPending.service.id === CONSULTATION_SERVICE_ID;
-      if (bookedConsultation) {
-        soft(
-          bundle.warnings,
-          "replace-named-procedure: supervisor routed book→consultation for named+no-visit",
-          false,
-        );
-      } else {
-        expectFamilyCatalogTurn("replace-named-procedure запиши на ботокс", bookBotox, {
-          familyIds: family.familyIds,
-        });
-      }
+      expectFamilyCatalogTurn("replace-named-procedure запиши на ботокс", bookBotox, {
+        familyIds: family.familyIds,
+      });
       if (bookBotox.reply.includes("Запис скасовано.")) {
         throw new SmokeAssertError(
           "replace-named-procedure: «запиши на ботокс» replayed «Запис скасовано.»",

@@ -1789,15 +1789,20 @@ export const routeAfterAgentPrepare = (
       const faqFinalize = finalizeName.includes("faq");
       if (faqFinalize) {
         const offered = state.pendingInteraction.service;
+        const offeredName = offered.name;
         const openedThisTurn =
           state.supervisorIntent === "named_procedure"
-          || matchingCatalogRows(bookText, [{
-            id: offered.id,
-            name: offered.name,
-            ...(offered.durationMinutes != null
-              ? { duration: offered.durationMinutes }
-              : {}),
-          }]).length > 0;
+          || (
+            offeredName != null
+            && offeredName.length > 0
+            && matchingCatalogRows(bookText, [{
+              id: offered.id,
+              name: offeredName,
+              ...(offered.durationMinutes != null
+                ? { duration: offered.durationMinutes }
+                : {}),
+            }]).length > 0
+          );
         if (openedThisTurn) {
           return finalizeName;
         }

@@ -25,6 +25,7 @@ import {
   type ClinicAgentDefinition,
   type ILLMConnector,
 } from "../types.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import {
   buildSupervisorTurnContext,
   refetchForVisitStatus,
@@ -54,6 +55,8 @@ export type CreateClinicSupervisorNodeOptions = {
   buildSupervisorDynamicContext?: () => string;
   prefetch?: () => Promise<AgentPrefetchResult>;
   prefetchTtlMs?: number;
+  /** FAQ catalog rows for named-booking pre-LLM; same loader as FAQ prepare. */
+  loadServices?: () => Promise<ServicesContext | null>;
   contextCache?: SupervisorContextCacheOptions;
 };
 
@@ -110,6 +113,25 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       ...(options.prefetch != null ? { prefetch: options.prefetch } : {}),
       ...(options.prefetchTtlMs != null ? { prefetchTtlMs: options.prefetchTtlMs } : {}),
     });
+
+    if (
+      (ctx.state.servicesContext?.list.length ?? 0) === 0
+      && options.loadServices != null
+      && ctx.lastHumanText.length > 0
+      && ctx.state.pendingInteraction == null
+    ) {
+      const loaded = await options.loadServices().catch(() => null);
+      if (loaded != null && loaded.list.length > 0) {
+        ctx = {
+          ...ctx,
+          state: { ...ctx.state, servicesContext: loaded },
+          prefetchUpdate: {
+            ...ctx.prefetchUpdate,
+            servicesContext: loaded,
+          },
+        };
+      }
+    }
 
     const preLlm = resolvePreLlmRoute(ctx);
     if (preLlm != null) {
