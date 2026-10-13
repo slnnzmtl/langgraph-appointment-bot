@@ -79,8 +79,20 @@ import {
 } from "../booking-draft.js";
 import type { BookingDraft } from "../booking-draft.js";
 import { reduceBookingSession } from "../booking-session.js";
-import { offeredServiceForTurn } from "../agent-loop/shared.js";
+import {
+  humanProvidedName,
+  normalizeNameForMatch,
+  offeredServiceForTurn,
+} from "../agent-loop/shared.js";
+import {
+  CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION,
+} from "../contact-name-classifier.js";
 import type { ClinicAgentDefinition } from "../types.js";
+
+/** Ukrainian modifier letter apostrophe (U+02BC). */
+const DARYA_MODIFIER = "Дарʼя";
+/** Same name with ASCII apostrophe (U+0027). */
+const DARYA_ASCII = "Дар'я";
 
 const listedMeetings: BookingContext = {
   meetings: [
@@ -5426,6 +5438,36 @@ describe("createAgentFinalizeNode", () => {
       field: "lastName",
       collected: { firstName: "Олена", lastName: "Коваль" },
     });
+  });
+
+  it("prepare preserves Дарʼя apostrophe glyph exactly on collected (DDD-206)", async () => {
+    const prepare = createAgentPrepareNode("booking", {
+      classifyContactName: async () => ({ kind: "name", value: DARYA_MODIFIER }),
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage(DARYA_MODIFIER)],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "firstName",
+          choices: [],
+        },
+      }),
+    );
+
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+      collected: { firstName: DARYA_MODIFIER },
+    });
+    expect(
+      (update.pendingInteraction as { collected?: { firstName?: string } })
+        .collected?.firstName,
+    ).toBe(DARYA_MODIFIER);
   });
 
   it("clears create mutation_confirm and invalidates the slot after awaitingConfirmation chat-other", async () => {
@@ -13212,6 +13254,111 @@ describe("DDD-59: name must appear in patient messages", () => {
         },
       },
     ]);
+  });
+
+  it("humanProvidedName matches Дарʼя ↔ Дар'я apostrophe variants (DDD-206)", () => {
+    expect(normalizeNameForMatch(DARYA_MODIFIER)).toBe(normalizeNameForMatch(DARYA_ASCII));
+    expect(humanProvidedName([new HumanMessage(DARYA_MODIFIER)], DARYA_ASCII)).toBe(true);
+    expect(humanProvidedName([new HumanMessage(DARYA_ASCII)], DARYA_MODIFIER)).toBe(true);
+  });
+
+  it("classifier instruction documents Дар'я and O'Brien (DDD-206)", () => {
+    expect(CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION).toContain("Дар'я");
+    expect(CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION).toContain("O'Brien");
+  });
+
+  it.each(["create_contact", "update_contact"] as const)(
+    "allows %s when collected.firstName apostrophe glyph differs from tool args (DDD-206)",
+    async (toolName) => {
+      const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+      const toolsNode = createAgentToolsNode(
+        nameTools((name, args) => {
+          invoked.push({ name, args });
+        }),
+        "booking",
+      );
+      const args =
+        toolName === "create_contact"
+          ? {
+              firstName: DARYA_ASCII,
+              lastName: "Коваленко",
+              phoneNumber: "+380501112233",
+            }
+          : {
+              contactId: "c-1",
+              firstName: DARYA_ASCII,
+              lastName: "Коваленко",
+            };
+      await toolsNode(
+        clinicState({
+          // Human typed a different glyph; grounding comes from collected.
+          messages: [new HumanMessage("0501112233")],
+          pendingInteraction: {
+            kind: "contact_field",
+            field: "lastName",
+            collected: { firstName: DARYA_MODIFIER, lastName: "Коваленко" },
+            choices: [],
+          },
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: "n1", name: toolName, args, type: "tool_call" }],
+            }),
+          ],
+        }),
+        { configurable: {} },
+      );
+      expect(invoked).toEqual([{ name: toolName, args }]);
+      expect(invoked[0]?.args.firstName).toBe(DARYA_ASCII);
+    },
+  );
+
+  it("forwards create_contact firstName with the original apostrophe glyph (DDD-206)", async () => {
+    const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const toolsNode = createAgentToolsNode(
+      nameTools((name, args) => {
+        invoked.push({ name, args });
+      }),
+      "booking",
+    );
+    await toolsNode(
+      clinicState({
+        messages: [
+          new HumanMessage(DARYA_MODIFIER),
+          new HumanMessage("Коваленко"),
+          new HumanMessage("0501112233"),
+        ],
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              {
+                id: "n1",
+                name: "create_contact",
+                args: {
+                  firstName: DARYA_MODIFIER,
+                  lastName: "Коваленко",
+                  phoneNumber: "+380501112233",
+                },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([
+      {
+        name: "create_contact",
+        args: {
+          firstName: DARYA_MODIFIER,
+          lastName: "Коваленко",
+          phoneNumber: "+380501112233",
+        },
+      },
+    ]);
+    expect(invoked[0]?.args.firstName).toBe(DARYA_MODIFIER);
   });
 });
 
