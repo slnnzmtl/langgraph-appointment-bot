@@ -12,7 +12,6 @@ import {
   matchesReplyLabel,
   parseLeakedModelToolCalls,
   replyButtonLabels,
-  requestsConsultation,
   unescapeModelLineBreaks,
 } from "../message-content.js";
 
@@ -24,22 +23,11 @@ describe("matchesReplyLabel", () => {
   });
 });
 
-describe("isYesReply / requestsConsultation", () => {
+describe("isYesReply", () => {
   it("detects yes replies", () => {
     expect(isYesReply("Так")).toBe(true);
     expect(isYesReply("yes")).toBe(true);
     expect(isYesReply("запиши")).toBe(false);
-  });
-
-  it("detects consultation book requests, not topic questions or declines", () => {
-    expect(requestsConsultation("запиши на консультацію")).toBe(true);
-    expect(requestsConsultation("консультація")).toBe(true);
-    expect(requestsConsultation("чи є у вас консультація?")).toBe(false);
-    expect(requestsConsultation("не хочу консультацію")).toBe(false);
-    expect(requestsConsultation("запиши на ботокс")).toBe(false);
-    // Mixed note-step utterances still match — prepare must skip this when orch owns.
-    expect(requestsConsultation("потрібна консультація щодо ювідерм")).toBe(true);
-    expect(requestsConsultation("потрібна консультація щодо збільшення губ")).toBe(true);
   });
 });
 

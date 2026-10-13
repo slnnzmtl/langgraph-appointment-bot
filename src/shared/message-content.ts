@@ -178,13 +178,6 @@ const CONFIRMATION_DECLINE = [
   /^(?:do\s+not|don['’]?t)\s+(?:book|reschedule|move|cancel)(?:\s+it)?[\s.!]*$/iu,
   /^не\s+(?:записывайте|переносите|отменяйте)[\s.!]*$/iu,
 ];
-const MENTIONS_CONSULTATION = /консультац|consultation/i;
-/** Declines — avoid `\b` before Cyrillic (JS word chars are ASCII-only without `u`). */
-const CONSULTATION_NEGATION =
-  /(?:(?:^|\s)не\s+(?:хочу|треба|потрібно|бажаю|буду)|без\s+консультац|(?:^|\s)(?:not|don'?t|no)(?:\s|$))/i;
-/** Book/browse request naming consultation — not a topic question or decline. */
-const CONSULTATION_REQUEST =
-  /(?:запиш\w*|записат\w*|хочу|бажаю|потрібн\w*|треба|book|want|need).{0,40}(?:консультац|consultation)|(?:консультац|consultation).{0,40}(?:запиш\w*|записат\w*|будь\s*ласка|please)|^(?:консультація|consultation)$/i;
 /** Exact «Так» / Yes / Да (booking-offer keyboard). */
 export const isYesReply = (text: string): boolean => YES_REPLY.test(text.trim());
 
@@ -253,24 +246,6 @@ export const isConfirmationAffirmation = (
 /** Explicit free-text decline for an already displayed mutation confirmation. */
 export const isConfirmationDecline = (text: string): boolean =>
   CONFIRMATION_DECLINE.some((pattern) => pattern.test(text.trim()));
-
-/**
- * True when the patient asks to book «Консультація» (not a topic question or decline).
- * Bare «консультація» counts; «чи є консультація?» and «не хочу консультацію» do not.
- */
-export const requestsConsultation = (text: string): boolean => {
-  const trimmed = text.trim();
-  if (!trimmed || trimmed.includes("?")) {
-    return false;
-  }
-  if (CONSULTATION_NEGATION.test(trimmed)) {
-    return false;
-  }
-  if (!MENTIONS_CONSULTATION.test(trimmed)) {
-    return false;
-  }
-  return CONSULTATION_REQUEST.test(trimmed);
-};
 
 /**
  * Defensive strip of accidental yield / `<reply_buttons>` tags so they never reach Telegram.

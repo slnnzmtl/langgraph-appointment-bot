@@ -189,16 +189,18 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   it.each([
     "Мій запис",
-    "Я вже записалася — перевірте",
-    "I already booked an appointment",
-  ])("keeps appointment assertions as a pre-LLM status signal: %s", (text) => {
+    "My visit",
+  ])("keeps the mainMyVisit chip as a pre-LLM status signal: %s", (text) => {
     expect(isVisitStatusSignal(text)).toBe(true);
   });
 
   it.each([
+    "Я вже записалася — перевірте",
+    "I already booked an appointment",
+    "У мене вже є запис",
     "Do I have an appointment?",
     "What visits do I have?",
-  ])("defers soft visit-status questions to the model intent: %s", (text) => {
+  ])("defers appointment assertions and soft questions to the model intent: %s", (text) => {
     expect(isVisitStatusSignal(text)).toBe(false);
   });
 
@@ -226,8 +228,12 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     "Я же уже записалась на 16 число",
     "У мене вже є запис?",
     "I already booked an appointment",
-  ])("owns visit-status assertion %s even when the model routes to FAQ", async (text) => {
-    invoke.mockResolvedValue({ next: "faq", reply: "У вас точно є запис." });
+  ])("owns visit-status via intent=visit_status even when next=faq: %s", async (text) => {
+    invoke.mockResolvedValue({
+      next: "faq",
+      intent: "visit_status",
+      reply: "У вас точно є запис.",
+    });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -240,11 +246,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
     const update = await node(supervisorState({ messages: [new HumanMessage(text)] }));
 
+    expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyText).toContain("не знайдено");
     expect(update.lastHandoff?.replyText).not.toContain("точно є");
     expect(update.lastHandoff?.replyButtons).toEqual(DEFAULT_MENU_NO_VISITS);
-    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("handles soft visit-status via model intent=visit_status after a forced refetch", async () => {
@@ -275,7 +281,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it("reports unverifiable status when the fresh prefetch fails", async () => {
+  it("reports unverifiable status when the fresh prefetch fails on «Мій запис»", async () => {
     invoke.mockResolvedValue({ next: "faq", reply: "Так, ваш запис підтверджено." });
     const node = createClinicSupervisorNode({
       agents,
@@ -285,7 +291,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
 
     const update = await node(supervisorState({
-      messages: [new HumanMessage("I already booked an appointment")],
+      messages: [new HumanMessage("Мій запис")],
     }));
 
     expect(update.next).toBe("FINISH");

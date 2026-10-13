@@ -47,7 +47,6 @@ import {
   labelIdFor,
   matchesReplyLabel,
   normalizeReplyLabel,
-  requestsConsultation,
 } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import { getTelegramUserId } from "../../tools/telegram-user-context.js";
@@ -688,8 +687,8 @@ const utteranceMatchesCatalogName = (
 };
 
 /**
- * CRM rows whose names match free-text (brand/family/full title). Shared by
- * offeredServiceForTurn (unique hit only) and catalog free-text narrowing.
+ * CRM rows whose names match free-text (brand/family/full title). Used by
+ * resolveCatalogFreeText for model `open_catalog` query / tag matching.
  */
 export const matchingCatalogRows = (
   text: string,
@@ -797,32 +796,11 @@ export const resolveCatalogFreeText = async (input: {
   return { kind: "none" };
 };
 
-const catalogServiceForText = (
-  text: string,
-  state: ClinicState,
-): { id: string; name: string; durationMinutes?: number; source: "catalog" } | null => {
-  const normalized = normalizeCatalogUtterance(text);
-  if (normalized.length < FAQ_CATALOG_NAME_MIN_LEN) {
-    return null;
-  }
-  const rows = state.servicesContext?.list ?? [];
-  const exact = rows.filter((row) => normalizeReplyLabel(row.name) === normalized);
-  if (exact.length !== 1) {
-    return null;
-  }
-  const service = exact[0]!;
-  return {
-    id: service.id,
-    name: service.name,
-    ...(service.duration != null ? { durationMinutes: service.duration } : {}),
-    source: "catalog",
-  };
-};
-
 /**
  * Resolve explicit service acceptance into a durable draft for this turn.
- * Direct consultation requests still accept immediately. Offer taps and dated
- * continuations go through pendingInteraction (service_confirm) when open.
+ * Offer taps and dated continuations go through pendingInteraction
+ * (service_confirm) when open. Consultation book-intent is supervisor LLM
+ * (`consultation_request`) or the mainBook chip — not patient-phrase regex.
  */
 export const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefined => {
   const humanMessages = (state.messages ?? []).filter(
@@ -833,14 +811,6 @@ export const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | u
     return undefined;
   }
   const currentText = extractMessageTextContent(current.content).trim();
-  if (requestsConsultation(currentText)) {
-    return reduceBookingDraft(state.bookingDraft, {
-      type: "service_selected",
-      service: consultationService("direct"),
-      accepted: true,
-      turn: state.stepCount,
-    });
-  }
 
   const interaction = state.pendingInteraction;
   if (interaction?.kind === "service_confirm") {
@@ -891,8 +861,8 @@ export const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | u
 
 /**
  * Resolve which CRM service a specialist is offering this turn without reading
- * offer-question wording. Prefer a named catalog row from the latest human line;
- * otherwise consultation after list_services or an explicit book/services tap.
+ * offer-question wording. Keyboard chips open consultation; named CRM rows
+ * come from FAQ `open_catalog` (model query), not patient-line title matching.
  */
 export const offeredServiceForTurn = (
   state: ClinicState,
@@ -925,10 +895,6 @@ export const offeredServiceForTurn = (
   if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
     return null;
   }
-  const service = catalogServiceForText(lastHumanText, state);
-  if (service != null) {
-    return service;
-  }
   // «Послуги» / «Записатись» → consultation even when list_services ran this turn.
   if (
     labelIdFor(lastHumanText) === "mainBook"
@@ -938,9 +904,6 @@ export const offeredServiceForTurn = (
   }
   if (toolRanThisTurn(agentMessages, "list_services")) {
     return null;
-  }
-  if (requestsConsultation(lastHumanText)) {
-    return consultationService("direct");
   }
   return null;
 };
