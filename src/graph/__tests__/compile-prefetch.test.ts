@@ -2161,6 +2161,16 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const opened = await invoke({
       messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
       bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{
+          id: "c-owned",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          missingFields: [],
+        }],
+      },
     });
     expect(opened.pendingInteraction?.kind).toBe("service_confirm");
     expect(opened.bookingDraft?.serviceAcceptance).toMatchObject({
@@ -2199,9 +2209,20 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const configBare = { configurable: { thread_id: "generic-book-bare-11" } };
     const invokeBare = (input: unknown) =>
       runWithTelegramUserId("tg-generic-book-bare", () => graph.invoke(input as never, configBare));
+    const ownedContact = {
+      ownership: "telegram" as const,
+      contacts: [{
+        id: "c-owned",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        phoneNumber: "+380501112233",
+        missingFields: [] as string[],
+      }],
+    };
     await invokeBare({
       messages: [new HumanMessage("Доброго дня. Можливо записатися на прийом?")],
       bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      contactContext: ownedContact,
     });
     await invokeBare({ messages: [new HumanMessage("Так")] });
     await invokeBare({ messages: [new HumanMessage("13 жовтня")] });

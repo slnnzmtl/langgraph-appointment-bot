@@ -1,16 +1,15 @@
 import { HumanMessage, type BaseMessage } from "@langchain/core/messages";
 
 import {
-  OTHER_DATE_LABEL,
-  OTHER_DATE_LABEL_EN,
-} from "../../shared/clinic-constants.js";
-import {
   extractMessageTextContent,
   isSupervisorOwnedLabel,
   isYesReply,
   labelIdFor,
+  normalizeReplyLabel,
 } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
+import { parseScheduleIntent } from "../../shared/booking-schedule.js";
+import { isOtherDateChip } from "../../shared/other-date-chip.js";
 import { resolveAvailabilityRequest } from "../../tools/availability-request.js";
 import { kyivToday } from "../../tools/availability-slots.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
@@ -87,23 +86,17 @@ export const classifyCancelTap = (
   return null;
 };
 
-const escapeRegExp = (value: string): string =>
-  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Chip «Інша дата» or shared later-direction paraphrases — no growing sticky regex. */
+export const isOtherDateReply = (human: string): boolean => {
+  if (isOtherDateChip(human)) {
+    return true;
+  }
+  return resolveAvailabilityRequest(human, kyivToday())?.kind === "later";
+};
 
-const OTHER_DATE_PATTERN = new RegExp(
-  `(?:${[OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map(escapeRegExp).join("|")}|інша\\s*дат|another\\s*date)`,
-  "i",
-);
-const RUSSIAN_OTHER_DATE_PATTERN =
-  /^(?:другая|другой|другую|другие)(?:\s+(?:дата|дату|даты|день|дни|вариант(?:ы)?))?$/i;
-
-export const isOtherDateReply = (human: string): boolean =>
-  OTHER_DATE_PATTERN.test(human) || RUSSIAN_OTHER_DATE_PATTERN.test(human.trim());
-
+/** Calendar / clock / other-date intent from the shared schedule parser. */
 export const isDayOrTimeReply = (human: string): boolean =>
-  resolveAvailabilityRequest(human, kyivToday()) != null
-  || /\b\d{1,2}:\d{2}\b/.test(human)
-  || isOtherDateReply(human);
+  parseScheduleIntent(human, kyivToday(), { isOtherDateChip }) != null;
 
 export const shouldContinueInSpecialist = (
   state: ClinicState,
@@ -153,17 +146,20 @@ export const shouldContinueInSpecialist = (
     }
     return true;
   }
-  if (
-    agentId === BOOKING_AGENT_ID
-    && (state.pendingInteraction?.kind === "date_select"
-      || state.pendingInteraction?.kind === "time_select"
-      || state.pendingInteraction?.kind === "service_confirm"
-      || state.pendingInteraction?.kind === "visit_note"
-      || (state.pendingInteraction?.kind === "visit_select"
-        && state.pendingInteraction.stage === "action"))
-  ) {
-    if (isDayOrTimeReply(humanText) || isOtherDateReply(humanText)) {
-      return true;
+  if (agentId === BOOKING_AGENT_ID) {
+    const kind = state.pendingInteraction?.kind;
+    const intent = parseScheduleIntent(humanText, kyivToday(), { isOtherDateChip });
+    // Open offer: only exact calendar dates sticky-continue (not clock/later digits).
+    if (kind === "service_confirm") {
+      return intent?.kind === "exact";
+    }
+    if (
+      kind === "date_select"
+      || kind === "time_select"
+      || kind === "visit_note"
+      || (kind === "visit_select" && state.pendingInteraction?.stage === "action")
+    ) {
+      return intent != null;
     }
   }
   return false;
@@ -227,7 +223,10 @@ export const stickyContinueAgentId = (
   const returnLabel = state.pendingInteraction?.choices.find(
     (choice) => choice.id === "return_to_booking",
   )?.label;
-  if (returnLabel != null && human === returnLabel) {
+  if (
+    returnLabel != null
+    && normalizeReplyLabel(human) === normalizeReplyLabel(returnLabel)
+  ) {
     return BOOKING_AGENT_ID;
   }
   if (shouldContinueInFaq(state) || shouldStayInFaqCatalog(state)) {

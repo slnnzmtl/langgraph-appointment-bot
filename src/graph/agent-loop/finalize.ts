@@ -36,7 +36,6 @@ import {
   extractFaqCatalogAction,
   extractMessageTextContent,
   extractReplyButtons,
-  matchesReplyLabel,
 } from "../../shared/message-content.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
@@ -87,7 +86,7 @@ import {
 
 import {
   CREATE_NOTE_REQUIRED_ERROR,
-  FAQ_SERVICES_GUIDE_LABELS,
+  isFaqServicesGuideLabel,
   SLOT_JUST_TAKEN_PREFIX,
   alreadyBookedMeetingFromMessages,
   authoritativeNoteStatus,
@@ -1066,10 +1065,7 @@ export const createAgentFinalizeNode = (
         if (session.pendingInteraction?.kind === "service_confirm") {
           // FAQ «Послуги» keeps the model catalog summary and always closes
           // with a consultation offer so Так / Обрати іншу процедуру make sense.
-          const servicesGuide = matchesReplyLabel(
-            lastPatientText(state),
-            FAQ_SERVICES_GUIDE_LABELS,
-          );
+          const servicesGuide = isFaqServicesGuideLabel(lastPatientText(state));
           if (
             agent.id === FAQ_AGENT_ID
             && servicesGuide

@@ -5,11 +5,11 @@ import {
   BOOKING_REPLACE_MENU_EN,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
-  RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
   VISIT_CHANGE_MENU,
+  VISIT_CHANGE_MENU_EN,
 } from "../shared/clinic-constants.js";
-import { normalizeReplyLabel } from "../shared/message-content.js";
+import { matchesReplyLabel } from "../shared/message-content.js";
 import {
   bookingDraftCanPresentAvailability,
   reduceBookingDraft,
@@ -260,9 +260,21 @@ export const openVisitActionMenuInteraction = (
   ...(meetings.length === 1 ? { meetingId: meetings[0]!.id } : {}),
   meetings,
   choices: [
-    { id: "reschedule", label: VISIT_CHANGE_MENU[0] },
-    { id: "cancel", label: VISIT_CHANGE_MENU[1] },
-    { id: "decline", label: VISIT_CHANGE_MENU[2] },
+    {
+      id: "reschedule",
+      label: VISIT_CHANGE_MENU[0],
+      aliases: [VISIT_CHANGE_MENU_EN[0]],
+    },
+    {
+      id: "cancel",
+      label: VISIT_CHANGE_MENU[1],
+      aliases: [VISIT_CHANGE_MENU_EN[1]],
+    },
+    {
+      id: "decline",
+      label: VISIT_CHANGE_MENU[2],
+      aliases: [VISIT_CHANGE_MENU_EN[2]],
+    },
   ],
 });
 
@@ -322,7 +334,7 @@ export type ApplyServiceChoiceEffect = {
   noteCandidate?: string;
 };
 
-/** Browse FAQ catalog while preserving the booking draft (choose_other / return path). */
+/** Browse FAQ catalog (choose_other wipe → FAQ prepare, or service_unresolved detour). */
 export type OpenFaqCatalogEffect = {
   type: "open_faq_catalog";
 };
@@ -475,14 +487,9 @@ export const interpretInteractionReply = (
   if (trimmed.length === 0) {
     return { kind: "unmatched" };
   }
-  const normalized = normalizeReplyLabel(trimmed);
   const choice = interaction.choices.find((entry) => {
-    if (normalizeReplyLabel(entry.label) === normalized) {
-      return true;
-    }
-    return entry.aliases?.some(
-      (alias) => normalizeReplyLabel(alias) === normalized,
-    ) === true;
+    const labels = [entry.label, ...(entry.aliases ?? [])];
+    return matchesReplyLabel(trimmed, labels);
   });
   return choice != null
     ? { kind: "choice", choiceId: choice.id }
@@ -680,6 +687,14 @@ export const reduceBookingSession = (
           pendingInteraction: openVisitNoteInteraction(),
         });
       }
+      // New slot while note is still awaiting — keep the skip chip; never clear
+      // visit_note and fall through to the booking LLM mid-note.
+      if (nextDraft.note.status === "awaiting") {
+        return noEffect({
+          bookingDraft: nextDraft,
+          pendingInteraction: openVisitNoteInteraction(),
+        });
+      }
       return noEffect({
         bookingDraft: nextDraft,
         pendingInteraction: clearBookingOwnedInteraction(interaction),
@@ -798,11 +813,12 @@ export const reduceBookingSession = (
           });
         }
         if (event.choiceId === "choose_other") {
-          // Preserve draft for return-to-booking; FAQ catalog owns the next turn.
+          // Same policy as supervisor faqPredicates: wipe the offer and browse FAQ.
+          // catalog_detour is reserved for service_unresolved (preserve draft).
           return {
-            bookingDraft: draft,
-            pendingInteraction: openCatalogDetourInteraction(RETURN_TO_BOOKING_LABEL_UK),
-            clearAvailability: false,
+            bookingDraft: null,
+            pendingInteraction: null,
+            clearAvailability: true,
             effect: { type: "open_faq_catalog" },
           };
         }

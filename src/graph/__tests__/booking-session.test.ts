@@ -56,6 +56,36 @@ describe("reduceBookingSession", () => {
     expect(result.effect).toBeNull();
   });
 
+  it("keeps visit_note open when a new slot is picked while note is awaiting", () => {
+    const awaiting = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    expect(awaiting.pendingInteraction?.kind).toBe("visit_note");
+    const laterSlot = {
+      dateStart: "2026-10-18T10:00:00",
+      dateEnd: "2026-10-18T10:30:00",
+      label: "10:00",
+    };
+    const withDate = {
+      bookingDraft: reduceBookingDraft(awaiting.bookingDraft, {
+        type: "date_selected",
+        date: "2026-10-18",
+      }),
+      pendingInteraction: awaiting.pendingInteraction,
+    };
+    const result = reduceBookingSession(withDate, {
+      type: "slot_selected",
+      slot: laterSlot,
+    });
+    expect(result.bookingDraft?.selectedSlot?.dateStart).toBe(laterSlot.dateStart);
+    expect(result.bookingDraft?.note.status).toBe("awaiting");
+    expect(result.pendingInteraction).toEqual({
+      kind: "visit_note",
+      choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+    });
+  });
+
   it("does not open visit_note when the note is already answered", () => {
     const slotted = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
@@ -433,7 +463,7 @@ describe("reduceBookingSession", () => {
     });
   });
 
-  it("accept on service_confirm accepts the service; choose_other opens catalog_detour", () => {
+  it("accept on service_confirm accepts the service; choose_other wipes draft for FAQ browse", () => {
     const offered = reduceBookingSession(
       { bookingDraft: null, pendingInteraction: null },
       {
@@ -454,8 +484,9 @@ describe("reduceBookingSession", () => {
       type: "interaction_choice",
       choiceId: "choose_other",
     });
-    expect(other.bookingDraft?.serviceAcceptance?.status).toBe("pending");
-    expect(other.pendingInteraction?.kind).toBe("catalog_detour");
+    expect(other.bookingDraft).toBeNull();
+    expect(other.pendingInteraction).toBeNull();
+    expect(other.clearAvailability).toBe(true);
     expect(other.effect).toEqual({ type: "open_faq_catalog" });
   });
 

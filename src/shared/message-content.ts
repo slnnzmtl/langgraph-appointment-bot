@@ -202,6 +202,9 @@ export const matchesReplyLabel = (
   return false;
 };
 
+/** Alias for chip matching — same exact-normalized equality as {@link matchesReplyLabel}. */
+export const matchChip = matchesReplyLabel;
+
 /** Map a patient tap/typed shortcut to a stable {@link ReplyLabelId}. */
 export const labelIdFor = (text: string): ReplyLabelId | null => {
   for (const [id, pair] of Object.entries(REPLY_LABELS) as Array<

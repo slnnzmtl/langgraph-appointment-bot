@@ -1,6 +1,7 @@
-import { isSupervisorOwnedLabel, labelIdFor } from "../../shared/message-content.js";
+import { isSupervisorOwnedLabel } from "../../shared/message-content.js";
 import {
   closedBookingSessionUpdate,
+  interpretInteractionReply,
   openVisitMeetingInteraction,
 } from "../booking-session.js";
 import {
@@ -135,8 +136,17 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
     ctx.state.lastHandoff?.agentId === BOOKING_AGENT_ID
     && routed.next === BOOKING_AGENT_ID
     && !isSupervisorOwnedLabel(ctx.lastHumanLine);
-  const abandonDraft = mainMenuLine
-    || labelIdFor(ctx.lastHumanLine) === "offerChooseOther";
+  const chooseOtherOnOpenOffer =
+    ctx.state.pendingInteraction?.kind === "service_confirm"
+    && (() => {
+      const match = interpretInteractionReply(
+        ctx.state.pendingInteraction,
+        ctx.lastHumanText,
+      );
+      return match.kind === "choice" && match.choiceId === "choose_other";
+    })();
+  // Only main menu or choose_other while the offer keyboard is open.
+  const abandonDraft = mainMenuLine || chooseOtherOnOpenOffer;
 
   const outcome: RouteOutcome = {
     path,

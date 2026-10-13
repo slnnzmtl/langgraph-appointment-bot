@@ -64,9 +64,18 @@ export const coerceAvailabilityToolCalls = (
       selectedDate: state.bookingDraft?.selectedDate,
     });
     const dayPick = matchAvailabilityDay(human, days);
+    const interactionKind = state.pendingInteraction?.kind;
+    const yesMayMeanNearest =
+      isYesReply(human)
+      && (
+        interactionKind == null
+        || interactionKind === "date_select"
+        || interactionKind === "time_select"
+        || interactionKind === "service_confirm"
+      );
     const semanticDirection = request?.kind === "earlier" || request?.kind === "later" || request?.kind === "nearest"
       ? request.kind
-      : isYesReply(human) ? "nearest" : undefined;
+      : yesMayMeanNearest ? "nearest" : undefined;
     // Recovery is allowed only for a structured patient action. Never turn arbitrary
     // availability-looking prose into an argument-less call that can replay a cache.
     // Pre-HITL leftover slots on the tape do not count as this turn.

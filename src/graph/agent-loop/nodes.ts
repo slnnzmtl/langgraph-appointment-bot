@@ -35,6 +35,7 @@ import {
   reconcileRequestedTime,
   resolveBookingScheduleRequest,
 } from "../booking-schedule.js";
+import { parseScheduleIntent } from "../../shared/booking-schedule.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../tools/contact-tools.js";
 import {
   normalizeListServicesResult,
@@ -125,7 +126,6 @@ import {
   availabilitySlotsRanThisTurn,
   blocksConsultationWithoutAgreement,
   bookingDateAnchors,
-  bookingDraftForTurn,
   bookingMutationNeedsModelRecovery,
   captureAvailabilityFromMessages,
   captureLatestToolContext,
@@ -273,7 +273,10 @@ export const createAgentPrepareNode = (
       }
       // Browse open: «Обрати іншу процедуру» / bare «Ні» (not «Послуги») — root partition.
       let browseServices = state.servicesContext?.list ?? [];
-      const browseShortcut = isFaqCatalogBrowseShortcut(patientText);
+      const browseShortcut = isFaqCatalogBrowseShortcut(
+        patientText,
+        state.pendingInteraction,
+      );
       if (
         !handledCatalogChoice
         && browseShortcut
@@ -426,44 +429,31 @@ export const createAgentPrepareNode = (
             );
             bookingDraft = session.bookingDraft;
             pendingInteraction = session.pendingInteraction;
+            if (session.clearAvailability) {
+              Object.assign(update, {
+                availabilityContext: null,
+                availabilityCursor: null,
+              });
+            }
           } else {
-            const schedule = resolveBookingScheduleRequest(
-              patientText,
-              kyivToday(),
-              {
-                availabilityContext: rescheduleState.availabilityContext,
-                availabilityCursor: rescheduleState.availabilityCursor,
-                selectedDate: bookingDraft?.selectedDate,
-              },
-            );
-            const isAvailabilityContinuation =
-              schedule != null || /\b\d{1,2}(?::\d{2})?\b/.test(patientText);
-            if (isAvailabilityContinuation) {
-              if (schedule?.kind === "exact" && schedule.date != null) {
-                const session = reduceBookingSession(
-                  { bookingDraft: bookingDraft ?? null, pendingInteraction },
-                  {
-                    type: "service_confirm_schedule",
-                    schedule: { type: "date_selected", date: schedule.date },
-                    turn: state.stepCount,
-                  },
-                );
-                bookingDraft = session.bookingDraft;
-                pendingInteraction = session.pendingInteraction;
-              } else {
-                const session = reduceBookingSession(
-                  { bookingDraft: bookingDraft ?? null, pendingInteraction },
-                  { type: "interaction_choice", choiceId: "accept" },
-                );
-                bookingDraft = session.bookingDraft;
-                pendingInteraction = session.pendingInteraction;
-              }
+            // Lexical exact date only (shared resolver — no snapshot-anchored
+            // bare day). Anchored "14" on a DATE page must not auto-accept.
+            const schedule = parseScheduleIntent(patientText, kyivToday());
+            if (schedule?.kind === "exact" && schedule.date != null) {
+              const session = reduceBookingSession(
+                { bookingDraft: bookingDraft ?? null, pendingInteraction },
+                {
+                  type: "service_confirm_schedule",
+                  schedule: { type: "date_selected", date: schedule.date },
+                  turn: state.stepCount,
+                },
+              );
+              bookingDraft = session.bookingDraft;
+              pendingInteraction = session.pendingInteraction;
             }
             // Unmatched prose on an open offer reaches the booking LLM — no
             // stem routing / catalog open from patient text.
           }
-        } else if (bookingDraft?.mode !== "reschedule") {
-          bookingDraft = bookingDraftForTurn(rescheduleState) ?? bookingDraft;
         }
         const scheduleRequest = resolveBookingScheduleRequest(
           lastPatientText(rescheduleState),
@@ -1686,10 +1676,8 @@ export const routeAfterAgentPrepare = (
       state.pendingInteraction,
       catalogText,
     );
-    if (
-      chipMatch.kind === "choice"
-      || isFaqCatalogBrowseShortcut(catalogText)
-    ) {
+    // Only catalog chips skip the FAQ LLM. Bare «ні» must not wipe drill-down.
+    if (chipMatch.kind === "choice") {
       return finalizeName;
     }
   }

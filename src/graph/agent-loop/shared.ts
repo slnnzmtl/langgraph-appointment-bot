@@ -22,22 +22,12 @@ import { resolveBookingScheduleRequest } from "../booking-schedule.js";
 import { normalizeListServicesResult, type ServicesContext } from "../../tools/service-tools.js";
 import { trackEvent } from "../../analytics/track.js";
 import {
-  BOOKING_OFFER_MENU,
-  BOOKING_OFFER_MENU_EN,
-  BOOKING_REPLACE_MENU,
-  BOOKING_REPLACE_MENU_EN,
   CONSULTATION_SERVICE_ID,
   CLINIC_SLOT_MINUTES,
   DEFAULT_MENU_HAS_VISITS,
   DEFAULT_MENU_NO_VISITS,
-  INTENT_SKIP_LABEL,
-  INTENT_SKIP_LABEL_EN,
   MAIN_MENU_LABEL,
-  OTHER_DATE_LABEL,
-  OTHER_DATE_LABEL_EN,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
-  VISIT_CHANGE_MENU,
-  VISIT_CHANGE_MENU_EN,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
 import {
@@ -48,6 +38,7 @@ import {
   matchesReplyLabel,
   normalizeReplyLabel,
 } from "../../shared/message-content.js";
+import { isOtherDateChip } from "../../shared/other-date-chip.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import { getTelegramUserId } from "../../tools/telegram-user-context.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -55,16 +46,19 @@ import {
   availabilityMatchesBooking,
   availabilityRequestFieldsFromDraft,
   reduceBookingDraft,
-  type BookingDraft,
   type BookingService,
   type ReplacementMeeting,
 } from "../booking-draft.js";
+
+export { isOtherDateChip };
 import {
   consultationService,
   interpretInteractionReply,
   reduceBookingSession,
+  visitMeetingChoiceLabel,
   type DateSelectInteraction,
   type InteractionChoice,
+  type PendingInteraction,
   type TimeSelectInteraction,
 } from "../booking-session.js";
 
@@ -102,12 +96,30 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "reschedule_meeting",
 ]);
 
-/** True for the choose-other chip (and its service_confirm aliases). */
-export const isFaqCatalogBrowseShortcut = (text: string): boolean =>
-  labelIdFor(text) === "offerChooseOther"
-  || matchesReplyLabel(text, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES);
+/**
+ * Choose-other catalog browse: exact «Обрати іншу процедуру» chip always, or
+ * service_confirm aliases («ні» / «no») only while that offer keyboard is open.
+ * Bare «ні» must not wipe an open FAQ catalog drill-down.
+ */
+export const isFaqCatalogBrowseShortcut = (
+  text: string,
+  interaction?: PendingInteraction | null,
+): boolean => {
+  if (labelIdFor(text) === "offerChooseOther") {
+    return true;
+  }
+  if (interaction?.kind !== "service_confirm") {
+    return false;
+  }
+  const match = interpretInteractionReply(interaction, text);
+  return match.kind === "choice" && match.choiceId === "choose_other";
+};
 
-/** Services-guide taps: consultation offer, not catalog drill-down chips. */
+/** Services-guide tap («Послуги» / Services) — prefer labelIdFor over string Sets. */
+export const isFaqServicesGuideLabel = (text: string): boolean =>
+  labelIdFor(text) === "mainServices";
+
+/** @deprecated Prefer {@link isFaqServicesGuideLabel}. */
 export const FAQ_SERVICES_GUIDE_LABELS = new Set<string>([
   DEFAULT_MENU_NO_VISITS[1],
   DEFAULT_MENU_HAS_VISITS[1],
@@ -550,56 +562,6 @@ const lastHumanText = (messages: BaseMessage[]): string => {
 export const lastPatientText = (state: ClinicState): string =>
   lastHumanText(state.messages) || lastHumanText(state.agentMessages ?? []);
 
-/** Known keyboard labels that must not collide with an «Інша дата» prefix tap. */
-const OTHER_DATE_COLLISION_LABELS = [
-  MAIN_MENU_LABEL,
-  ...DEFAULT_MENU_NO_VISITS,
-  ...DEFAULT_MENU_HAS_VISITS,
-  ...BOOKING_OFFER_MENU,
-  ...BOOKING_OFFER_MENU_EN,
-  ...BOOKING_REPLACE_MENU,
-  ...BOOKING_REPLACE_MENU_EN,
-  ...VISIT_CHANGE_MENU,
-  ...VISIT_CHANGE_MENU_EN,
-  INTENT_SKIP_LABEL,
-  INTENT_SKIP_LABEL_EN,
-  "Book",
-  "Services",
-  "Address",
-  "My visit",
-].map((label) => label.toLowerCase());
-
-const RUSSIAN_OTHER_DATE_RE =
-  /^(?:другая|другой|другую|другие)(?:\s+(?:дата|дату|даты|день|дни|вариант(?:ы)?))?$/i;
-
-/**
- * Exact Ukrainian/English keyboard label, its unique prefix (≥4 chars, e.g. «Інша»),
- * or a standalone Russian equivalent (e.g. «другая», «другой»).
- * Rejects a prefix that also prefixes another known keyboard label.
- */
-const isOtherDateHuman = (humanText: string): boolean => {
-  const normalized = humanText.trim().toLowerCase();
-  if (normalized.length < 4) {
-    return false;
-  }
-  if (RUSSIAN_OTHER_DATE_RE.test(normalized)) {
-    return true;
-  }
-  const targets = [OTHER_DATE_LABEL, OTHER_DATE_LABEL_EN].map((label) => label.toLowerCase());
-  const matched = targets.find(
-    (target) => normalized === target || target.startsWith(normalized),
-  );
-  if (!matched) {
-    return false;
-  }
-  if (normalized === matched) {
-    return true;
-  }
-  return !OTHER_DATE_COLLISION_LABELS.some(
-    (label) => label.startsWith(normalized) && !targets.includes(label),
-  );
-};
-
 export const bookingDateAnchors = (state: ClinicState): string[] => [
   ...(state.bookingDraft?.selectedDate ? [state.bookingDraft.selectedDate] : []),
   ...(state.bookingDraft?.selectedSlot
@@ -741,8 +703,8 @@ export const resolveCatalogFreeText = async (input: {
     || trimmed.includes("?")
     || labelIdFor(trimmed) != null
     || isSupervisorOwnedLabel(trimmed)
-    || isFaqCatalogBrowseShortcut(trimmed)
-    || matchesReplyLabel(trimmed, FAQ_SERVICES_GUIDE_LABELS)
+    || matchesReplyLabel(trimmed, SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES)
+    || isFaqServicesGuideLabel(trimmed)
   ) {
     return { kind: "none" };
   }
@@ -797,69 +759,6 @@ export const resolveCatalogFreeText = async (input: {
 };
 
 /**
- * Resolve explicit service acceptance into a durable draft for this turn.
- * Offer taps and dated continuations go through pendingInteraction
- * (service_confirm) when open. Consultation book-intent is supervisor LLM
- * (`consultation_request`) or the mainBook chip — not patient-phrase regex.
- */
-export const bookingDraftForTurn = (state: ClinicState): BookingDraft | null | undefined => {
-  const humanMessages = (state.messages ?? []).filter(
-    (message): message is HumanMessage => message instanceof HumanMessage,
-  );
-  const current = humanMessages.at(-1);
-  if (!current) {
-    return undefined;
-  }
-  const currentText = extractMessageTextContent(current.content).trim();
-
-  const interaction = state.pendingInteraction;
-  if (interaction?.kind === "service_confirm") {
-    const choice = interpretInteractionReply(interaction, currentText);
-    if (choice.kind === "choice" && choice.choiceId === "accept") {
-      const reduced = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: interaction,
-        },
-        { type: "interaction_choice", choiceId: "accept" },
-      );
-      return reduced.bookingDraft;
-    }
-    const isAvailabilityContinuation =
-      resolveBookingScheduleRequest(currentText, kyivToday()) != null
-      || /\b\d{1,2}(?::\d{2})?\b/.test(currentText);
-    if (isAvailabilityContinuation) {
-      const schedule = resolveBookingScheduleRequest(currentText, kyivToday());
-      if (schedule?.kind === "exact" && schedule.date != null) {
-        const reduced = reduceBookingSession(
-          {
-            bookingDraft: state.bookingDraft ?? null,
-            pendingInteraction: interaction,
-          },
-          {
-            type: "service_confirm_schedule",
-            schedule: { type: "date_selected", date: schedule.date },
-            turn: state.stepCount,
-          },
-        );
-        return reduced.bookingDraft;
-      }
-      const reduced = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: interaction,
-        },
-        { type: "interaction_choice", choiceId: "accept" },
-      );
-      return reduced.bookingDraft;
-    }
-    return undefined;
-  }
-
-  return undefined;
-};
-
-/**
  * Resolve which CRM service a specialist is offering this turn without reading
  * offer-question wording. Keyboard chips open consultation; named CRM rows
  * come from FAQ `open_catalog` (model query), not patient-line title matching.
@@ -885,8 +784,8 @@ export const offeredServiceForTurn = (
   const lastHumanText = lastHuman != null
     ? extractMessageTextContent(lastHuman.content).trim()
     : "";
-  // «Обрати іншу процедуру» / bare «Ні» opens FAQ catalog — do not re-offer.
-  if (isFaqCatalogBrowseShortcut(lastHumanText)) {
+  // «Обрати іншу процедуру» / bare «Ні» on an open offer — do not re-offer.
+  if (isFaqCatalogBrowseShortcut(lastHumanText, state.pendingInteraction)) {
     return null;
   }
   if (state.bookingDraft?.serviceAcceptance?.status === "pending") {
@@ -898,7 +797,7 @@ export const offeredServiceForTurn = (
   // «Послуги» / «Записатись» → consultation even when list_services ran this turn.
   if (
     labelIdFor(lastHumanText) === "mainBook"
-    || matchesReplyLabel(lastHumanText, FAQ_SERVICES_GUIDE_LABELS)
+    || isFaqServicesGuideLabel(lastHumanText)
   ) {
     return consultationService("catalog");
   }
@@ -930,6 +829,10 @@ export const rescheduleAvailabilityArgsFromBookingContext = (
   };
 };
 
+/**
+ * Fill a missing reschedule target. Prefer a single listed meeting, then an
+ * open visit_select chip / ordinal against that picker — never name substring.
+ */
 export const rescheduleTargetFromBookingContext = (
   state: ClinicState,
 ): ReplacementMeeting | null => {
@@ -941,22 +844,32 @@ export const rescheduleTargetFromBookingContext = (
   if (meetings.length === 1) return meetings[0] ?? null;
   if (meetings.length === 0) return null;
 
-  const human = lastPatientText(state).trim().toLocaleLowerCase();
+  const human = lastPatientText(state).trim();
+  const interaction = state.pendingInteraction;
+  if (
+    interaction?.kind === "visit_select"
+    && (interaction.stage === "meeting" || interaction.stage === "action")
+  ) {
+    const match = interpretInteractionReply(interaction, human);
+    if (match.kind === "choice") {
+      const byId = meetings.find((meeting) => meeting.id === match.choiceId);
+      if (byId != null) {
+        return byId;
+      }
+    }
+  }
   const ordinal = /^(\d+)$/.exec(human);
   if (ordinal && Number(ordinal[1]) <= meetings.length) {
     return meetings[Number(ordinal[1]) - 1] ?? null;
   }
-  const requestedDate = resolveBookingScheduleRequest(human, kyivToday());
-  const matches = meetings.filter((meeting) => {
-    const name = meeting.name.toLocaleLowerCase();
-    const day = meeting.dateStart.slice(0, 10);
-    const dayNumber = meeting.dateStart.slice(8, 10).replace(/^0/, "");
-    return human.includes(name)
-      || human.includes(day)
-      || (requestedDate?.kind === "exact" && requestedDate.date === day)
-      || human === dayNumber;
+  // Unique exact rendered meeting label (same as visit picker chips).
+  const normalized = normalizeReplyLabel(human);
+  const exactLabel = meetings.filter((meeting) => {
+    const chip = normalizeReplyLabel(visitMeetingChoiceLabel(meeting));
+    const name = normalizeReplyLabel(meeting.name ?? "");
+    return chip === normalized || (name.length > 0 && name === normalized);
   });
-  return matches.length === 1 ? matches[0]! : null;
+  return exactLabel.length === 1 ? exactLabel[0]! : null;
 };
 
 /** Match a patient day pick to a snapshot day (keyboard short label, dayLabel, or YYYY-MM-DD). */
@@ -965,7 +878,7 @@ export const matchAvailabilityDay = (
   days: AvailabilityContext["days"],
 ): AvailabilityContext["days"][number] | null => {
   const trimmed = humanText.trim();
-  if (!trimmed || isOtherDateHuman(trimmed)) {
+  if (!trimmed || isOtherDateChip(trimmed)) {
     return null;
   }
   const normalized = trimmed.toLowerCase();
@@ -1019,7 +932,7 @@ export const matchAvailabilitySlot = (
     return null;
   }
   const trimmed = humanText.trim();
-  if (!trimmed || isOtherDateHuman(trimmed)) {
+  if (!trimmed || isOtherDateChip(trimmed)) {
     return null;
   }
   const normalized = trimmed.toLowerCase().replace(/\s+/g, "");
@@ -1048,16 +961,6 @@ export const matchAvailabilitySlot = (
   }
   return null;
 };
-
-const NOTE_SKIP_REPLIES = new Set(
-  [
-    INTENT_SKIP_LABEL,
-    INTENT_SKIP_LABEL_EN,
-  ].map((label) => label.toLowerCase()),
-);
-
-const isNoteSkipReply = (humanText: string): boolean =>
-  NOTE_SKIP_REPLIES.has(humanText.trim().toLowerCase());
 
 export const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boolean =>
   status !== "skipped" && status !== "answered";
@@ -1239,13 +1142,14 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
     return {};
   }
 
-  // Skip / same-slot reaffirm while a note is open. Free-text note answers are
-  // owned by the note orchestrator (classify → reduce), not this ladder.
+  // Chip skip while visit_note is open. Free-text synonyms belong to the note
+  // orchestrator classifier — never a phrase list here.
   if (
     (authoritativeSelectedSlot(state) != null && status === "unasked")
     || status === "awaiting"
   ) {
-    if (isNoteSkipReply(human) || (status === "awaiting" && sameSlot)) {
+    const skipMatch = interpretInteractionReply(state.pendingInteraction, human);
+    if (skipMatch.kind === "choice" && skipMatch.choiceId === "skip") {
       trackEvent("booking_note_step", { phase: "skipped" });
       const session = reduceBookingSession(
         {
@@ -1258,6 +1162,10 @@ export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate =>
         bookingDraft: session.bookingDraft,
         pendingInteraction: session.pendingInteraction,
       };
+    }
+    // Same-slot reaffirm while awaiting — keep the note open (no auto-skip).
+    if (status === "awaiting" && sameSlot) {
+      return {};
     }
     if (status === "awaiting" && matchedSlot) {
       trackEvent("booking_note_step", { phase: "awaiting" });

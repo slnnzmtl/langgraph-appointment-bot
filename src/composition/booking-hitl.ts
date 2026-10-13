@@ -57,8 +57,30 @@ export const resumeConfirmBookingHitl = (
   const bookingUpdate = input.bookingUpdate ?? {};
   const mutationInteraction = asMutationConfirm(input.pendingInteraction);
   const text = input.text;
-
   const tap = classifyConfirmReply(text);
+
+  // Main-menu leave works even if mutation_confirm was cleared mid-interrupt.
+  if (tap.kind === "leave") {
+    return {
+      resume: { left: true },
+      update: {
+        ...bookingUpdate,
+        messages: [new HumanMessage(text)],
+      },
+    };
+  }
+
+  // ✅/❌ chips and NL affirm/decline require an open mutation_confirm card.
+  if (mutationInteraction == null) {
+    return {
+      resume: { userReply: text },
+      update: {
+        ...bookingUpdate,
+        messages: [new HumanMessage(text)],
+      },
+    };
+  }
+
   if (tap.kind === "confirmed") {
     return {
       resume: { confirmed: true },
@@ -71,39 +93,28 @@ export const resumeConfirmBookingHitl = (
       update: bookingUpdate,
     };
   }
-  if (tap.kind === "leave") {
+
+  const match = interpretInteractionReply(mutationInteraction, text);
+  const action = mutationInteraction.kind === "mutation_confirm"
+    ? mutationInteraction.action
+    : undefined;
+  if (
+    match.kind === "choice" && match.choiceId === "confirm"
+    || (action != null && isConfirmationAffirmation(text, action))
+  ) {
     return {
-      resume: { left: true },
-      update: {
-        ...bookingUpdate,
-        messages: [new HumanMessage(text)],
-      },
+      resume: { confirmed: true },
+      update: bookingUpdate,
     };
   }
-
-  if (mutationInteraction != null) {
-    const match = interpretInteractionReply(mutationInteraction, text);
-    const action = mutationInteraction.kind === "mutation_confirm"
-      ? mutationInteraction.action
-      : undefined;
-    if (
-      match.kind === "choice" && match.choiceId === "confirm"
-      || (action != null && isConfirmationAffirmation(text, action))
-    ) {
-      return {
-        resume: { confirmed: true },
-        update: bookingUpdate,
-      };
-    }
-    if (
-      match.kind === "choice" && match.choiceId === "decline"
-      || isConfirmationDecline(text)
-    ) {
-      return {
-        resume: { confirmed: false },
-        update: bookingUpdate,
-      };
-    }
+  if (
+    match.kind === "choice" && match.choiceId === "decline"
+    || isConfirmationDecline(text)
+  ) {
+    return {
+      resume: { confirmed: false },
+      update: bookingUpdate,
+    };
   }
 
   return {

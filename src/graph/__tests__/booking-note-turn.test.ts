@@ -112,6 +112,22 @@ describe("interpretNoteTurn trusted path", () => {
     }
     expect(classify).not.toHaveBeenCalled();
   });
+
+  it("treats same-slot reaffirm as unresolved without classifying", async () => {
+    const classify = vi.fn<ClassifyNoteTurn>();
+    const result = await interpretNoteTurn({
+      patientText: "14:00",
+      pendingInteraction: visitNote,
+      matchSchedule: () => ({ type: "same_slot_ignored" }),
+      classify,
+    });
+
+    expect(result).toEqual({
+      source: "classified",
+      classification: { kind: "unresolved" },
+    });
+    expect(classify).not.toHaveBeenCalled();
+  });
 });
 
 describe("interpretNoteTurn classifier path", () => {

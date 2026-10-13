@@ -1374,6 +1374,142 @@ describe("createAgentPrepareNode", () => {
     });
   });
 
+  it("does not wipe open FAQ catalog chips on bare ні", async () => {
+    const root = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "catalog",
+      consultationDeclined: true,
+      choices: [
+        { id: "g0", label: "Ін'єкційні процедури", serviceIds: ["svc-collagen"] },
+        { id: "g1", label: "Дерматологія", serviceIds: ["svc-derm"] },
+      ],
+    };
+    const prepare = createAgentPrepareNode("faq", {
+      partitionCandidates: async () => [
+        { label: "Root wipe", serviceIds: ["svc-collagen", "svc-derm"] },
+      ],
+    });
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("ні")],
+        servicesContext: {
+          list: [
+            { id: "svc-collagen", name: "Колагеностимуляція" },
+            { id: "svc-derm", name: "Видалення новоутворень" },
+          ],
+        },
+        pendingInteraction: root,
+      }),
+    );
+    expect(update.pendingInteraction).toBeUndefined();
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("ні")],
+          pendingInteraction: root,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+      ),
+    ).toBe("faq__llm");
+  });
+
+  it("does not auto-accept an open offer on bare digits", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("14")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "service",
+          serviceAcceptance: {
+            status: "pending",
+            service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+          },
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "unasked" },
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+    expect(update.bookingDraft?.serviceAcceptance?.status).toBe("pending");
+    expect(update.bookingDraft?.selectedDate ?? null).toBeNull();
+  });
+
+  it("does not auto-accept an open offer on anchored bare day with DATE snapshot", async () => {
+    const prepare = createAgentPrepareNode("booking");
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("14")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "service",
+          serviceAcceptance: {
+            status: "pending",
+            service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+          },
+          selectedDate: null,
+          selectedSlot: null,
+          note: { status: "unasked" },
+          contactId: null,
+        }),
+        availabilityContext: {
+          days: [
+            {
+              date: "2026-10-14",
+              slots: [
+                {
+                  dateStart: "2026-10-14T10:00:00",
+                  dateEnd: "2026-10-14T10:30:00",
+                  label: "10:00",
+                },
+              ],
+            },
+            {
+              date: "2026-10-15",
+              slots: [
+                {
+                  dateStart: "2026-10-15T11:00:00",
+                  dateEnd: "2026-10-15T11:30:00",
+                  label: "11:00",
+                },
+              ],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        pendingInteraction: {
+          kind: "service_confirm",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+          choices: [
+            { id: "accept", label: "Так" },
+            { id: "choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+      }),
+    );
+    expect(update.bookingDraft?.serviceAcceptance?.status).toBe("pending");
+    expect(update.bookingDraft?.selectedDate ?? null).toBeNull();
+  });
+
   it("offers collagen via open_catalog when the FAQ model names the procedure", async () => {
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
@@ -8825,15 +8961,26 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     expect(offer.pendingInteraction?.kind).toBe("service_confirm");
     const prepare = createAgentPrepareNode("booking");
-    const picked = await prepare(
+    const accepted = await prepare(
       availabilityClinicState({
         messages: [
           new HumanMessage("Записатись"),
           new AIMessage("Підібрати вільний час на консультацію?"),
-          new HumanMessage("14:00"),
+          new HumanMessage("Так"),
         ],
         bookingDraft: offer.bookingDraft,
         pendingInteraction: offer.pendingInteraction,
+        availabilityContext: snapshot,
+      }),
+    );
+    expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    // After accept, prepare queues note orch for DATE/TIME free text — slot
+    // matching still lives in advanceBookingNoteStep (snapshot clock).
+    const picked = advanceBookingNoteStep(
+      availabilityClinicState({
+        messages: [new HumanMessage("14:00")],
+        bookingDraft: accepted.bookingDraft,
+        pendingInteraction: null,
         availabilityContext: snapshot,
       }),
     );
@@ -10330,7 +10477,11 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(skipped.note.status).toBe("skipped");
   });
 
-  it("advanceBookingNoteStep skips on INTENT shortcut; free text stays for the note orch", async () => {
+  it("advanceBookingNoteStep skips on INTENT chip; free text stays for the note orch", async () => {
+    const visitNote = {
+      kind: "visit_note" as const,
+      choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+    };
     expect(
       advanceBookingNoteStep(
         availabilityClinicState({
@@ -10339,6 +10490,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
             phase: "note",
             note: { status: "awaiting" },
           }),
+          pendingInteraction: visitNote,
           availabilityContext: snapshot,
         }),
       ).bookingDraft?.note.status,
@@ -10350,6 +10502,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           phase: "note",
           note: { status: "awaiting" },
         }),
+        pendingInteraction: visitNote,
         availabilityContext: snapshot,
       }),
     );

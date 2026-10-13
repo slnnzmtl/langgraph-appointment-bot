@@ -15,8 +15,10 @@ import {
   lookupPlannedMeetings,
   normalizeContactLookupResult,
 } from "../tools/index.js";
+import { kyivToday } from "../tools/availability-slots.js";
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
+import { resolveBookingScheduleRequest } from "./booking-schedule.js";
 import {
   createAgentFinalizeNode,
   createAgentMutationFinalizeNode,
@@ -282,7 +284,27 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
                 state.availabilityContext,
                 state.bookingDraft?.selectedDate,
               );
-              return slot != null ? { type: "slot_selected", slot } : null;
+              if (slot != null) {
+                // Same-slot reaffirm while visit_note is open → trusted no-op
+                // (skip classifier; keep skip chip via unresolved → interaction_render).
+                if (
+                  state.pendingInteraction?.kind === "visit_note"
+                  && state.bookingDraft?.selectedSlot?.dateStart === slot.dateStart
+                ) {
+                  return { type: "same_slot_ignored" };
+                }
+                return { type: "slot_selected", slot };
+              }
+              // Lexical exact date («завтра», «20 жовтня») while DATE/TIME/note open.
+              const schedule = resolveBookingScheduleRequest(text, kyivToday(), {
+                availabilityContext: state.availabilityContext,
+                availabilityCursor: state.availabilityCursor,
+                selectedDate: state.bookingDraft?.selectedDate,
+              });
+              if (schedule?.kind === "exact" && schedule.date != null) {
+                return { type: "date_selected", date: schedule.date };
+              }
+              return null;
             },
             nodes: {
               bookingLlm: llm,
