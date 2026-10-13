@@ -12,7 +12,6 @@ import {
 import { matchesReplyLabel } from "../shared/message-content.js";
 import {
   bookingDraftCanPresentAvailability,
-  effectiveBookingContactDetails,
   nextMissingContactField,
   reduceBookingDraft,
   upgradeBookingDraftCheckpoint,
@@ -1159,11 +1158,7 @@ export const reduceBookingSession = (
           }
         }
       }
-      const effective = effectiveBookingContactDetails({
-        contactDetails: nextDraft.contactDetails ?? null,
-        ...(collected != null ? { collected } : {}),
-      });
-      const missing = nextMissingContactField(effective);
+      const missing = nextMissingContactField(nextDraft.contactDetails ?? {});
       if (missing == null) {
         return noEffect({
           bookingDraft: nextDraft,

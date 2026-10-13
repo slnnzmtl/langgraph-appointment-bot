@@ -121,6 +121,9 @@ const trimContactName = (value: string): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+/** Ladder order for patient identity collection (phone before names). */
+const CONTACT_LADDER_FIELDS = ["phoneNumber", "firstName", "lastName"] as const;
+
 const contactFieldFromUnknown = (
   value: unknown,
   field: BookingContactField,
@@ -134,6 +137,26 @@ const contactFieldFromUnknown = (
   return trimContactName(value) ?? undefined;
 };
 
+const mergeContactFields = (
+  target: BookingContactDetails,
+  source: Record<string, unknown> | BookingContactDetails | null | undefined,
+  fields: readonly BookingContactField[],
+  onlyGaps: boolean,
+): void => {
+  if (source == null) {
+    return;
+  }
+  for (const field of fields) {
+    if (onlyGaps && target[field] != null) {
+      continue;
+    }
+    const value = contactFieldFromUnknown(source[field], field);
+    if (value != null) {
+      target[field] = value;
+    }
+  }
+};
+
 /**
  * Effective accepted identity: owned CRM row, then draft contactDetails (wins),
  * then per-field gaps from leftover contact_field.collected.
@@ -144,41 +167,11 @@ export const effectiveBookingContactDetails = (input: {
   collected?: { firstName?: string; lastName?: string } | null;
 }): BookingContactDetails => {
   const merged: BookingContactDetails = {};
-  const crm = input.crmContact;
-  if (crm != null) {
-    for (const field of ["phoneNumber", "firstName", "lastName"] as const) {
-      const value = contactFieldFromUnknown(crm[field], field);
-      if (value != null) {
-        merged[field] = value;
-      }
-    }
-  }
-  const details = input.contactDetails;
-  if (details != null) {
-    for (const field of ["phoneNumber", "firstName", "lastName"] as const) {
-      const value = contactFieldFromUnknown(details[field], field);
-      if (value != null) {
-        merged[field] = value;
-      }
-    }
-  }
-  const collected = input.collected;
-  if (collected != null) {
-    for (const field of ["firstName", "lastName"] as const) {
-      if (merged[field] != null) {
-        continue;
-      }
-      const value = contactFieldFromUnknown(collected[field], field);
-      if (value != null) {
-        merged[field] = value;
-      }
-    }
-  }
+  mergeContactFields(merged, input.crmContact, CONTACT_LADDER_FIELDS, false);
+  mergeContactFields(merged, input.contactDetails, CONTACT_LADDER_FIELDS, false);
+  mergeContactFields(merged, input.collected, ["firstName", "lastName"], true);
   return merged;
 };
-
-/** Ladder order for patient identity collection (phone before names). */
-const CONTACT_LADDER_FIELDS = ["phoneNumber", "firstName", "lastName"] as const;
 
 /** First required identity field still missing/invalid on the effective details. */
 export const nextMissingContactField = (
@@ -607,22 +600,7 @@ const hasExecutableCommandViolation = (draft: BookingDraft): boolean =>
 const copyContactDetails = (
   details: BookingContactDetails | null | undefined,
 ): BookingContactDetails | null => {
-  if (details == null) {
-    return null;
-  }
-  const copied: BookingContactDetails = {};
-  const phone = contactFieldFromUnknown(details.phoneNumber, "phoneNumber");
-  const firstName = contactFieldFromUnknown(details.firstName, "firstName");
-  const lastName = contactFieldFromUnknown(details.lastName, "lastName");
-  if (phone != null) {
-    copied.phoneNumber = phone;
-  }
-  if (firstName != null) {
-    copied.firstName = firstName;
-  }
-  if (lastName != null) {
-    copied.lastName = lastName;
-  }
+  const copied = effectiveBookingContactDetails({ contactDetails: details ?? null });
   return Object.keys(copied).length > 0 ? copied : null;
 };
 
@@ -949,10 +927,7 @@ export const upgradeBookingDraftCheckpoint = (
         rescheduleTarget: keptReschedule,
         replacement: keptReplacement,
       });
-      const kept = constructBookingDraft({
-        ...keptBase,
-        phase: bookingDraftPhase(keptBase),
-      });
+      const kept = { ...keptBase, phase: bookingDraftPhase(keptBase) };
       return {
         update: {
           ...stamp,
@@ -1014,10 +989,7 @@ export const upgradeBookingDraftCheckpoint = (
     rescheduleTarget,
     replacement,
   });
-  const canonical = constructBookingDraft({
-    ...withCommands,
-    phase: bookingDraftPhase(withCommands),
-  });
+  const canonical = { ...withCommands, phase: bookingDraftPhase(withCommands) };
   return {
     update: {
       ...stamp,

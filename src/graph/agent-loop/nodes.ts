@@ -66,6 +66,7 @@ import {
   availabilityMatchesBooking,
   bookingAvailabilityScope,
   createEmptyBookingDraft,
+  effectiveBookingContactDetails,
   reduceBookingDraft,
   type PendingBookingCommand,
   type BookingDraft,
@@ -583,55 +584,44 @@ export const createAgentPrepareNode = (
       }
       if (pendingInteraction?.kind === "contact_field") {
         const patientText = lastPatientText(state).trim();
-        if (pendingInteraction.field === "phoneNumber" && patientText.length > 0) {
+        const openField = pendingInteraction.field;
+        let submitted: { field: typeof openField; value: string } | null = null;
+        if (openField === "phoneNumber" && patientText.length > 0) {
           const phone = normalizeClinicPhone(patientText);
           if (phone != null) {
-            const session = reduceBookingSession(
-              {
-                bookingDraft: bookingDraft ?? null,
-                pendingInteraction,
-              },
-              {
-                type: "contact_field_submitted",
-                field: "phoneNumber",
-                value: phone,
-              },
-            );
-            bookingDraft = session.bookingDraft;
-            pendingInteraction = session.pendingInteraction;
-            update.pendingInteraction = pendingInteraction;
-            if (session.bookingDraft !== undefined) {
-              update.bookingDraft = session.bookingDraft;
-            }
+            submitted = { field: "phoneNumber", value: phone };
           }
         } else if (
           options?.classifyContactName
-          && (pendingInteraction.field === "firstName" || pendingInteraction.field === "lastName")
+          && (openField === "firstName" || openField === "lastName")
           && patientText.length > 0
           && normalizeClinicPhone(patientText) == null
         ) {
           const classified = await options.classifyContactName({
             patientText,
-            field: pendingInteraction.field,
+            field: openField,
           });
           if (classified.kind === "name") {
-            const session = reduceBookingSession(
-              {
-                bookingDraft: bookingDraft ?? null,
-                pendingInteraction,
-              },
-              {
-                type: "contact_field_submitted",
-                field: pendingInteraction.field,
-                value: classified.value,
-              },
-            );
-            bookingDraft = session.bookingDraft;
-            pendingInteraction = session.pendingInteraction;
-            update.pendingInteraction = pendingInteraction;
-            if (session.bookingDraft !== undefined) {
-              update.bookingDraft = session.bookingDraft;
-            }
+            submitted = { field: openField, value: classified.value };
+          }
+        }
+        if (submitted != null) {
+          const session = reduceBookingSession(
+            {
+              bookingDraft: bookingDraft ?? null,
+              pendingInteraction,
+            },
+            {
+              type: "contact_field_submitted",
+              field: submitted.field,
+              value: submitted.value,
+            },
+          );
+          bookingDraft = session.bookingDraft;
+          pendingInteraction = session.pendingInteraction;
+          update.pendingInteraction = pendingInteraction;
+          if (session.bookingDraft !== undefined) {
+            update.bookingDraft = session.bookingDraft;
           }
         }
       }
@@ -935,34 +925,23 @@ export const createAgentToolsNode = (
         }
 
         if (PHONE_GROUNDED_TOOLS.has(call.name)) {
-          const draftDetails = state.bookingDraft?.contactDetails;
-          const collected = state.pendingInteraction?.kind === "contact_field"
+          const openCollected = state.pendingInteraction?.kind === "contact_field"
             ? state.pendingInteraction.collected
             : undefined;
-          const matchesCanonicalPhone = (wanted: string): boolean => {
-            const accepted = draftDetails?.phoneNumber;
-            return typeof accepted === "string"
-              && normalizeClinicPhone(accepted) === wanted;
-          };
-          const matchesCanonicalName = (
-            field: "firstName" | "lastName",
-            raw: string,
-          ): boolean => {
-            const fromDraft = draftDetails?.[field];
-            const fromCollected = collected?.[field];
-            const accepted = typeof fromDraft === "string" && fromDraft.trim() !== ""
-              ? fromDraft
-              : fromCollected;
-            return typeof accepted === "string"
-              && normalizeNameForMatch(accepted) === normalizeNameForMatch(raw);
-          };
+          const canonicalIdentity = effectiveBookingContactDetails({
+            contactDetails: state.bookingDraft?.contactDetails ?? null,
+            ...(openCollected != null ? { collected: openCollected } : {}),
+          });
           const rawPhone = (call.args ?? {}).phoneNumber;
           if (typeof rawPhone === "string" && rawPhone.trim() !== "") {
             const wanted = normalizeClinicPhone(rawPhone);
+            const acceptedPhone = canonicalIdentity.phoneNumber != null
+              ? normalizeClinicPhone(canonicalIdentity.phoneNumber)
+              : null;
             if (
               wanted != null
               && !humanProvidedPhone(state.messages ?? [], wanted)
-              && !matchesCanonicalPhone(wanted)
+              && acceptedPhone !== wanted
             ) {
               trackToolError(call.name, PHONE_NOT_PROVIDED_ERROR);
               synthetic.push(
@@ -986,11 +965,15 @@ export const createAgentToolsNode = (
             const nameFields = ["firstName", "lastName"] as const;
             const invented = nameFields.find((field) => {
               const raw = args[field];
+              const accepted = canonicalIdentity[field];
               return (
                 typeof raw === "string"
                 && raw.trim() !== ""
                 && !humanProvidedName(state.messages ?? [], raw)
-                && !matchesCanonicalName(field, raw)
+                && !(
+                  typeof accepted === "string"
+                  && normalizeNameForMatch(accepted) === normalizeNameForMatch(raw)
+                )
               );
             });
             if (invented) {

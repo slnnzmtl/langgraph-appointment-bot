@@ -318,12 +318,8 @@ export const createAgentFinalizeNode = (
           let replyText = BOOKING_CONTACT_SAVE_FAILED_UK;
           let replyButtons: string[] = [];
           if (classification.outcome === "known_field") {
-            const stillMissing = nextMissingContactField(details);
-            const reopen =
-              classification.field != null
-              && stillMissing === classification.field
-                ? classification.field
-                : stillMissing;
+            // Same ladder as details-step: never reopen a field already on CRM∪draft∪collected.
+            const reopen = nextMissingContactField(details);
             if (reopen != null) {
               const session = reduceBookingSession(
                 {
