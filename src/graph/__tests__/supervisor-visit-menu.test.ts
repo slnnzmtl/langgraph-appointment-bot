@@ -312,7 +312,10 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => ({
-        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{ id: "c-1", firstName: "Ada" }],
+        },
         bookingContext,
       }),
     });
@@ -588,6 +591,31 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.lastHandoff?.status).toBe("ok");
   });
 
+  it("does not personalize Main menu from a phone-owned contact", async () => {
+    const { MAIN_MENU_GREETING_UK } = await import("../../shared/clinic-constants.js");
+    const node = createClinicSupervisorNode({
+      agents,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch: async () => {
+        throw new Error("CRM down");
+      },
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage(MAIN_MENU_LABEL)],
+        contactContext: {
+          ownership: "phone",
+          contacts: [{ id: "c-other", firstName: "Інша людина" }],
+        },
+        bookingContext: meetings,
+      }),
+    );
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
+    expect(update.lastHandoff?.replyText).not.toContain("Інша людина");
+  });
+
   it("forces FINISH + default menu on «Головне меню» without calling the booking model", async () => {
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({
@@ -734,7 +762,10 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       { next: "FINISH" },
       supervisorState({
         messages: [new HumanMessage(MAIN_MENU_LABEL)],
-        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{ id: "c-1", firstName: "Ada" }],
+        },
       }),
       new Set(["faq", "booking"]),
       meetings,
@@ -754,7 +785,10 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     const { buildSupervisorTurnContext } = await import("../supervisor/context.js");
     const state = supervisorState({
       messages: [new HumanMessage(MAIN_MENU_LABEL)],
-      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{ id: "c-1", firstName: "Ada" }],
+      },
       bookingContext: meetings,
       bookingDraft: (() => {
         const draft = createEmptyBookingDraft();

@@ -763,6 +763,44 @@ describe("present_availability_slots CReservedTime", () => {
     expect(parsed.error).toBeUndefined();
     expect(parsed.slots.some((s) => s.label === "09:00")).toBe(true);
   });
+
+  it("fails closed on exact-day search when either meeting query hits the row limit", async () => {
+    const callTool = async (name: string, args?: Record<string, unknown>) => {
+      if (name === "get_working_time") {
+        return openMorning;
+      }
+      if (name === "search_meetings") {
+        const count = args?.assignedUserId != null ? 100 : 0;
+        return {
+          meetings: Array.from({ length: count }, (_, index) => ({
+            id: `m-${index}`,
+            status: "Planned",
+            dateStart: "2026-08-10T09:00:00",
+            dateEnd: "2026-08-10T09:15:00",
+          })),
+        };
+      }
+      return { ok: true };
+    };
+
+    const tool = createPresentAvailabilitySlotsTool({
+      callTool,
+      assignedUserId: "user-1",
+    });
+    const parsed = JSON.parse(
+      (await tool.invoke({ date: "2026-08-10", durationMinutes: 30 })) as string,
+    ) as {
+      error?: string;
+      slots: unknown[];
+      truncated?: boolean;
+      query?: { coverageComplete?: boolean };
+    };
+
+    expect(parsed.error).toBe("Meeting search truncated");
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.query?.coverageComplete).toBe(false);
+    expect(parsed.slots).toEqual([]);
+  });
 });
 
 describe("normalizePresentAvailabilityResult", () => {

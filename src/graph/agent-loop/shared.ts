@@ -902,6 +902,27 @@ export const terminalContactWriteOutcome = (
   return null;
 };
 
+/**
+ * find_contact_by_phone returned a structured error (does not throw). Terminal
+ * for this turn so command_prepare cannot lookup-loop; next patient turn retries.
+ */
+export const phoneLookupFailedThisTurn = (state: ClinicState): boolean => {
+  const messages = state.agentMessages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!(message instanceof ToolMessage) || message.name !== "find_contact_by_phone") {
+      continue;
+    }
+    const body = extractMessageTextContent(message.content).trim();
+    if (body.startsWith("Error:")) {
+      return true;
+    }
+    const record = asJsonRecord(body);
+    return typeof record?.error === "string" && record.error.length > 0;
+  }
+  return false;
+};
+
 /** True when some HumanMessage in `messages` normalizes to the same E.164 as `wanted`. */
 export const humanProvidedPhone = (messages: BaseMessage[], wanted: string): boolean =>
   messages.some((message) => {

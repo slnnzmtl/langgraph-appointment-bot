@@ -17,6 +17,7 @@ import { createContactTools } from "../../tools/contact-tools.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import { compileClinicGraph, prefetchBookingContext } from "../compile.js";
 import {
+  BOOKING_CONTACT_SAVE_FAILED_UK,
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_PHONE_QUESTION_UK,
   BOOKING_REPLACE_MENU,
@@ -1408,6 +1409,86 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       contactId: "c-phone",
     });
     expect(resumed.__interrupt__).toBeUndefined();
+  });
+
+  it("treats a failed phone lookup as a terminal patient-safe retry", async () => {
+    const modelInvoke = vi.fn(async () => new AIMessage("must not run"));
+    const searches: string[] = [];
+    const contactTools = createContactTools({
+      callTool: async (name) => {
+        searches.push(name);
+        if (name === "search_contacts") {
+          return { error: "CRM down" };
+        }
+        throw new Error(`unexpected ${name}`);
+      },
+    });
+    const { graph } = compileClinicGraph({
+      agents: [bookingAgent],
+      agentTools: { booking: contactTools },
+      agentModel: {
+        bindTools: () => ({ invoke: modelInvoke }),
+      } as unknown as BaseChatModel,
+      supervisorLlm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ next: "booking" }),
+        }),
+      } as ILLMConnector,
+      loadSupervisorPrompt: () => "STATIC",
+      formatSystemMetadata: () => "META",
+      messageHistoryMaxTokens: 6_000,
+    });
+
+    const result = await runWithTelegramUserId("tg-1", () => graph.invoke(
+      {
+        messages: [new HumanMessage("+380501112233")],
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: BOOKING_PHONE_QUESTION_UK,
+        },
+        bookingDraft: {
+          version: 4,
+          mode: "create",
+          phase: "details",
+          serviceAcceptance: {
+            status: "accepted",
+            service: {
+              id: CONSULTATION_SERVICE_ID,
+              name: "Консультація",
+              durationMinutes: 30,
+              source: "catalog",
+            },
+          },
+          selectedDate: "2026-10-19",
+          selectedSlot: {
+            slotId: "slot-1",
+            label: "11:00",
+            dateStart: "2026-10-19T11:00:00",
+            dateEnd: "2026-10-19T11:30:00",
+          },
+          requestedTime: null,
+          note: { status: "skipped" },
+          contactId: null,
+          contactDetails: {
+            phoneNumber: "+380501112233",
+            firstName: "Олена",
+            lastName: "Коваль",
+          },
+          phoneLookupEvidence: null,
+          pendingCommand: null,
+          replacement: null,
+        },
+      } as never,
+      { configurable: { thread_id: "lookup-error-no-loop" } },
+    ));
+
+    expect(searches.filter((name) => name === "search_contacts")).toHaveLength(1);
+    expect(searches).not.toContain("create_contact");
+    expect(modelInvoke).not.toHaveBeenCalled();
+    expect(result.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
+    expect(result.__interrupt__).toBeUndefined();
   });
 
   it.each(["без коментаря", INTENT_SKIP_LABEL])(

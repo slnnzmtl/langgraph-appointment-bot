@@ -154,6 +154,7 @@ import {
   rescheduleTargetFromBookingContext,
   resolveContactIdentity,
   resolveFaqCatalogChoices,
+  phoneLookupFailedThisTurn,
   terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
   toolRanThisTurn,
@@ -1884,8 +1885,11 @@ export const routeAfterAgentTools = (
     return toolsName;
   }
 
-  // Failed contact writes are terminal for this turn — code owns the patient reply.
-  if (finalizeName && terminalContactWriteOutcome(state) != null) {
+  // Failed contact writes / phone lookups are terminal for this turn.
+  if (
+    finalizeName
+    && (terminalContactWriteOutcome(state) != null || phoneLookupFailedThisTurn(state))
+  ) {
     return finalizeName;
   }
 

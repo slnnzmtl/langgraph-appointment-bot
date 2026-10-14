@@ -439,7 +439,7 @@ describe("ContactCommand decisions", () => {
     });
   });
 
-  it("creates only after none evidence for the exact accepted phone", async () => {
+  it("revalidates none evidence with a same-phone lookup before create", async () => {
     const state = clinicState({
       bookingDraft: detailsDraft({
         phoneLookupEvidence: {
@@ -449,22 +449,14 @@ describe("ContactCommand decisions", () => {
         },
       }),
     });
-    expect(resolveContactCommand(state)).toMatchObject({
-      action: "create",
-      details: {
-        phoneNumber: "+380501112233",
-        firstName: "Олена",
-        lastName: "Коваль",
-      },
+    expect(resolveContactCommand(state)).toEqual({
+      action: "lookup",
+      phoneNumber: "+380501112233",
     });
     const update = await commandPrepare(state);
     expect(lastToolCall(update)).toMatchObject({
-      name: "create_contact",
-      args: {
-        phoneNumber: "+380501112233",
-        firstName: "Олена",
-        lastName: "Коваль",
-      },
+      name: "find_contact_by_phone",
+      args: { phoneNumber: "+380501112233" },
     });
   });
 
@@ -620,6 +612,31 @@ describe("ContactCommand decisions", () => {
     });
     expect(bookingCommandContinuesAfterTools(afterLookup)).toBe(true);
     expect(resolveContactCommand(afterLookup).action).toBe("create");
+  });
+
+  it("stops the contact chain when find_contact_by_phone returns an error", () => {
+    const afterLookup = clinicState({
+      bookingDraft: detailsDraft({ phoneLookupEvidence: null }),
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "lookup-err",
+            name: "find_contact_by_phone",
+            args: { phoneNumber: "+380501112233" },
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ error: "CRM down" }),
+          name: "find_contact_by_phone",
+          tool_call_id: "lookup-err",
+        }),
+      ],
+    });
+    expect(resolveContactCommand(afterLookup).action).toBe("none");
+    expect(bookingCommandContinuesAfterTools(afterLookup)).toBe(false);
+    expect(bookingTurnNeedsCommandPreparation(afterLookup)).toBe(false);
   });
 
   it("continues after link when draft still has accepted fields for update", () => {

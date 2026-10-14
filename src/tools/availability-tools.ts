@@ -474,6 +474,7 @@ export const tryAvailabilityCacheHit = (
 
 /** MCP search_meetings validates limit <= 200. */
 const RANGED_MEETINGS_LIMIT = 200;
+const EXACT_DAY_MEETINGS_LIMIT = 100;
 
 const parseWorkingTimeResult = (
   raw: unknown,
@@ -644,10 +645,36 @@ export const createPresentAvailabilitySlotsTool = (options: {
               assignedUserId,
               input.date,
               input.date,
-              100,
+              EXACT_DAY_MEETINGS_LIMIT,
             ),
             searchReservedTimes(callTool, assignedUserId, input.date, input.date),
           ]);
+          if (busy.truncated) {
+            trackEvent("availability_presented", {
+              outcome: "truncated",
+              date: input.date,
+              slot_count: 0,
+              duration_minutes: stepMinutes,
+            });
+            return JSON.stringify({
+              error: "Meeting search truncated",
+              slots: [],
+              date: input.date,
+              dayLabel: formatKyivDayLabel(input.date, todayKyiv),
+              stepMinutes,
+              startIntervalMinutes: CLINIC_SLOT_MINUTES,
+              query: {
+                kind: "exact",
+                date: input.date,
+                anchor: input.date,
+                rangeFrom: input.date,
+                rangeThrough: input.date,
+                coverageComplete: false,
+              },
+              truncated: true,
+              ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
+            });
+          }
           const searchedMeetings = busy.meetings;
           const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
           const meetings = [

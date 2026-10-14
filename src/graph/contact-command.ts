@@ -10,6 +10,7 @@ import {
 } from "./booking-draft.js";
 import {
   phoneCandidateCanBeLinked,
+  phoneLookupFailedThisTurn,
   resolveContactIdentity,
   toolRanThisTurn,
 } from "./agent-loop/shared.js";
@@ -153,6 +154,11 @@ export const resolveContactCommand = (state: ClinicState): ContactCommand => {
     return { action: "request_field", field: "phoneNumber" };
   }
 
+  // Failed lookup is terminal this turn — do not inject lookup again.
+  if (phoneLookupFailedThisTurn(state)) {
+    return { action: "none" };
+  }
+
   if (!phoneLookupEvidenceMatches(evidence, acceptedPhone)) {
     return { action: "lookup", phoneNumber: acceptedPhone };
   }
@@ -183,6 +189,10 @@ export const resolveContactCommand = (state: ClinicState): ContactCommand => {
     return next != null
       ? { action: "request_field", field: next }
       : { action: "none" };
+  }
+  // Revalidate the exact phone this turn before create_contact (stale "none").
+  if (!toolRanThisTurn(state.agentMessages ?? [], "find_contact_by_phone")) {
+    return { action: "lookup", phoneNumber: acceptedPhone };
   }
   return { action: "create", details: complete };
 };

@@ -53,6 +53,7 @@ import {
   lastPatientText,
   matchAvailabilityDay,
   resolveContactIdentity,
+  phoneLookupFailedThisTurn,
   terminalContactWriteOutcome,
   toolRanThisTurn,
 } from "./shared.js";
@@ -730,6 +731,9 @@ export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean 
   if (bookingMutationNeedsModelRecovery(state)) {
     return false;
   }
+  if (phoneLookupFailedThisTurn(state)) {
+    return false;
+  }
   // Chat-other after HITL must return to the model — never replay the frozen
   // mutation. Cancel is the exception: after the model answers (no pending
   // tool calls), re-arm HITL. Create/reschedule chat-other require fresh
@@ -790,8 +794,8 @@ export const bookingCommandContinuesAfterTools = (state: ClinicState): boolean =
   if (hasPendingConfirmationChatOther(state)) {
     return false;
   }
-  // Operational contact-write failure is terminal — finalize owns the patient reply.
-  if (terminalContactWriteOutcome(state) != null) {
+  // Operational contact-write / phone-lookup failure is terminal — finalize owns the reply.
+  if (terminalContactWriteOutcome(state) != null || phoneLookupFailedThisTurn(state)) {
     return false;
   }
   if (state.bookingDraft?.replacement?.status === "create_pending") {

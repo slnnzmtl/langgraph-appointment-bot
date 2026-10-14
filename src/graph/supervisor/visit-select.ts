@@ -38,11 +38,14 @@ export const supervisorFinishReply = (
   messages: [new AIMessage(replyText)],
 });
 
-/** Short Main-menu greeting; optional firstName from prefetch contact. */
+/** Short Main-menu greeting; firstName only from a Telegram-owned contact. */
 const mainMenuGreetingReply = (
   contactContext: ContactLookupContext | null | undefined,
 ): string => {
-  const raw = contactContext?.contacts[0]?.firstName;
+  if (contactContext?.ownership !== "telegram") {
+    return MAIN_MENU_GREETING_UK;
+  }
+  const raw = contactContext.contacts[0]?.firstName;
   const firstName = typeof raw === "string" ? raw.trim() : "";
   if (firstName.length === 0) {
     return MAIN_MENU_GREETING_UK;

@@ -38,4 +38,13 @@ describe("clinic-tools composition", () => {
       expect(full.some((tool) => tool.name === name)).toBe(true);
     }
   });
+
+  it("keeps unknown booking tools off the LLM surface by default", () => {
+    const informational = filterBookingInformationalTools([
+      { name: "list_services" },
+      { name: "create_meeting_v2" },
+      { name: "get_working_time" },
+    ] as never).map((tool) => tool.name);
+    expect(informational).toEqual(["list_services", "get_working_time"]);
+  });
 });

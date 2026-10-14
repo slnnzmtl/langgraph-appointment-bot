@@ -106,6 +106,7 @@ import {
   meetingMutationIsHitlDecline,
   offeredServiceForTurn,
   phoneCandidateHasLinkableRow,
+  phoneLookupFailedThisTurn,
   resolveAvailabilityOffer,
   resolveContactIdentity,
   terminalContactWriteOutcome,
@@ -329,7 +330,28 @@ export const createAgentFinalizeNode = (
     }
 
     if (!(lastMessage instanceof AIMessage)) {
-      // Failed contact write: terminal this turn; preserve identity; patient-safe copy.
+      // Failed contact write or phone lookup: terminal this turn; patient-safe copy.
+      if (agent.id === BOOKING_AGENT_ID && phoneLookupFailedThisTurn(state)) {
+        trackEvent("contact_write_failed", {
+          tool: "find_contact_by_phone",
+          category: "operational",
+        });
+        const pendingInteraction = state.pendingInteraction?.kind === "contact_field"
+          ? null
+          : state.pendingInteraction ?? null;
+        return {
+          ...cleared,
+          ...confirmationCleanup,
+          pendingInteraction,
+          messages: [tagRuntimeAgentMessage(new AIMessage(BOOKING_CONTACT_SAVE_FAILED_UK), agent.id)],
+          lastHandoff: {
+            agentId: agent.id,
+            agentName: agent.name,
+            status: "ok",
+            replyText: BOOKING_CONTACT_SAVE_FAILED_UK,
+          },
+        };
+      }
       if (agent.id === BOOKING_AGENT_ID) {
         const contactWrite = terminalContactWriteOutcome(state);
         if (contactWrite != null) {

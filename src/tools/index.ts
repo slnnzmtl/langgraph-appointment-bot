@@ -39,11 +39,18 @@ export const BOOKING_RUNTIME_TOOL_NAMES = new Set([
 export const isBookingRuntimeToolName = (name: string): boolean =>
   BOOKING_RUNTIME_TOOL_NAMES.has(name);
 
+/** Positive allowlist for the booking LLM. Unknown tools stay runtime-only. */
+export const BOOKING_INFORMATIONAL_TOOL_NAMES = new Set([
+  "list_services",
+  "get_service",
+  "get_working_time",
+]);
+
 /** Model-visible booking tools: FAQ-style reads only. */
 export const filterBookingInformationalTools = (
   tools: readonly StructuredToolInterface[],
 ): StructuredToolInterface[] =>
-  tools.filter((tool) => !isBookingRuntimeToolName(tool.name));
+  tools.filter((tool) => BOOKING_INFORMATIONAL_TOOL_NAMES.has(tool.name));
 
 export const createBookingTools = (options: BookingToolsOptions): StructuredToolInterface[] => [
   ...createContactTools({ callTool: options.callTool }),
