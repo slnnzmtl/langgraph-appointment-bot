@@ -6,6 +6,7 @@ import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
 import type { SupervisorTurnContext } from "./context.js";
 import type { RouteOutcome } from "./telemetry.js";
 import {
+  isGreetingOrMainMenuLine,
   isPendingRescheduleSelection,
   shouldRouteProcedureBrowseToFaq,
   stickyContinueAgentId,
@@ -14,7 +15,11 @@ import {
   seedVisitMutation,
   visitMutationActionForLabel,
 } from "./visit-change-seed.js";
-import { abandonReply, applyVisitSelectChoice } from "./visit-select.js";
+import {
+  abandonReply,
+  applyVisitSelectChoice,
+  mainMenuReply,
+} from "./visit-select.js";
 import { buildVisitStatusMenuUpdate } from "./visit-status.js";
 
 type PreLlmRule = (ctx: SupervisorTurnContext) => RouteOutcome | null;
@@ -45,6 +50,21 @@ const abandonBareCancel: PreLlmRule = (ctx) => {
   return {
     path: "abandon",
     update: abandonReply(ctx.prefetchUpdate, ctx.bookingContext),
+  };
+};
+
+/** «Головне меню» — close booking without calling the supervisor LLM. */
+const mainMenu: PreLlmRule = (ctx) => {
+  if (!isGreetingOrMainMenuLine(ctx.lastHumanLine)) {
+    return null;
+  }
+  return {
+    path: "main_menu",
+    update: mainMenuReply(
+      ctx.prefetchUpdate,
+      ctx.bookingContext,
+      ctx.contactContext,
+    ),
   };
 };
 
@@ -139,6 +159,7 @@ const faqPredicates: PreLlmRule = (ctx) => {
 export const PRE_LLM_RULES: readonly PreLlmRule[] = [
   pendingRescheduleDate,
   abandonBareCancel,
+  mainMenu,
   visitStatusSignal,
   openVisitMenu,
   sticky,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { routeAfterAgentLlm, routeAfterAgentTools } from "../agent-loop.js";
+import { routeAfterAgentLlm, routeAfterAgentTools } from "../agent-loop/index.js";
 import {
   buildClinicRoutingSchema,
   normalizeSupervisorReply,

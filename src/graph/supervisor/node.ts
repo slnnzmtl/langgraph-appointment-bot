@@ -37,10 +37,12 @@ import { formatOpenInteractionContext } from "./open-interaction.js";
 import { resolvePreLlmRoute } from "./pre-llm.js";
 import { applyModelDecision } from "./post-llm.js";
 import { routingFailureUpdate } from "./resolve-routing.js";
+import { isGreetingOrMainMenuLine } from "./routing-predicates.js";
 import {
   emitSupervisorRoutingDecision,
   type RouteOutcome,
 } from "./telemetry.js";
+import { mainMenuReply } from "./visit-select.js";
 
 export type SupervisorContextCacheOptions = {
   manager: ContextCacheManager;
@@ -165,6 +167,17 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         decision = await invokeUncached(staticPrompt, dynamic, ctx.history, config);
       }
     } catch (error) {
+      // Main menu must close the booking session even when the supervisor LLM fails.
+      if (isGreetingOrMainMenuLine(ctx.lastHumanLine)) {
+        return finalize(ctx, {
+          path: "main_menu",
+          update: mainMenuReply(
+            ctx.prefetchUpdate,
+            ctx.bookingContext,
+            ctx.contactContext,
+          ),
+        });
+      }
       const message = error instanceof Error ? error.message : String(error);
       return finalize(ctx, {
         path: "routing_failure",

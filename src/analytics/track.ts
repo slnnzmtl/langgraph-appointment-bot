@@ -20,6 +20,7 @@ export const TIER1_EVENTS = [
   "booking_checkpoint_migrated",
   "booking_consultation_guard",
   "booking_invariant_violation",
+  "booking_runtime_tool",
   "meeting_mutation_outcome",
   "visit_status_response",
   "meeting_created",

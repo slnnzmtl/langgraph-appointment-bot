@@ -4,7 +4,7 @@ import {
   matchingCatalogRows,
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
-} from "../agent-loop/shared.js";
+} from "../catalog-match.js";
 
 const catalog = [
   {

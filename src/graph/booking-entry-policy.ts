@@ -3,12 +3,12 @@ import {
   reduceBookingSession,
   type PendingInteraction,
 } from "./booking-session.js";
+import { resolveFaqCatalogChoices } from "./agent-loop/shared.js";
 import {
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
-  resolveFaqCatalogChoices,
   type CatalogFreeTextResult,
-} from "./agent-loop/shared.js";
+} from "./catalog-match.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   type PartitionServiceCandidates,

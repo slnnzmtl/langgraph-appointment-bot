@@ -1511,7 +1511,7 @@ describe("BookingDraft contactDetails", () => {
     expect(next.contactDetails).toEqual({ phoneNumber: "+380501112233" });
   });
 
-  it("persists names independently and clears them on contact_resolved", () => {
+  it("persists names across link-style contact_resolved and clears only with clearDetails", () => {
     let draft = reduceBookingDraft(detailsReady(), {
       type: "contact_field_submitted",
       field: "phoneNumber",
@@ -1532,12 +1532,39 @@ describe("BookingDraft contactDetails", () => {
       firstName: "Олена",
       lastName: "Коваль",
     });
-    const resolved = reduceBookingDraft(draft, {
+    const linked = reduceBookingDraft(draft, {
       type: "contact_resolved",
       contactId: "c-1",
     });
-    expect(resolved.contactId).toBe("c-1");
-    expect(resolved.contactDetails).toBeNull();
+    expect(linked.contactId).toBe("c-1");
+    expect(linked.phase).toBe("ready");
+    expect(linked.contactDetails).toEqual({
+      phoneNumber: "+380501112233",
+      firstName: "Олена",
+      lastName: "Коваль",
+    });
+    const cleared = reduceBookingDraft(linked, {
+      type: "contact_resolved",
+      contactId: "c-1",
+      clearDetails: true,
+    });
+    expect(cleared.contactDetails).toBeNull();
+    expect(cleared.phase).toBe("ready");
+  });
+
+  it("stays in details after contact_resolved when draft identity is still incomplete", () => {
+    const withPhone = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "phoneNumber",
+      value: "+380501112233",
+    });
+    const linked = reduceBookingDraft(withPhone, {
+      type: "contact_resolved",
+      contactId: "c-incomplete",
+    });
+    expect(linked.contactId).toBe("c-incomplete");
+    expect(linked.phase).toBe("details");
+    expect(nextMissingContactField(linked.contactDetails ?? {})).toBe("firstName");
   });
 
   it("keeps contactDetails across contact_unresolved and abandons with the draft", () => {

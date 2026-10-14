@@ -11,6 +11,7 @@ import {
   formatKyivLocalIso,
   kyivLocalIsoToUtcMs,
   localIso,
+  mergeBusyMeetingsById,
   normalizeLocalIsoDatetime,
   omitSlotsAtStarts,
   resolveDayTimeRanges,
@@ -386,6 +387,52 @@ describe("extractMeetingsFromSearchResult", () => {
         dateEnd: "2026-08-10T09:30:00",
         status: "Planned",
       },
+    ]);
+  });
+});
+
+describe("mergeBusyMeetingsById", () => {
+  it("dedupes by id and keeps id-less rows", () => {
+    expect(
+      mergeBusyMeetingsById(
+        [
+          {
+            id: "shared",
+            dateStart: "2026-08-10T11:00:00",
+            dateEnd: "2026-08-10T11:30:00",
+            status: "Planned",
+          },
+          { dateStart: "2026-08-10T12:00:00", dateEnd: "2026-08-10T12:30:00" },
+        ],
+        [
+          {
+            id: "shared",
+            dateStart: "2026-08-10T11:00:00",
+            dateEnd: "2026-08-10T11:30:00",
+            status: "Planned",
+          },
+          {
+            id: "attendee-only",
+            dateStart: "2026-08-10T13:00:00",
+            dateEnd: "2026-08-10T13:30:00",
+            status: "Planned",
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        id: "shared",
+        dateStart: "2026-08-10T11:00:00",
+        dateEnd: "2026-08-10T11:30:00",
+        status: "Planned",
+      },
+      {
+        id: "attendee-only",
+        dateStart: "2026-08-10T13:00:00",
+        dateEnd: "2026-08-10T13:30:00",
+        status: "Planned",
+      },
+      { dateStart: "2026-08-10T12:00:00", dateEnd: "2026-08-10T12:30:00" },
     ]);
   });
 });

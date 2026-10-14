@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createBookingTools } from "../index.js";
+import {
+  BOOKING_RUNTIME_TOOL_NAMES,
+  createBookingTools,
+  createReadTools,
+  filterBookingInformationalTools,
+} from "../index.js";
 
 describe("clinic-tools composition", () => {
   const callTool = async () => ({ ok: true });
@@ -20,5 +25,26 @@ describe("clinic-tools composition", () => {
     ]);
     expect(names).not.toContain("list_services");
     expect(names).not.toContain("get_service");
+  });
+
+  it("booking LLM surface is FAQ reads only; runtime tools stay executable", () => {
+    const readTools = createReadTools({ callTool, assignedUserId: "user-1" });
+    const bookingTools = createBookingTools({ callTool, assignedUserId: "user-1" });
+    const full = [...readTools, ...bookingTools];
+    const informational = filterBookingInformationalTools(full).map((t) => t.name);
+    expect(informational).toEqual(["list_services", "get_service", "get_working_time"]);
+    for (const name of BOOKING_RUNTIME_TOOL_NAMES) {
+      expect(informational).not.toContain(name);
+      expect(full.some((tool) => tool.name === name)).toBe(true);
+    }
+  });
+
+  it("keeps unknown booking tools off the LLM surface by default", () => {
+    const informational = filterBookingInformationalTools([
+      { name: "list_services" },
+      { name: "create_meeting_v2" },
+      { name: "get_working_time" },
+    ] as never).map((tool) => tool.name);
+    expect(informational).toEqual(["list_services", "get_working_time"]);
   });
 });

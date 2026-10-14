@@ -480,6 +480,7 @@ describe("reduceBookingSession", () => {
     });
     expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
     expect(accepted.pendingInteraction).toBeNull();
+    expect(accepted.clearAvailability).toBe(true);
 
     const other = reduceBookingSession(offered, {
       type: "interaction_choice",

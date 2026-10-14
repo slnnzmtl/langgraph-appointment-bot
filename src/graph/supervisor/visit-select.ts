@@ -3,8 +3,11 @@ import { AIMessage } from "@langchain/core/messages";
 import {
   ABANDON_BOOKING_REPLY_UK,
   defaultMenuLabels,
+  mainMenuFullGreetingUk,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
+import type { ContactLookupContext } from "../../tools/contact-tools.js";
+import { attachPrefetchVisits } from "../context-blocks.js";
 import {
   closedBookingSessionUpdate,
   reduceBookingSession,
@@ -36,6 +39,25 @@ export const supervisorFinishReply = (
   messages: [new AIMessage(replyText)],
 });
 
+/**
+ * Full Main-menu GREETING; firstName only from a Telegram-owned contact.
+ * Prefetch visits are injected via attachPrefetchVisits(..., "greeting").
+ */
+const mainMenuGreetingReply = (
+  contactContext: ContactLookupContext | null | undefined,
+  bookingContext: ClinicState["bookingContext"],
+): string => {
+  const firstName = contactContext?.ownership === "telegram"
+    && typeof contactContext.contacts[0]?.firstName === "string"
+    ? contactContext.contacts[0].firstName.trim()
+    : "";
+  return attachPrefetchVisits(
+    mainMenuFullGreetingUk(firstName.length > 0 ? firstName : null),
+    bookingContext,
+    "greeting",
+  );
+};
+
 /** Code-owned FINISH after abandoning an in-progress booking draft. */
 export const abandonReply = (
   prefetchUpdate: ClinicStateUpdate,
@@ -48,6 +70,24 @@ export const abandonReply = (
       ...closedBookingSessionUpdate(),
     },
     ABANDON_BOOKING_REPLY_UK,
+    [...defaultMenuLabels(hasVisit)],
+    null,
+  );
+};
+
+/** Code-owned FINISH for «Головне меню» — closes booking and restores DEFAULT MENU. */
+export const mainMenuReply = (
+  prefetchUpdate: ClinicStateUpdate,
+  bookingContext: ClinicState["bookingContext"],
+  contactContext: ClinicState["contactContext"],
+): ClinicStateUpdate => {
+  const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+  return supervisorFinishReply(
+    {
+      ...prefetchUpdate,
+      ...closedBookingSessionUpdate(),
+    },
+    mainMenuGreetingReply(contactContext, bookingContext),
     [...defaultMenuLabels(hasVisit)],
     null,
   );

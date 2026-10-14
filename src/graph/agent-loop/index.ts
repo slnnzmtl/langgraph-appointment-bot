@@ -12,6 +12,7 @@ export {
   classifyMeetingMutationToolMessage,
   createMeetingAlreadyBooked,
   terminalContactWriteOutcome,
+  phoneLookupFailedThisTurn,
   crmWriteDirtiesPrefetch,
   formatAvailabilityDateOffer,
   formatAvailabilityEmptyOffer,

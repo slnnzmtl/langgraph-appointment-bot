@@ -18,7 +18,7 @@ import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
-import { createAgentCommandPrepareNode } from "../agent-loop.js";
+import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
   agents,
@@ -538,11 +538,6 @@ describe("shouldStayInFaqCatalog", () => {
     const supervisorLlm = {
       bindRoutingTools: vi.fn(() => ({ invoke })),
     } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply: "Чим можу допомогти?",
-      menu: "default",
-    });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -559,10 +554,13 @@ describe("shouldStayInFaqCatalog", () => {
       }),
     );
 
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
-    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт! Я ШІ-асистент");
+    expect(reply).toContain("Чим можу допомогти?");
+    expect(update.pendingInteraction).toBeNull();
   });
 });
 

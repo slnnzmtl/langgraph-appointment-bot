@@ -26,6 +26,7 @@ import {
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   CONSULTATION_SERVICE_ID,
+  MAIN_MENU_GREETING_UK,
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   PATIENT_FALLBACK_MESSAGE,
@@ -105,6 +106,7 @@ import {
   meetingMutationIsHitlDecline,
   offeredServiceForTurn,
   phoneCandidateHasLinkableRow,
+  phoneLookupFailedThisTurn,
   resolveAvailabilityOffer,
   resolveContactIdentity,
   terminalContactWriteOutcome,
@@ -328,7 +330,28 @@ export const createAgentFinalizeNode = (
     }
 
     if (!(lastMessage instanceof AIMessage)) {
-      // Failed contact write: terminal this turn; preserve identity; patient-safe copy.
+      // Failed contact write or phone lookup: terminal this turn; patient-safe copy.
+      if (agent.id === BOOKING_AGENT_ID && phoneLookupFailedThisTurn(state)) {
+        trackEvent("contact_write_failed", {
+          tool: "find_contact_by_phone",
+          category: "operational",
+        });
+        const pendingInteraction = state.pendingInteraction?.kind === "contact_field"
+          ? null
+          : state.pendingInteraction ?? null;
+        return {
+          ...cleared,
+          ...confirmationCleanup,
+          pendingInteraction,
+          messages: [tagRuntimeAgentMessage(new AIMessage(BOOKING_CONTACT_SAVE_FAILED_UK), agent.id)],
+          lastHandoff: {
+            agentId: agent.id,
+            agentName: agent.name,
+            status: "ok",
+            replyText: BOOKING_CONTACT_SAVE_FAILED_UK,
+          },
+        };
+      }
       if (agent.id === BOOKING_AGENT_ID) {
         const contactWrite = terminalContactWriteOutcome(state);
         if (contactWrite != null) {
@@ -642,6 +665,14 @@ export const createAgentFinalizeNode = (
         (message) =>
           message instanceof ToolMessage
           && message.name === "create_meeting"
+          && classifyMeetingMutationToolMessage(message) === "committed",
+      );
+    const mutationCommitted =
+      createCommitted
+      || agentMessages.some(
+        (message) =>
+          message instanceof ToolMessage
+          && (message.name === "cancel_meeting" || message.name === "reschedule_meeting")
           && classifyMeetingMutationToolMessage(message) === "committed",
       );
     const createError = latestCreateMeetingError(agentMessages);
@@ -1095,7 +1126,8 @@ export const createAgentFinalizeNode = (
           replyButtons = [];
           replySource = "runtime";
         } else {
-          replyText = consumeServiceChangeNotice() ?? PATIENT_FALLBACK_MESSAGE;
+          // Uncommitted ready / details with no card — DEFAULT MENU, not error fallback.
+          replyText = consumeServiceChangeNotice() ?? MAIN_MENU_GREETING_UK;
           replyButtons = replyButtons.length > 0
             ? replyButtons
             : [...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext))];
@@ -1105,9 +1137,12 @@ export const createAgentFinalizeNode = (
       }
     }
 
-    // Telemetry only: model prose that still claims an outcome means a risk
-    // state is missing — never rewrite the reply here.
-    if (replySource === "model" && (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)) {
+    // Never ship model claimsOutcome unless this turn committed a meeting mutation.
+    if (
+      replySource === "model"
+      && (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
+      && !mutationCommitted
+    ) {
       const claim = claimsOutcome(replyText);
       if (claim != null) {
         trackEvent("false_success_claim", {
@@ -1115,6 +1150,27 @@ export const createAgentFinalizeNode = (
           phase: state.bookingDraft?.phase ?? null,
           agent: agent.id,
         });
+        if (
+          agent.id === BOOKING_AGENT_ID
+          && state.pendingInteraction != null
+          && isBookingOwnedInteraction(state.pendingInteraction)
+        ) {
+          replyText = String(
+            renderBookingInteractionMessage(state.pendingInteraction).content,
+          );
+          replyButtons = replyButtonsForInteraction(state.pendingInteraction);
+          replySource = "runtime";
+        } else {
+          replyText = MAIN_MENU_GREETING_UK;
+          replyButtons = [
+            ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+          ];
+          replySource = "runtime";
+          trackEvent("reply_menu_filled", {
+            menu: "default",
+            reason: "false_success_claim",
+          });
+        }
       }
     }
 
