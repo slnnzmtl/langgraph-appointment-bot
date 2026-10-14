@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -30,6 +30,14 @@ import {
   stickyContinueAgentId,
   supervisorState,
 } from "./supervisor-fixtures.js";
+
+const unwrapCommandUpdate = <T extends Record<string, unknown>>(result: unknown): T => {
+  if (result instanceof Command) {
+    return (result.update ?? {}) as T;
+  }
+  return result as T;
+};
+
 
 describe("shouldRouteProcedureBrowseToFaq", () => {
   it.each(["20 октября", "20.10", "2026-10-20"])(
@@ -529,7 +537,7 @@ describe("shouldStayInFaqCatalog", () => {
     expect(update.next).toBe("faq");
     expect(update.lastHandoff).toBeNull();
     // Sticky path omits pendingInteraction — session-close must not null it.
-    expect(update.pendingInteraction).toBeUndefined();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeUndefined();
     expect(catalogPending?.kind).toBe("service_candidate");
   });
 
@@ -560,7 +568,7 @@ describe("shouldStayInFaqCatalog", () => {
     const reply = String(update.lastHandoff?.replyText ?? "");
     expect(reply).toContain("Привіт! Я ШІ-асистент");
     expect(reply).toContain("Чим можу допомогти?");
-    expect(update.pendingInteraction).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
 import { serviceChangedNoticeUk } from "../../shared/clinic-constants.js";
@@ -16,7 +16,11 @@ import {
   reduceBookingDraft,
   type BookingDraft,
 } from "../booking-draft.js";
-import type { ClinicState } from "../state.js";
+import type { ClinicState, ClinicStateUpdate } from "../state.js";
+
+const unwrapCommandUpdate = (result: unknown): ClinicStateUpdate =>
+  result instanceof Command ? (result.update as ClinicStateUpdate) : (result as ClinicStateUpdate);
+
 
 const listedMeetings: BookingContext = {
   meetings: [
@@ -192,7 +196,7 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__command_prepare");
 
     const update = await createAgentCommandPrepareNode("booking")(state);
-    const prepared = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const prepared = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value;
     const call = prepared.at(-1)?.tool_calls?.[0];
     expect(call).toMatchObject({
       name: "present_availability_slots",
@@ -228,7 +232,7 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__command_prepare");
 
     const update = await createAgentCommandPrepareNode("booking")(state);
-    const prepared = (update.agentMessages as Overwrite<AIMessage[]>).value;
+    const prepared = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value;
     const call = prepared.at(-1)?.tool_calls?.[0];
     expect(call).toMatchObject({
       name: "present_availability_slots",

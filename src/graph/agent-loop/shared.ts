@@ -167,15 +167,11 @@ export const blocksConsultationWithoutAgreement = (
     && state.bookingDraft.serviceAcceptance.service.id === CONSULTATION_SERVICE_ID
   );
 
+/** Real CRM / tool-level outcomes only — invariant guards are typed route outcomes. */
 const BLOCKED_MEETING_ERRORS = new Set([
   "Contact incomplete",
   "Already booked",
   "Not authorized",
-  "Note step required",
-  CREATE_CONSULTATION_REQUIRED_ERROR,
-  SLOT_SELECTION_REQUIRED_ERROR,
-  SELECTED_SLOT_NOT_AVAILABLE_ERROR,
-  RESCHEDULE_STATE_REQUIRED_ERROR,
   CONTACT_OWNERSHIP_REQUIRED_ERROR,
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
 ]);
@@ -272,12 +268,10 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     if (message.name !== "cancel_meeting") {
       const record = asJsonRecord(extractMessageTextContent(message.content).trim());
       const isReplacementConflict = record?.error === "Already booked";
-      const isInvariantGuard = record?.error === CREATE_CONSULTATION_REQUIRED_ERROR;
       if (
         !isReplacementConflict
         && (
-          isInvariantGuard
-          || outcome === "committed"
+          outcome === "committed"
           || outcome === "declined"
           || outcome === "abandoned"
           || outcome === "failed"

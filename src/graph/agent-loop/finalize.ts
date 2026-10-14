@@ -81,7 +81,7 @@ import {
   applyMutationChatOtherCleanup,
   hasMutationCallDuringUnresolvedConfirmation,
   hasPendingConfirmationChatOther,
-} from "./command-prepare.js";
+} from "./booking-command.js";
 
 import {
   createAgentMutationFinalizeNode,

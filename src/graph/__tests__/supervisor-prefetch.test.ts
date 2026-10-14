@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -29,6 +29,14 @@ import {
   PREFETCH_TTL_MS,
   supervisorState,
 } from "./supervisor-fixtures.js";
+
+const unwrapCommandUpdate = <T extends Record<string, unknown>>(result: unknown): T => {
+  if (result instanceof Command) {
+    return (result.update ?? {}) as T;
+  }
+  return result as T;
+};
+
 
 describe("createClinicSupervisorNode context cache", () => {
   const invoke = vi.fn();
@@ -368,7 +376,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
-    expect(update.bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.selectedAvailabilityDate).toBeNull();
@@ -412,7 +420,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       }),
     );
 
-    expect(update.bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.selectedAvailabilityDate).toBeNull();
@@ -728,7 +736,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
     expect(update.next).toBe("booking");
-    expect(update.bookingDraft).toMatchObject({
+    expect(unwrapCommandUpdate(update).bookingDraft).toMatchObject({
       mode: "create",
       selectedSlot: null,
       note: { status: "unasked" },
@@ -767,8 +775,8 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.contactContext).toEqual(listedContact);
-    expect(update.bookingDraft?.pendingCommand).toBeNull();
-    expect(update.bookingDraft).toMatchObject({
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toMatchObject({
       pendingCommand: null,
     });
   });
@@ -918,7 +926,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(update.next).toBe("FINISH");
     expect(update.prefetchDirty).toBe(true);
-    expect(update.bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.selectedAvailabilityDate).toBeNull();
@@ -955,7 +963,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyText).toBe(ABANDON_BOOKING_REPLY_UK);
-    expect(update.bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -1010,7 +1018,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(reply).not.toContain("Заплановані візити:");
     expect(reply).not.toBe(MAIN_MENU_GREETING_UK);
     expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);
-    expect(update.bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
     expect(update.selectedAvailabilityDate).toBeNull();

@@ -265,8 +265,18 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         interactionRender,
         ...(faqPrepare != null ? [faqPrepare] : []),
       ];
+      const commandPrepareEnds = [toolsNode, interactionRender, llm, finalize];
       graph = graph
-        .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
+        .addNode(
+          commandPrepare,
+          createAgentCommandPrepareNode(agent.id, {
+            tools: toolsNode,
+            interactionRender,
+            llm,
+            finalize,
+          }),
+          { ends: commandPrepareEnds },
+        )
         .addNode(
           mutationFinalize,
           createAgentMutationFinalizeNode(agent),
@@ -326,7 +336,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         )
         .addNode(interactionRender, createBookingInteractionRenderNode(agent))
         .addEdge(interactionRender, finalize)
-        .addEdge(commandPrepare, toolsNode)
         .addEdge(mutationFinalize, END);
     }
 
