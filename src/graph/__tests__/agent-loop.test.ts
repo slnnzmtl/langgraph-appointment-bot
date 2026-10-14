@@ -9094,18 +9094,32 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       availabilityClinicState({
         contactContext: {
           ownership: "telegram",
-          contacts: [{ id: "c-1", firstName: "Ada", lastName: "Lovelace" }],
+          contacts: [{
+            id: "c-1",
+            firstName: "Ada",
+            lastName: "Lovelace",
+            phoneNumber: "+380501112233",
+            missingFields: [],
+          }],
         },
         bookingDraft: draft,
         agentMessages: [
-          new AIMessage({
-            content: "",
-            tool_calls: [{
-              id: "create-1",
-              name: "create_meeting",
-              args: { serviceId: "invented", dateStart: "2025-01-01T09:00:00" },
-              type: "tool_call",
-            }],
+          new ToolMessage({
+            content: JSON.stringify({
+              days: [{
+                date: "2026-09-10",
+                slots: [{
+                  id: "slot-14",
+                  label: "14:00",
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                }],
+              }],
+              stepMinutes: 30,
+              query: { kind: "exact", date: "2026-09-10", coverageComplete: true },
+            }),
+            name: "present_availability_slots",
+            tool_call_id: "slots-1",
           }),
         ],
       }),
@@ -9127,7 +9141,13 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       availabilityClinicState({
         contactContext: {
           ownership: "telegram",
-          contacts: [{ id: "c-1", firstName: "Ada", lastName: "Lovelace" }],
+          contacts: [{
+            id: "c-1",
+            firstName: "Ada",
+            lastName: "Lovelace",
+            phoneNumber: "+380501112233",
+            missingFields: [],
+          }],
         },
         bookingDraft: {
           version: 4,
@@ -9150,25 +9170,27 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         },
         agentMessages: [
           new ToolMessage({
-            content: "{}",
+            content: JSON.stringify({
+              days: [{
+                date: "2026-09-10",
+                slots: [{
+                  id: "slot-14",
+                  label: "14:00",
+                  dateStart: "2026-09-10T14:00:00",
+                  dateEnd: "2026-09-10T14:30:00",
+                }],
+              }],
+              stepMinutes: 30,
+              query: { kind: "exact", date: "2026-09-10", coverageComplete: true },
+            }),
             name: "present_availability_slots",
             tool_call_id: "slots-1",
-          }),
-          new AIMessage({
-            content: "",
-            tool_calls: [{
-              id: "model-create-1",
-              name: "create_meeting",
-              args: {},
-              type: "tool_call",
-            }],
           }),
         ],
       }),
     );
 
-    const messages = (update.agentMessages as unknown as { __overwrite__?: AIMessage[] }).__overwrite__
-      ?? (update.agentMessages as AIMessage[]);
+    const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
     const message = messages.at(-1)!;
     expect(message.tool_calls?.[0]).toMatchObject({
       name: "create_meeting",
@@ -9828,50 +9850,29 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([CONFIRM_YES_LABEL, CONFIRM_NO_LABEL]);
   });
 
-  it("coerces a post-HITL exact-date slots call despite leftover pre-confirm slots", async () => {
+  it("command_prepare injects post-HITL exact-date slots despite leftover pre-confirm slots", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-07T12:00:00+03:00"));
-    const invoke = vi.fn(async () => new AIMessage("Підберу вільні години."));
-    const slotsTool = tool(
-      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({
-          direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
-          date: z.string().optional(),
-        }),
-      },
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const draft = reduceBookingDraft(
+      canonicalBookingDraft({
+        selectedDate: "2026-10-20",
+        selectedSlot: {
+          dateStart: "2026-10-20T12:00:00",
+          dateEnd: "2026-10-20T12:30:00",
+          label: "12:00",
+        },
+        phase: "confirming",
+        note: { status: "answered", value: "акне" },
+        pendingCommand: null,
+      }),
+      { type: "schedule_requested", date: "2026-10-22" },
     );
-    const llm = createAgentLlmNode({
-      agent,
-      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
-      tools: [slotsTool],
-      formatSystemMetadata: () => "DYN",
-    });
-    const update = await llm(
+    const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("запиши на 22 жовтня")],
         contactContext: ownedContactContext(),
-        bookingDraft: {
-          ...canonicalBookingDraft({
-            selectedDate: "2026-10-20",
-            selectedSlot: {
-              dateStart: "2026-10-20T12:00:00",
-              dateEnd: "2026-10-20T12:30:00",
-              label: "12:00",
-            },
-            phase: "confirming",
-            note: { status: "answered", text: "акне" },
-            pendingCommand: {
-              action: "create",
-              payload: {
-                serviceId: "svc-1",
-                dateStart: "2026-10-20T12:00:00",
-              },
-            },
-          }),
-        },
+        bookingDraft: draft,
         agentMessages: [
           oct20SlotsTool(),
           new ToolMessage({
@@ -9882,16 +9883,15 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
             name: "create_meeting",
             tool_call_id: "create-1",
           }),
+          new AIMessage("Підберу вільні години."),
         ],
       }),
     );
     vi.useRealTimers();
 
-    const messages = update.agentMessages as AIMessage[];
-    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
-      name: "present_availability_slots",
-      args: { direction: "exact", date: "2026-10-22" },
-    });
+    // Create chat-other must not re-arm mutation; exact-date inject waits for a
+    // later turn after slot invalidation (Path B).
+    expect(update.agentMessages).toBeUndefined();
   });
 
   it("abandons a create draft after an explicit chat decline", async () => {
@@ -10114,6 +10114,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     const state = availabilityClinicState({
       messages: [new HumanMessage(utterance)],
       bookingContext: listedMeetings,
+      // No active create ladder — only cancel synthesis is under test.
+      bookingDraft: null,
       agentMessages: [new HumanMessage(utterance), new AIMessage("Добре")],
     });
     expect(
@@ -12045,9 +12047,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(String(ai.content)).toBe("Ось каталог послуг.");
   });
 
-  it("injects present_availability_slots when DATE copy has no tool_calls", async () => {
-    const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
-    const llmUpdate = await llm(
+  it("command_prepare injects present_availability_slots when DATE has no snapshot", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Так")],
         agentMessages: [new HumanMessage("Так")],
@@ -12055,18 +12057,18 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         next: "booking",
       }),
     );
-    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    const ai = (update.agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
     expect(ai.tool_calls).toEqual([
       expect.objectContaining({
         name: "present_availability_slots",
-        args: { direction: "nearest" },
+        args: { direction: "nearest", forceRefresh: true },
       }),
     ]);
   });
 
-  it("forces availability lookup for direct reschedule instead of accepting a day prompt", async () => {
-    const llm = bookingLlmReturning("Оберіть новий день для перенесення візиту:");
-    const llmUpdate = await llm(
+  it("command_prepare forces availability lookup for direct reschedule instead of a day prompt", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Перенести")],
         agentMessages: [new HumanMessage("Перенести")],
@@ -12079,7 +12081,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         next: "booking",
       }),
     );
-    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+    const ai = (update.agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
     expect(ai.tool_calls).toEqual([
       expect.objectContaining({
         name: "present_availability_slots",
@@ -12087,44 +12089,35 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           direction: "nearest",
           durationMinutes: 30,
           excludeMeetingIds: ["m-1"],
+          forceRefresh: true,
         },
       }),
     ]);
   });
 
-  it("starts a fresh nearest search after accepting a consultation offer", async () => {
-    const llm = bookingLlmReturning("Добре");
-    const state = availabilityClinicState({
-      messages: [new HumanMessage("Так")],
-      agentMessages: [new HumanMessage("Так")],
-      availabilityContext: {
-        ...snapshot,
-        searchDirection: "exact",
-        searchAnchor: "2026-10-08",
-        query: {
-          kind: "exact",
-          date: "2026-10-08",
-          rangeFrom: "2026-10-08",
-          rangeThrough: "2026-10-08",
-          coverageComplete: true,
+  it("command_prepare starts a fresh nearest search after service accept clears stale snapshot", async () => {
+    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const update = await commandPrepare(
+      availabilityClinicState({
+        messages: [new HumanMessage("Так")],
+        agentMessages: [new HumanMessage("Так")],
+        // Accept path clears availability; runtime then owns nearest.
+        availabilityContext: null,
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Підібрати вільний час на консультацію?",
+          replyButtons: ["Так", "Обрати іншу процедуру"],
         },
-      },
-      lastHandoff: {
-        agentId: "booking",
-        agentName: "Booking",
-        status: "ok",
-        replyText: "Підібрати вільний час на консультацію?",
-        replyButtons: ["Так", "Обрати іншу процедуру"],
-      },
-      next: "booking",
-    });
-
-    const llmUpdate = await llm(state);
-    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+        next: "booking",
+      }),
+    );
+    const ai = (update.agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
     expect(ai.tool_calls).toEqual([
       expect.objectContaining({
         name: "present_availability_slots",
-        args: { direction: "nearest" },
+        args: { direction: "nearest", forceRefresh: true },
       }),
     ]);
   });
@@ -12183,7 +12176,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it.each([OTHER_DATE_LABEL, "другая дата", "другая", "другой"])(
-    "injects present_availability_slots for alternative-date reply %s when TIME has no tool_calls",
+    "LLM no longer synthesizes present_availability_slots for alternative-date reply %s",
     async (otherDateReply) => {
     const llm = bookingLlmReturning("Добре");
     const llmUpdate = await llm(
@@ -12195,33 +12188,34 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
     const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
-    expect(ai.tool_calls).toEqual([
-      expect.objectContaining({
-        name: "present_availability_slots",
-        args: { direction: "later" },
-      }),
-    ]);
+    // Coercion no longer injects availability; informational bind has no slots tool.
+    expect(ai.tool_calls ?? []).toEqual([]);
     },
   );
 
-  it("injects the validated exact date when the model skips the availability tool", async () => {
+  it("command_prepare injects the validated exact date when schedule is pending", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-24T09:00:00Z"));
-      const llm = bookingLlmReturning("На 20 жовтня вільного часу немає.");
-      const llmUpdate = await llm(
+      const commandPrepare = createAgentCommandPrepareNode("booking");
+      const draft = reduceBookingDraft(
+        acceptedCreateDraft({ phase: "date", note: { status: "unasked" } }),
+        { type: "schedule_requested", date: "2026-10-20" },
+      );
+      const update = await commandPrepare(
         availabilityClinicState({
           messages: [new HumanMessage("20 жовтня")],
           agentMessages: [new HumanMessage("20 жовтня")],
+          bookingDraft: draft,
           availabilityContext: snapshot,
           next: "booking",
         }),
       );
-      const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+      const ai = (update.agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
       expect(ai.tool_calls).toEqual([
         expect.objectContaining({
           name: "present_availability_slots",
-          args: { direction: "exact", date: "2026-10-20" },
+          args: { direction: "exact", date: "2026-10-20", forceRefresh: true },
         }),
       ]);
     } finally {
@@ -12229,12 +12223,21 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     }
   });
 
-  it("anchors a bare day to the current booking month before model prose can invent slots", async () => {
+  it("command_prepare anchors a bare day via schedule_requested before inventing slots", async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-28T09:00:00Z"));
-      const llm = bookingLlmReturning("На 26 жовтня вільного часу немає.");
-      const llmUpdate = await llm(
+      const commandPrepare = createAgentCommandPrepareNode("booking");
+      const draft = reduceBookingDraft(
+        canonicalBookingDraft({
+          phase: "time",
+          selectedDate: "2026-10-25",
+          selectedSlot: null,
+          note: { status: "unasked" },
+        }),
+        { type: "schedule_requested", date: "2026-10-26", preferredTime: undefined },
+      );
+      const update = await commandPrepare(
         availabilityClinicState({
           messages: [new HumanMessage("26")],
           agentMessages: [new HumanMessage("26")],
@@ -12249,20 +12252,15 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
               coverageComplete: true,
             },
           },
-          bookingDraft: canonicalBookingDraft({
-            phase: "time",
-            selectedDate: "2026-10-25",
-            selectedSlot: null,
-            note: { status: "unasked" },
-          }),
+          bookingDraft: draft,
           next: "booking",
         }),
       );
-      const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
+      const ai = (update.agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
       expect(ai.tool_calls).toEqual([
         expect.objectContaining({
           name: "present_availability_slots",
-          args: { direction: "exact", date: "2026-10-26" },
+          args: { direction: "exact", date: "2026-10-26", forceRefresh: true },
         }),
       ]);
     } finally {

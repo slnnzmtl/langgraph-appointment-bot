@@ -8,11 +8,23 @@ export const BOOKING_SCHEMA_VERSION = 1;
 
 export type BookingContactField = "phoneNumber" | "firstName" | "lastName";
 
-/** Accepted patient identity pending CRM create/update/link. Cleared on contact_resolved. */
+/**
+ * Accepted patient identity pending CRM create/update/link.
+ * Kept across link until the CRM row is complete; cleared only then.
+ */
 export type BookingContactDetails = {
   phoneNumber?: string; // normalized E.164
   firstName?: string;
   lastName?: string;
+};
+
+/** Typed find_contact_by_phone outcome for the exact accepted draft phone. */
+export type PhoneLookupResult = "none" | "single_linkable" | "occupied" | "ambiguous";
+
+export type PhoneLookupEvidence = {
+  phoneNumber: string;
+  result: PhoneLookupResult;
+  contactIds: string[];
 };
 
 /** Allowed visit lengths for availability search and command guards (tool schema). */
@@ -81,8 +93,10 @@ export type BookingDraft = {
   requestedTime: RequestedBookingTime | null;
   note: BookingNote;
   contactId: string | null;
-  /** Durable accepted identity until CRM contact resolves. Optional on older checkpoints. */
+  /** Durable accepted identity until CRM contact is complete. Optional on older checkpoints. */
   contactDetails?: BookingContactDetails | null;
+  /** Last phone lookup for this draft's accepted phone. Optional on older checkpoints. */
+  phoneLookupEvidence?: PhoneLookupEvidence | null;
   pendingCommand: PendingBookingCommand | null;
   /** CRM-owned meeting selected as the target of a direct reschedule. */
   rescheduleTarget?: ReplacementMeeting | null;
@@ -103,7 +117,9 @@ export type BookingEvent =
       field: BookingContactField;
       value: string;
     }
-  | { type: "contact_resolved"; contactId: string }
+  | { type: "contact_resolved"; contactId: string; clearDetails?: boolean }
+  | { type: "contact_details_cleared" }
+  | { type: "phone_lookup_recorded"; evidence: PhoneLookupEvidence }
   | { type: "contact_unresolved" }
   | { type: "command_prepared"; command: PendingBookingCommand }
   | { type: "command_cleared" }
@@ -616,6 +632,7 @@ const constructBookingDraft = (fields: {
   note: BookingNote;
   contactId: string | null;
   contactDetails?: BookingContactDetails | null;
+  phoneLookupEvidence?: PhoneLookupEvidence | null;
   pendingCommand: PendingBookingCommand | null;
   rescheduleTarget?: ReplacementMeeting | null;
   replacement?: ReplacementState | null;
@@ -630,6 +647,7 @@ const constructBookingDraft = (fields: {
   note: fields.note,
   contactId: fields.contactId,
   contactDetails: copyContactDetails(fields.contactDetails),
+  phoneLookupEvidence: fields.phoneLookupEvidence ?? null,
   pendingCommand: fields.pendingCommand,
   rescheduleTarget: fields.rescheduleTarget ?? null,
   replacement: fields.replacement ?? null,
@@ -1015,6 +1033,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   note: { status: "unasked" },
   contactId: null,
   contactDetails: null,
+  phoneLookupEvidence: null,
   pendingCommand: null,
   rescheduleTarget: null,
   replacement: null,
@@ -1247,13 +1266,26 @@ export const reduceBookingDraft = (
           ...(draft.contactDetails ?? {}),
           [event.field]: accepted,
         },
+        // New phone invalidates prior lookup evidence for a different number.
+        ...(event.field === "phoneNumber" ? { phoneLookupEvidence: null } : {}),
       });
     }
     case "contact_resolved":
       return withVersion(draft, {
         ...draft,
         contactId: event.contactId,
+        // Keep accepted details across link→update unless CRM is already complete.
+        ...(event.clearDetails === true ? { contactDetails: null } : {}),
+      });
+    case "contact_details_cleared":
+      return withVersion(draft, {
+        ...draft,
         contactDetails: null,
+      });
+    case "phone_lookup_recorded":
+      return withVersion(draft, {
+        ...draft,
+        phoneLookupEvidence: event.evidence,
       });
     case "contact_unresolved": {
       const next = {

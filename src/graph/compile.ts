@@ -11,6 +11,7 @@ import {
 import type { McpCallTool } from "../shared/mcp.js";
 import {
   extractContactIdFromSearchResult,
+  filterBookingInformationalTools,
   lookupContactByTelegram,
   lookupPlannedMeetings,
   normalizeContactLookupResult,
@@ -169,6 +170,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const noteOrch = noteOrchestratorNodeName(agent.id);
     const interactionRender = interactionRenderNodeName(agent.id);
     const isBooking = agent.id === BOOKING_AGENT_ID;
+    // Booking LLM binds informational reads only; ToolNode keeps the full set
+    // so command_prepare can inject runtime-owned availability/contact/mutations.
+    const llmTools = isBooking ? filterBookingInformationalTools(tools) : tools;
 
     const classifyContactName = isBooking
       ? (options.classifyContactName ?? createContactNameClassifier(options.supervisorLlm))
@@ -202,7 +206,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         createAgentLlmNode({
           agent,
           model: options.agentModel,
-          tools,
+          tools: llmTools,
           formatSystemMetadata: options.formatSystemMetadata,
           ...(options.contextCache && options.agentModelName
             ? {

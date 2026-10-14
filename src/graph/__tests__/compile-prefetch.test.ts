@@ -1220,20 +1220,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
   });
 
   it("continues a successful contact link directly to the single meeting HITL", async () => {
-    const modelInvoke = vi.fn(async () => {
-      if (modelInvoke.mock.calls.length === 1) {
-        return new AIMessage({
-          content: "",
-          tool_calls: [{
-            id: "link-1",
-            name: "link_telegram_to_contact",
-            args: { contactId: "c-phone" },
-            type: "tool_call",
-          }],
-        });
-      }
-      return new AIMessage("Підтвердіть, будь ласка, запис.");
-    });
+    // Runtime owns link → revalidate → create; the booking LLM is never required.
+    const modelInvoke = vi.fn(async () => new AIMessage("Підтвердіть, будь ласка, запис."));
     const crmCalls: Array<{ name: string; args: Record<string, unknown> }> = [];
     const [linkContact] = createContactTools({
       callTool: async (name, args) => {
@@ -1368,6 +1356,16 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
           requestedTime: null,
           note: { status: "skipped" },
           contactId: null,
+          contactDetails: {
+            phoneNumber: "+380632123123",
+            firstName: "Daniel",
+            lastName: "Test",
+          },
+          phoneLookupEvidence: {
+            phoneNumber: "+380632123123",
+            result: "single_linkable",
+            contactIds: ["c-phone"],
+          },
           pendingCommand: null,
           replacement: null,
         },
@@ -1385,7 +1383,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     }]);
     expect(availabilityInvoke).toHaveBeenCalledOnce();
     expect(createInvoke).toHaveBeenCalledOnce();
-    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(modelInvoke).not.toHaveBeenCalled();
     expect(result.bookingDraft).toMatchObject({
       contactId: "c-phone",
       pendingCommand: { action: "create" },
@@ -1404,7 +1402,7 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       config,
     ));
 
-    expect(modelInvoke).toHaveBeenCalledOnce();
+    expect(modelInvoke).not.toHaveBeenCalled();
     expect(createInvoke).toHaveBeenCalledTimes(2);
     expect(createInvoke.mock.calls.at(-1)?.[0]).toMatchObject({
       contactId: "c-phone",
@@ -2114,20 +2112,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         },
       });
     });
-    const modelInvoke = vi.fn(async () => {
-      if (modelInvoke.mock.calls.length <= 1) {
-        return new AIMessage({
-          content: "",
-          tool_calls: [{
-            id: "slots-1",
-            name: "present_availability_slots",
-            args: { direction: "nearest" },
-            type: "tool_call",
-          }],
-        });
-      }
-      return new AIMessage("Оберіть зручний день.");
-    });
+    // Availability is runtime-owned after service accept; the LLM must not call slots.
+    const modelInvoke = vi.fn(async () => new AIMessage("Оберіть зручний день."));
     const presentAvailability = tool(availabilityInvoke, {
       name: "present_availability_slots",
       description: "availability",
@@ -2182,7 +2168,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
 
     const accepted = await invoke({ messages: [new HumanMessage("Так")] });
     expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
-    expect(modelInvoke).toHaveBeenCalled();
+    // Runtime injects nearest slots after accept; the LLM may still greet but
+    // must not be required for the DATE card.
     expect(availabilityInvoke).toHaveBeenCalled();
     expect(accepted.bookingDraft).not.toBeNull();
     expect(

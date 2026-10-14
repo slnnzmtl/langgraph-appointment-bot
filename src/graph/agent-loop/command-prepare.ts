@@ -14,7 +14,6 @@ import { contactMissingFields } from "../../tools/contact-tools.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { extractMessageTextContent, extractReplyButtons } from "../../shared/message-content.js";
 import type {
-  CancellationPurpose,
   ClinicState,
   ClinicStateUpdate,
 } from "../state.js";
@@ -37,19 +36,24 @@ import {
   replacementActionForTurn,
 } from "./replacement-flow.js";
 
+import { trackEvent } from "../../analytics/track.js";
+import {
+  contactCommandNeedsToolInjection,
+  contactCommandReadyForInjection,
+  resolveContactCommand,
+  type ContactCommand,
+} from "../contact-command.js";
 import {
   MEETING_MUTATION_TOOLS,
-  authoritativeNoteStatus,
   authoritativeSelectedSlot,
-  blocksConsultationWithoutAgreement,
   bookingDateAnchors,
   bookingMutationNeedsModelRecovery,
   captureAvailabilityFromMessages,
   classifyMeetingMutationToolMessage,
   lastPatientText,
   matchAvailabilityDay,
-  noteStepBlocksCreate,
   resolveContactIdentity,
+  terminalContactWriteOutcome,
   toolRanThisTurn,
 } from "./shared.js";
 
@@ -68,6 +72,101 @@ const alignArgDates = (
 };
 
 type MeetingMutationCall = { name: string; args?: unknown };
+
+const RUNTIME_TOOL_ORIGIN = "command_prepare" as const;
+
+/** Stamp runtime-originated tool calls without PII or tool args. */
+const stampRuntimeToolAi = (
+  toolName: string,
+  toolCalls: NonNullable<AIMessage["tool_calls"]>,
+  action?: string,
+): AIMessage => {
+  trackEvent("booking_runtime_tool", {
+    tool: toolName,
+    origin: RUNTIME_TOOL_ORIGIN,
+    ...(action != null ? { action } : {}),
+  });
+  return new AIMessage({
+    content: "",
+    tool_calls: toolCalls,
+    additional_kwargs: { runtimeToolOrigin: RUNTIME_TOOL_ORIGIN },
+  });
+};
+
+const contactToolCallFromCommand = (
+  command: ContactCommand,
+  draftVersion: number,
+): { name: string; args: Record<string, unknown>; action: string } | null => {
+  switch (command.action) {
+    case "lookup":
+      return {
+        name: "find_contact_by_phone",
+        args: { phoneNumber: command.phoneNumber },
+        action: "lookup",
+      };
+    case "link":
+      return {
+        name: "link_telegram_to_contact",
+        args: { contactId: command.contactId },
+        action: "link",
+      };
+    case "create":
+      return {
+        name: "create_contact",
+        args: {
+          firstName: command.details.firstName,
+          lastName: command.details.lastName,
+          phoneNumber: command.details.phoneNumber,
+        },
+        action: "create",
+      };
+    case "update":
+      return {
+        name: "update_contact",
+        args: {
+          contactId: command.contactId,
+          ...command.fields,
+        },
+        action: "update",
+      };
+    default:
+      return null;
+  }
+};
+
+const injectContactCommandUpdate = (
+  state: ClinicState,
+): ClinicStateUpdate | null => {
+  if (!contactCommandReadyForInjection(state)) {
+    return null;
+  }
+  const command = resolveContactCommand(state);
+  if (!contactCommandNeedsToolInjection(command)) {
+    return null;
+  }
+  // Do not re-inject the same contact tool while its call is still pending.
+  if (hasPendingToolCalls(state.agentMessages)) {
+    return null;
+  }
+  const mapped = contactToolCallFromCommand(command, state.bookingDraft?.version ?? 0);
+  if (mapped == null) {
+    return null;
+  }
+  const syntheticCall = {
+    id: `booking_contact_${mapped.action}_${state.bookingDraft?.version ?? 0}`,
+    name: mapped.name,
+    args: mapped.args,
+    type: "tool_call" as const,
+  };
+  return {
+    agentMessages: new Overwrite(
+      appendOrReplacePendingToolCall(
+        state.agentMessages ?? [],
+        stampRuntimeToolAi(mapped.name, [syntheticCall], mapped.action),
+      ),
+    ),
+  };
+};
 
 /** Runtime-owned arguments used for command checkpointing and tool execution. */
 export const normalizeMeetingMutationArgs = (
@@ -397,12 +496,6 @@ const directCancelCommandForTurn = (
   return cancelCommandFromPlannedVisit(state);
 };
 
-const cancellationPurposeForState = (state: ClinicState): CancellationPurpose =>
-  state.bookingDraft?.replacement?.status === "offered"
-    || state.bookingDraft?.replacement?.status === "cancelling"
-    ? "replacement"
-    : "direct";
-
 /** Build the create command from the authoritative draft, without model-owned fields. */
 const createCommandFromBookingDraft = (
   state: ClinicState,
@@ -519,21 +612,29 @@ const nearestRescheduleAvailabilityRequest = (
 };
 
 /**
- * After a mid-booking service change the old date/slot are cleared. Runtime owns
- * the next nearest availability search for the replacement service duration.
+ * After service accept (first book or mid-booking service change) with no date
+ * yet, runtime owns the nearest DATE search. Skip when a trusted snapshot is
+ * already on the checkpoint unless a service-change notice forces a refresh.
  */
-const serviceChangeNearestAvailabilityRequest = (
+const createNearestAvailabilityRequest = (
   state: ClinicState,
 ): AvailabilitySlotsToolArgs | null => {
   const draft = state.bookingDraft;
   if (
-    state.serviceChangeNotice == null
-    || draft?.mode !== "create"
+    draft?.mode !== "create"
     || draft.serviceAcceptance?.status !== "accepted"
     || draft.selectedDate != null
     || draft.selectedSlot != null
     || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
   ) {
+    return null;
+  }
+  // Replacement-cancel nearest is a separate path (keeps pendingCancellationPurpose).
+  if (state.pendingCancellationPurpose === "replacement") {
+    return null;
+  }
+  const forceServiceChange = state.serviceChangeNotice != null;
+  if (!forceServiceChange && state.availabilityContext != null) {
     return null;
   }
   return {
@@ -607,15 +708,15 @@ const availabilitySlotsAgentMessagesUpdate = (
   args: AvailabilitySlotsToolArgs,
 ): ClinicStateUpdate => ({
   agentMessages: new Overwrite(
-    appendOrReplacePendingToolCall(messages, new AIMessage({
-      content: "",
-      tool_calls: [{
+    appendOrReplacePendingToolCall(
+      messages,
+      stampRuntimeToolAi("present_availability_slots", [{
         id: toolCallId,
         name: "present_availability_slots",
         args,
         type: "tool_call" as const,
-      }],
-    })),
+      }], "availability"),
+    ),
   ),
 });
 
@@ -631,7 +732,8 @@ export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean 
   }
   // Chat-other after HITL must return to the model — never replay the frozen
   // mutation. Cancel is the exception: after the model answers (no pending
-  // tool calls), re-arm HITL.
+  // tool calls), re-arm HITL. Create/reschedule chat-other require fresh
+  // availability and a new confirmation card on a later turn (no free-text replay).
   if (hasPendingConfirmationChatOther(state)) {
     return shouldRearmCancelAfterChatOther(state)
       && !hasPendingToolCalls(state.agentMessages)
@@ -643,10 +745,16 @@ export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean 
   ) {
     return true;
   }
+  if (
+    contactCommandReadyForInjection(state)
+    && contactCommandNeedsToolInjection(resolveContactCommand(state))
+  ) {
+    return true;
+  }
   if (availabilityRequestFromBookingDraft(state) != null) {
     return true;
   }
-  if (serviceChangeNearestAvailabilityRequest(state) != null) {
+  if (createNearestAvailabilityRequest(state) != null) {
     return true;
   }
   if (replacementCancelNearestAvailabilityRequest(state) != null) {
@@ -682,18 +790,32 @@ export const bookingCommandContinuesAfterTools = (state: ClinicState): boolean =
   if (hasPendingConfirmationChatOther(state)) {
     return false;
   }
+  // Operational contact-write failure is terminal — finalize owns the patient reply.
+  if (terminalContactWriteOutcome(state) != null) {
+    return false;
+  }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
     return true;
   }
   if (replacementCancelNearestAvailabilityRequest(state) != null) {
     return true;
   }
-  const contactResolvedThisTurn = resolveContactIdentity(state.contactContext).kind === "owned"
-    && (
-      toolRanThisTurn(state.agentMessages ?? [], "create_contact")
-      || toolRanThisTurn(state.agentMessages ?? [], "link_telegram_to_contact")
-    );
-  if (contactResolvedThisTurn && createCommandFromBookingDraft(state) != null) {
+  // Continue the contact chain (empty lookup → create, match → link, link → update)
+  // without returning to the LLM between steps.
+  if (
+    contactCommandReadyForInjection(state)
+    && contactCommandNeedsToolInjection(resolveContactCommand(state))
+    && !hasPendingToolCalls(state.agentMessages)
+  ) {
+    return true;
+  }
+  const contactOwned = resolveContactIdentity(state.contactContext).kind === "owned";
+  const contactWriteThisTurn =
+    toolRanThisTurn(state.agentMessages ?? [], "create_contact")
+    || toolRanThisTurn(state.agentMessages ?? [], "link_telegram_to_contact")
+    || toolRanThisTurn(state.agentMessages ?? [], "update_contact")
+    || toolRanThisTurn(state.agentMessages ?? [], "find_contact_by_phone");
+  if (contactOwned && contactWriteThisTurn && createCommandFromBookingDraft(state) != null) {
     return true;
   }
   const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
@@ -810,7 +932,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         args: rearmCancel.payload,
         type: "tool_call" as const,
       };
-      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      const syntheticAi = stampRuntimeToolAi("cancel_meeting", [syntheticCall], "cancel_rearm");
       const prepared = withMutationConfirm(state, "cancel", {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "command_prepared",
@@ -845,7 +967,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         args: directCancelCommand.payload,
         type: "tool_call" as const,
       };
-      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      const syntheticAi = stampRuntimeToolAi("cancel_meeting", [syntheticCall], "cancel");
       const messages = state.agentMessages ?? [];
       return withMutationConfirm(state, "cancel", {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
@@ -872,7 +994,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
           args: cancelCommand.payload,
           type: "tool_call" as const,
         };
-        const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+        const syntheticAi = stampRuntimeToolAi("cancel_meeting", [syntheticCall], "replace_cancel");
         const messages = state.agentMessages ?? [];
         return withMutationConfirm(state, "cancel", {
           bookingDraft: reduceBookingDraft(state.bookingDraft, {
@@ -890,6 +1012,10 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
     ) {
       return {};
     }
+    const contactInject = injectContactCommandUpdate(state);
+    if (contactInject != null) {
+      return contactInject;
+    }
     const nearestRescheduleRequest = nearestRescheduleAvailabilityRequest(state);
     if (nearestRescheduleRequest) {
       return availabilitySlotsAgentMessagesUpdate(
@@ -898,12 +1024,12 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         nearestRescheduleRequest,
       );
     }
-    const serviceChangeNearestRequest = serviceChangeNearestAvailabilityRequest(state);
-    if (serviceChangeNearestRequest) {
+    const createNearestRequest = createNearestAvailabilityRequest(state);
+    if (createNearestRequest) {
       return availabilitySlotsAgentMessagesUpdate(
         state.agentMessages ?? [],
-        `booking_service_change_nearest_${state.bookingDraft?.version ?? 0}`,
-        serviceChangeNearestRequest,
+        `booking_create_nearest_${state.bookingDraft?.version ?? 0}`,
+        createNearestRequest,
       );
     }
     const replacementCancelNearestRequest = replacementCancelNearestAvailabilityRequest(state);
@@ -941,7 +1067,11 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         },
         type: "tool_call" as const,
       };
-      const revalidationAi = new AIMessage({ content: "", tool_calls: [revalidationCall] });
+      const revalidationAi = stampRuntimeToolAi(
+        "present_availability_slots",
+        [revalidationCall],
+        "reschedule_revalidate",
+      );
       return {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "command_prepared",
@@ -963,7 +1093,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         args: rescheduleCommand.payload,
         type: "tool_call" as const,
       };
-      const syntheticAi = new AIMessage({ content: "", tool_calls: [syntheticCall] });
+      const syntheticAi = stampRuntimeToolAi("reschedule_meeting", [syntheticCall], "reschedule");
       return withMutationConfirm(state, "reschedule", {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
           type: "command_prepared",
@@ -991,10 +1121,11 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         },
         type: "tool_call" as const,
       };
-      const revalidationAi = new AIMessage({
-        content: "",
-        tool_calls: [revalidationCall],
-      });
+      const revalidationAi = stampRuntimeToolAi(
+        "present_availability_slots",
+        [revalidationCall],
+        "create_revalidate",
+      );
       const messages = state.agentMessages ?? [];
       return {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
@@ -1013,10 +1144,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         args: draftCommand.payload,
         type: "tool_call" as const,
       };
-      const syntheticAi = new AIMessage({
-        content: "",
-        tool_calls: [syntheticCall],
-      });
+      const syntheticAi = stampRuntimeToolAi("create_meeting", [syntheticCall], "create");
       const messages = state.agentMessages ?? [];
       return withMutationConfirm(state, "create", {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
@@ -1026,60 +1154,7 @@ export const createAgentCommandPrepareNode = (agentId: string) =>
         agentMessages: new Overwrite(appendOrReplacePendingToolCall(messages, syntheticAi)),
       });
     }
-    const lastAi = [...(state.agentMessages ?? [])]
-      .reverse()
-      .find((message) => message instanceof AIMessage && (message.tool_calls?.length ?? 0) > 0);
-    if (!(lastAi instanceof AIMessage)) {
-      return {};
-    }
-    const calls = (lastAi.tool_calls ?? [])
-      .filter((call) => commandActionForTool(call.name) != null);
-    if (calls.length === 0) {
-      return {};
-    }
-    const call = calls[0]!;
-    const action = commandActionForTool(call.name)!;
-    if (
-      call.name === "create_meeting"
-      && (
-        noteStepBlocksCreate(authoritativeNoteStatus(state))
-        || blocksConsultationWithoutAgreement(agentId, call, state)
-      )
-    ) {
-      return {};
-    }
-    const payload = normalizeMeetingMutationArgs(state, call);
-    const command: PendingBookingCommand = { action, payload };
-    const bookingDraft = reduceBookingDraft(state.bookingDraft, {
-      type: "command_prepared",
-      command,
-    });
-    const normalizedCalls = (lastAi.tool_calls ?? []).map((candidate) =>
-      candidate === call ? { ...candidate, args: payload } : candidate,
-    );
-    const normalizedAi = new AIMessage({
-      content: lastAi.content,
-      tool_calls: normalizedCalls,
-      additional_kwargs: lastAi.additional_kwargs,
-      response_metadata: lastAi.response_metadata,
-      id: lastAi.id,
-    } as ConstructorParameters<typeof AIMessage>[0]);
-    const lastIndex = state.agentMessages.lastIndexOf(lastAi);
-    const update: ClinicStateUpdate = {
-      bookingDraft,
-      ...(action === "cancel"
-        ? { pendingCancellationPurpose: cancellationPurposeForState(state) }
-        : {}),
-      agentMessages: new Overwrite([
-        ...state.agentMessages.slice(0, lastIndex),
-        normalizedAi,
-        ...state.agentMessages.slice(lastIndex + 1),
-      ]),
-    };
-    // Open mutation_confirm only when this node appends/normalizes a mutation
-    // tool call (never on the present_availability revalidation branch above).
-    if (action === "create" || action === "reschedule" || action === "cancel") {
-      return withMutationConfirm(state, action, update);
-    }
-    return update;
+    // Model-originated meeting mutations are no longer normalized here — runtime
+    // is the sole authority for availability, contact writes, and mutations.
+    return {};
   };

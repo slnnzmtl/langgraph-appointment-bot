@@ -811,12 +811,16 @@ export const reduceBookingSession = (
           if (draft == null) {
             return noEffect(current);
           }
-          return noEffect({
+          // Drop any stale DATE snapshot so command_prepare injects a fresh
+          // nearest search for the accepted service duration.
+          return {
             bookingDraft: reduceBookingDraft(draft, {
               type: "service_accepted",
             }),
             pendingInteraction: null,
-          });
+            clearAvailability: true,
+            effect: null,
+          };
         }
         if (event.choiceId === "choose_other") {
           // Same policy as supervisor faqPredicates: wipe the offer and browse FAQ.
