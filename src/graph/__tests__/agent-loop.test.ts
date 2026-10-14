@@ -29,7 +29,7 @@ import {
   routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
-} from "../agent-loop.js";
+} from "../agent-loop/index.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { committedMeetingEntityId } from "../../shared/json-record.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
@@ -73,8 +73,6 @@ import {
   formatContactContext,
   formatPlannedVisitsFlag,
   formatServicesContext,
-  formatMyVisitReply,
-  attachPrefetchVisits,
 } from "../context-blocks.js";
 import { createContactTools, type ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
@@ -96,7 +94,7 @@ import {
 import {
   CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION,
 } from "../contact-name-classifier.js";
-import type { ClinicAgentDefinition } from "../types.js";
+import { FAQ_AGENT_ID, type ClinicAgentDefinition } from "../types.js";
 
 /** Ukrainian modifier letter apostrophe (U+02BC). */
 const DARYA_MODIFIER = "Дарʼя";
@@ -201,7 +199,7 @@ vi.mock("@personal-assistant/llm-gemini", () => ({
   isCachedContentNotFoundError: (error: unknown) => isCachedContentNotFoundError(error),
 }));
 
-const { createAgentLlmNode } = await import("../agent-loop.js");
+const { createAgentLlmNode } = await import("../agent-loop/index.js");
 
 
 const faqCatalogAi = (
@@ -214,203 +212,6 @@ const faqCatalogAi = (
   const body = content.trim().length > 0 ? `${content.trim()}\n${tag}` : tag;
   return new AIMessage(body);
 };
-
-describe("formatBookingMeetingsContext", () => {
-  it("returns an empty string when context is missing", async () => {
-    expect(formatBookingMeetingsContext(null)).toBe("");
-  });
-
-  it("renders an empty meetings list so the model does not re-fetch", async () => {
-    const block = formatBookingMeetingsContext({ meetings: [], dateFrom: "2026-08-11" });
-    expect(block).toContain("<list_planned_meetings>");
-    expect(block).toContain('"meetings":[]');
-    expect(block).toContain('"latestHeld":null');
-    expect(block).not.toContain("When moving or cancelling");
-  });
-
-  it("wraps the list payload for uncached system metadata", async () => {
-    const block = formatBookingMeetingsContext(listedMeetings);
-    expect(block).toContain("<list_planned_meetings>");
-    expect(block).toContain("</list_planned_meetings>");
-    expect(block).toContain('"id":"m-1"');
-    expect(block).toContain('"dateStart":"2026-08-17 11:00:00"');
-    expect(block).toContain('"dateFrom":"2026-08-11"');
-    expect(block).toContain('"latestHeld":null');
-  });
-
-  it("includes latestHeld without visitLabel when prefetch set a past visit", async () => {
-    const block = formatBookingMeetingsContext({
-      ...listedMeetings,
-      latestHeld: {
-        id: "h-1",
-        name: "Консультація - Ada Lovelace",
-        dateStart: "2026-06-01 10:00:00",
-        dateEnd: "2026-06-01 10:30:00",
-      },
-    });
-    expect(block).toContain('"latestHeld":{"id":"h-1"');
-    expect(block).toContain('"dateStart":"2026-06-01 10:00:00"');
-    expect(block).not.toMatch(/"latestHeld":\{[^}]*"visitLabel"/);
-  });
-
-  it("adds a ready-to-quote Ukrainian visitLabel so the model does not format dates", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      expect(formatBookingMeetingsContext(listedMeetings)).toContain(
-        '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
-      );
-      expect(formatBookingMeetingsContext(listedMeetings)).not.toContain('"whenLabel"');
-      expect(formatBookingMeetingsContext(listedMeetings)).not.toContain('"serviceLabel"');
-      vi.setSystemTime(new Date("2026-08-16T09:00:00Z"));
-      expect(formatBookingMeetingsContext(listedMeetings)).toContain(
-        '"visitLabel":"Консультація - завтра, 17 серпня (понеділок) о 11:00"',
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("adds visitLabel from CRM name (service before last ' - '), not chat", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      const block = formatBookingMeetingsContext(listedMeetings);
-      expect(block).toContain(
-        "When moving or cancelling, quote visitLabel from this block only — never a procedure from earlier chat.",
-      );
-      expect(block).toContain(
-        '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
-      );
-      expect(
-        formatBookingMeetingsContext({
-          dateFrom: "2026-08-11",
-          meetings: [
-            {
-              id: "m-2",
-              name: "Контурна пластика - 2 зони - Ada Lovelace",
-              dateStart: "2026-08-17 11:00:00",
-              dateEnd: "2026-08-17 11:30:00",
-            },
-          ],
-        }),
-      ).toContain('"visitLabel":"Контурна пластика - 2 зони - 17 серпня (понеділок) о 11:00"');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe("formatPlannedVisitsFlag", () => {
-  it("emits visits has/none under the meetings tag", async () => {
-    expect(formatPlannedVisitsFlag(null)).toBe(
-      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
-    );
-    expect(formatPlannedVisitsFlag({ meetings: [], dateFrom: "2026-08-11" })).toBe(
-      '<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>',
-    );
-    expect(formatPlannedVisitsFlag(listedMeetings)).toBe(
-      '<list_planned_meetings>\n{"visits":"has"}\n</list_planned_meetings>',
-    );
-  });
-
-  it("ignores latestHeld — visits stays none when only history exists", async () => {
-    expect(
-      formatPlannedVisitsFlag({
-        meetings: [],
-        dateFrom: "2026-08-11",
-        latestHeld: {
-          id: "h-1",
-          name: "Past",
-          dateStart: "2026-06-01 10:00:00",
-          dateEnd: "2026-06-01 10:30:00",
-        },
-      }),
-    ).toBe('<list_planned_meetings>\n{"visits":"none"}\n</list_planned_meetings>');
-  });
-});
-
-describe("attachPrefetchVisits", () => {
-  it("replaces visit-ask with formatMyVisitReply", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      expect(
-        attachPrefetchVisits("stale 15:05 from chat", listedMeetings, "visit_ask"),
-      ).toBe(formatMyVisitReply(listedMeetings));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("injects prefetch lines on greeting even without a visit heading", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      const out = attachPrefetchVisits(
-        "Привіт, Ada! Я ШІ-асистент.\n\nЧим можу допомогти?",
-        listedMeetings,
-        "greeting",
-      );
-      expect(out).toContain("🗓️ Консультація - 17 серпня (понеділок) о 11:00");
-      expect(out).toContain("Чим можу допомогти?");
-      expect(out.indexOf("Заплановані візити:")).toBeLessThan(out.indexOf("Чим можу допомогти?"));
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("does not inject a list on other FINISH (thanks)", async () => {
-    const out = attachPrefetchVisits(
-      "Будь ласка! Чим ще можу допомогти?",
-      listedMeetings,
-      "other",
-    );
-    expect(out).toBe("Будь ласка! Чим ще можу допомогти?");
-    expect(out).not.toContain("Заплановані візити:");
-  });
-});
-
-describe("formatMyVisitReply", () => {
-  it("lists prefetch labels and asks to move or cancel", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
-      expect(formatMyVisitReply(listedMeetings)).toBe(
-        "Заплановані візити:\n🗓️ Консультація - 17 серпня (понеділок) о 11:00\n\nБажаєте перенести або скасувати цей візит?",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-});
-
-describe("formatContactContext", () => {
-  it("returns an empty string when context is missing", async () => {
-    expect(formatContactContext(null)).toBe("");
-  });
-
-  it("renders an empty contacts list so the model does not re-fetch", async () => {
-    const block = formatContactContext({ contacts: [] });
-    expect(block).toContain("<contact_info>");
-    expect(block).toContain('"contacts":[]');
-  });
-
-  it("renders error lookups as a completed prefetch block", async () => {
-    const block = formatContactContext({ contacts: [], error: "CRM down" });
-    expect(block).toContain("<contact_info>");
-    expect(block).toContain('"lookupFailed":true');
-    expect(block).not.toContain("CRM down");
-  });
-
-  it("wraps the contact payload for uncached system metadata", async () => {
-    const block = formatContactContext(listedContact);
-    expect(block).toContain("<contact_info>");
-    expect(block).toContain("</contact_info>");
-    expect(block).toContain(JSON.stringify({ contacts: listedContact.contacts }));
-    expect(block).not.toContain("lookupFailed");
-  });
-});
 
 describe("createAgentPrepareNode", () => {
   it("keeps original human message without synthetic ToolMessages or CRM writes", async () => {
@@ -1435,6 +1236,7 @@ describe("createAgentPrepareNode", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
   });
@@ -2153,6 +1955,7 @@ describe("createAgentPrepareNode", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
 
@@ -4572,303 +4375,6 @@ describe("createAgentLlmNode context cache", () => {
   });
 });
 
-describe("routeAfterAgentLlm", () => {
-  it("routes a direct cancellation to runtime command preparation even after plain model text", async () => {
-    expect(
-      routeAfterAgentLlm(
-        clinicState({
-          messages: [new HumanMessage("Скасувати")],
-          bookingContext: listedMeetings,
-          bookingDraft: {
-            ...createEmptyBookingDraft(),
-            pendingCommand: {
-              action: "cancel",
-              payload: { meetingId: "m-1", confirmMessage: "Скасувати цей візит?" },
-            },
-          },
-          agentMessages: [new AIMessage("Запис скасовано")],
-          stepCount: 1,
-        }),
-        5,
-        "booking__tools",
-        "booking__finalize",
-        "booking__command_prepare",
-      ),
-    ).toBe("booking__command_prepare");
-  });
-
-  it("routes a ready draft to runtime command preparation before the step limit", async () => {
-    expect(
-      routeAfterAgentLlm(
-        clinicState({
-          contactContext: ownedContactContext(),
-          bookingDraft: canonicalBookingDraft(),
-          agentMessages: [new AIMessage("Готово! Запис створено.")],
-          stepCount: 5,
-        }),
-        5,
-        "booking__tools",
-        "booking__finalize",
-        "booking__command_prepare",
-      ),
-    ).toBe("booking__command_prepare");
-  });
-});
-
-describe("runtime-owned booking routing", () => {
-  it("bypasses the LLM when prepare has a complete booking draft", async () => {
-    expect(
-      routeAfterAgentPrepare(
-        clinicState({
-          contactContext: ownedContactContext(),
-          bookingDraft: canonicalBookingDraft(),
-        }),
-        "booking__llm",
-        "booking__command_prepare",
-      ),
-    ).toBe("booking__command_prepare");
-  });
-
-  it("uses the LLM while canonical booking facts are still missing", async () => {
-    expect(
-      routeAfterAgentPrepare(
-        clinicState({
-          bookingDraft: canonicalBookingDraft({
-            phase: "note",
-            note: { status: "awaiting" },
-          }),
-        }),
-        "booking__llm",
-        "booking__command_prepare",
-      ),
-    ).toBe("booking__llm");
-  });
-
-  it("routes a checkpointed bare-day selection to availability before the LLM", async () => {
-    const state = clinicState({
-      messages: [new HumanMessage("26")],
-      agentMessages: [new HumanMessage("26")],
-      bookingDraft: canonicalBookingDraft({
-        phase: "time",
-        selectedDate: "2099-10-26",
-        selectedSlot: null,
-        note: { status: "unasked" },
-      }),
-      availabilityContext: {
-        days: [{ date: "2099-10-25", slots: [] }],
-        stepMinutes: 30,
-        query: {
-          kind: "exact",
-          date: "2099-10-25",
-          rangeFrom: "2099-10-25",
-          rangeThrough: "2099-10-25",
-          coverageComplete: true,
-        },
-      },
-    });
-    expect(
-      routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"),
-    ).toBe("booking__command_prepare");
-
-    const update = await createAgentCommandPrepareNode("booking")(state);
-    const prepared = (update.agentMessages as Overwrite<AIMessage[]>).value;
-    const call = prepared.at(-1)?.tool_calls?.[0];
-    expect(call).toMatchObject({
-      name: "present_availability_slots",
-      args: { direction: "exact", date: "2099-10-26" },
-    });
-  });
-
-  it("requests nearest availability for a service-change notice with the new duration", async () => {
-    const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
-    const state = clinicState({
-      messages: [new HumanMessage("Neotiva")],
-      agentMessages: [new HumanMessage("Neotiva")],
-      serviceChangeNotice: notice,
-      bookingDraft: canonicalBookingDraft({
-        phase: "date",
-        selectedDate: null,
-        selectedSlot: null,
-        note: { status: "answered", value: "запиши на збільшення губ" },
-        serviceAcceptance: {
-          status: "accepted",
-          service: {
-            id: "svc-neotiva",
-            name: "Збільшення губ Neotiva",
-            durationMinutes: 60,
-            source: "catalog",
-          },
-        },
-      }),
-      availabilityContext: null,
-    });
-    expect(
-      routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"),
-    ).toBe("booking__command_prepare");
-
-    const update = await createAgentCommandPrepareNode("booking")(state);
-    const prepared = (update.agentMessages as Overwrite<AIMessage[]>).value;
-    const call = prepared.at(-1)?.tool_calls?.[0];
-    expect(call).toMatchObject({
-      name: "present_availability_slots",
-      args: {
-        direction: "nearest",
-        forceRefresh: true,
-        durationMinutes: 60,
-      },
-    });
-  });
-
-  it("continues successful slot revalidation directly to command preparation", async () => {
-    expect(
-      routeAfterAgentTools(
-        clinicState({
-          contactContext: ownedContactContext(),
-          bookingDraft: canonicalBookingDraft({
-            phase: "confirming",
-            serviceAcceptance: {
-              status: "accepted",
-              service: {
-                id: "svc-1",
-                name: "Процедура",
-                durationMinutes: 30,
-                source: "catalog",
-              },
-            },
-            pendingCommand: {
-              action: "create",
-              payload: { serviceId: "svc-1" },
-            },
-          }),
-          agentMessages: [
-            new ToolMessage({
-              content: JSON.stringify({
-                date: "2026-09-10",
-                slots: [{
-                  label: "14:00",
-                  dateStart: "2026-09-10T14:00:00",
-                  dateEnd: "2026-09-10T14:30:00",
-                }],
-                // Snapshot metadata is not authoritative; the exact interval is.
-                stepMinutes: 45,
-              }),
-              name: "present_availability_slots",
-              tool_call_id: "revalidate-1",
-            }),
-          ],
-        }),
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-      ),
-    ).toBe("booking__command_prepare");
-  });
-
-  it("does not continue command preparation when fresh revalidation fails", async () => {
-    expect(
-      routeAfterAgentTools(
-        clinicState({
-          bookingDraft: canonicalBookingDraft({
-            phase: "confirming",
-            pendingCommand: {
-              action: "create",
-              payload: { serviceId: "svc-1" },
-            },
-          }),
-          agentMessages: [
-            new ToolMessage({
-              content: JSON.stringify({ error: "CRM unavailable" }),
-              name: "present_availability_slots",
-              tool_call_id: "revalidate-1",
-            }),
-          ],
-        }),
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-      ),
-    ).toBe("booking__llm");
-  });
-
-  it("routes incomplete-contact booking errors to the model without retrying the mutation", async () => {
-    const state = clinicState({
-      contactContext: {
-        ownership: "telegram",
-        contacts: [{ id: "c-1", firstName: "Ada", missingFields: ["lastName"] }],
-      },
-      bookingDraft: canonicalBookingDraft({ contactId: "c-1" }),
-      agentMessages: [new ToolMessage({
-        content: JSON.stringify({ error: "Contact incomplete", missingFields: ["lastName"] }),
-        name: "create_meeting",
-        tool_call_id: "create-incomplete-1",
-      })],
-    });
-
-    expect(routeAfterAgentTools(
-      state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-    )).toBe("booking__llm");
-    expect(routeAfterAgentLlm(
-      { ...state, agentMessages: [...state.agentMessages, new AIMessage("Назвіть, будь ласка, прізвище.")] },
-      8,
-      "booking__tools",
-      "booking__finalize",
-      "booking__command_prepare",
-    )).toBe("booking__finalize");
-  });
-
-  it("does not rebuild a reschedule after authorization failure until identity is refreshed", async () => {
-    const state = clinicState({
-      contactContext: null,
-      bookingContext: null,
-      bookingDraft: canonicalBookingDraft({
-        mode: "reschedule",
-        phase: "confirming",
-        contactId: null,
-        selectedDate: "2026-09-10",
-        selectedSlot: {
-          dateStart: "2026-09-10T14:00:00",
-          dateEnd: "2026-09-10T14:30:00",
-          label: "14:00",
-        },
-        pendingCommand: {
-          action: "reschedule",
-          payload: { meetingId: "m-1" },
-        },
-        rescheduleTarget: { id: "m-1" },
-      }),
-      agentMessages: [new ToolMessage({
-        content: JSON.stringify({ error: "Not authorized" }),
-        name: "reschedule_meeting",
-        tool_call_id: "reschedule-auth-1",
-      })],
-    });
-    const invalidated = reduceBookingDraft(state.bookingDraft, { type: "contact_unresolved" });
-    const afterFailure = { ...state, bookingDraft: invalidated };
-
-    expect(invalidated).toMatchObject({
-      mode: "reschedule",
-      rescheduleTarget: null,
-      selectedDate: null,
-      selectedSlot: null,
-      pendingCommand: null,
-    });
-    expect(routeAfterAgentTools(
-      afterFailure,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-    )).toBe("booking__llm");
-    expect(routeAfterAgentPrepare(afterFailure, "booking__llm", "booking__command_prepare"))
-      .toBe("booking__llm");
-  });
-});
 
 describe("createAgentFinalizeNode", () => {
   it("replaces model prose with the service-change notice while DATE reselection is open", async () => {
@@ -6634,7 +6140,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("delivers model-failure fallback via handoff only (no history, no sticky ok)", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const { createAgentLlmNode } = await import("../agent-loop/index.js");
     const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
     const bindTools = vi.fn(() => ({
       invoke: vi.fn(async () => {
@@ -12357,7 +11863,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("hydrates TIME «Інша дата» XML into slots tool_calls and pages from last snapshot day", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const { createAgentLlmNode } = await import("../agent-loop/index.js");
     const leaked =
       "<call:default_api:present_availability_slots{afterDate: 2026-09-29,durationMinutes:30}></call:default_api:present_availability_slots>";
     const invoke = vi.fn(async () => new AIMessage(leaked));
@@ -12464,7 +11970,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("ignores leaked Gemini XML for tools not bound to the agent", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const { createAgentLlmNode } = await import("../agent-loop/index.js");
     const leaked =
       "<call:default_api:create_meeting{serviceId: demo}></call:default_api:create_meeting>";
     const invoke = vi.fn(async () => new AIMessage(leaked));
@@ -12495,7 +12001,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("strips native tool_calls for tools not bound to the agent", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop.js");
+    const { createAgentLlmNode } = await import("../agent-loop/index.js");
     const faqAgent: ClinicAgentDefinition = {
       id: "faq",
       name: "FAQ",

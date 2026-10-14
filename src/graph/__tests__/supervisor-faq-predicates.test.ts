@@ -18,7 +18,7 @@ import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
-import { createAgentCommandPrepareNode } from "../agent-loop.js";
+import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
   agents,

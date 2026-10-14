@@ -11,16 +11,16 @@ import {
   createAgentFinalizeNode,
   createAgentPrepareNode,
   routeAfterAgentPrepare,
-} from "../agent-loop.js";
+} from "../agent-loop/index.js";
 import {
   isCatalogEvidenceEligibleText,
   refineSupervisorNamedBooking,
   utteranceHasCatalogCrmEvidence,
 } from "../booking-entry-policy.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
-import { resolveCatalogLexicalEvidence } from "../agent-loop/shared.js";
+import { resolveCatalogLexicalEvidence } from "../catalog-match.js";
 import type { ClinicState } from "../state.js";
-import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+import { FAQ_AGENT_ID, type ClinicAgentDefinition, type ILLMConnector } from "../types.js";
 import {
   agents,
   createClinicSupervisorNode,
@@ -268,6 +268,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
   });
@@ -310,6 +311,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
   });
@@ -423,6 +425,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
   });
@@ -457,6 +460,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
   });
@@ -499,6 +503,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
   });
@@ -534,6 +539,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
   });
@@ -570,6 +576,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
   });
@@ -604,6 +611,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
   });
@@ -635,6 +643,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
   });
@@ -671,6 +680,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         undefined,
         undefined,
         "faq__finalize",
+        FAQ_AGENT_ID,
       ),
     ).toBe("faq__llm");
   });

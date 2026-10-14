@@ -71,6 +71,7 @@ import {
   type PendingBookingCommand,
   type BookingDraft,
 } from "../booking-draft.js";
+import { matchingCatalogRows } from "../catalog-match.js";
 import { cancelCommandFromStoredPayload } from "../cancel-command.js";
 import {
   closedBookingSessionUpdate,
@@ -145,13 +146,11 @@ import {
   lastPatientText,
   latestCreateMeetingError,
   matchAvailabilityDay,
-  matchingCatalogRows,
   meetingMutationClearsAvailability,
   meetingMutationIsHitlDecline,
   noteStepBlocksCreate,
   phoneCandidateCanBeLinked,
   rescheduleTargetFromBookingContext,
-  resetBookingNoteState,
   resolveContactIdentity,
   resolveFaqCatalogChoices,
   terminalContactWriteOutcome,
@@ -1487,7 +1486,6 @@ export const createAgentToolsNode = (
       } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
         Object.assign(update, closedBookingSessionUpdate());
       } else if (!cancelOnlyCommitted) {
-        Object.assign(update, resetBookingNoteState(state));
         const mutationFailed = resultMessages.some(
           (message) =>
             message instanceof ToolMessage
@@ -1745,6 +1743,7 @@ export const routeAfterAgentPrepare = (
   commandPrepareName?: string,
   noteOrchestratorName?: string,
   finalizeName?: string,
+  agentId?: string,
 ): string => {
   if (noteOrchestratorName && state.noteOrchQueued) {
     return noteOrchestratorName;
@@ -1805,8 +1804,7 @@ export const routeAfterAgentPrepare = (
       bookText,
     );
     if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
-      const faqFinalize = finalizeName.includes("faq");
-      if (faqFinalize) {
+      if (agentId === FAQ_AGENT_ID) {
         const offered = state.pendingInteraction.service;
         const offeredName = offered.name;
         const openedThisTurn =

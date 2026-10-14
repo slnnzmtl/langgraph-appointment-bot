@@ -3,7 +3,7 @@ import {
   CONSULTATION_SERVICE_ID,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
-import { matchingCatalogRows } from "../../graph/agent-loop/shared.js";
+import { matchingCatalogRows } from "../../graph/catalog-match.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { normalizeReplyLabel } from "../../shared/message-content.js";
 import type { McpCallTool } from "../../shared/mcp.js";

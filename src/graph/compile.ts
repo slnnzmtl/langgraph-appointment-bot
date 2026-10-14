@@ -37,7 +37,7 @@ import {
   routeAfterAgentLlm,
   routeAfterAgentTools,
   toolsNodeName,
-} from "./agent-loop.js";
+} from "./agent-loop/index.js";
 import { createNoteTurnClassifier } from "./booking-note-classifier.js";
 import { createContactNameClassifier } from "./contact-name-classifier.js";
 import {
@@ -197,14 +197,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           prepareOptions,
         ),
       )
-      .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
-      .addNode(
-        mutationFinalize,
-        createAgentMutationFinalizeNode(agent),
-        // Plain updates follow the static edge to END; main-menu leave Command
-        // hands control back to the supervisor's existing greeting path.
-        { ends: [END, "supervisor"] },
-      )
       .addNode(
         llm,
         createAgentLlmNode({
@@ -270,6 +262,14 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         ...(faqPrepare != null ? [faqPrepare] : []),
       ];
       graph = graph
+        .addNode(commandPrepare, createAgentCommandPrepareNode(agent.id))
+        .addNode(
+          mutationFinalize,
+          createAgentMutationFinalizeNode(agent),
+          // Plain updates follow the static edge to END; main-menu leave Command
+          // hands control back to the supervisor's existing greeting path.
+          { ends: [END, "supervisor"] },
+        )
         .addNode(
           noteOrch,
           createBookingNoteOrchestratorNode({
@@ -321,7 +321,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           },
         )
         .addNode(interactionRender, createBookingInteractionRenderNode(agent))
-        .addEdge(interactionRender, finalize);
+        .addEdge(interactionRender, finalize)
+        .addEdge(commandPrepare, toolsNode)
+        .addEdge(mutationFinalize, END);
     }
 
     graph = graph
@@ -334,12 +336,14 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             isBooking ? commandPrepare : undefined,
             isBooking ? noteOrch : undefined,
             finalize,
+            agent.id,
           ),
         {
           [llm]: llm,
-          [commandPrepare]: commandPrepare,
           [finalize]: finalize,
-          ...(isBooking ? { [noteOrch]: noteOrch } : {}),
+          ...(isBooking
+            ? { [commandPrepare]: commandPrepare, [noteOrch]: noteOrch }
+            : {}),
         },
       )
       .addConditionalEdges(
@@ -354,11 +358,10 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           ),
         {
           [toolsNode]: toolsNode,
-          [commandPrepare]: commandPrepare,
           [finalize]: finalize,
+          ...(isBooking ? { [commandPrepare]: commandPrepare } : {}),
         },
       )
-      .addEdge(commandPrepare, toolsNode)
       .addConditionalEdges(
         toolsNode,
         (state: { agentMessages: unknown[] }) =>
@@ -374,16 +377,17 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         {
           [llm]: llm,
           [toolsNode]: toolsNode,
-          [mutationFinalize]: mutationFinalize,
-          [commandPrepare]: commandPrepare,
           ...(isBooking
-            ? { [noteOrch]: noteOrch, [finalize]: finalize }
+            ? {
+                [mutationFinalize]: mutationFinalize,
+                [commandPrepare]: commandPrepare,
+                [noteOrch]: noteOrch,
+                [finalize]: finalize,
+              }
             : {}),
         },
       )
       .addEdge(finalize, END);
-
-    graph = graph.addEdge(mutationFinalize, END);
 
     supervisorRoutes[agent.id] = prepare;
   }
