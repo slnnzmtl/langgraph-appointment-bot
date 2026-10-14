@@ -21,6 +21,7 @@ import {
   findPreviousAvailableSlots,
   formatKyivDayLabel,
   kyivToday,
+  mergeBusyMeetingsById,
   omitSlotsAtStarts,
   resolveDayTimeRanges,
   startsOfExcludedMeetings,
@@ -555,6 +556,39 @@ const searchReservedTimes = async (
   }
 };
 
+/**
+ * Busy meetings for free/busy: assignee OR attendee (matches Espo BeforeSave overlap).
+ */
+const searchBusyMeetingsForUser = async (
+  callTool: McpCallTool,
+  assignedUserId: string,
+  dateFrom: string,
+  dateTo: string,
+  limit: number,
+): Promise<{ meetings: BusyMeeting[]; truncated: boolean }> => {
+  const [assignedRaw, attendeeRaw] = await Promise.all([
+    callTool("search_meetings", {
+      dateFrom,
+      dateTo,
+      assignedUserId,
+      limit,
+    }),
+    callTool("search_meetings", {
+      dateFrom,
+      dateTo,
+      attendeeUserId: assignedUserId,
+      limit,
+    }),
+  ]);
+  const assigned = extractMeetingsFromSearchResult(assignedRaw);
+  const attendee = extractMeetingsFromSearchResult(attendeeRaw);
+  return {
+    meetings: mergeBusyMeetingsById(assigned, attendee),
+    truncated:
+      assigned.length >= limit || attendee.length >= limit,
+  };
+};
+
 /** Next-available search start: later of startDate and day after afterDate (YYYY-MM-DD compares lexicographically). */
 export const resolveNextAvailableStart = (input: {
   startDate?: string;
@@ -603,17 +637,18 @@ export const createPresentAvailabilitySlotsTool = (options: {
               stepMinutes,
             });
           }
-          const [working, raw, reserved] = await Promise.all([
+          const [working, busy, reserved] = await Promise.all([
             fetchWorkingCalendar(callTool, assignedUserId),
-            callTool("search_meetings", {
-              dateFrom: input.date,
-              dateTo: input.date,
+            searchBusyMeetingsForUser(
+              callTool,
               assignedUserId,
-              limit: 100,
-            }),
+              input.date,
+              input.date,
+              100,
+            ),
             searchReservedTimes(callTool, assignedUserId, input.date, input.date),
           ]);
-          const searchedMeetings = extractMeetingsFromSearchResult(raw);
+          const searchedMeetings = busy.meetings;
           const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
           const meetings = [
             ...excludeMeetingsById(searchedMeetings, excludeIds),
@@ -676,17 +711,18 @@ export const createPresentAvailabilitySlotsTool = (options: {
         const backwardSearchable = backwardEnd >= today;
         const meetingFrom = direction === "earlier" && backwardSearchable ? backwardStart : start;
         const meetingTo = direction === "earlier" && backwardSearchable ? backwardEnd : end;
-        const [working, raw, reserved] = await Promise.all([
+        const [working, busy, reserved] = await Promise.all([
           fetchWorkingCalendar(callTool, assignedUserId),
-          callTool("search_meetings", {
-            dateFrom: meetingFrom,
-            dateTo: meetingTo,
+          searchBusyMeetingsForUser(
+            callTool,
             assignedUserId,
-            limit: RANGED_MEETINGS_LIMIT,
-          }),
+            meetingFrom,
+            meetingTo,
+            RANGED_MEETINGS_LIMIT,
+          ),
           searchReservedTimes(callTool, assignedUserId, meetingFrom, meetingTo),
         ]);
-        const searchedMeetings = extractMeetingsFromSearchResult(raw);
+        const searchedMeetings = busy.meetings;
         const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
         const meetings = [
           ...excludeMeetingsById(searchedMeetings, excludeIds),
@@ -741,10 +777,10 @@ export const createPresentAvailabilitySlotsTool = (options: {
             anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,
             rangeFrom: searchedFrom,
             rangeThrough: searchedThrough,
-            coverageComplete: searchedMeetings.length < RANGED_MEETINGS_LIMIT,
+            coverageComplete: !busy.truncated,
           },
           ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
-          ...(searchedMeetings.length >= RANGED_MEETINGS_LIMIT ? { truncated: true } : {}),
+          ...(busy.truncated ? { truncated: true } : {}),
         });
       } catch (error) {
         const message = errorMessage(error);

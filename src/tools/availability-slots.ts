@@ -689,6 +689,27 @@ export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => 
   return out;
 };
 
+/**
+ * Union assignee + attendee busy lists (Espo overlap checks both). Prefer rows with an id;
+ * dedupe by id when present.
+ */
+export const mergeBusyMeetingsById = (
+  ...groups: BusyMeeting[][]
+): BusyMeeting[] => {
+  const byId = new Map<string, BusyMeeting>();
+  const withoutId: BusyMeeting[] = [];
+  for (const group of groups) {
+    for (const meeting of group) {
+      if (meeting.id) {
+        byId.set(meeting.id, meeting);
+      } else {
+        withoutId.push(meeting);
+      }
+    }
+  }
+  return [...byId.values(), ...withoutId];
+};
+
 /** Drop meetings whose id is in excludeIds (e.g. the meeting being rescheduled). */
 export const excludeMeetingsById = (
   meetings: BusyMeeting[],

@@ -629,6 +629,69 @@ describe("present_availability_slots CReservedTime", () => {
     expect(parsed.slots.some((s) => s.label === "09:30")).toBe(true);
   });
 
+  it("blocks a slot when the user is only an attendee on someone else's Planned meeting", async () => {
+    const meetingSearches: Array<Record<string, unknown>> = [];
+    const afternoon = {
+      success: true,
+      calendars: [
+        {
+          name: "Main",
+          timeRanges: [["11:00", "15:00"]],
+          weekdays: {
+            "0": true,
+            "1": true,
+            "2": true,
+            "3": true,
+            "4": true,
+            "5": true,
+            "6": true,
+          },
+          weekdayTimeRanges: {},
+        },
+      ],
+      ranges: [],
+    };
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      if (name === "get_working_time") {
+        return afternoon;
+      }
+      if (name === "search_meetings") {
+        meetingSearches.push(args);
+        if (typeof args.attendeeUserId === "string") {
+          return {
+            meetings: [
+              {
+                id: "attendee-only",
+                status: "Planned",
+                dateStart: "2026-08-10T11:00:00",
+                dateEnd: "2026-08-10T11:30:00",
+              },
+            ],
+          };
+        }
+        return { meetings: [] };
+      }
+      if (name === "search_entity") {
+        return { list: [] };
+      }
+      return { ok: true };
+    };
+
+    const tool = createPresentAvailabilitySlotsTool({
+      callTool,
+      assignedUserId: "user-1",
+    });
+    const parsed = JSON.parse(
+      (await tool.invoke({ date: "2026-08-10", durationMinutes: 30 })) as string,
+    ) as { slots: Array<{ label: string; dateStart: string }> };
+
+    expect(meetingSearches).toHaveLength(2);
+    expect(meetingSearches.some((args) => args.assignedUserId === "user-1")).toBe(true);
+    expect(meetingSearches.some((args) => args.attendeeUserId === "user-1")).toBe(true);
+    expect(parsed.slots.some((s) => s.dateStart === "2026-08-10T11:00:00")).toBe(false);
+    expect(parsed.slots.some((s) => s.label === "11:30")).toBe(true);
+  });
+
   it("keeps CReservedTime busy when excludeMeetingIds frees a meeting", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {
