@@ -796,8 +796,6 @@ export const matchAvailabilitySlot = (
 export const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boolean =>
   status !== "skipped" && status !== "answered";
 
-export const CREATE_NOTE_REQUIRED_ERROR = "Note step required";
-
 export const BOOKING_SLOT_REQUIRED_UK =
   "Будь ласка, спочатку оберіть дату й час із запропонованих варіантів.";
 

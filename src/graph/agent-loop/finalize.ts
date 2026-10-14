@@ -89,7 +89,6 @@ import {
 } from "./mutation-finalize.js";
 
 import {
-  CREATE_NOTE_REQUIRED_ERROR,
   isFaqServicesGuideLabel,
   SLOT_JUST_TAKEN_PREFIX,
   alreadyBookedMeetingFromMessages,
@@ -676,10 +675,9 @@ export const createAgentFinalizeNode = (
           && classifyMeetingMutationToolMessage(message) === "committed",
       );
     const createError = latestCreateMeetingError(agentMessages);
-    const noteBlockedThisTurn = createError === CREATE_NOTE_REQUIRED_ERROR;
     const awaitingNote =
       agent.id === BOOKING_AGENT_ID
-      && (authoritativeNoteStatus(state) === "awaiting" || noteBlockedThisTurn)
+      && authoritativeNoteStatus(state) === "awaiting"
       && authoritativeSelectedSlot(state) != null
       && !alreadyBooked;
     // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
@@ -693,9 +691,6 @@ export const createAgentFinalizeNode = (
             state.availabilityContext,
             authoritativeSelectedSlot(state) == null,
           )
-          ?? (noteBlockedThisTurn && authoritativeSelectedSlot(state) == null
-            ? availabilityRecoveryOffer(state)
-            : null)
         : null;
     const requestedTimeUnavailable =
       agent.id === BOOKING_AGENT_ID
@@ -741,7 +736,7 @@ export const createAgentFinalizeNode = (
         : "";
       const offerBody = unavailablePrefix
         + (
-          createError != null && !noteBlockedThisTurn
+          createError != null
             ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
             : slotOffer.replyText
         );
@@ -1114,7 +1109,7 @@ export const createAgentFinalizeNode = (
         const recovered = availabilityRecoveryOffer(state);
         if (recovered != null) {
           const notice = consumeServiceChangeNotice();
-          const body = createError != null && !noteBlockedThisTurn
+          const body = createError != null
             ? `${SLOT_JUST_TAKEN_PREFIX}${recovered.replyText}`
             : recovered.replyText;
           replyText = notice != null ? `${notice}\n\n${body}` : body;

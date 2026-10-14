@@ -39,6 +39,13 @@ const slotsAlreadyThisTurn = (state: ClinicState): boolean =>
 const pagedThisTurn = (state: ClinicState): boolean =>
   availabilitySlotsRanThisTurn(state.agentMessages ?? []);
 
+const scheduleRequestFromState = (state: ClinicState) =>
+  resolveBookingScheduleRequest(lastPatientText(state), kyivToday(), {
+    availabilityContext: state.availabilityContext,
+    availabilityCursor: state.availabilityCursor,
+    selectedDate: state.bookingDraft?.selectedDate,
+  });
+
 const withDraftScope = (
   state: ClinicState,
   partial: Omit<
@@ -143,11 +150,7 @@ const exactDateFromDraftRequest = (
   state: ClinicState,
 ): RuntimeAvailabilityRequest | null => {
   const human = lastPatientText(state);
-  const request = resolveBookingScheduleRequest(human, kyivToday(), {
-    availabilityContext: state.availabilityContext,
-    availabilityCursor: state.availabilityCursor,
-    selectedDate: state.bookingDraft?.selectedDate,
-  });
+  const request = scheduleRequestFromState(state);
   const selectedDate = state.bookingDraft?.selectedDate;
   if (selectedDate == null || slotsAlreadyThisTurn(state)) {
     return null;
@@ -183,12 +186,7 @@ const pagingRequest = (
   if (slotsAlreadyThisTurn(state) || pagedThisTurn(state)) {
     return null;
   }
-  const human = lastPatientText(state);
-  const request = resolveBookingScheduleRequest(human, kyivToday(), {
-    availabilityContext: state.availabilityContext,
-    availabilityCursor: state.availabilityCursor,
-    selectedDate: state.bookingDraft?.selectedDate,
-  });
+  const request = scheduleRequestFromState(state);
   if (request?.kind !== "earlier" && request?.kind !== "later") {
     return null;
   }
