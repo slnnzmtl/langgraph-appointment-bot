@@ -103,6 +103,12 @@ export const VISIT_DECLINE_REPLY_UK = "Добре. Чим ще можу допо
 /** Code-owned FINISH when the patient abandons an in-progress booking. */
 export const ABANDON_BOOKING_REPLY_UK = "Добре, скасувала запис. Чим ще можу допомогти?";
 
+/**
+ * Short Main-menu FINISH (not /start welcome, not abandon copy).
+ * Optional firstName is prepended by the supervisor main-menu reply helper.
+ */
+export const MAIN_MENU_GREETING_UK = "Чим ще можу допомогти?";
+
 /** Confirm copy before cancel_meeting HITL / CRM write. */
 export const CANCEL_CONFIRMATION_UK =
   "Скасувати цей візит? Після підтвердження запис буде скасовано.";

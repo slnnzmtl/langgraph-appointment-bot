@@ -824,7 +824,15 @@ export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
   if (draft.note.status !== "skipped" && draft.note.status !== "answered") {
     return "note";
   }
+  // Stay in details until identity is complete — contactId alone (e.g. link of an
+  // incomplete CRM row) must not jump to ready / create HITL.
   if (draft.contactId == null) {
+    return "details";
+  }
+  if (
+    draft.contactDetails != null
+    && nextMissingContactField(draft.contactDetails) != null
+  ) {
     return "details";
   }
   return "ready";
@@ -1260,7 +1268,7 @@ export const reduceBookingDraft = (
       if (accepted == null) {
         return draft;
       }
-      return withVersion(draft, {
+      const next = {
         ...draft,
         contactDetails: {
           ...(draft.contactDetails ?? {}),
@@ -1268,20 +1276,34 @@ export const reduceBookingDraft = (
         },
         // New phone invalidates prior lookup evidence for a different number.
         ...(event.field === "phoneNumber" ? { phoneLookupEvidence: null } : {}),
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
       });
     }
-    case "contact_resolved":
-      return withVersion(draft, {
+    case "contact_resolved": {
+      const next = {
         ...draft,
         contactId: event.contactId,
         // Keep accepted details across link→update unless CRM is already complete.
         ...(event.clearDetails === true ? { contactDetails: null } : {}),
-      });
-    case "contact_details_cleared":
+      } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
+      });
+    }
+    case "contact_details_cleared": {
+      const next = {
         ...draft,
         contactDetails: null,
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
       });
+    }
     case "phone_lookup_recorded":
       return withVersion(draft, {
         ...draft,

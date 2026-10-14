@@ -10,6 +10,7 @@ export type SupervisorRoutingPath =
   | "status_pre_llm"
   | "pending_reschedule"
   | "abandon"
+  | "main_menu"
   | "llm"
   | "llm_choice"
   | "llm_status"

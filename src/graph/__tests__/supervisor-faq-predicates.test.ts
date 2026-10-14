@@ -538,11 +538,6 @@ describe("shouldStayInFaqCatalog", () => {
     const supervisorLlm = {
       bindRoutingTools: vi.fn(() => ({ invoke })),
     } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply: "Чим можу допомогти?",
-      menu: "default",
-    });
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -559,10 +554,11 @@ describe("shouldStayInFaqCatalog", () => {
       }),
     );
 
-    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
-    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
+    expect(update.lastHandoff?.replyText).toBe("Чим ще можу допомогти?");
+    expect(update.pendingInteraction).toBeNull();
   });
 });
 

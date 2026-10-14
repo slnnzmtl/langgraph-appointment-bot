@@ -48,6 +48,7 @@ import {
   EARLIER_DATE_LABEL,
   INTENT_SKIP_LABEL,
   LATER_DATE_LABEL,
+  MAIN_MENU_GREETING_UK,
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
   OTHER_DATE_LABEL_EN,
@@ -7799,6 +7800,9 @@ describe("booking outcome risk: no model success text without a committed entity
       bookingDraft: canonicalBookingDraft({ phase: "details" }),
     }))).toBe(true);
     expect(bookingOutcomeRiskState(clinicState({
+      bookingDraft: canonicalBookingDraft({ phase: "ready" }),
+    }))).toBe(true);
+    expect(bookingOutcomeRiskState(clinicState({
       bookingDraft: canonicalBookingDraft({
         phase: "confirming",
         pendingCommand: { action: "create", payload: {} },
@@ -7887,7 +7891,7 @@ describe("booking outcome risk: no model success text without a committed entity
         new AIMessage(claim),
       ],
     }));
-    expect(update.lastHandoff?.replyText).toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
     expect(update.lastHandoff?.replyText).not.toContain("Готово");
   });
 
@@ -7924,7 +7928,7 @@ describe("booking outcome risk: no model success text without a committed entity
     }
   });
 
-  it("emits false_success_claim telemetry when idle model prose claims an outcome", async () => {
+  it("rewrites uncommitted outcome claims to DEFAULT MENU and emits telemetry", async () => {
     const seen: { name: string; props: Record<string, unknown> }[] = [];
     setTrackEventForTests((name, props) => {
       seen.push({ name, props });
@@ -7935,8 +7939,8 @@ describe("booking outcome risk: no model success text without a committed entity
         bookingDraft: null,
         agentMessages: [new AIMessage("Готово! Запис створено.")],
       }));
-      // Idle with no draft is not a risk state — model prose ships, telemetry fires.
-      expect(update.lastHandoff?.replyText).toBe("Готово! Запис створено.");
+      expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
+      expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
       expect(seen).toContainEqual(
         expect.objectContaining({
           name: "false_success_claim",
@@ -7946,6 +7950,19 @@ describe("booking outcome risk: no model success text without a committed entity
     } finally {
       setTrackEventForTests(null);
     }
+  });
+
+  it("does not ship create success after Main menu closed the draft", async () => {
+    const { claimsOutcome } = await import("../../shared/outcome-claims.js");
+    const update = await finalize(clinicState({
+      stepCount: 1,
+      bookingDraft: null,
+      pendingInteraction: null,
+      messages: [new HumanMessage("+380 50 832 4221")],
+      agentMessages: [new AIMessage("Запис успішно створено.")],
+    }));
+    expect(claimsOutcome(update.lastHandoff?.replyText ?? "")).toBeNull();
+    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
   });
 
   it("renders a code-owned Already booked label from the tool payload", async () => {

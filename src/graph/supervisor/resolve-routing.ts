@@ -21,6 +21,7 @@ import {
   isGreetingOrMainMenuLine,
   lastHumanLineFromMessages,
 } from "./routing-predicates.js";
+import { mainMenuReply } from "./visit-select.js";
 import { isVisitStatusSignal } from "./visit-status.js";
 
 export const routingFailureUpdate = (reason: string): ClinicStateUpdate => {
@@ -47,6 +48,10 @@ export const resolveRoutingDecision = (
     const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
     const lastHumanLine = lastHumanLineFromMessages(state.messages);
     const wantsVisitChange = hasVisit && isVisitStatusSignal(lastHumanLine);
+    // Fail-closed: never PATIENT_FALLBACK, never list visits, always greeting+DEFAULT MENU.
+    if (isGreetingOrMainMenuLine(lastHumanLine)) {
+      return mainMenuReply({}, bookingContext, state.contactContext);
+    }
 
     const normalizedReply = normalizeSupervisorReply(decision.reply);
     if (!normalizedReply) {
@@ -65,9 +70,7 @@ export const resolveRoutingDecision = (
     const text = normalizedReply ? extractReplyButtons(normalizedReply).text : "";
     const visitIntent: FinishVisitIntent = wantsVisitChange
       ? "visit_ask"
-      : isGreetingOrMainMenuLine(lastHumanLine)
-        ? "greeting"
-        : "other";
+      : "other";
     const replyText = attachPrefetchVisits(text, bookingContext, visitIntent);
     let replyButtons: string[];
     if (wantsVisitChange) {

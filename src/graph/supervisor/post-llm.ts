@@ -36,6 +36,32 @@ type PostLlmRule = (
   enabledIds: Set<string>,
 ) => RouteOutcome | null;
 
+/** First: Main menu FINISH from resolveRoutingDecision, not later intent rules. */
+const modelMainMenu: PostLlmRule = (ctx, decision, enabledIds) => {
+  if (!isGreetingOrMainMenuLine(ctx.lastHumanLine)) {
+    return null;
+  }
+  const outcome: RouteOutcome = {
+    path: "main_menu",
+    update: {
+      ...resolveRoutingDecision(
+        { next: FINISH_ROUTE },
+        ctx.state,
+        enabledIds,
+        ctx.bookingContext,
+      ),
+      ...ctx.prefetchUpdate,
+      supervisorIntent: null,
+      availabilityContext: null,
+      availabilityCursor: null,
+    },
+  };
+  if (decision.choiceId != null) {
+    outcome.choiceAccepted = false;
+  }
+  return outcome;
+};
+
 const modelChoice: PostLlmRule = (ctx, decision) => {
   const choice = supervisorOwnedChoiceId(ctx.state.pendingInteraction, decision.choiceId);
   if (choice == null) {
@@ -100,26 +126,16 @@ const multiVisitPicker: PostLlmRule = (ctx, decision) => {
 };
 
 const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
-  // «Головне меню» must stay on FINISH with the default keyboard even when the
-  // model returns next=booking / intent=book from nearby booking history.
-  const mainMenuLine = isGreetingOrMainMenuLine(ctx.lastHumanLine);
-  const effectiveDecision: ClinicRoutingDecision = mainMenuLine
-    ? (() => {
-        const { intent: _ignored, ...rest } = decision;
-        return { ...rest, next: FINISH_ROUTE };
-      })()
-    : decision;
   let routed = resolveRoutingDecision(
-    effectiveDecision,
+    decision,
     ctx.state,
     enabledIds,
     ctx.bookingContext,
   );
-  const intentSpecialist = specialistForSupervisorIntent(effectiveDecision.intent);
+  const intentSpecialist = specialistForSupervisorIntent(decision.intent);
   let path: SupervisorRoutingPath = "llm";
   if (
-    !mainMenuLine
-    && intentSpecialist != null
+    intentSpecialist != null
     && routed.next !== intentSpecialist
     && enabledIds.has(intentSpecialist)
   ) {
@@ -127,7 +143,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
     path = "llm_intent_override";
   }
 
-  const mutationAction = visitMutationActionForIntent(effectiveDecision.intent);
+  const mutationAction = visitMutationActionForIntent(decision.intent);
   const seed = routed.next === BOOKING_AGENT_ID
     ? seedVisitMutation(mutationAction, ctx.bookingContext, ctx.workingDraft)
     : { update: {}, draftDiscarded: false };
@@ -145,8 +161,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
       );
       return match.kind === "choice" && match.choiceId === "choose_other";
     })();
-  // Only main menu or choose_other while the offer keyboard is open.
-  const abandonDraft = mainMenuLine || chooseOtherOnOpenOffer;
+  const abandonDraft = chooseOtherOnOpenOffer;
 
   const outcome: RouteOutcome = {
     path,
@@ -156,7 +171,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
       ...seed.update,
       // One-turn gate for FAQ prepare catalog open — not a phrase matcher.
       supervisorIntent:
-        effectiveDecision.intent === "named_procedure" ? "named_procedure" : null,
+        decision.intent === "named_procedure" ? "named_procedure" : null,
       ...(abandonDraft ? closedBookingSessionUpdate() : {}),
       ...(keepAvailability
         ? {}
@@ -175,6 +190,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
 
 /** Ordered post-LLM rules — first match wins; intentOverride is the default. */
 export const POST_LLM_RULES: readonly PostLlmRule[] = [
+  modelMainMenu,
   modelChoice,
   modelAbandon,
   modelStatus,

@@ -3,8 +3,10 @@ import { AIMessage } from "@langchain/core/messages";
 import {
   ABANDON_BOOKING_REPLY_UK,
   defaultMenuLabels,
+  MAIN_MENU_GREETING_UK,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
+import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import {
   closedBookingSessionUpdate,
   reduceBookingSession,
@@ -36,6 +38,18 @@ export const supervisorFinishReply = (
   messages: [new AIMessage(replyText)],
 });
 
+/** Short Main-menu greeting; optional firstName from prefetch contact. */
+const mainMenuGreetingReply = (
+  contactContext: ContactLookupContext | null | undefined,
+): string => {
+  const raw = contactContext?.contacts[0]?.firstName;
+  const firstName = typeof raw === "string" ? raw.trim() : "";
+  if (firstName.length === 0) {
+    return MAIN_MENU_GREETING_UK;
+  }
+  return `${firstName}, чим ще можу допомогти?`;
+};
+
 /** Code-owned FINISH after abandoning an in-progress booking draft. */
 export const abandonReply = (
   prefetchUpdate: ClinicStateUpdate,
@@ -48,6 +62,24 @@ export const abandonReply = (
       ...closedBookingSessionUpdate(),
     },
     ABANDON_BOOKING_REPLY_UK,
+    [...defaultMenuLabels(hasVisit)],
+    null,
+  );
+};
+
+/** Code-owned FINISH for «Головне меню» — closes booking and restores DEFAULT MENU. */
+export const mainMenuReply = (
+  prefetchUpdate: ClinicStateUpdate,
+  bookingContext: ClinicState["bookingContext"],
+  contactContext: ClinicState["contactContext"],
+): ClinicStateUpdate => {
+  const hasVisit = (bookingContext?.meetings.length ?? 0) > 0;
+  return supervisorFinishReply(
+    {
+      ...prefetchUpdate,
+      ...closedBookingSessionUpdate(),
+    },
+    mainMenuGreetingReply(contactContext),
     [...defaultMenuLabels(hasVisit)],
     null,
   );

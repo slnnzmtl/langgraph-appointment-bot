@@ -468,6 +468,24 @@ describe("ContactCommand decisions", () => {
     });
   });
 
+  it("requests firstName after none evidence when names are still missing", () => {
+    const state = clinicState({
+      bookingDraft: detailsDraft({
+        contactDetails: { phoneNumber: "+380501112233" },
+        phoneLookupEvidence: {
+          phoneNumber: "+380501112233",
+          result: "none",
+          contactIds: [],
+        },
+      }),
+    });
+    expect(resolveContactCommand(state)).toEqual({
+      action: "request_field",
+      field: "firstName",
+    });
+    expect(bookingTurnNeedsCommandPreparation(state)).toBe(false);
+  });
+
   it("links a single linkable phone match", async () => {
     const state = clinicState({
       contactContext: {

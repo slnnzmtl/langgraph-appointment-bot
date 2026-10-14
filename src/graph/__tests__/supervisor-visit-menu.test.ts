@@ -525,43 +525,70 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
   });
 
-  it("injects prefetch visits on «Головне меню» even when the model omitted the heading", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply: "Привіт, Ada! Я ШІ-асистент.\n\nЧим можу допомогти?",
-      menu: "default",
-    });
+  it("skips the LLM on «Головне меню» with DEFAULT has-visits and no visit list in text", async () => {
+    const { MAIN_MENU_GREETING_UK, PATIENT_FALLBACK_MESSAGE } = await import(
+      "../../shared/clinic-constants.js"
+    );
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("Головне меню")] }),
     );
 
-    expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
-    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toBe("Ada, чим ще можу допомогти?");
+    expect(update.lastHandoff?.replyText).not.toContain("🗓️");
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.lastHandoff?.replyText).not.toBe(MAIN_MENU_GREETING_UK);
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
-
-  it("attaches DEFAULT has-visits after «Головне меню» even when menu=visit_change", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply: "Привіт! У вас є запланований візит. Чим можу допомогти?",
-      menu: "visit_change",
-    });
+  it("closes contact_field phone on «Головне меню» without PATIENT_FALLBACK", async () => {
+    const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "accepted",
+      service: {
+        id: CONSULTATION_SERVICE_ID,
+        name: "Консультація",
+        source: "catalog",
+      },
+    };
+    draft.selectedDate = "2026-10-17";
+    draft.selectedSlot = {
+      dateStart: "2026-10-17T11:00:00",
+      dateEnd: "2026-10-17T11:30:00",
+      label: "11:00",
+    };
+    draft.note = { status: "skipped" };
+    draft.phase = "details";
     const update = await nodeWithPrefetch(meetings)(
-      supervisorState({ messages: [new HumanMessage("Головне меню")] }),
+      supervisorState({
+        messages: [new HumanMessage(MAIN_MENU_LABEL)],
+        bookingDraft: draft,
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "phoneNumber",
+          choices: [],
+        },
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Для завершення запису надішліть, будь ласка, ваш номер телефону.",
+          replyButtons: [],
+        },
+      }),
     );
 
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("FINISH");
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingInteraction).toBeNull();
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.lastHandoff?.status).toBe("ok");
   });
 
-  it("forces FINISH + default menu on «Головне меню» when the model returns booking/book", async () => {
-    invoke.mockResolvedValue({
-      next: "booking",
-      intent: "book",
-      reply:
-        "Привіт, Ada! Я ШІ-асистент клініки.\n\nМожу записати вас, відповісти на запитання про послуги та допомогти з візитом.\n\nЧим можу допомогти?",
-    });
+  it("forces FINISH + default menu on «Головне меню» without calling the booking model", async () => {
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({
         messages: [
@@ -592,6 +619,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
 
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
     expect(update.bookingDraft).toBeNull();
@@ -659,31 +687,26 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
   });
 
-  it("attaches DEFAULT has-visits when menu is omitted on Головне меню and visits exist", async () => {
-    invoke.mockResolvedValue({ next: "FINISH", reply: "Привіт! Чим можу допомогти?" });
+  it("attaches DEFAULT has-visits on Головне меню without listing visits in text", async () => {
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage(MAIN_MENU_LABEL)] }),
     );
 
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(update.lastHandoff?.replyText).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
-    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
+    expect(update.lastHandoff?.replyText).not.toContain("🗓️");
+    expect(update.lastHandoff?.replyText).toContain("чим ще можу допомогти?");
   });
 
-  it("strips a stray model trailer and still uses code-owned menu labels", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply:
-        "Привіт, Тест!\n\n<reply_buttons>\nWrong\nLabels\n</reply_buttons>",
-      menu: "default",
-    });
+  it("uses code-owned DEFAULT no-visits greeting on Головне меню without the LLM", async () => {
     const update = await nodeWithPrefetch(null)(
       supervisorState({ messages: [new HumanMessage("Головне меню")] }),
     );
 
-    expect(update.lastHandoff?.replyText).toBe("Привіт, Тест!");
+    expect(invoke).not.toHaveBeenCalled();
+    // Prefetch still supplies firstName Ada even when there are no visits.
+    expect(update.lastHandoff?.replyText).toBe("Ada, чим ще можу допомогти?");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
-    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
   });
 
   it("delivers routing failure via handoff only", async () => {
@@ -700,6 +723,58 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       replyText: PATIENT_FALLBACK_MESSAGE,
       replyButtons: [...DEFAULT_MENU_NO_VISITS],
     });
+  });
+
+  it("fail-closes FINISH without reply on Головне меню instead of PATIENT_FALLBACK", async () => {
+    const { PATIENT_FALLBACK_MESSAGE, MAIN_MENU_GREETING_UK } = await import(
+      "../../shared/clinic-constants.js"
+    );
+    const { resolveRoutingDecision } = await import("../supervisor/resolve-routing.js");
+    const update = resolveRoutingDecision(
+      { next: "FINISH" },
+      supervisorState({
+        messages: [new HumanMessage(MAIN_MENU_LABEL)],
+        contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      }),
+      new Set(["faq", "booking"]),
+      meetings,
+    );
+    expect(update.lastHandoff?.status).toBe("ok");
+    expect(update.lastHandoff?.replyText).toBe("Ada, чим ще можу допомогти?");
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.lastHandoff?.replyText).not.toBe(MAIN_MENU_GREETING_UK);
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingInteraction).toBeNull();
+  });
+
+  it("applyModelDecision ignores next=booking without reply on Головне меню", async () => {
+    const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
+    const { applyModelDecision } = await import("../supervisor/post-llm.js");
+    const { buildSupervisorTurnContext } = await import("../supervisor/context.js");
+    const state = supervisorState({
+      messages: [new HumanMessage(MAIN_MENU_LABEL)],
+      contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
+      bookingContext: meetings,
+      bookingDraft: (() => {
+        const draft = createEmptyBookingDraft();
+        draft.phase = "details";
+        return draft;
+      })(),
+    });
+    const ctx = await buildSupervisorTurnContext(state, {});
+    const outcome = applyModelDecision(
+      ctx,
+      { next: "booking", intent: "book" },
+      new Set(["faq", "booking"]),
+    );
+    expect(outcome.path).toBe("main_menu");
+    expect(outcome.update.next).toBe("FINISH");
+    expect(outcome.update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(outcome.update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+    expect(outcome.update.bookingDraft).toBeNull();
+    expect(outcome.update.pendingInteraction).toBeNull();
+    expect(outcome.update.supervisorIntent).toBeNull();
   });
 
   it("declines an open visit_select on case-folded Ні, дякую without the LLM", async () => {

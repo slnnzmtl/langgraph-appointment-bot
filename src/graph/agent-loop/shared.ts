@@ -249,7 +249,13 @@ export const bookingOutcomeRiskState = (state: ClinicState): boolean => {
   }
   const draft = state.bookingDraft;
   if (draft != null) {
-    if (draft.phase === "details" || draft.phase === "confirming" || draft.pendingCommand != null) {
+    // Uncommitted `ready` is waiting for command_prepare HITL — model prose must not ship.
+    if (
+      draft.phase === "details"
+      || draft.phase === "confirming"
+      || draft.phase === "ready"
+      || draft.pendingCommand != null
+    ) {
       return true;
     }
   }

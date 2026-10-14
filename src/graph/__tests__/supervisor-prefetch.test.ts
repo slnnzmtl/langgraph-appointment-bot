@@ -193,13 +193,7 @@ describe("createClinicSupervisorNode context cache", () => {
     expect((update.messages?.[0] as AIMessage).content).toBe("Uncached reply");
   });
 
-  it("strips reply_buttons from FINISH history and attaches code-owned DEFAULT MENU", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply:
-        "Привіт, Тест!\n\n<reply_buttons>\nЗаписатись\nПослуги\nАдреса\n</reply_buttons>",
-      menu: "default",
-    });
+  it("skips the LLM on Головне меню and attaches code-owned DEFAULT MENU", async () => {
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -210,12 +204,11 @@ describe("createClinicSupervisorNode context cache", () => {
       supervisorState({ messages: [new HumanMessage("Головне меню")] }),
     );
 
-    expect(String(update.messages?.[0]?.content)).toBe("Привіт, Тест!");
-    expect(String(update.messages?.[0]?.content)).not.toContain("reply_buttons");
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.lastHandoff).toMatchObject({
       agentId: "FINISH",
       status: "ok",
-      replyText: "Привіт, Тест!",
+      replyText: "Чим ще можу допомогти?",
       replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
   });
@@ -965,7 +958,10 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("closes an active booking on Головне меню when prefetch and routing both fail", async () => {
+  it("closes an active booking on Головне меню when prefetch fails without calling the LLM", async () => {
+    const { MAIN_MENU_GREETING_UK, PATIENT_FALLBACK_MESSAGE } = await import(
+      "../../shared/clinic-constants.js"
+    );
     const activeDraft = createEmptyBookingDraft();
     activeDraft.serviceAcceptance = {
       status: "accepted",
@@ -1003,8 +999,11 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       }),
     );
 
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
-    expect(update.lastHandoff?.status).toBe("error");
+    expect(update.lastHandoff?.status).toBe("ok");
+    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
     expect(update.bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();
