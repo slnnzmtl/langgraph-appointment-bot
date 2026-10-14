@@ -557,7 +557,9 @@ describe("shouldStayInFaqCatalog", () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
-    expect(update.lastHandoff?.replyText).toBe("Чим ще можу допомогти?");
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт! Я ШІ-асистент");
+    expect(reply).toContain("Чим можу допомогти?");
     expect(update.pendingInteraction).toBeNull();
   });
 });

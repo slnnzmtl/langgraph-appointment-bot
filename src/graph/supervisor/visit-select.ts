@@ -3,10 +3,11 @@ import { AIMessage } from "@langchain/core/messages";
 import {
   ABANDON_BOOKING_REPLY_UK,
   defaultMenuLabels,
-  MAIN_MENU_GREETING_UK,
+  mainMenuFullGreetingUk,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
+import { attachPrefetchVisits } from "../context-blocks.js";
 import {
   closedBookingSessionUpdate,
   reduceBookingSession,
@@ -38,19 +39,23 @@ export const supervisorFinishReply = (
   messages: [new AIMessage(replyText)],
 });
 
-/** Short Main-menu greeting; firstName only from a Telegram-owned contact. */
+/**
+ * Full Main-menu GREETING; firstName only from a Telegram-owned contact.
+ * Prefetch visits are injected via attachPrefetchVisits(..., "greeting").
+ */
 const mainMenuGreetingReply = (
   contactContext: ContactLookupContext | null | undefined,
+  bookingContext: ClinicState["bookingContext"],
 ): string => {
-  if (contactContext?.ownership !== "telegram") {
-    return MAIN_MENU_GREETING_UK;
-  }
-  const raw = contactContext.contacts[0]?.firstName;
-  const firstName = typeof raw === "string" ? raw.trim() : "";
-  if (firstName.length === 0) {
-    return MAIN_MENU_GREETING_UK;
-  }
-  return `${firstName}, чим ще можу допомогти?`;
+  const firstName = contactContext?.ownership === "telegram"
+    && typeof contactContext.contacts[0]?.firstName === "string"
+    ? contactContext.contacts[0].firstName.trim()
+    : "";
+  return attachPrefetchVisits(
+    mainMenuFullGreetingUk(firstName.length > 0 ? firstName : null),
+    bookingContext,
+    "greeting",
+  );
 };
 
 /** Code-owned FINISH after abandoning an in-progress booking draft. */
@@ -82,7 +87,7 @@ export const mainMenuReply = (
       ...prefetchUpdate,
       ...closedBookingSessionUpdate(),
     },
-    mainMenuGreetingReply(contactContext),
+    mainMenuGreetingReply(contactContext, bookingContext),
     [...defaultMenuLabels(hasVisit)],
     null,
   );

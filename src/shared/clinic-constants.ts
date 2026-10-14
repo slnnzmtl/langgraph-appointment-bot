@@ -104,10 +104,29 @@ export const VISIT_DECLINE_REPLY_UK = "Добре. Чим ще можу допо
 export const ABANDON_BOOKING_REPLY_UK = "Добре, скасувала запис. Чим ще можу допомогти?";
 
 /**
- * Short Main-menu FINISH (not /start welcome, not abandon copy).
- * Optional firstName is prepended by the supervisor main-menu reply helper.
+ * Short Main-menu / false-success rewrite (not /start welcome, not abandon copy).
+ * Full Main-menu FINISH uses {@link mainMenuFullGreetingUk}.
  */
 export const MAIN_MENU_GREETING_UK = "Чим ще можу допомогти?";
+
+/**
+ * Code-owned Main-menu GREETING (supervisor prompt shape). Visits are injected
+ * separately via attachPrefetchVisits(..., "greeting"). Optional firstName is
+ * only for Telegram-owned contacts.
+ */
+export const mainMenuFullGreetingUk = (firstName?: string | null): string => {
+  const name = typeof firstName === "string" ? firstName.trim() : "";
+  const hello = name.length > 0 ? `Привіт, ${name}!` : "Привіт!";
+  return [
+    `${hello} Я ШІ-асистент ${CLINIC_NAME_UK}.`,
+    "",
+    "Можу розповісти про послуги, ціни й графік, а також записати, перенести чи скасувати візит.",
+    "",
+    "Можете написати в чат, надіслати голосове або скористатися кнопками під повідомленням.",
+    "",
+    "Чим можу допомогти?",
+  ].join("\n");
+};
 
 /** Confirm copy before cancel_meeting HITL / CRM write. */
 export const CANCEL_CONFIRMATION_UK =

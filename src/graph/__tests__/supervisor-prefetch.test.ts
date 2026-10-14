@@ -208,9 +208,11 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(update.lastHandoff).toMatchObject({
       agentId: "FINISH",
       status: "ok",
-      replyText: "Чим ще можу допомогти?",
       replyButtons: ["Записатись", "Послуги", "Адреса"],
     });
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт! Я ШІ-асистент");
+    expect(reply).toContain("Чим можу допомогти?");
   });
 
   it("routes to booking without rewriting a specialist prompt", async () => {
@@ -1002,8 +1004,12 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.status).toBe("ok");
-    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
-    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт! Я ШІ-асистент");
+    expect(reply).toContain("Чим можу допомогти?");
+    expect(reply).not.toContain("Заплановані візити:");
+    expect(reply).not.toBe(MAIN_MENU_GREETING_UK);
+    expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);
     expect(update.bookingDraft).toBeNull();
     expect(update.bookingNoteStatus).toBe("unasked");
     expect(update.selectedSlot).toBeNull();

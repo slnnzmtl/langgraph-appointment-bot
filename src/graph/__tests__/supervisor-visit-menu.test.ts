@@ -528,7 +528,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
   });
 
-  it("skips the LLM on «Головне меню» with DEFAULT has-visits and no visit list in text", async () => {
+  it("skips the LLM on «Головне меню» with full GREETING and prefetch visit list", async () => {
     const { MAIN_MENU_GREETING_UK, PATIENT_FALLBACK_MESSAGE } = await import(
       "../../shared/clinic-constants.js"
     );
@@ -537,10 +537,15 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(update.lastHandoff?.replyText).toBe("Ada, чим ще можу допомогти?");
-    expect(update.lastHandoff?.replyText).not.toContain("🗓️");
-    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
-    expect(update.lastHandoff?.replyText).not.toBe(MAIN_MENU_GREETING_UK);
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт, Ada!");
+    expect(reply).toContain("Я ШІ-асистент");
+    expect(reply).toContain("Заплановані візити:");
+    expect(reply).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
+    expect(reply).toContain("Чим можу допомогти?");
+    expect(reply.indexOf("Заплановані візити:")).toBeLessThan(reply.indexOf("Чим можу допомогти?"));
+    expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(reply).not.toBe(MAIN_MENU_GREETING_UK);
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
@@ -592,7 +597,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   });
 
   it("does not personalize Main menu from a phone-owned contact", async () => {
-    const { MAIN_MENU_GREETING_UK } = await import("../../shared/clinic-constants.js");
     const node = createClinicSupervisorNode({
       agents,
       supervisorLlm,
@@ -612,8 +616,10 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
     expect(invoke).not.toHaveBeenCalled();
-    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
-    expect(update.lastHandoff?.replyText).not.toContain("Інша людина");
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт! Я ШІ-асистент");
+    expect(reply).not.toContain("Інша людина");
+    expect(reply).toContain("Заплановані візити:");
   });
 
   it("forces FINISH + default menu on «Головне меню» without calling the booking model", async () => {
@@ -715,15 +721,15 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.messages).toEqual([expect.objectContaining({ content: visitAsk })]);
   });
 
-  it("attaches DEFAULT has-visits on Головне меню without listing visits in text", async () => {
+  it("attaches DEFAULT has-visits on Головне меню with visit list in text", async () => {
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage(MAIN_MENU_LABEL)] }),
     );
 
     expect(invoke).not.toHaveBeenCalled();
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(update.lastHandoff?.replyText).not.toContain("🗓️");
-    expect(update.lastHandoff?.replyText).toContain("чим ще можу допомогти?");
+    expect(update.lastHandoff?.replyText).toContain("🗓️");
+    expect(update.lastHandoff?.replyText).toContain("Чим можу допомогти?");
   });
 
   it("uses code-owned DEFAULT no-visits greeting on Головне меню without the LLM", async () => {
@@ -733,7 +739,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
     expect(invoke).not.toHaveBeenCalled();
     // Prefetch still supplies firstName Ada even when there are no visits.
-    expect(update.lastHandoff?.replyText).toBe("Ada, чим ще можу допомогти?");
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт, Ada!");
+    expect(reply).toContain("Я ШІ-асистент");
+    expect(reply).not.toContain("Заплановані візити:");
+    expect(reply).toContain("Чим можу допомогти?");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
@@ -771,9 +781,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       meetings,
     );
     expect(update.lastHandoff?.status).toBe("ok");
-    expect(update.lastHandoff?.replyText).toBe("Ada, чим ще можу допомогти?");
-    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
-    expect(update.lastHandoff?.replyText).not.toBe(MAIN_MENU_GREETING_UK);
+    const reply = String(update.lastHandoff?.replyText ?? "");
+    expect(reply).toContain("Привіт, Ada!");
+    expect(reply).toContain("Заплановані візити:");
+    expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(reply).not.toBe(MAIN_MENU_GREETING_UK);
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
     expect(update.bookingDraft).toBeNull();
     expect(update.pendingInteraction).toBeNull();
