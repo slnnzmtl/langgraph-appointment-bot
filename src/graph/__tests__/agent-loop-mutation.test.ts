@@ -28,6 +28,7 @@ import {
   BOOKING_PHONE_QUESTION_UK,
   BOOKING_REPLACE_MENU,
   CLINIC_ADDRESS,
+  CLINIC_MAPS_MARKDOWN,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   MAIN_MENU_GREETING_UK,
@@ -42,7 +43,6 @@ import {
 } from "../booking-draft.js";
 import type { BookingDraft } from "../booking-draft.js";
 import { type ClinicAgentDefinition } from "../types.js";
-
 import {
   canonicalBookingDraft,
   clinicState,
@@ -544,6 +544,102 @@ describe("booking outcome risk: no model success text without a committed entity
     }));
     expect(update.lastHandoff?.replyText).toContain(alreadyBookedReplaceReplyUk().slice(0, 20));
     expect(update.lastHandoff?.replyText).toMatch(/Консультація/);
+  });
+});
+
+describe("runtime-owned create/reschedule success copy", () => {
+  const agent: ClinicAgentDefinition = {
+    id: "booking",
+    name: "Booking",
+    description: "Books visits",
+    systemPrompt: "book",
+    maxSteps: 8,
+  };
+
+  const mutationMessages = (
+    name: "create_meeting" | "reschedule_meeting",
+    content: unknown,
+  ): [AIMessage, ToolMessage] => [
+    new AIMessage({
+      content: "",
+      tool_calls: [{ id: "mut-1", name, args: {}, type: "tool_call" }],
+    }),
+    new ToolMessage({
+      content: JSON.stringify(content),
+      tool_call_id: "mut-1",
+      name,
+    }),
+  ];
+
+  it("renders committed create from tool visitLabel", () => {
+    const visitLabel = "Консультація — 10 вересня (четвер) о 14:00";
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingDraft: null,
+      agentMessages: mutationMessages("create_meeting", {
+        id: "m-new",
+        success: true,
+        visitLabel,
+      }),
+    }));
+
+    expect(update.lastHandoff?.replyText).toBe(
+      `Готово! Запис створено.\n\n${visitLabel} ✨`
+      + `\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`
+      + "\n\nПереглянути або змінити візит можна в «Мій запис».",
+    );
+    expect(update.lastHandoff?.replyText).not.toContain("Ada");
+    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
+  });
+
+  it("ignores raw name/dateStart on the tool JSON without visitLabel", () => {
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingDraft: null,
+      agentMessages: mutationMessages("create_meeting", {
+        id: "m-new",
+        name: "Консультація - Ada",
+        dateStart: "2026-09-10 14:00:00",
+      }),
+    }));
+
+    expect(update.lastHandoff?.replyText).toMatch(/^Готово! Запис створено\./);
+    expect(update.lastHandoff?.replyText).not.toContain("Консультація");
+    expect(update.lastHandoff?.replyText).not.toContain("Ada");
+    expect(update.lastHandoff?.replyText).toContain(CLINIC_ADDRESS);
+    expect(update.lastHandoff?.replyText).toContain("Мій запис");
+  });
+
+  it("renders committed create without inventing details when visitLabel is absent", () => {
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingDraft: null,
+      agentMessages: mutationMessages("create_meeting", {
+        id: "m-new",
+        success: true,
+      }),
+    }));
+
+    expect(update.lastHandoff?.replyText).toMatch(/^Готово! Запис створено\./);
+    expect(update.lastHandoff?.replyText).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(update.lastHandoff?.replyText).toContain(CLINIC_ADDRESS);
+    expect(update.lastHandoff?.replyText).toContain("Мій запис");
+  });
+
+  it("renders committed reschedule from tool visitLabel", () => {
+    const visitLabel = "Консультація — 10 вересня (четвер) о 14:00";
+    const update = createAgentMutationFinalizeNode(agent)(clinicState({
+      bookingDraft: null,
+      agentMessages: mutationMessages("reschedule_meeting", {
+        id: "m-1",
+        success: true,
+        visitLabel,
+      }),
+    }));
+
+    expect(update.lastHandoff?.replyText).toBe(
+      `Готово! Запис перенесено.\n\n${visitLabel} ✨`
+      + `\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`
+      + "\n\nПереглянути або змінити візит можна в «Мій запис».",
+    );
+    expect(update.lastHandoff?.replyText).toMatch(/^Готово! Запис перенесено/);
   });
 });
 

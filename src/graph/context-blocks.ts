@@ -1,5 +1,6 @@
 import { CONTEXT_TAGS } from "../shared/clinic-constants.js";
-import { formatKyivDateTimeLabel, kyivToday } from "../tools/availability-slots.js";
+import { kyivToday } from "../tools/availability-slots.js";
+import { visitLabelForMeetingStart } from "../tools/visit-label.js";
 import type { AvailabilityContext } from "../tools/availability-tools.js";
 import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
@@ -8,27 +9,10 @@ import type { BookingDraft } from "./booking-draft.js";
 
 export { CONTEXT_TAGS };
 
-/** CRM titles are "[service-name] - [firstName lastName]"; last " - " is the patient, not the service. */
-export const meetingServiceLabel = (name: string): string => {
-  const separator = name.lastIndexOf(" - ");
-  if (separator <= 0) {
-    return name.trim();
-  }
-  const service = name.slice(0, separator).trim();
-  return service.length > 0 ? service : name.trim();
-};
-
-const visitLabelForMeeting = (
-  meeting: { name: string; dateStart: string },
-  today: string,
-): string => {
-  const whenLabel = formatKyivDateTimeLabel(meeting.dateStart, today);
-  const serviceLabel = meetingServiceLabel(meeting.name);
-  return `${serviceLabel} - ${whenLabel}`;
-};
-
 const listedVisitLines = (ctx: BookingContext, today = kyivToday()): string[] =>
-  ctx.meetings.map((meeting) => `🗓️ ${visitLabelForMeeting(meeting, today)}`);
+  ctx.meetings.map((meeting) =>
+    `🗓️ ${visitLabelForMeetingStart(meeting.name, meeting.dateStart, today)}`,
+  );
 
 const visitListBlock = (ctx: BookingContext): string =>
   `Заплановані візити:\n${listedVisitLines(ctx).join("\n")}`;
@@ -111,7 +95,7 @@ export const formatBookingMeetingsContext = (
     name: meeting.name,
     dateStart: meeting.dateStart,
     dateEnd: meeting.dateEnd,
-    visitLabel: visitLabelForMeeting(meeting, today),
+    visitLabel: visitLabelForMeetingStart(meeting.name, meeting.dateStart, today),
   }));
   const latestHeld =
     ctx.latestHeld != null

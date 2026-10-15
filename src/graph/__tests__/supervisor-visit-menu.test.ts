@@ -229,7 +229,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   };
 
   const visitAsk =
-    "Заплановані візити:\n🗓️ Консультація - 21 серпня (п'ятниця) о 11:00\n\nБажаєте перенести або скасувати цей візит?";
+    "Заплановані візити:\n🗓️ Консультація — 21 серпня (п'ятниця) о 11:00\n\nБажаєте перенести або скасувати цей візит?";
 
   it.each([
     "Я вже записалася на 16 число",
@@ -549,7 +549,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(reply).toContain("Привіт, Ada!");
     expect(reply).toContain("Я ШІ-асистент");
     expect(reply).toContain("Заплановані візити:");
-    expect(reply).toContain("🗓️ Консультація - 21 серпня (п'ятниця) о 11:00");
+    expect(reply).toContain("🗓️ Консультація — 21 серпня (п'ятниця) о 11:00");
     expect(reply).toContain("Чим можу допомогти?");
     expect(reply.indexOf("Заплановані візити:")).toBeLessThan(reply.indexOf("Чим можу допомогти?"));
     expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);

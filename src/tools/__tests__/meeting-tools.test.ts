@@ -2,6 +2,11 @@ import { Annotation, Command, END, MemorySaver, START, StateGraph } from "@langc
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 
 import { setTrackEventForTests, type Tier1EventName } from "../../analytics/track.js";
+import { visitLabel } from "../../shared/meeting-label.js";
+import {
+  formatKyivDateTimeLabel,
+  kyivToday,
+} from "../availability-slots.js";
 import {
   clearPendingConfirmForRuntime,
   clearPendingConfirmsForTests,
@@ -186,7 +191,13 @@ describe("create_meeting HITL interrupt", () => {
         assignedUserId: "assigned-99",
         status: "Planned",
       });
-      expect(JSON.parse(second.result)).toMatchObject({ success: true, id: "meeting-1" });
+      const when = formatKyivDateTimeLabel("2026-08-07T10:00:00", kyivToday());
+      expect(JSON.parse(second.result)).toMatchObject({
+        success: true,
+        id: "meeting-1",
+        visitLabel: visitLabel("Consult", when),
+      });
+      expect(JSON.parse(second.result).visitLabel).not.toContain("Ada");
     });
   });
 
@@ -446,7 +457,12 @@ describe("create_meeting HITL interrupt", () => {
       );
 
       expect(calls.filter((call) => call.name === "create_meeting")).toHaveLength(1);
-      expect(JSON.parse(String(raw))).toMatchObject({ success: true, id: "meeting-1" });
+      const when = formatKyivDateTimeLabel("2026-08-07T10:00:00", kyivToday());
+      expect(JSON.parse(String(raw))).toMatchObject({
+        success: true,
+        id: "meeting-1",
+        visitLabel: visitLabel("Consult", when),
+      });
     });
   });
 
@@ -927,10 +943,12 @@ describe("reschedule_meeting HITL interrupt", () => {
         dateStart: "2026-08-14T11:00:00",
         dateEnd: "2026-08-14T11:30:00",
       });
+      const when = formatKyivDateTimeLabel("2026-08-14T11:00:00", kyivToday());
       expect(JSON.parse(second.result)).toMatchObject({
         success: true,
         id: "mtg-1",
         meetingId: "mtg-1",
+        visitLabel: visitLabel("Consult: Ada", when),
       });
     });
   });
@@ -960,10 +978,12 @@ describe("reschedule_meeting HITL interrupt", () => {
       );
 
       expect(calls.filter((call) => call.name === "update_meeting")).toHaveLength(1);
+      const when = formatKyivDateTimeLabel("2026-08-14T11:00:00", kyivToday());
       expect(JSON.parse(String(raw))).toMatchObject({
         success: true,
         id: "mtg-1",
         meetingId: "mtg-1",
+        visitLabel: visitLabel("Consult: Ada", when),
       });
     });
   });

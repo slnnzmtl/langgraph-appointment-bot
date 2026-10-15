@@ -52,7 +52,7 @@ import {
   reduceBookingDraft,
   type BookingService,
 } from "../booking-draft.js";
-import { meetingServiceLabel } from "../context-blocks.js";
+import { visitLabelForMeetingStart } from "../../tools/visit-label.js";
 import {
   isFaqCatalogBrowseShortcut,
   openCatalogFromFreeText,
@@ -792,7 +792,7 @@ export const createAgentFinalizeNode = (
     } else if (alreadyBooked) {
       const conflict = alreadyBookedMeetingFromMessages(agentMessages);
       const visitLabel = conflict?.name != null && conflict.dateStart != null
-        ? `${meetingServiceLabel(conflict.name)} - ${formatKyivDateTimeLabel(conflict.dateStart, kyivToday())}`
+        ? visitLabelForMeetingStart(conflict.name, conflict.dateStart)
         : undefined;
       replyText = alreadyBookedReplaceReplyUk(visitLabel);
       replyButtons = [...BOOKING_REPLACE_MENU];
