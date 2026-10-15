@@ -150,6 +150,15 @@ export const classifyMeetingMutationToolMessage = (
   return committedMeetingEntityId(body) != null ? "committed" : "failed";
 };
 
+/** True when any meeting mutation tool committed on this turn's tape. */
+export const mutationCommittedThisTurn = (messages: BaseMessage[]): boolean =>
+  messages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && MEETING_MUTATION_TOOLS.has(message.name ?? "")
+      && classifyMeetingMutationToolMessage(message) === "committed",
+  );
+
 /** HITL ❌ only — main-menu leave is `abandoned` and must not keep the draft for re-pick. */
 export const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
   classifyMeetingMutationToolMessage(message) === "declined";

@@ -1,6 +1,5 @@
 import {
   AIMessage,
-  ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
@@ -36,7 +35,7 @@ import {
   createAgentMutationFinalizeNode,
 } from "./mutation-finalize.js";
 import {
-  classifyMeetingMutationToolMessage,
+  mutationCommittedThisTurn,
   terminalMeetingMutationOutcome,
 } from "./protocol.js";
 import {
@@ -49,11 +48,12 @@ import {
 } from "./finalize-booking.js";
 import {
   applyFaqCatalogAiFinalize,
-  applyServiceOfferSynthesis,
   tryFaqNoAiFinalize,
 } from "./finalize-faq.js";
 import {
+  applyServiceOfferSynthesis,
   emptyFinalizeReply,
+  finalizeAiUpdate,
   lastHandoffFromReply,
   offeredServiceForTurn,
   resolveHandoffStatus,
@@ -223,14 +223,7 @@ export const createAgentFinalizeNode = (
       reply = risk.reply;
       availabilityInteraction = risk.availabilityInteraction;
     } else if (agent.id === FAQ_AGENT_ID) {
-      mutationCommitted = agentMessages.some(
-        (message) =>
-          message instanceof ToolMessage
-          && (message.name === "create_meeting"
-            || message.name === "cancel_meeting"
-            || message.name === "reschedule_meeting")
-          && classifyMeetingMutationToolMessage(message) === "committed",
-      );
+      mutationCommitted = mutationCommittedThisTurn(agentMessages);
 
       const faqResult = await applyFaqCatalogAiFinalize(
         state,
@@ -300,53 +293,29 @@ export const createAgentFinalizeNode = (
           })
         : tagged;
 
-    const serviceChangeNoticeClear: { serviceChangeNotice?: null } =
-      clearServiceChangeNotice ? { serviceChangeNotice: null } : {};
-    const supervisorIntentClear: { supervisorIntent: null } = { supervisorIntent: null };
-
-    const extras: ClinicStateUpdate = {
-      ...cleared,
-      ...noteStatusForHandoff,
-      ...serviceOfferUpdate,
-      ...availabilityInteractionUpdate,
-      ...visitSelectUpdate,
-      ...contactFieldUpdate,
-      ...confirmationCleanup,
-      ...clearOccupiedPhoneCandidate,
-      ...serviceChangeNoticeClear,
-      ...supervisorIntentClear,
-      ...reply.patch,
+    // Merge order must match historical extras: note → service offer →
+    // availability presented → visit → contact field → chat-other →
+    // occupied-phone clear → notice → supervisorIntent.
+    reply = {
+      ...reply,
+      patch: {
+        ...noteStatusForHandoff,
+        ...serviceOfferUpdate,
+        ...availabilityInteractionUpdate,
+        ...visitSelectUpdate,
+        ...contactFieldUpdate,
+        ...confirmationCleanup,
+        ...clearOccupiedPhoneCandidate,
+        ...(clearServiceChangeNotice ? { serviceChangeNotice: null } : {}),
+        supervisorIntent: null,
+        ...reply.patch,
+      },
     };
 
-    const lastHandoff = lastHandoffFromReply(agent, reply);
-
-    if (reply.status === "empty") {
-      return {
-        ...extras,
-        lastHandoff,
-      };
-    }
-
-    if (reply.status === "max_steps") {
-      if (reply.replyText.length === 0) {
-        console.error(
-          `[clinic-${agent.id}] exceeded the maximum of ${agent.maxSteps} tool steps.`,
-        );
-      }
-      return {
-        ...extras,
-        lastHandoff,
-        messages: [
-          reply.replyText.length > 0
-            ? replyMessage
-            : tagRuntimeAgentMessage(new AIMessage(PATIENT_FALLBACK_MESSAGE), agent.id),
-        ],
-      };
-    }
-
-    return {
-      ...extras,
-      lastHandoff,
-      messages: [replyMessage],
-    };
+    return finalizeAiUpdate({
+      agent,
+      extras: { ...cleared, ...reply.patch },
+      reply,
+      replyMessage,
+    });
   };

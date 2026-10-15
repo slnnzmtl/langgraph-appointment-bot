@@ -93,16 +93,17 @@ export const applyToolEffects = async (
     );
 
   let effectiveState = state;
+  // Keep resultMessages on the return update only — contact projection must
+  // resolve tool-call args against the original agentMessages tape.
   let update: ClinicStateUpdate = {
     agentMessages: resultMessages,
-    ...(replacementCancellationResult
-      ? { pendingCancellationPurpose: "replacement" as const }
-      : {}),
   };
   if (replacementCancellationResult) {
-    effectiveState = applyEffective(effectiveState, {
+    const purposePatch: ClinicStateUpdate = {
       pendingCancellationPurpose: "replacement",
-    });
+    };
+    update = { ...update, ...purposePatch };
+    effectiveState = applyEffective(effectiveState, purposePatch);
   }
 
   const mutation = await projectMutationEffects({

@@ -28,7 +28,6 @@ import {
   renderBookingInteractionMessage,
   resolveAvailabilityOffer,
 } from "../booking-interaction-render.js";
-import { renderFaqCatalogReply } from "../faq-catalog.js";
 import {
   isBookingOwnedInteraction,
   openVisitNoteInteraction,
@@ -50,6 +49,7 @@ import {
   createMeetingAlreadyBooked,
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
+  mutationCommittedThisTurn,
 } from "./protocol.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
 import {
@@ -59,6 +59,7 @@ import {
 } from "./finalize-contact.js";
 import {
   emptyFinalizeReply,
+  faqCatalogChipReply,
   type FinalizeReply,
 } from "./finalize-shared.js";
 
@@ -118,21 +119,20 @@ export const tryBookingNoAiFinalize = (
     const isFaqCatalog =
       interaction.kind === "service_candidate"
       && interaction.owner === "faq";
-    const body = isFaqCatalog
-      ? renderFaqCatalogReply(
-          interaction.choices,
-          state.servicesContext?.list ?? [],
-        )
-      : String(renderBookingInteractionMessage(interaction).content);
+    const chips = isFaqCatalog
+      ? faqCatalogChipReply(interaction, state.servicesContext?.list ?? [])
+      : {
+          replyText: String(renderBookingInteractionMessage(interaction).content),
+          replyButtons: replyButtonsForInteraction(interaction),
+        };
     const replyText =
       state.pendingCancellationPurpose === "replacement"
-        ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${body}`
-        : body;
-    const replyButtons = replyButtonsForInteraction(interaction);
+        ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${chips.replyText}`
+        : chips.replyText;
     return {
       ...emptyFinalizeReply("ok"),
       replyText,
-      replyButtons,
+      replyButtons: chips.replyButtons,
       replySource: "runtime",
       patch: {
         pendingInteraction: interaction,
@@ -246,14 +246,7 @@ export const applyBookingPrimaryReply = (
       && message.name === "create_meeting"
       && classifyMeetingMutationToolMessage(message) === "committed",
   );
-  const mutationCommitted =
-    createCommitted
-    || agentMessages.some(
-      (message) =>
-        message instanceof ToolMessage
-        && (message.name === "cancel_meeting" || message.name === "reschedule_meeting")
-        && classifyMeetingMutationToolMessage(message) === "committed",
-    );
+  const mutationCommitted = mutationCommittedThisTurn(agentMessages);
   const createError = latestCreateMeetingError(agentMessages);
   const awaitingNote =
     authoritativeNoteStatus(state) === "awaiting"

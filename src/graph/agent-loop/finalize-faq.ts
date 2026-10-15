@@ -1,9 +1,5 @@
 import { trackEvent } from "../../analytics/track.js";
-import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
-import {
-  extractFaqCatalogAction,
-  isFaqServicesGuideLabel,
-} from "../../shared/message-content.js";
+import { extractFaqCatalogAction } from "../../shared/message-content.js";
 import type { ServicesContext } from "../../tools/service-tools.js";
 import {
   openCatalogFromFreeText,
@@ -27,15 +23,12 @@ import type {
   SelectServiceCandidates,
 } from "../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { FAQ_AGENT_ID } from "../types.js";
-import { lastPatientText } from "./protocol.js";
 import {
   emptyFinalizeReply,
-  offeredServiceForTurn,
+  faqCatalogChipReply,
   withServiceConfirmQuestion,
   type FinalizeReply,
 } from "./finalize-shared.js";
-import type { BaseMessage } from "@langchain/core/messages";
 
 export type FinalizeFaqOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -55,15 +48,13 @@ export const tryFaqNoAiFinalize = (
     interaction.kind === "service_candidate"
     && interaction.owner === "faq"
   ) {
-    const replyText = renderFaqCatalogReply(
-      interaction.choices,
+    const chips = faqCatalogChipReply(
+      interaction,
       state.servicesContext?.list ?? [],
     );
-    const replyButtons = replyButtonsForInteraction(interaction);
     return {
       ...emptyFinalizeReply("ok"),
-      replyText,
-      replyButtons,
+      ...chips,
       replySource: "runtime",
       patch: {
         supervisorIntent: null,
@@ -340,112 +331,6 @@ export const applyFaqCatalogAiFinalize = async (
     if (returnLabel != null && returnLabel.length > 0) {
       next = { ...next, replyButtons: [returnLabel] };
     }
-  }
-
-  return { reply: next, serviceOfferUpdate };
-};
-
-/**
- * Structured service-offer synthesis for FAQ or booking when no slot/REPLACE
- * already owns the reply.
- */
-export const applyServiceOfferSynthesis = (
-  state: ClinicState,
-  agentId: string,
-  agentMessages: BaseMessage[],
-  reply: FinalizeReply,
-  opts: {
-    alreadyBooked: boolean;
-    slotOfferPresent: boolean;
-    availabilityInteractionPresent: boolean;
-    detailsStepActive: boolean;
-  },
-): { reply: FinalizeReply; serviceOfferUpdate: ClinicStateUpdate } => {
-  let serviceOfferUpdate: ClinicStateUpdate = {};
-  let next = reply;
-
-  if (
-    !opts.alreadyBooked
-    && !opts.slotOfferPresent
-    && !opts.availabilityInteractionPresent
-    && state.pendingInteraction?.kind !== "service_confirm"
-  ) {
-    const offeredService = offeredServiceForTurn(state, agentId, agentMessages);
-    if (offeredService != null) {
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        { type: "service_offered", service: offeredService },
-      );
-      serviceOfferUpdate = {
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      };
-      if (session.pendingInteraction?.kind === "service_confirm") {
-        const servicesGuide = isFaqServicesGuideLabel(lastPatientText(state));
-        if (
-          agentId === FAQ_AGENT_ID
-          && servicesGuide
-          && offeredService.id === CONSULTATION_SERVICE_ID
-        ) {
-          next = {
-            ...next,
-            replyText: withServiceConfirmQuestion(
-              next.replyText,
-              session.pendingInteraction,
-            ),
-          };
-        } else if (next.replyText.length === 0) {
-          next = {
-            ...next,
-            replyText: String(
-              renderBookingInteractionMessage(session.pendingInteraction).content,
-            ),
-          };
-        }
-        if (!opts.detailsStepActive) {
-          next = {
-            ...next,
-            replyButtons: replyButtonsForInteraction(session.pendingInteraction),
-          };
-        }
-        if (agentId === FAQ_AGENT_ID) {
-          next = { ...next, yieldToSupervisor: true };
-        }
-        trackEvent("reply_menu_filled", {
-          menu: "service_confirm",
-          reason: "pending_interaction",
-        });
-      }
-    }
-  } else if (
-    state.pendingInteraction?.kind === "service_confirm"
-    && !opts.detailsStepActive
-    && !opts.alreadyBooked
-    && !opts.slotOfferPresent
-    && next.replyButtons.length === 0
-  ) {
-    if (next.replyText.length === 0) {
-      next = {
-        ...next,
-        replyText: String(
-          renderBookingInteractionMessage(state.pendingInteraction).content,
-        ),
-      };
-    }
-    next = {
-      ...next,
-      replyButtons: replyButtonsForInteraction(state.pendingInteraction),
-    };
-    if (agentId === FAQ_AGENT_ID) {
-      next = { ...next, yieldToSupervisor: true };
-    }
-    trackEvent("reply_menu_filled", {
-      menu: "service_confirm",
-      reason: "pending_interaction",
-    });
   }
 
   return { reply: next, serviceOfferUpdate };
