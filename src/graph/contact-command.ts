@@ -1,5 +1,6 @@
 import { normalizeClinicPhone } from "../shared/phone.js";
 import { contactMissingFields } from "../tools/contact-tools.js";
+import { getTelegramUserId } from "../tools/telegram-user-context.js";
 import type { ClinicState } from "./state.js";
 import {
   effectiveBookingContactDetails,
@@ -9,11 +10,93 @@ import {
   type PhoneLookupEvidence,
 } from "./booking-draft.js";
 import {
-  phoneCandidateCanBeLinked,
   phoneLookupFailedThisTurn,
-  resolveContactIdentity,
   toolRanThisTurn,
-} from "./agent-loop/shared.js";
+} from "./agent-loop/protocol.js";
+
+export type ContactIdentityResolution =
+  | { kind: "owned"; contactId: string; contact: Record<string, unknown> }
+  | { kind: "phone_candidate"; contacts: Record<string, unknown>[] }
+  | { kind: "unresolved" };
+
+/** Resolve identity from explicit lookup provenance; ambiguous legacy context fails closed. */
+export const resolveContactIdentity = (
+  context: ClinicState["contactContext"],
+  expectedContactId?: string | null,
+): ContactIdentityResolution => {
+  if (!context) {
+    return { kind: "unresolved" };
+  }
+  const contacts = context.contacts.filter(
+    (contact) => typeof contact.id === "string" && contact.id.length > 0,
+  );
+  if (context.ownership === "phone") {
+    return contacts.length > 0
+      ? { kind: "phone_candidate", contacts }
+      : { kind: "unresolved" };
+  }
+  if (context.ownership !== "telegram") {
+    return { kind: "unresolved" };
+  }
+  const contact = expectedContactId == null
+    ? contacts[0]
+    : contacts.find((candidate) => candidate.id === expectedContactId);
+  return contact && typeof contact.id === "string"
+    ? { kind: "owned", contactId: contact.id, contact }
+    : { kind: "unresolved" };
+};
+
+export const phoneCandidateCanBeLinked = (
+  identity: ContactIdentityResolution,
+  contactId: string,
+): boolean => {
+  if (identity.kind !== "phone_candidate") {
+    return false;
+  }
+  const candidate = identity.contacts.find((contact) => contact.id === contactId);
+  if (!candidate) {
+    return false;
+  }
+  const linkedTelegram = candidate.cTelegram;
+  if (linkedTelegram == null || (typeof linkedTelegram === "string" && linkedTelegram.trim() === "")) {
+    return true;
+  }
+  try {
+    return linkedTelegram === getTelegramUserId();
+  } catch {
+    // Without the runtime identity, fail closed rather than overwrite a link.
+    return false;
+  }
+};
+
+export const phoneCandidateHasLinkableRow = (identity: ContactIdentityResolution): boolean =>
+  identity.kind === "phone_candidate"
+  && identity.contacts.some(
+    (contact) => typeof contact.id === "string" && phoneCandidateCanBeLinked(identity, contact.id),
+  );
+
+/** True when create_contact's phone matches a stored phone candidate that cannot be linked. */
+export const createContactPhoneMatchesOccupiedCandidate = (
+  identity: ContactIdentityResolution,
+  rawPhone: unknown,
+): boolean => {
+  if (identity.kind !== "phone_candidate" || typeof rawPhone !== "string" || rawPhone.trim() === "") {
+    return false;
+  }
+  const wanted = normalizeClinicPhone(rawPhone);
+  if (wanted == null) {
+    return false;
+  }
+  return identity.contacts.some((contact) => {
+    if (typeof contact.id !== "string" || phoneCandidateCanBeLinked(identity, contact.id)) {
+      return false;
+    }
+    const candidatePhone = typeof contact.phoneNumber === "string"
+      ? normalizeClinicPhone(contact.phoneNumber)
+      : null;
+    return candidatePhone === wanted;
+  });
+};
 
 export type CompleteContactDetails = {
   phoneNumber: string;

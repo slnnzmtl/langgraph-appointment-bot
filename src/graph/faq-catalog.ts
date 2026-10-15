@@ -1,6 +1,11 @@
 import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js";
 import type { InteractionChoice } from "./booking-session.js";
 import type { ServicesContext } from "../tools/service-tools.js";
+import {
+  interactionChoicesFromSelectorGroups,
+  partitionRemainingServiceChoices,
+  type PartitionServiceCandidates,
+} from "./service-resolution.js";
 
 const MAX_FAQ_CATALOG_CHOICES = 8;
 /** Safe width for Telegram 2-column reply keyboard labels. */
@@ -321,4 +326,48 @@ export const buildFaqCatalogChoices = (
       serviceIds: overflow.map((row) => row.id),
     },
   ];
+};
+
+export const resolveFaqCatalogChoices = async (input: {
+  services: ServicesContext["list"];
+  remainingIds?: readonly string[];
+  utterance: string;
+  query?: string;
+  selectedLabel?: string;
+  groups?: Array<{ label: string; serviceIds: string[] }>;
+  partitionCandidates?: PartitionServiceCandidates;
+}): Promise<InteractionChoice[]> => {
+  const fromSelectorGroups = input.remainingIds != null && input.groups != null
+    ? interactionChoicesFromSelectorGroups(
+      input.services,
+      input.remainingIds,
+      input.groups,
+    )
+    : [];
+  if (fromSelectorGroups.length > 0) {
+    return shortenFaqChoiceLabels(
+      fromSelectorGroups,
+      input.selectedLabel != null && input.selectedLabel.length > 0
+        ? { selectedLabel: input.selectedLabel }
+        : undefined,
+    );
+  }
+  const partitioned = await partitionRemainingServiceChoices({
+    rows: input.services,
+    ...(input.remainingIds != null ? { remainingIds: input.remainingIds } : {}),
+    utterance: input.utterance,
+    ...(input.query != null ? { query: input.query } : {}),
+    ...(input.partitionCandidates != null
+      ? { partitionCandidates: input.partitionCandidates }
+      : {}),
+  });
+  const choices = partitioned.length > 0
+    ? partitioned
+    : buildFaqCatalogChoices(input.services, input.remainingIds);
+  return shortenFaqChoiceLabels(
+    choices,
+    input.selectedLabel != null && input.selectedLabel.length > 0
+      ? { selectedLabel: input.selectedLabel }
+      : undefined,
+  );
 };

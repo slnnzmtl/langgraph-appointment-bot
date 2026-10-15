@@ -11,13 +11,13 @@ import {
 } from "../booking-draft.js";
 import { resolveBookingScheduleRequest } from "../booking-schedule.js";
 import type { ClinicState } from "../state.js";
+import { matchAvailabilityDay } from "../booking-interaction-render.js";
 import {
   availabilitySlotsRanThisTurn,
   bookingDateAnchors,
   lastPatientText,
-  matchAvailabilityDay,
   toolRanThisTurn,
-} from "./shared.js";
+} from "./protocol.js";
 
 export type RuntimeAvailabilityPurpose =
   | "reschedule_nearest"

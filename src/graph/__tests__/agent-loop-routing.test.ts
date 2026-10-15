@@ -1,15 +1,23 @@
-import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import {
+  AIMessage,
+  HumanMessage,
+  ToolMessage,
+} from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
-import { Command, Overwrite } from "@langchain/langgraph";
-import { describe, expect, it, vi } from "vitest";
+import { Overwrite } from "@langchain/langgraph";
+import {
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { z } from "zod";
 
 import {
+  BOOKING_NOTE_QUESTION_UK,
   CONSULTATION_SERVICE_ID,
   serviceChangedNoticeUk,
 } from "../../shared/clinic-constants.js";
-import type { ContactLookupContext } from "../../tools/contact-tools.js";
-import type { BookingContext } from "../../tools/planned-meetings.js";
 import {
   createAgentCommandPrepareNode,
   createAgentToolsNode,
@@ -17,107 +25,28 @@ import {
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
-import { resolveBookingCommand, stampRuntimeToolAi } from "../agent-loop/booking-command.js";
+import {
+  resolveBookingCommand,
+  stampRuntimeToolAi,
+} from "../agent-loop/booking-command.js";
 import {
   latestContactIncompleteMissingFields,
   latestMeetingMutationError,
-} from "../agent-loop/shared.js";
+} from "../agent-loop/protocol.js";
 import { createBookingInteractionRenderNode } from "../booking-note-orchestrator.js";
 import {
   createEmptyBookingDraft,
   reduceBookingDraft,
-  type BookingDraft,
 } from "../booking-draft.js";
 import { openMutationConfirmInteraction } from "../booking-session.js";
-import { BOOKING_NOTE_QUESTION_UK } from "../../shared/clinic-constants.js";
-import type { ClinicState, ClinicStateUpdate } from "../state.js";
-
-const agentMessagesOf = (update: { agentMessages?: unknown }): BaseMessage[] => {
-  const raw = update.agentMessages;
-  if (raw instanceof Overwrite) {
-    return raw.value as BaseMessage[];
-  }
-  return Array.isArray(raw) ? (raw as BaseMessage[]) : [];
-};
-
-const unwrapCommandUpdate = (result: unknown): ClinicStateUpdate =>
-  result instanceof Command ? (result.update as ClinicStateUpdate) : (result as ClinicStateUpdate);
-
-
-const listedMeetings: BookingContext = {
-  meetings: [
-    {
-      id: "m-1",
-      name: "Консультація - Daniel",
-      dateStart: "2026-08-17 11:00:00",
-      dateEnd: "2026-08-17 11:30:00",
-    },
-  ],
-  dateFrom: "2026-08-11",
-};
-
-const ownedContactContext = (contactId = "contact-1"): ContactLookupContext => ({
-  ownership: "telegram",
-  contacts: [{
-    id: contactId,
-    firstName: "Ada",
-    lastName: "Lovelace",
-    phoneNumber: "+380501112233",
-    missingFields: [],
-  }],
-});
-
-const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
-  messages: [],
-  agentMessages: [],
-  stepCount: 0,
-  next: undefined,
-  supervisorIntent: null,
-  lastHandoff: null,
-  bookingContext: null,
-  contactContext: null,
-  availabilityContext: null,
-  availabilityCursor: null,
-  servicesContext: null,
-  prefetchDirty: false,
-  prefetchFetchedAt: null,
-  bookingNoteStatus: "unasked",
-  selectedSlot: null,
-  selectedAvailabilityDate: null,
-  bookingDraft: null,
-  pendingInteraction: null,
-  noteOrchQueued: false,
-  serviceChangeNotice: null,
-  bookingSchemaVersion: 1,
-  pendingCancellationPurpose: null,
-  ...overrides,
-});
-
-const canonicalBookingDraft = (overrides: Partial<BookingDraft> = {}): BookingDraft => ({
-  version: 1,
-  mode: "create",
-  phase: "details",
-  serviceAcceptance: {
-    status: "accepted",
-    service: {
-      id: "svc-1",
-      name: "Процедура",
-      source: "catalog",
-    },
-  },
-  selectedDate: "2026-09-10",
-  selectedSlot: {
-    dateStart: "2026-09-10T14:00:00",
-    dateEnd: "2026-09-10T14:30:00",
-    label: "14:00",
-  },
-  requestedTime: null,
-  note: { status: "skipped" },
-  contactId: "contact-1",
-  pendingCommand: null,
-  replacement: null,
-  ...overrides,
-});
+import {
+  agentMessagesOf,
+  canonicalBookingDraft,
+  clinicState,
+  makeListedMeetings,
+  ownedContactContext,
+  unwrapCommandUpdate,
+} from "./agent-loop-fixtures.js";
 
 describe("routeAfterAgentLlm", () => {
   it("routes a direct cancellation to runtime command preparation even after plain model text", async () => {
@@ -125,7 +54,7 @@ describe("routeAfterAgentLlm", () => {
       routeAfterAgentLlm(
         clinicState({
           messages: [new HumanMessage("Скасувати")],
-          bookingContext: listedMeetings,
+          bookingContext: makeListedMeetings(),
           bookingDraft: {
             ...createEmptyBookingDraft(),
             pendingCommand: {
@@ -511,7 +440,7 @@ describe("runtime-owned booking routing", () => {
   it("keeps HITL create chat-other informational without replaying the frozen mutation", async () => {
     const state = clinicState({
       messages: [new HumanMessage("скільки коштує консультація")],
-      bookingContext: listedMeetings,
+      bookingContext: makeListedMeetings(),
       bookingDraft: canonicalBookingDraft({
         phase: "confirming",
         pendingCommand: null,
