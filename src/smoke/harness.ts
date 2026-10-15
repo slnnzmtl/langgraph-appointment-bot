@@ -10,7 +10,7 @@ import type { BookingDraft } from "../graph/booking-draft.js";
 import type { PendingInteraction } from "../graph/booking-session.js";
 import type { ClinicHandoff } from "../graph/types.js";
 import type { McpCallTool } from "../shared/mcp.js";
-import { SmokeAssertError } from "./assert.js";
+import { expectNoControlMarkup, SmokeAssertError } from "./assert.js";
 import {
   nextAutopilotInput,
   type AutopilotDecision,
@@ -168,6 +168,7 @@ export const createSmokeSession = (
     const buttons = keyboardLabels(outbound.reply_markup);
     lastButtons = buttons;
     turns += 1;
+    expectNoControlMarkup(`${options.scenario} turn ${turns}`, outbound.text);
     return {
       reply: outbound.text,
       buttons,

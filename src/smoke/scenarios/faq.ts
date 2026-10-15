@@ -1,5 +1,6 @@
 import {
   BOOKING_OFFER_MENU,
+  BOOKING_REPLACE_MENU,
   MAIN_MENU_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
@@ -8,6 +9,7 @@ import {
   expectButtons,
   expectCalled,
   expectInteraction,
+  expectNoButtons,
   expectNotCalled,
   SmokeAssertError,
   soft,
@@ -270,6 +272,67 @@ export const faqChooseOtherScenario: SmokeScenario = {
       const returned = await returnToBookingOffer(session, "faq-choose-other");
       expectButtons("faq-choose-other return", returned.buttons, [...BOOKING_OFFER_MENU]);
       console.log("✓ faq-choose-other: catalog → compare → return to BOOKING OFFER");
+    }),
+};
+
+/**
+ * Open FAQ catalog via «Послуги» (not «Записатись» — that opens REPLACE when a
+ * visit is already on file), then ask hours — must emit close_catalog without
+ * CRM writes.
+ */
+const openFaqCatalogForClose = async (
+  session: SmokeSession,
+  label: string,
+): Promise<TurnResult> => {
+  let turn = await session.say("Послуги");
+  // Known contact with a Planned visit can still surface REPLACE on book-ish
+  // routing; decline and retry catalog once.
+  if (
+    turn.buttons.includes(BOOKING_REPLACE_MENU[0])
+    && turn.buttons.includes(BOOKING_REPLACE_MENU[1])
+  ) {
+    await session.tap(BOOKING_REPLACE_MENU[1]);
+    turn = await session.say("Послуги");
+  }
+  if (hasBookingOfferKeyboard(turn.buttons)) {
+    turn = await session.tap(BOOKING_OFFER_MENU[1]);
+  }
+  if (turn.state.pendingInteraction?.kind === "service_candidate") {
+    return turn;
+  }
+  throw new SmokeAssertError(
+    `${label}: expected FAQ service_candidate after Послуги, got ${turn.state.pendingInteraction?.kind ?? "null"} (buttons=[${turn.buttons.join(" | ") || "none"}])`,
+  );
+};
+
+export const faqCatalogCloseScenario: SmokeScenario = {
+  name: "faq-catalog-close",
+  tier: "invoke",
+  run: async (ctx) =>
+    withSession(ctx, "faq-catalog-close", ctx.env.telegramIdA, async (session) => {
+      const catalog = await openFaqCatalogForClose(session, "faq-catalog-close");
+      const catalogInteraction = catalog.state.pendingInteraction;
+      expectInteraction("faq-catalog-close open", catalogInteraction?.kind, "service_candidate");
+      if (catalogInteraction?.kind !== "service_candidate") {
+        throw new SmokeAssertError(
+          `faq-catalog-close: expected service_candidate, got ${catalogInteraction?.kind ?? "null"}`,
+        );
+      }
+      const catalogLabels = catalogInteraction.choices
+        .map((choice) => choice.label)
+        .filter((label) => label !== MAIN_MENU_LABEL);
+
+      const hours = await session.say("Які у вас години роботи?");
+      expectCalled("faq-catalog-close", hours.calls, "get_working_time");
+      expectNotCalled("faq-catalog-close", hours.calls, [...WRITE_TOOLS]);
+      if (hours.state.pendingInteraction != null) {
+        throw new SmokeAssertError(
+          `faq-catalog-close: expected pendingInteraction null after hours, got ${hours.state.pendingInteraction.kind}`,
+        );
+      }
+      expectNoButtons("faq-catalog-close after hours", hours.buttons, catalogLabels);
+      console.log("✓ faq-catalog-close: catalog → hours closes picker, no writes");
+      console.log("  reply:", hours.reply.slice(0, 200));
     }),
 };
 
