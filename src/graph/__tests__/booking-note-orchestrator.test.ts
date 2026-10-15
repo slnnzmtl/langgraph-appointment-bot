@@ -4,6 +4,7 @@ import { AIMessage, HumanMessage } from "@langchain/core/messages";
 import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU_EN,
+  BOOKING_SCHEDULE_RESELECT_UK,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   RETURN_TO_BOOKING_LABEL_UK,
@@ -929,5 +930,41 @@ describe("renderBookingInteractionMessage", () => {
       "Продовжити з обраною послугою",
       "Змінити послугу",
     ]);
+  });
+
+  it("interaction_render with null pending and awaiting note (no slot) does not invent visit_note", () => {
+    const render = createBookingInteractionRenderNode({ id: "booking", name: "Booking" });
+    const update = render({
+      messages: [],
+      agentMessages: [],
+      pendingInteraction: null,
+      bookingDraft: {
+        ...acceptedSlotDraft()!,
+        selectedSlot: null,
+        note: { status: "awaiting" },
+      },
+    } as never);
+    expect((update.lastHandoff as { replyText: string }).replyText)
+      .toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect((update.lastHandoff as { replyText: string }).replyText)
+      .not.toBe(BOOKING_NOTE_QUESTION_UK);
+  });
+
+  it("interaction_render with null pending and awaiting note with selectedSlot still does not invent visit_note", () => {
+    const render = createBookingInteractionRenderNode({ id: "booking", name: "Booking" });
+    const slotted = acceptedSlotDraft()!;
+    const update = render({
+      messages: [],
+      agentMessages: [],
+      pendingInteraction: null,
+      bookingDraft: {
+        ...slotted,
+        note: { status: "awaiting" },
+      },
+    } as never);
+    expect((update.lastHandoff as { replyText: string }).replyText)
+      .toBe(BOOKING_SCHEDULE_RESELECT_UK);
+    expect((update.lastHandoff as { replyText: string }).replyText)
+      .not.toBe(BOOKING_NOTE_QUESTION_UK);
   });
 });

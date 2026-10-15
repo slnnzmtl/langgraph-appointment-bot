@@ -203,24 +203,42 @@ const pagingRequest = (
   return args == null ? null : { args, purpose: "page" };
 };
 
-/** Fresh exact-day revalidation before create_meeting or reschedule_meeting. */
-export const exactRevalidateRequest = (
+/** Exact-day forceRefresh args from draft selectedDate (no same-turn slots gate). */
+const buildExactRevalidateArgs = (
   state: ClinicState,
-  purpose: "create_revalidate" | "reschedule_revalidate",
-  options?: { ignoreSlotsAlreadyThisTurn?: boolean },
-): RuntimeAvailabilityRequest | null => {
+): AvailabilitySlotsToolArgs | null => {
   const selectedDate = state.bookingDraft?.selectedDate;
-  if (
-    selectedDate == null
-    || (!options?.ignoreSlotsAlreadyThisTurn && slotsAlreadyThisTurn(state))
-  ) {
+  if (selectedDate == null) {
     return null;
   }
-  const args = withDraftScope(state, {
+  return withDraftScope(state, {
     direction: "exact",
     date: selectedDate,
     forceRefresh: true,
   });
+};
+
+/** Fresh exact-day revalidation before create_meeting or reschedule_meeting. */
+export const exactRevalidateRequest = (
+  state: ClinicState,
+  purpose: "create_revalidate" | "reschedule_revalidate",
+): RuntimeAvailabilityRequest | null => {
+  if (slotsAlreadyThisTurn(state)) {
+    return null;
+  }
+  const args = buildExactRevalidateArgs(state);
+  return args == null ? null : { args, purpose };
+};
+
+/**
+ * Ungated exact refresh for stale-slot recovery when the snapshot is unusable.
+ * Callers must ensure at most one booking_stale_revalidate_* lookup per turn.
+ */
+export const staleExactRevalidateRequest = (
+  state: ClinicState,
+  purpose: "create_revalidate" | "reschedule_revalidate",
+): RuntimeAvailabilityRequest | null => {
+  const args = buildExactRevalidateArgs(state);
   return args == null ? null : { args, purpose };
 };
 

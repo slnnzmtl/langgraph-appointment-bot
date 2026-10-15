@@ -487,16 +487,12 @@ export const createBookingInteractionRenderNode = (
   agent: { id: string; name: string },
 ) => (state: ClinicState) => {
   const pending = state.pendingInteraction;
-  const canDefaultVisitNote =
-    state.bookingDraft?.note.status === "awaiting"
-    && state.bookingDraft?.selectedSlot != null;
   const interaction = pending != null && isBookingOwnedInteraction(pending)
     ? pending
-    : canDefaultVisitNote
-      ? openVisitNoteInteraction()
-      : null;
+    : null;
   if (interaction == null) {
-    // Stale-slot / missing-date recovery must not invent a visit-note prompt.
+    // Never invent visit_note here — note UI is opened upstream
+    // (createBlockedOnlyByNote / note orchestrator).
     return {
       agentMessages: new Overwrite([]),
       lastHandoff: {

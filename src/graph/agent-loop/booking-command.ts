@@ -52,6 +52,7 @@ import {
 import {
   exactRevalidateRequest,
   resolveRuntimeAvailabilityRequest,
+  staleExactRevalidateRequest,
   type RuntimeAvailabilityPurpose,
 } from "./availability-request.js";
 import {
@@ -635,6 +636,7 @@ const overlayContactIncompleteFields = (
 /**
  * After create_meeting returns Contact incomplete: trust CRM missingFields,
  * drop the HITL confirm card, and open contact_field (create) or clear confirm (reschedule).
+ * Does not re-run ContactCommand — CRM is the source of truth for incomplete.
  */
 const contactIncompleteRecovery = (state: ClinicState): BookingCommandOutcome => {
   const missingFromCrm = latestContactIncompleteMissingFields(state.agentMessages ?? [])
@@ -655,12 +657,6 @@ const contactIncompleteRecovery = (state: ClinicState): BookingCommandOutcome =>
     bookingDraft?.contactId,
     missingFromCrm,
   );
-  const recoveryState: ClinicState = {
-    ...state,
-    bookingDraft,
-    pendingInteraction: clearedConfirm.pendingInteraction,
-    contactContext,
-  };
 
   const baseUpdate: ClinicStateUpdate = {
     bookingDraft,
@@ -673,41 +669,14 @@ const contactIncompleteRecovery = (state: ClinicState): BookingCommandOutcome =>
     return { kind: "render", reason: "contact_field", update: baseUpdate };
   }
 
-  if (contactCommandReadyForInjection(recoveryState)) {
-    const command = resolveContactCommand(recoveryState);
-    if (command.action === "request_field") {
-      return {
-        kind: "render",
-        reason: "contact_field",
-        update: {
-          ...baseUpdate,
-          pendingInteraction: openContactFieldInteraction(
-            command.field,
-            command.occupied === true,
-          ),
-        },
-      };
-    }
-    if (contactCommandNeedsToolInjection(command) && !hasPendingToolCalls(state.agentMessages)) {
-      const toolCall = contactToolCallFromCommand(
-        command,
-        bookingDraft?.version ?? 0,
-      );
-      if (toolCall != null) {
-        return executeToolOutcome(recoveryState, toolCall, baseUpdate);
-      }
-    }
-  }
-
-  // Cached context looked complete but CRM listed fields — still open the first field.
-  const fallbackField = missingFromCrm[0];
-  if (fallbackField != null) {
+  const field = missingFromCrm[0];
+  if (field != null) {
     return {
       kind: "render",
       reason: "contact_field",
       update: {
         ...baseUpdate,
-        pendingInteraction: openContactFieldInteraction(fallbackField),
+        pendingInteraction: openContactFieldInteraction(field),
       },
     };
   }
@@ -715,6 +684,17 @@ const contactIncompleteRecovery = (state: ClinicState): BookingCommandOutcome =>
   // Never leave mutation_confirm active after Contact incomplete.
   return { kind: "render", reason: "contact_field", update: baseUpdate };
 };
+
+const STALE_REVALIDATE_TOOL_CALL_PREFIX = "booking_stale_revalidate_";
+
+const staleRevalidateRanThisTurn = (messages: BaseMessage[]): boolean =>
+  messages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && message.name === "present_availability_slots"
+      && typeof message.tool_call_id === "string"
+      && message.tool_call_id.startsWith(STALE_REVALIDATE_TOOL_CALL_PREFIX),
+  );
 
 const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   const session = reduceBookingSession(
@@ -729,11 +709,10 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   );
   trackEvent("booking_invariant_violation", { reason: "stale_slot" });
 
-  // Keep the fresh exact-day snapshot that proved the slot is gone; rebuild
-  // DATE/TIME from it. Never render with a null interaction (visit_note default).
-  const availability = state.availabilityContext
-    ?? captureAvailabilityFromMessages(state.agentMessages ?? [])
-    ?? null;
+  // Prefer this-turn capture (exact revalidate that proved the slot gone) over
+  // a checkpoint that may still list the taken slot. Never invent visit_note.
+  const captured = captureAvailabilityFromMessages(state.agentMessages ?? []) ?? null;
+  const availability = captured ?? state.availabilityContext ?? null;
   const recoveryState: ClinicState = {
     ...state,
     bookingDraft: session.bookingDraft,
@@ -748,9 +727,21 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
       update: {
         bookingDraft: session.bookingDraft,
         pendingInteraction: offer.interaction,
-        ...(state.availabilityContext == null && availability != null
-          ? { availabilityContext: availability }
+        ...(captured != null && captured !== state.availabilityContext
+          ? { availabilityContext: captured }
           : {}),
+      },
+    };
+  }
+
+  // At most one ungated stale force-refresh per turn.
+  if (staleRevalidateRanThisTurn(state.agentMessages ?? [])) {
+    return {
+      kind: "render",
+      reason: "missing_exact_date",
+      update: {
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
       },
     };
   }
@@ -758,19 +749,16 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   const purpose = state.bookingDraft?.mode === "reschedule"
     ? "reschedule_revalidate"
     : "create_revalidate";
-  const revalidateState: ClinicState = {
-    ...state,
-    bookingDraft: session.bookingDraft,
-  };
-  const revalidate = exactRevalidateRequest(revalidateState, purpose, {
-    ignoreSlotsAlreadyThisTurn: true,
-  });
+  const revalidate = staleExactRevalidateRequest(
+    { ...state, bookingDraft: session.bookingDraft },
+    purpose,
+  );
   if (revalidate != null) {
     return availabilityExecute(
       state,
       revalidate.args,
       revalidate.purpose,
-      `booking_stale_revalidate_${state.bookingDraft?.version ?? 0}`,
+      `${STALE_REVALIDATE_TOOL_CALL_PREFIX}${state.bookingDraft?.version ?? 0}`,
       {
         bookingDraft: session.bookingDraft,
         pendingInteraction: session.pendingInteraction,

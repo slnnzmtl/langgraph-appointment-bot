@@ -604,7 +604,10 @@ describe("runtime-owned booking routing", () => {
       pendingCommand: null,
       selectedDate: "2026-09-10",
     });
-    expect(outcome.update.availabilityContext).toBeUndefined();
+    // This-turn capture wins and is written back onto the checkpoint.
+    expect(outcome.update.availabilityContext).toMatchObject({
+      days: [{ date: "2026-09-10", slots: [expect.objectContaining({ dateStart: remaining.dateStart })] }],
+    });
 
     const rendered = createBookingInteractionRenderNode({ id: "booking", name: "Booking" })({
       ...state,
@@ -717,7 +720,46 @@ describe("runtime-owned booking routing", () => {
         forceRefresh: true,
       }),
     });
+    expect(outcome.toolCall.id).toMatch(/^booking_stale_revalidate_/);
     expect(outcome.update.pendingInteraction?.kind).not.toBe("visit_note");
+  });
+
+  it("stale-slot does not execute a second force-refresh after booking_stale_revalidate", async () => {
+    const state = clinicState({
+      contactContext: ownedContactContext(),
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        serviceAcceptance: {
+          status: "accepted",
+          service: {
+            id: "svc-1",
+            name: "Процедура",
+            durationMinutes: 30,
+            source: "catalog",
+          },
+        },
+        pendingCommand: {
+          action: "create",
+          payload: { serviceId: "svc-1" },
+        },
+      }),
+      availabilityContext: null,
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify({ error: "CRM down", slots: [] }),
+        name: "present_availability_slots",
+        tool_call_id: "booking_stale_revalidate_1",
+      })],
+    });
+
+    const outcome = resolveBookingCommand(state);
+    expect(outcome).toMatchObject({ kind: "render", reason: "missing_exact_date" });
+    if (outcome.kind !== "render") {
+      throw new Error("expected render");
+    }
+    expect(outcome.update.bookingDraft).toMatchObject({
+      selectedSlot: null,
+      pendingCommand: null,
+    });
   });
 
   it("Contact incomplete with stale-complete cache opens contact_field and clears confirm", async () => {
@@ -769,6 +811,99 @@ describe("runtime-owned booking routing", () => {
       }],
     });
     expect(outcome.kind).not.toBe("none");
+  });
+
+  it("Contact incomplete on reschedule clears confirm without opening contact_field", async () => {
+    const state = clinicState({
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          missingFields: [],
+        }],
+      },
+      bookingDraft: canonicalBookingDraft({
+        mode: "reschedule",
+        phase: "confirming",
+        contactId: "c-1",
+        note: { status: "skipped" },
+        rescheduleTarget: {
+          id: "m-1",
+          name: "Консультація",
+          dateStart: "2026-08-17 11:00:00",
+          dateEnd: "2026-08-17 11:30:00",
+        },
+        pendingCommand: {
+          action: "reschedule",
+          payload: { meetingId: "m-1" },
+        },
+      }),
+      pendingInteraction: openMutationConfirmInteraction("reschedule"),
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify({
+          error: "Contact incomplete",
+          missingFields: ["lastName"],
+        }),
+        name: "reschedule_meeting",
+        tool_call_id: "reschedule-incomplete-1",
+      })],
+    });
+
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("render");
+    if (outcome.kind !== "render") {
+      throw new Error("expected render");
+    }
+    expect(outcome.update.pendingInteraction?.kind).not.toBe("contact_field");
+    expect(outcome.update.pendingInteraction?.kind).not.toBe("mutation_confirm");
+    expect(outcome.update.bookingDraft).toMatchObject({ pendingCommand: null });
+  });
+
+  it("Contact incomplete opens contact_field even when draft already has the CRM field", async () => {
+    const state = clinicState({
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{
+          id: "c-1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501112233",
+          missingFields: [],
+        }],
+      },
+      bookingDraft: canonicalBookingDraft({
+        contactId: "c-1",
+        note: { status: "skipped" },
+        contactDetails: { lastName: "Lovelace" },
+        pendingCommand: {
+          action: "create",
+          payload: { contactId: "c-1" },
+        },
+      }),
+      pendingInteraction: openMutationConfirmInteraction("create"),
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify({
+          error: "Contact incomplete",
+          missingFields: ["lastName"],
+        }),
+        name: "create_meeting",
+        tool_call_id: "create-incomplete-draft-has-field",
+      })],
+    });
+
+    const outcome = resolveBookingCommand(state);
+    expect(outcome).toMatchObject({ kind: "render", reason: "contact_field" });
+    if (outcome.kind !== "render") {
+      throw new Error("expected render");
+    }
+    expect(outcome.update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+    expect(outcome.kind).not.toBe("execute");
   });
 });
 
