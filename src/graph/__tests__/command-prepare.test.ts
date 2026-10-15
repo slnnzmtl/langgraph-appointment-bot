@@ -1,18 +1,28 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { Command, Overwrite } from "@langchain/langgraph";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import { BOOKING_RUNTIME_TOOL_NAMES } from "../../tools/index.js";
 import {
-  bookingCommandContinuesAfterTools,
-  bookingTurnNeedsCommandPreparation,
+  bookingOutcomeNeedsPrepare,
   isPendingChatConfirmationReplay,
   resolveBookingCommand,
   shouldRearmCancelAfterChatOther,
 } from "../agent-loop/booking-command.js";
-import { createAgentCommandPrepareNode } from "../agent-loop/command-prepare.js";
+import {
+  commandFromBookingOutcome,
+  createAgentCommandPrepareNode,
+  defaultCommandPrepareNodes,
+} from "../agent-loop/command-prepare.js";
+import {
+  routeAfterAgentLlm,
+  routeAfterAgentPrepare,
+  routeAfterAgentTools,
+} from "../agent-loop/routing.js";
+import { BOOKING_REPLACE_MENU } from "../../shared/clinic-constants.js";
+import { openVisitReplacementInteraction } from "../booking-session.js";
 import { coerceAvailabilityToolCalls } from "../agent-loop/tool-call-coercion.js";
 import type { BookingDraft } from "../booking-draft.js";
 import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
@@ -157,7 +167,11 @@ describe("command_prepare runtime authority", () => {
       bookingDraft: readyCreateDraft(),
       agentMessages: [],
     });
-    expect(bookingTurnNeedsCommandPreparation(base)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(base))).toBe(true);
+    expect(resolveBookingCommand(base)).toMatchObject({
+      kind: "execute",
+      toolCall: { name: "present_availability_slots" },
+    });
 
     const revalidate = await commandPrepare(base);
     expect(lastToolCall(revalidate)).toMatchObject({
@@ -190,7 +204,11 @@ describe("command_prepare runtime authority", () => {
         freshSlotsToolMessage("booking_revalidate_4"),
       ],
     });
-    expect(bookingCommandContinuesAfterTools(afterSlots)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(afterSlots))).toBe(true);
+    expect(resolveBookingCommand(afterSlots)).toMatchObject({
+      kind: "execute",
+      toolCall: { name: "create_meeting" },
+    });
 
     const create = await commandPrepare(afterSlots);
     const createUpdate = asUpdate(create);
@@ -243,7 +261,7 @@ describe("command_prepare runtime authority", () => {
         freshSlotsToolMessage("slots-1", { excludeMeetingIds: ["m-1"] }),
       ],
     });
-    expect(bookingTurnNeedsCommandPreparation(afterSlots)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(afterSlots))).toBe(true);
     const update = await commandPrepare(afterSlots);
     expect(lastToolCall(update)).toMatchObject({
       name: "reschedule_meeting",
@@ -328,7 +346,7 @@ describe("command_prepare runtime authority", () => {
       ],
     });
     expect(shouldRearmCancelAfterChatOther(state)).toBe(false);
-    expect(bookingTurnNeedsCommandPreparation(state)).toBe(false);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(state))).toBe(false);
     const update = await commandPrepare(state);
     expect(asUpdate(update).agentMessages).toBeUndefined();
     expect(update).toBeInstanceOf(Command);
@@ -361,7 +379,7 @@ describe("command_prepare runtime authority", () => {
       availabilityContext: null,
       agentMessages: [],
     });
-    expect(bookingTurnNeedsCommandPreparation(state)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(state))).toBe(true);
     const update = await commandPrepare(state);
     expect(lastToolCall(update)).toMatchObject({
       name: "present_availability_slots",
@@ -487,7 +505,7 @@ describe("ContactCommand decisions", () => {
       action: "request_field",
       field: "firstName",
     });
-    expect(bookingTurnNeedsCommandPreparation(state)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(state))).toBe(true);
     expect(resolveBookingCommand(state)).toMatchObject({
       kind: "render",
       reason: "contact_field",
@@ -578,7 +596,7 @@ describe("ContactCommand decisions", () => {
       field: "phoneNumber",
       occupied: true,
     });
-    expect(bookingTurnNeedsCommandPreparation(state)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(state))).toBe(true);
     expect(resolveBookingCommand(state)).toMatchObject({
       kind: "render",
       reason: "contact_field",
@@ -630,7 +648,7 @@ describe("ContactCommand decisions", () => {
         }),
       ],
     });
-    expect(bookingCommandContinuesAfterTools(afterLookup)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(afterLookup))).toBe(true);
     expect(resolveContactCommand(afterLookup).action).toBe("create");
   });
 
@@ -655,8 +673,7 @@ describe("ContactCommand decisions", () => {
       ],
     });
     expect(resolveContactCommand(afterLookup).action).toBe("none");
-    expect(bookingCommandContinuesAfterTools(afterLookup)).toBe(false);
-    expect(bookingTurnNeedsCommandPreparation(afterLookup)).toBe(false);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(afterLookup))).toBe(false);
   });
 
   it("continues after link when draft still has accepted fields for update", () => {
@@ -697,7 +714,7 @@ describe("ContactCommand decisions", () => {
       ],
     });
     expect(resolveContactCommand(afterLink).action).toBe("update");
-    expect(bookingCommandContinuesAfterTools(afterLink)).toBe(true);
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(afterLink))).toBe(true);
   });
 });
 
@@ -866,7 +883,7 @@ describe("DDD-255 deterministic booking transitions", () => {
         }),
       ],
     });
-    expect(resolveBookingCommand(state).kind).toBe("none");
+    expect(resolveBookingCommand(state).kind).toBe("continue_llm");
   });
 
   it("routes note-required as render without a tool call", async () => {
@@ -984,5 +1001,306 @@ describe("DDD-255 deterministic booking transitions", () => {
       kind: "execute",
       toolCall: { name: "present_availability_slots" },
     });
+  });
+});
+
+describe("DDD-261 unified booking transition planner", () => {
+  const commandPrepare = createAgentCommandPrepareNode("booking");
+  const nodes = defaultCommandPrepareNodes("booking");
+  const tracked: Array<{ name: string; props: Record<string, unknown> }> = [];
+
+  afterEach(() => {
+    setTrackEventForTests(null);
+    tracked.length = 0;
+  });
+
+  it("routes continue_llm with an update through command_prepare (replacement decline)", async () => {
+    const meeting = {
+      id: "existing-1",
+      name: "Консультація - Ada",
+      dateStart: "2026-08-17 11:00:00",
+      dateEnd: "2026-08-17 11:30:00",
+    };
+    const state = clinicState({
+      messages: [new HumanMessage(BOOKING_REPLACE_MENU[1])],
+      bookingContext: { meetings: [meeting], dateFrom: "2026-08-11" },
+      bookingDraft: readyCreateDraft({
+        phase: "service",
+        selectedDate: null,
+        selectedSlot: null,
+        contactId: null,
+        note: { status: "unasked" },
+        replacement: { meeting, status: "offered" },
+      }),
+      pendingInteraction: openVisitReplacementInteraction(meeting),
+      agentMessages: [],
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("continue_llm");
+    expect(outcome.update).toMatchObject({
+      bookingDraft: null,
+      pendingInteraction: null,
+    });
+    expect(bookingOutcomeNeedsPrepare(outcome)).toBe(true);
+    expect(routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"))
+      .toBe("booking__command_prepare");
+
+    const cmd = await commandPrepare(state);
+    expect(cmd.goto).toEqual(["booking__llm"]);
+    expect(asUpdate(cmd)).toMatchObject({
+      bookingDraft: null,
+      pendingInteraction: null,
+    });
+    expect(asUpdate(cmd).agentMessages).toBeInstanceOf(Overwrite);
+  });
+
+  it("applies continue_tools tape rewrite before tools", async () => {
+    const state = clinicState({
+      messages: [new HumanMessage("яка адреса?")],
+      bookingDraft: readyCreateDraft({
+        phase: "confirming",
+        pendingCommand: {
+          action: "cancel",
+          payload: { meetingId: "m-1", name: "Консультація" },
+        },
+      }),
+      bookingContext: {
+        meetings: [{
+          id: "m-1",
+          name: "Консультація",
+          dateStart: "2026-08-17 11:00:00",
+          dateEnd: "2026-08-17 11:30:00",
+        }],
+        dateFrom: "2026-08-11",
+      },
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "cancel",
+        choices: [
+          { id: "confirm", label: "✅" },
+          { id: "decline", label: "❌" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "яка адреса?",
+          }),
+          name: "cancel_meeting",
+          tool_call_id: "cancel-1",
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [
+            {
+              id: "cancel-rearm",
+              name: "cancel_meeting",
+              args: { meetingId: "m-1" },
+              type: "tool_call",
+            },
+            {
+              id: "info-1",
+              name: "get_working_time",
+              args: {},
+              type: "tool_call",
+            },
+          ],
+        }),
+      ],
+    });
+    // Mixed mutation + informational: strip mutation, keep informational.
+    expect(shouldRearmCancelAfterChatOther(state)).toBe(true);
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("continue_tools");
+    expect(outcome.update?.agentMessages).toBeInstanceOf(Overwrite);
+    const rewritten = (outcome.update!.agentMessages as Overwrite<AIMessage[]>).value;
+    const lastAi = [...rewritten].reverse().find((m) => m instanceof AIMessage) as AIMessage;
+    expect(lastAi.tool_calls?.map((c) => c.name)).toEqual(["get_working_time"]);
+    expect(bookingOutcomeNeedsPrepare(outcome)).toBe(true);
+
+    const cmd = commandFromBookingOutcome(state, outcome, nodes);
+    expect(cmd.goto).toEqual(["booking__tools"]);
+    const applied = (asUpdate(cmd).agentMessages as Overwrite<AIMessage[]>).value;
+    const appliedAi = [...applied].reverse().find((m) => m instanceof AIMessage) as AIMessage;
+    expect(appliedAi.tool_calls?.map((c) => c.name)).toEqual(["get_working_time"]);
+  });
+
+  it("does not emit telemetry when routers call the planner", () => {
+    setTrackEventForTests((name, props) => {
+      tracked.push({ name, props });
+    });
+    const state = clinicState({
+      contactContext: ownedContact,
+      bookingDraft: readyCreateDraft(),
+      agentMessages: [],
+    });
+    resolveBookingCommand(state);
+    resolveBookingCommand(state);
+    routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare");
+    routeAfterAgentLlm(
+      state,
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    );
+    expect(tracked).toEqual([]);
+
+    const cmd = commandFromBookingOutcome(state, resolveBookingCommand(state), nodes);
+    expect(cmd.goto).toEqual(["booking__tools"]);
+    expect(tracked).toContainEqual({
+      name: "booking_runtime_tool",
+      props: {
+        tool: "present_availability_slots",
+        origin: "command_prepare",
+        action: "create_revalidate",
+      },
+    });
+    expect(tracked.filter((e) => e.name === "booking_runtime_tool")).toHaveLength(1);
+  });
+
+  it("finalizes unresolved HITL mutation calls instead of the informational-tool path", () => {
+    const state = clinicState({
+      messages: [new HumanMessage("скільки коштує?")],
+      bookingDraft: readyCreateDraft({
+        phase: "confirming",
+        pendingCommand: null,
+        selectedSlot: null,
+      }),
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [
+          { id: "confirm", label: "✅" },
+          { id: "decline", label: "❌" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "скільки коштує?",
+          }),
+          name: "create_meeting",
+          tool_call_id: "create-1",
+        }),
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "create-leak",
+            name: "create_meeting",
+            args: { confirmationGiven: true },
+            type: "tool_call",
+          }],
+        }),
+      ],
+      stepCount: 2,
+    });
+    expect(resolveBookingCommand(state).kind).toBe("continue_llm");
+    expect(routeAfterAgentLlm(
+      state,
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    )).toBe("booking__finalize");
+  });
+
+  it("prepares the original create command after create_pending revalidation", async () => {
+    const originalCommand = {
+      action: "create" as const,
+      payload: {
+        serviceId: CONSULTATION_SERVICE_ID,
+        contactId: "c-1",
+        dateStart: "2026-10-17T11:30:00",
+        dateEnd: "2026-10-17T12:00:00",
+      },
+      idempotencyKey: "create:replacement",
+      expiresAt: Date.now() + 60_000,
+    };
+    const state = clinicState({
+      contactContext: ownedContact,
+      messages: [new HumanMessage("Скасувати")],
+      bookingContext: {
+        meetings: [{
+          id: "existing-1",
+          name: "Консультація",
+          dateStart: "2026-08-17 11:00:00",
+          dateEnd: "2026-08-17 11:30:00",
+        }],
+        dateFrom: "2026-08-11",
+      },
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        version: 9,
+        mode: "create",
+        phase: "confirming",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:30:00",
+          dateEnd: "2026-10-17T12:00:00",
+          label: "11:30",
+        },
+        note: { status: "skipped" },
+        contactId: "c-1",
+        pendingCommand: null,
+        replacement: {
+          meeting: { id: "existing-1" },
+          status: "create_pending",
+          originalCommand,
+        },
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            days: [{
+              date: "2026-10-17",
+              slots: [{
+                id: "slot-1130",
+                label: "11:30",
+                dateStart: "2026-10-17T11:30:00",
+                dateEnd: "2026-10-17T12:00:00",
+              }],
+            }],
+            stepMinutes: 30,
+            query: {
+              kind: "exact",
+              date: "2026-10-17",
+              coverageComplete: true,
+            },
+          }),
+          name: "present_availability_slots",
+          tool_call_id: "slots-1",
+        }),
+        new AIMessage("Готую запис"),
+      ],
+    });
+    expect(resolveBookingCommand(state)).toMatchObject({
+      kind: "execute",
+      toolCall: {
+        name: "create_meeting",
+        args: originalCommand.payload,
+      },
+    });
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+    )).toBe("booking__command_prepare");
+
+    const update = await commandPrepare(state);
+    expect(lastToolCall(update)).toMatchObject({
+      name: "create_meeting",
+      args: originalCommand.payload,
+    });
+    expect(asUpdate(update).bookingDraft?.pendingCommand?.action).toBe("create");
+    expect(lastToolCall(update)?.name).not.toBe("cancel_meeting");
   });
 });

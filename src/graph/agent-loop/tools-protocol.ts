@@ -26,8 +26,11 @@ import {
   authoritativeSelectedSlot,
   freshAvailabilityValidatesSelectedSlot,
   isPendingChatConfirmationReplay,
-  isRuntimeOriginatedToolAi,
 } from "./booking-command.js";
+import {
+  isRuntimeOriginatedToolAi,
+  rewriteAiToolCalls,
+} from "./runtime-tool-stamp.js";
 import {
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   CONTACT_OWNERSHIP_REQUIRED_ERROR,
@@ -53,32 +56,6 @@ export type ToolProtocolResult = {
   syntheticMessages: ToolMessage[];
   stateTapeRewrite?: BaseMessage[];
   recovery: ToolRecovery | null;
-};
-
-const rewriteAiToolCalls = (
-  agentMessages: BaseMessage[],
-  lastAiIndex: number,
-  remainingCalls: NonNullable<AIMessage["tool_calls"]>,
-): BaseMessage[] => {
-  if (lastAiIndex < 0) {
-    return agentMessages;
-  }
-  const lastAi = agentMessages[lastAiIndex] as AIMessage;
-  const originalCalls = lastAi.tool_calls ?? [];
-  if (remainingCalls.length === originalCalls.length) {
-    return agentMessages;
-  }
-  return [
-    ...agentMessages.slice(0, lastAiIndex),
-    new AIMessage({
-      content: lastAi.content,
-      tool_calls: remainingCalls,
-      additional_kwargs: lastAi.additional_kwargs,
-      response_metadata: lastAi.response_metadata,
-      id: lastAi.id,
-    } as ConstructorParameters<typeof AIMessage>[0]),
-    ...agentMessages.slice(lastAiIndex + 1),
-  ];
 };
 
 export const filterToolTape = (

@@ -1,5 +1,6 @@
-import { Command } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 
+import { trackEvent } from "../../analytics/track.js";
 import { BOOKING_AGENT_ID } from "../types.js";
 import type { ClinicState } from "../state.js";
 import {
@@ -9,10 +10,14 @@ import {
 } from "./nodes-names.js";
 import { interactionRenderNodeName } from "../booking-note-orchestrator.js";
 import {
+  authoritativeNoteStatus,
   resolveBookingCommand,
   type BookingCommandOutcome,
 } from "./booking-command.js";
-import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
+import {
+  appendOrReplacePendingToolCall,
+  stampRuntimeToolAi,
+} from "./runtime-tool-stamp.js";
 
 export type CommandPrepareNodes = {
   tools: string;
@@ -28,9 +33,35 @@ export const defaultCommandPrepareNodes = (agentId: string): CommandPrepareNodes
   finalize: finalizeNodeName(agentId),
 });
 
+const emitRenderTelemetry = (
+  state: ClinicState,
+  outcome: Extract<BookingCommandOutcome, { kind: "render" }>,
+): void => {
+  if (outcome.reason === "stale_slot") {
+    trackEvent("booking_invariant_violation", { reason: "stale_slot" });
+    return;
+  }
+  if (outcome.reason === "note_required") {
+    trackEvent("booking_create_blocked_note", {
+      phase: authoritativeNoteStatus(state),
+    });
+    return;
+  }
+  if (
+    outcome.reason === "consultation_agreement"
+    && outcome.update.pendingInteraction != null
+  ) {
+    trackEvent("booking_consultation_guard", {
+      phase: state.bookingDraft?.phase ?? "service",
+      outcome: "render",
+    });
+  }
+};
+
 /**
- * Map a pure booking outcome to a LangGraph Command. Does not store the outcome
- * on checkpoint state — only the update payload and the goto target.
+ * Map a pure booking outcome to a LangGraph Command. Stamps runtime tool calls
+ * and emits telemetry exactly once. Does not store the outcome on checkpoint
+ * state — only the update payload and the goto target.
  */
 export const commandFromBookingOutcome = (
   state: ClinicState,
@@ -38,24 +69,42 @@ export const commandFromBookingOutcome = (
   nodes: CommandPrepareNodes,
 ): Command => {
   if (outcome.kind === "execute") {
+    const stamped = stampRuntimeToolAi(
+      outcome.toolCall.name,
+      [{
+        id: outcome.toolCall.id,
+        name: outcome.toolCall.name,
+        args: outcome.toolCall.args,
+        type: "tool_call" as const,
+      }],
+      outcome.toolCall.action,
+    );
     return new Command({
-      update: outcome.update,
+      update: {
+        ...outcome.update,
+        agentMessages: new Overwrite(
+          appendOrReplacePendingToolCall(state.agentMessages ?? [], stamped),
+        ),
+      },
       goto: nodes.tools,
     });
   }
   if (outcome.kind === "render") {
+    emitRenderTelemetry(state, outcome);
     return new Command({
       update: outcome.update,
       goto: nodes.interactionRender,
     });
   }
-  const update = outcome.update ?? {};
-  const pendingInformational =
-    hasPendingToolCalls(state.agentMessages)
-    || lastMessageRequestsTools(state.agentMessages);
+  if (outcome.kind === "continue_tools") {
+    return new Command({
+      update: outcome.update ?? {},
+      goto: nodes.tools,
+    });
+  }
   return new Command({
-    update,
-    goto: pendingInformational ? nodes.tools : nodes.llm,
+    update: outcome.update ?? {},
+    goto: nodes.llm,
   });
 };
 

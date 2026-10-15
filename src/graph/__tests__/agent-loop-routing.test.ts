@@ -25,10 +25,8 @@ import {
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
-import {
-  resolveBookingCommand,
-  stampRuntimeToolAi,
-} from "../agent-loop/booking-command.js";
+import { resolveBookingCommand } from "../agent-loop/booking-command.js";
+import { stampRuntimeToolAi } from "../agent-loop/runtime-tool-stamp.js";
 import {
   latestContactIncompleteMissingFields,
   latestMeetingMutationError,
@@ -241,31 +239,38 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__command_prepare");
   });
 
-  it("does not continue command preparation when fresh revalidation fails", async () => {
+  it("routes failed revalidation through command_prepare for contact or stale recovery", async () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        pendingCommand: {
+          action: "create",
+          payload: { serviceId: "svc-1" },
+        },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ error: "CRM unavailable" }),
+          name: "present_availability_slots",
+          tool_call_id: "revalidate-1",
+        }),
+      ],
+    });
+    // Without owned contact the planner opens contact_field (not the LLM).
+    // The old boolean gate returned false here because createCommand was null.
+    expect(resolveBookingCommand(state)).toMatchObject({
+      kind: "render",
+      reason: "contact_field",
+    });
     expect(
       routeAfterAgentTools(
-        clinicState({
-          bookingDraft: canonicalBookingDraft({
-            phase: "confirming",
-            pendingCommand: {
-              action: "create",
-              payload: { serviceId: "svc-1" },
-            },
-          }),
-          agentMessages: [
-            new ToolMessage({
-              content: JSON.stringify({ error: "CRM unavailable" }),
-              name: "present_availability_slots",
-              tool_call_id: "revalidate-1",
-            }),
-          ],
-        }),
+        state,
         "booking__llm",
         "booking__tools",
         "booking__mutation_finalize",
         "booking__command_prepare",
       ),
-    ).toBe("booking__llm");
+    ).toBe("booking__command_prepare");
   });
 
   it("renders consultation service_confirm without a tool when agreement is missing", async () => {
@@ -475,7 +480,7 @@ describe("runtime-owned booking routing", () => {
       "booking__command_prepare",
     )).toBe("booking__finalize");
     const outcome = resolveBookingCommand(state);
-    expect(outcome.kind).toBe("none");
+    expect(outcome.kind).toBe("continue_llm");
     expect(outcome).not.toMatchObject({ kind: "execute" });
   });
 

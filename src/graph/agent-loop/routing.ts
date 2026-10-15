@@ -6,11 +6,9 @@ import { matchingCatalogRows } from "../catalog-match.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
 import {
-  bookingCommandContinuesAfterTools,
-  bookingTurnNeedsCommandPreparation,
-  hasMutationCallDuringUnresolvedConfirmation,
+  bookingOutcomeNeedsPrepare,
   hasPendingConfirmationChatOther,
-  shouldRearmCancelAfterChatOther,
+  resolveBookingCommand,
 } from "./booking-command.js";
 import {
   lastPatientText,
@@ -21,6 +19,9 @@ import {
 } from "./protocol.js";
 import { resolveContactIdentity } from "../contact-command.js";
 
+const routeNeedsCommandPrepare = (state: ClinicState): boolean =>
+  bookingOutcomeNeedsPrepare(resolveBookingCommand(state));
+
 export const routeAfterAgentLlm = (
   state: ClinicState,
   maxSteps: number,
@@ -28,20 +29,8 @@ export const routeAfterAgentLlm = (
   finalizeName: string,
   commandPrepareName?: string,
 ): string => {
-  // Cancel chat-other re-arm outranks a model mutation call during unresolved
-  // confirm (command_prepare replaces it). Other agents still finalize.
-  if (
-    commandPrepareName
-    && hasMutationCallDuringUnresolvedConfirmation(state)
-    && !shouldRearmCancelAfterChatOther(state)
-  ) {
-    return finalizeName;
-  }
-
-  // Runtime-owned booking transitions outrank both model text and the model's
-  // step budget. Once canonical state is ready, no LLM-authored terminal claim
-  // is eligible for finalization.
-  if (commandPrepareName && bookingTurnNeedsCommandPreparation(state)) {
+  // Abort-mutation during unresolved HITL is planner-owned (continue_llm).
+  if (commandPrepareName && routeNeedsCommandPrepare(state)) {
     return commandPrepareName;
   }
 
@@ -49,10 +38,11 @@ export const routeAfterAgentLlm = (
     return finalizeName;
   }
 
-  if (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages)) {
-    if (commandPrepareName) {
-      return commandPrepareName;
-    }
+  // FAQ agents have no command_prepare; pending model tools go straight to ToolNode.
+  if (
+    !commandPrepareName
+    && (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages))
+  ) {
     return toolsName;
   }
 
@@ -156,7 +146,7 @@ export const routeAfterAgentPrepare = (
       }
     }
   }
-  return commandPrepareName && bookingTurnNeedsCommandPreparation(state)
+  return commandPrepareName && routeNeedsCommandPrepare(state)
     ? commandPrepareName
     : llmName;
 };
@@ -187,13 +177,10 @@ export const routeAfterAgentTools = (
     return mutationFinalizeName;
   }
 
-  // Contact incomplete / consultation agreement → command_prepare (typed recovery).
-  if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
-    return commandPrepareName;
-  }
-
   // Ownership / link-candidate / consultation strips open a pending interaction
-  // without a ToolMessage — finalize renders the card.
+  // without a ToolMessage — finalize renders the card. Must outrank the planner:
+  // resolveBookingCommand would re-emit render contact_field and bounce through
+  // command_prepare otherwise.
   if (
     finalizeName
     && state.pendingInteraction != null
@@ -207,6 +194,10 @@ export const routeAfterAgentTools = (
     && !hasPendingToolCalls(state.agentMessages)
   ) {
     return finalizeName;
+  }
+
+  if (commandPrepareName && routeNeedsCommandPrepare(state)) {
+    return commandPrepareName;
   }
 
   // REPLACE cancel with no frozen create: finalize renders the next booking step
