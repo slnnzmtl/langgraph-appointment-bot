@@ -172,8 +172,6 @@ const BLOCKED_MEETING_ERRORS = new Set([
   "Contact incomplete",
   "Already booked",
   "Not authorized",
-  CONTACT_OWNERSHIP_REQUIRED_ERROR,
-  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
 ]);
 
 /** Mutation success is runtime-owned; model prose can never prove a CRM write. */
@@ -268,13 +266,19 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     if (message.name !== "cancel_meeting") {
       const record = asJsonRecord(extractMessageTextContent(message.content).trim());
       const isReplacementConflict = record?.error === "Already booked";
+      // Contact incomplete is typed ContactCommand recovery via command_prepare.
+      const isContactIncomplete = record?.error === "Contact incomplete";
+      // Not authorized is finalize-owned patient-safe copy (mutation_finalize).
+      const isNotAuthorized = record?.error === "Not authorized";
       if (
         !isReplacementConflict
+        && !isContactIncomplete
         && (
           outcome === "committed"
           || outcome === "declined"
           || outcome === "abandoned"
           || outcome === "failed"
+          || (outcome === "blocked" && isNotAuthorized)
         )
       ) {
         return message;
@@ -418,7 +422,8 @@ export const createContactPhoneMatchesOccupiedCandidate = (
   });
 };
 
-const latestMeetingMutationError = (messages: BaseMessage[]): string | undefined => {
+/** Latest structured error from a meeting mutation or link tool this turn. */
+export const latestMeetingMutationError = (messages: BaseMessage[]): string | undefined => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (
@@ -432,14 +437,6 @@ const latestMeetingMutationError = (messages: BaseMessage[]): string | undefined
     return typeof record?.error === "string" ? record.error : undefined;
   }
   return undefined;
-};
-
-export const bookingMutationNeedsModelRecovery = (state: ClinicState): boolean => {
-  const error = latestMeetingMutationError(state.agentMessages ?? []);
-  return error === "Contact incomplete"
-    || error === CONTACT_OWNERSHIP_REQUIRED_ERROR
-    || error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR
-    || error === "Not authorized";
 };
 
 /** True when a ToolMessage for this tool is already in the current agent turn. */

@@ -120,7 +120,6 @@ import {
   alreadyBookedMeetingFromMessages,
   authoritativeSelectedSlot,
   blocksConsultationWithoutAgreement,
-  bookingMutationNeedsModelRecovery,
   captureAvailabilityFromMessages,
   captureLatestToolContext,
   captureServicesFromMessages,
@@ -811,6 +810,8 @@ export const createAgentToolsNode = (
     const synthetic: ToolMessage[] = [];
     const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
     let strippedUnstampedRuntime = false;
+    let consultationAgreementStrip = false;
+    let contactRecoveryStrip: "ownership" | "link_candidate" | null = null;
 
     if (lastAiIndex >= 0) {
       const lastAi = agentMessages[lastAiIndex] as AIMessage;
@@ -910,19 +911,10 @@ export const createAgentToolsNode = (
               (call.args ?? {}).phoneNumber,
             )
           ) {
+            // Fail closed — occupied phone keyboard owns recovery.
             trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
-                  field: "phoneNumber",
-                  hint:
-                    "This phone belongs to another Telegram account. Ask for a different number; do not create a Contact with it.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
+            strippedUnstampedRuntime = true;
+            contactRecoveryStrip = "link_candidate";
             continue;
           }
         }
@@ -991,10 +983,11 @@ export const createAgentToolsNode = (
             outcome: "blocked",
           });
           strippedUnstampedRuntime = true;
+          consultationAgreementStrip = true;
           continue;
         }
 
-        // Defense in depth: CRM ownership / fresh-slot checks on stamped calls.
+        // Defense in depth: ownership missing → strip; contact_field owns recovery.
         if (
           call.name === "create_meeting"
           && resolveContactIdentity(
@@ -1003,17 +996,8 @@ export const createAgentToolsNode = (
           ).kind !== "owned"
         ) {
           trackToolError(call.name, CONTACT_OWNERSHIP_REQUIRED_ERROR);
-          synthetic.push(
-            new ToolMessage({
-              content: JSON.stringify({
-                error: CONTACT_OWNERSHIP_REQUIRED_ERROR,
-                hint:
-                  "Resolve a Telegram-owned Contact for the current patient before creating the meeting.",
-              }),
-              tool_call_id: call.id ?? "",
-              name: call.name,
-            }),
-          );
+          strippedUnstampedRuntime = true;
+          contactRecoveryStrip = "ownership";
           continue;
         }
 
@@ -1073,18 +1057,10 @@ export const createAgentToolsNode = (
             contactId == null
             || !phoneCandidateCanBeLinked(resolveContactIdentity(state.contactContext), contactId)
           ) {
+            // Fail closed — occupied phone keyboard owns recovery.
             trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
-                  hint:
-                    "Link only the Contact returned by find_contact_by_phone for this patient.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
+            strippedUnstampedRuntime = true;
+            contactRecoveryStrip = "link_candidate";
             continue;
           }
         }
@@ -1103,7 +1079,7 @@ export const createAgentToolsNode = (
         const kept = (lastAi.tool_calls ?? []).filter(
           (call) => !isBookingRuntimeToolName(call.name),
         );
-        return {
+        const stripUpdate: ClinicStateUpdate = {
           agentMessages: new Overwrite([
             ...agentMessages.slice(0, lastAiIndex),
             new AIMessage({
@@ -1116,6 +1092,39 @@ export const createAgentToolsNode = (
             ...agentMessages.slice(lastAiIndex + 1),
           ]),
         };
+        if (consultationAgreementStrip) {
+          const labels = bookingOfferLabels(
+            inferConversationLocaleFromText(lastPatientText(state)),
+          );
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            {
+              type: "service_offered",
+              service: consultationService("catalog"),
+              acceptLabel: labels.acceptLabel,
+              chooseOtherLabel: labels.chooseOtherLabel,
+            },
+          );
+          stripUpdate.bookingDraft = session.bookingDraft;
+          stripUpdate.pendingInteraction = session.pendingInteraction;
+        } else if (contactRecoveryStrip != null) {
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            {
+              type: "contact_field_required",
+              field: "phoneNumber",
+              occupied: contactRecoveryStrip === "link_candidate",
+            },
+          );
+          stripUpdate.pendingInteraction = session.pendingInteraction;
+        }
+        return stripUpdate;
       }
     }
 
@@ -1723,16 +1732,31 @@ export const routeAfterAgentTools = (
     return finalizeName;
   }
 
-  if (bookingMutationNeedsModelRecovery(state)) {
-    return llmName;
-  }
-
+  // Not authorized → mutation_finalize patient-safe copy (not the LLM).
   if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
     return mutationFinalizeName;
   }
 
+  // Contact incomplete / consultation agreement → command_prepare (typed recovery).
   if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
     return commandPrepareName;
+  }
+
+  // Ownership / link-candidate / consultation strips open a pending interaction
+  // without a ToolMessage — finalize renders the card.
+  if (
+    finalizeName
+    && state.pendingInteraction != null
+    && (
+      state.pendingInteraction.kind === "contact_field"
+      || (
+        state.pendingInteraction.kind === "service_confirm"
+        && state.bookingDraft?.serviceAcceptance?.status === "pending"
+      )
+    )
+    && !hasPendingToolCalls(state.agentMessages)
+  ) {
+    return finalizeName;
   }
 
   // REPLACE cancel with no frozen create: finalize renders the next booking step

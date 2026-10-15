@@ -26,10 +26,16 @@ import {
 } from "../cancel-command.js";
 import {
   closedBookingSessionUpdate,
+  consultationService,
   openContactFieldInteraction,
   openVisitNoteInteraction,
   reduceBookingSession,
 } from "../booking-session.js";
+import {
+  bookingOfferLabels,
+  inferConversationLocaleFromText,
+} from "../../shared/conversation-locale.js";
+import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import {
   contactCommandNeedsToolInjection,
   contactCommandReadyForInjection,
@@ -54,11 +60,12 @@ import {
   resolveContactIdentity,
   phoneLookupFailedThisTurn,
   toolRanThisTurn,
-  bookingMutationNeedsModelRecovery,
   terminalContactWriteOutcome,
   noteStepBlocksCreate,
   authoritativeNoteStatus,
   captureAvailabilityFromMessages,
+  lastPatientText,
+  latestMeetingMutationError,
 } from "./shared.js";
 
 export const RUNTIME_TOOL_ORIGIN = "command_prepare" as const;
@@ -74,7 +81,8 @@ export type BookingGuardReason =
   | "note_required"
   | "stale_slot"
   | "missing_exact_date"
-  | "contact_field";
+  | "contact_field"
+  | "consultation_agreement";
 
 export type BookingCommandOutcome =
   | { kind: "execute"; toolCall: RuntimeToolCall; update: ClinicStateUpdate }
@@ -618,6 +626,70 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   };
 };
 
+/** True when create/reschedule targets consultation without an accepted agreement. */
+const consultationAgreementRequired = (state: ClinicState): boolean => {
+  const draft = state.bookingDraft;
+  if (draft == null) {
+    return false;
+  }
+  const acceptance = draft.serviceAcceptance;
+  const pendingServiceId =
+    typeof draft.pendingCommand?.payload?.serviceId === "string"
+      ? draft.pendingCommand.payload.serviceId
+      : null;
+  const targetsConsultation =
+    pendingServiceId === CONSULTATION_SERVICE_ID
+    || acceptance?.service.id === CONSULTATION_SERVICE_ID;
+  if (!targetsConsultation) {
+    return false;
+  }
+  return !(
+    acceptance?.status === "accepted"
+    && acceptance.service.id === CONSULTATION_SERVICE_ID
+  );
+};
+
+const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome => {
+  const draft = state.bookingDraft;
+  if (
+    state.pendingInteraction?.kind === "service_confirm"
+    && state.pendingInteraction.service.id === CONSULTATION_SERVICE_ID
+  ) {
+    return {
+      kind: "render",
+      reason: "consultation_agreement",
+      update: {},
+    };
+  }
+  const labels = bookingOfferLabels(
+    inferConversationLocaleFromText(lastPatientText(state)),
+  );
+  const session = reduceBookingSession(
+    {
+      bookingDraft: draft ?? null,
+      pendingInteraction: state.pendingInteraction ?? null,
+    },
+    {
+      type: "service_offered",
+      service: consultationService("catalog"),
+      acceptLabel: labels.acceptLabel,
+      chooseOtherLabel: labels.chooseOtherLabel,
+    },
+  );
+  trackEvent("booking_consultation_guard", {
+    phase: draft?.phase ?? "service",
+    outcome: "render",
+  });
+  return {
+    kind: "render",
+    reason: "consultation_agreement",
+    update: {
+      bookingDraft: session.bookingDraft,
+      pendingInteraction: session.pendingInteraction,
+    },
+  };
+};
+
 /**
  * Pure booking transition: availability, contact, mutations, or a renderable
  * guard. Does not write a durable outcome onto checkpoint state.
@@ -750,6 +822,12 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     return { kind: "none" };
   }
 
+  // Consultation agreement before contact / availability mutation so an
+  // unaccepted consultation never collects identity or retries create.
+  if (consultationAgreementRequired(state)) {
+    return consultationAgreementRender(state);
+  }
+
   // Availability before contact so service-change / date intent can refresh
   // slots without blocking on the identity ladder.
   const availability = resolveRuntimeAvailabilityRequest(state);
@@ -812,6 +890,38 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         pendingInteraction: openVisitNoteInteraction(),
       },
     };
+  }
+
+  // CRM Contact incomplete: reopen the identity ladder; do not retry create.
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Contact incomplete") {
+    if (contactCommandReadyForInjection(state)) {
+      const command = resolveContactCommand(state);
+      if (
+        command.action === "request_field"
+        && state.bookingDraft?.mode !== "reschedule"
+      ) {
+        return {
+          kind: "render",
+          reason: "contact_field",
+          update: {
+            pendingInteraction: openContactFieldInteraction(
+              command.field,
+              command.occupied === true,
+            ),
+          },
+        };
+      }
+      if (contactCommandNeedsToolInjection(command) && !hasPendingToolCalls(state.agentMessages)) {
+        const toolCall = contactToolCallFromCommand(
+          command,
+          state.bookingDraft?.version ?? 0,
+        );
+        if (toolCall != null) {
+          return executeToolOutcome(state, toolCall);
+        }
+      }
+    }
+    return { kind: "none" };
   }
 
   const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
@@ -906,10 +1016,15 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
 };
 
 export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
-  if (bookingMutationNeedsModelRecovery(state)) {
+  if (phoneLookupFailedThisTurn(state)) {
     return false;
   }
-  if (phoneLookupFailedThisTurn(state)) {
+  // Real CRM Contact incomplete → ContactCommand / contact_field, not the LLM.
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Contact incomplete") {
+    return true;
+  }
+  // Not authorized is finalize-owned; do not re-enter command_prepare.
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Not authorized") {
     return false;
   }
   if (hasPendingConfirmationChatOther(state)) {
@@ -941,6 +1056,9 @@ export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean 
   if (createBlockedOnlyByNote(state)) {
     return true;
   }
+  if (consultationAgreementRequired(state)) {
+    return true;
+  }
   const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
   if (rescheduleCommand != null) {
     return !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
@@ -970,6 +1088,15 @@ export const bookingCommandContinuesAfterTools = (state: ClinicState): boolean =
   }
   if (terminalContactWriteOutcome(state) != null || phoneLookupFailedThisTurn(state)) {
     return false;
+  }
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Not authorized") {
+    return false;
+  }
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Contact incomplete") {
+    return true;
+  }
+  if (consultationAgreementRequired(state)) {
+    return true;
   }
   if (state.bookingDraft?.replacement?.status === "create_pending") {
     return true;

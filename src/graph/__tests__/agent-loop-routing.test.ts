@@ -1,22 +1,37 @@
-import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage, type BaseMessage } from "@langchain/core/messages";
+import { tool } from "@langchain/core/tools";
 import { Command, Overwrite } from "@langchain/langgraph";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
-import { serviceChangedNoticeUk } from "../../shared/clinic-constants.js";
+import {
+  CONSULTATION_SERVICE_ID,
+  serviceChangedNoticeUk,
+} from "../../shared/clinic-constants.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
 import {
   createAgentCommandPrepareNode,
+  createAgentToolsNode,
   routeAfterAgentLlm,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
+import { resolveBookingCommand, stampRuntimeToolAi } from "../agent-loop/booking-command.js";
 import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
 } from "../booking-draft.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
+
+const agentMessagesOf = (update: { agentMessages?: unknown }): BaseMessage[] => {
+  const raw = update.agentMessages;
+  if (raw instanceof Overwrite) {
+    return raw.value as BaseMessage[];
+  }
+  return Array.isArray(raw) ? (raw as BaseMessage[]) : [];
+};
 
 const unwrapCommandUpdate = (result: unknown): ClinicStateUpdate =>
   result instanceof Command ? (result.update as ClinicStateUpdate) : (result as ClinicStateUpdate);
@@ -317,13 +332,104 @@ describe("runtime-owned booking routing", () => {
     ).toBe("booking__llm");
   });
 
-  it("routes incomplete-contact booking errors to the model without retrying the mutation", async () => {
+  it("renders consultation service_confirm without a tool when agreement is missing", async () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        serviceAcceptance: {
+          status: "pending",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+        },
+        pendingCommand: {
+          action: "create",
+          payload: { serviceId: CONSULTATION_SERVICE_ID },
+        },
+      }),
+      pendingInteraction: null,
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome).toMatchObject({
+      kind: "render",
+      reason: "consultation_agreement",
+    });
+    if (outcome.kind !== "render") {
+      return;
+    }
+    expect(outcome.update.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+    expect(outcome.update.agentMessages).toBeUndefined();
+  });
+
+  it("strips ownership-blocked create without a synthetic ToolMessage and opens contact_field", async () => {
+    const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
+    const createTool = tool(invoke, {
+      name: "create_meeting",
+      description: "create",
+      schema: z.object({ contactId: z.string().optional() }),
+    });
+    const state = clinicState({
+      contactContext: null,
+      bookingDraft: canonicalBookingDraft({
+        contactId: null,
+        note: { status: "skipped" },
+      }),
+      agentMessages: [
+        stampRuntimeToolAi("create_meeting", [{
+          id: "create-1",
+          name: "create_meeting",
+          args: { contactId: "unverified" },
+          type: "tool_call" as const,
+        }]),
+      ],
+    });
+    const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
+      state,
+      { configurable: {} },
+    );
+    expect(invoke).not.toHaveBeenCalled();
+    const afterTools = {
+      ...state,
+      ...toolsUpdate,
+      agentMessages: agentMessagesOf(toolsUpdate),
+      pendingInteraction: toolsUpdate.pendingInteraction ?? state.pendingInteraction,
+    };
+    expect(afterTools.agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
+    expect(afterTools.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "phoneNumber",
+    });
+    expect(routeAfterAgentTools(
+      afterTools,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      undefined,
+      "booking__finalize",
+    )).toBe("booking__finalize");
+  });
+
+  it("routes incomplete-contact booking errors to command_prepare, not the LLM", async () => {
     const state = clinicState({
       contactContext: {
         ownership: "telegram",
-        contacts: [{ id: "c-1", firstName: "Ada", missingFields: ["lastName"] }],
+        contacts: [{
+          id: "c-1",
+          firstName: "Ada",
+          lastName: null,
+          phoneNumber: "+380501112233",
+          missingFields: ["lastName"],
+        }],
       },
-      bookingDraft: canonicalBookingDraft({ contactId: "c-1" }),
+      bookingDraft: canonicalBookingDraft({
+        contactId: "c-1",
+        note: { status: "skipped" },
+      }),
       agentMessages: [new ToolMessage({
         content: JSON.stringify({ error: "Contact incomplete", missingFields: ["lastName"] }),
         name: "create_meeting",
@@ -337,17 +443,18 @@ describe("runtime-owned booking routing", () => {
       "booking__tools",
       "booking__mutation_finalize",
       "booking__command_prepare",
-    )).toBe("booking__llm");
-    expect(routeAfterAgentLlm(
-      { ...state, agentMessages: [...state.agentMessages, new AIMessage("Назвіть, будь ласка, прізвище.")] },
-      8,
-      "booking__tools",
-      "booking__finalize",
-      "booking__command_prepare",
-    )).toBe("booking__finalize");
+    )).toBe("booking__command_prepare");
+
+    const prepared = await createAgentCommandPrepareNode("booking")(state);
+    const update = unwrapCommandUpdate(prepared);
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+    expect(update.agentMessages).toBeUndefined();
   });
 
-  it("does not rebuild a reschedule after authorization failure until identity is refreshed", async () => {
+  it("routes Not authorized to mutation_finalize, not the LLM", async () => {
     const state = clinicState({
       contactContext: null,
       bookingContext: null,
@@ -389,8 +496,50 @@ describe("runtime-owned booking routing", () => {
       "booking__tools",
       "booking__mutation_finalize",
       "booking__command_prepare",
-    )).toBe("booking__llm");
+    )).toBe("booking__mutation_finalize");
     expect(routeAfterAgentPrepare(afterFailure, "booking__llm", "booking__command_prepare"))
       .toBe("booking__llm");
+  });
+
+  it("keeps HITL create chat-other informational without replaying the frozen mutation", async () => {
+    const state = clinicState({
+      messages: [new HumanMessage("скільки коштує консультація")],
+      bookingContext: listedMeetings,
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        pendingCommand: null,
+      }),
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [
+          { id: "confirm", label: "✅" },
+          { id: "decline", label: "❌" },
+        ],
+      },
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            awaitingConfirmation: true,
+            userReply: "скільки коштує консультація",
+          }),
+          name: "create_meeting",
+          tool_call_id: "create-1",
+        }),
+        new AIMessage("Вартість первинної консультації становить 300 грн."),
+      ],
+    });
+    // Model may answer the FAQ during chat-other; command_prepare must not
+    // re-inject create_meeting with the frozen payload.
+    expect(routeAfterAgentLlm(
+      state,
+      8,
+      "booking__tools",
+      "booking__finalize",
+      "booking__command_prepare",
+    )).toBe("booking__finalize");
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("none");
+    expect(outcome).not.toMatchObject({ kind: "execute" });
   });
 });

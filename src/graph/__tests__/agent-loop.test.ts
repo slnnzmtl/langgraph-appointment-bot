@@ -3325,9 +3325,8 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
-      error: "Contact ownership required",
-    });
+    // Fail-closed strip — no synthetic ownership ToolMessage on the tape.
+    expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
   it("marks a successfully linked phone match as Telegram-owned", async () => {
@@ -3392,9 +3391,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
-      error: "Contact link candidate required",
-    });
+    expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
   it("does not create_contact when phone matches a stored occupied candidate", async () => {
@@ -3439,9 +3436,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
-      error: "Contact link candidate required",
-    });
+    expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
   it("still creates a contact when the phone differs from the occupied candidate", async () => {
@@ -3633,7 +3628,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       "tools",
       "mutation-finalize",
       "command-prepare",
-    )).toBe("llm");
+    )).toBe("mutation-finalize");
   });
 
   it("does not call create_meeting for a phone candidate before linking", async () => {
@@ -3685,8 +3680,17 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content))).toMatchObject({
-      error: "Contact ownership required",
+    // Fail-closed strip: no synthetic ownership ToolMessage; open contact_field instead.
+    expect(
+      agentMessagesOf(update).some(
+        (m) =>
+          m instanceof ToolMessage
+          && String(m.content).includes("Contact ownership required"),
+      ),
+    ).toBe(false);
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "phoneNumber",
     });
   });
 
@@ -7838,7 +7842,10 @@ describe("booking outcome risk: no model success text without a committed entity
         new AIMessage(claim),
       ],
     }));
-    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
+    // Typed mutation_finalize owns Not authorized — never ship model success copy.
+    expect(update.lastHandoff?.replyText).toBe(
+      "Не вдалося створити запис через невідповідність даних. Ваші дані збережено.",
+    );
     expect(update.lastHandoff?.replyText).not.toContain("Готово");
   });
 
