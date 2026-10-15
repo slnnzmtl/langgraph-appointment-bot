@@ -1,9 +1,10 @@
 import type { BookingDraft, BookingService } from "./booking-draft.js";
 import {
+  interpretInteractionReply,
   reduceBookingSession,
   type PendingInteraction,
 } from "./booking-session.js";
-import { resolveFaqCatalogChoices } from "./agent-loop/shared.js";
+import { resolveFaqCatalogChoices } from "./faq-catalog.js";
 import {
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
@@ -31,6 +32,25 @@ const catalogRowToBookingService = (
 type BookingSessionSnapshot = {
   bookingDraft: BookingDraft | null;
   pendingInteraction: PendingInteraction | null;
+};
+
+/**
+ * Choose-other catalog browse: exact «Обрати іншу процедуру» chip always, or
+ * service_confirm aliases («ні» / «no») only while that offer keyboard is open.
+ * Bare «ні» must not wipe an open FAQ catalog drill-down.
+ */
+export const isFaqCatalogBrowseShortcut = (
+  text: string,
+  interaction?: PendingInteraction | null,
+): boolean => {
+  if (labelIdFor(text) === "offerChooseOther") {
+    return true;
+  }
+  if (interaction?.kind !== "service_confirm") {
+    return false;
+  }
+  const match = interpretInteractionReply(interaction, text);
+  return match.kind === "choice" && match.choiceId === "choose_other";
 };
 
 /** Apply resolveCatalogFreeText output to booking session (offer or FAQ chips). */

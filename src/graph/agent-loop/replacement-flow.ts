@@ -7,7 +7,8 @@ import {
   openVisitReplacementInteraction,
 } from "../booking-session.js";
 
-import { lastPatientText, resolveContactIdentity } from "./shared.js";
+import { resolveContactIdentity } from "../contact-command.js";
+import { lastPatientText } from "./protocol.js";
 
 export type BookingEntryTransition =
   | {

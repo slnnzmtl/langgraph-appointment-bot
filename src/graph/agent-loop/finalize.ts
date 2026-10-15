@@ -1,5 +1,6 @@
 import {
   AIMessage,
+  HumanMessage,
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
@@ -37,6 +38,8 @@ import {
   extractFaqCatalogAction,
   extractMessageTextContent,
   extractReplyButtons,
+  isFaqServicesGuideLabel,
+  labelIdFor,
 } from "../../shared/message-content.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import { clearPendingConfirmForRuntime } from "../../tools/meeting-confirm.js";
@@ -47,9 +50,11 @@ import {
   effectiveBookingContactDetails,
   nextMissingContactField,
   reduceBookingDraft,
+  type BookingService,
 } from "../booking-draft.js";
 import { meetingServiceLabel } from "../context-blocks.js";
 import {
+  isFaqCatalogBrowseShortcut,
   openCatalogFromFreeText,
   openRootFaqCatalog,
 } from "../booking-entry-policy.js";
@@ -66,6 +71,10 @@ import {
 import {
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
+  SLOT_JUST_TAKEN_PREFIX,
+  availabilityOfferFromToolTurn,
+  availabilityRecoveryOffer,
+  resolveAvailabilityOffer,
 } from "../booking-interaction-render.js";
 import {
   faqCatalogIntroFromModel,
@@ -79,6 +88,9 @@ import { isModelFailureMessage, tagRuntimeAgentMessage } from "../sub-agent-mess
 
 import {
   applyMutationChatOtherCleanup,
+  authoritativeNoteStatus,
+  authoritativeSelectedSlot,
+  bookingOutcomeRiskState,
   hasMutationCallDuringUnresolvedConfirmation,
   hasPendingConfirmationChatOther,
 } from "./booking-command.js";
@@ -89,28 +101,22 @@ import {
 } from "./mutation-finalize.js";
 
 import {
-  isFaqServicesGuideLabel,
-  SLOT_JUST_TAKEN_PREFIX,
+  phoneCandidateHasLinkableRow,
+  resolveContactIdentity,
+} from "../contact-command.js";
+import {
+  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   alreadyBookedMeetingFromMessages,
-  authoritativeNoteStatus,
-  authoritativeSelectedSlot,
-  availabilityOfferFromToolTurn,
-  availabilityRecoveryOffer,
-  bookingOutcomeRiskState,
   classifyMeetingMutationToolMessage,
   createMeetingAlreadyBooked,
-  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   lastPatientText,
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
-  offeredServiceForTurn,
-  phoneCandidateHasLinkableRow,
   phoneLookupFailedThisTurn,
-  resolveAvailabilityOffer,
-  resolveContactIdentity,
   terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
-} from "./shared.js";
+  toolRanThisTurn,
+} from "./protocol.js";
 
 /** Prefix when REPLACE cancel continues into the date/time keyboard. */
 const REPLACEMENT_CANCELLED_CONTINUE_PREFIX = "Запис скасовано.";
@@ -1357,3 +1363,53 @@ export const createAgentFinalizeNode = (
       messages: [replyMessage],
     };
   };
+
+/**
+ * Resolve which CRM service a specialist is offering this turn without reading
+ * offer-question wording. Keyboard chips open consultation; named CRM rows
+ * come from FAQ `open_catalog` (model query), not patient-line title matching.
+ */
+export const offeredServiceForTurn = (
+  state: ClinicState,
+  agentId: string,
+  agentMessages: BaseMessage[],
+): BookingService | null => {
+  if (state.bookingDraft?.serviceAcceptance?.status === "accepted") {
+    return null;
+  }
+  // Mid-catalog drill-down is owned by FAQ service_candidate, not a book offer.
+  if (
+    state.pendingInteraction?.kind === "service_candidate"
+    && state.pendingInteraction.owner === "faq"
+  ) {
+    return null;
+  }
+  const lastHuman = (state.messages ?? []).filter(
+    (message): message is HumanMessage => message instanceof HumanMessage,
+  ).at(-1);
+  const lastHumanText = lastHuman != null
+    ? extractMessageTextContent(lastHuman.content).trim()
+    : "";
+  // «Обрати іншу процедуру» / bare «Ні» on an open offer — do not re-offer.
+  if (isFaqCatalogBrowseShortcut(lastHumanText, state.pendingInteraction)) {
+    return null;
+  }
+  if (state.bookingDraft?.serviceAcceptance?.status === "pending") {
+    return state.bookingDraft.serviceAcceptance.service;
+  }
+  if (agentId !== FAQ_AGENT_ID && agentId !== BOOKING_AGENT_ID) {
+    return null;
+  }
+  // «Послуги» / «Записатись» → consultation even when list_services ran this turn.
+  if (
+    labelIdFor(lastHumanText) === "mainBook"
+    || isFaqServicesGuideLabel(lastHumanText)
+  ) {
+    return consultationService("catalog");
+  }
+  if (toolRanThisTurn(agentMessages, "list_services")) {
+    return null;
+  }
+  return null;
+};
+

@@ -6,7 +6,7 @@ import {
   normalizeReplyLabel,
 } from "../shared/message-content.js";
 import type { ServicesContext } from "../tools/service-tools.js";
-import { isFaqServicesGuideLabel } from "./agent-loop/shared.js";
+import { isFaqServicesGuideLabel } from "../shared/message-content.js";
 import {
   safeSelect,
   type SelectServiceCandidates,

@@ -217,6 +217,10 @@ export const labelIdFor = (text: string): ReplyLabelId | null => {
   return null;
 };
 
+/** Services-guide tap («Послуги» / Services) — prefer labelIdFor over string Sets. */
+export const isFaqServicesGuideLabel = (text: string): boolean =>
+  labelIdFor(text) === "mainServices";
+
 /**
  * Labels the supervisor must own (main menu, DEFAULT MENU, choose-other, soft decline).
  * Matches each owned id's UK/EN labels so case/whitespace variants work — do not use

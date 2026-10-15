@@ -891,7 +891,7 @@ describe("DDD-255 deterministic booking transitions", () => {
   });
 
   it("fails closed for unstamped legacy runtime calls in tools", async () => {
-    const { createAgentToolsNode } = await import("../agent-loop/nodes.js");
+    const { createAgentToolsNode } = await import("../agent-loop/tools.js");
     const { tool } = await import("@langchain/core/tools");
     const { z } = await import("zod");
     const invoked: unknown[] = [];

@@ -24,7 +24,7 @@ import { tagRuntimeAgentMessage } from "../sub-agent-messages.js";
 import {
   classifyMeetingMutationToolMessage,
   terminalMeetingMutationOutcome,
-} from "./shared.js";
+} from "./protocol.js";
 
 /** Meeting id from a committed cancel_meeting result or its tool_call args. */
 const cancelledMeetingIdFromTurn = (
