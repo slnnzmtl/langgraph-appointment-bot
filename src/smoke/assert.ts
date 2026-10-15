@@ -105,3 +105,15 @@ export const expectTruthy = (label: string, value: unknown): void => {
     throw new SmokeAssertError(`${label}: expected truthy value`);
   }
 };
+
+/** Leaked control / tool markup must never reach the patient reply. */
+export const CONTROL_MARKUP_LEAK =
+  /<faq_catalog_action|<reply_buttons|<yield_to_supervisor|<tool_call/i;
+
+export const expectNoControlMarkup = (label: string, reply: string): void => {
+  if (CONTROL_MARKUP_LEAK.test(reply)) {
+    throw new SmokeAssertError(
+      `${label}: patient reply leaked control markup: ${reply.slice(0, 200)}`,
+    );
+  }
+};

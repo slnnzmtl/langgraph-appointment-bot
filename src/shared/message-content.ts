@@ -328,6 +328,33 @@ export type FaqCatalogAction =
   | "close_catalog"
   | "open_catalog";
 
+/**
+ * Typed catalog UI intent for a future structured FAQ reply.
+ * `query` is valid only on `open_catalog` (omit/empty → root catalog).
+ */
+export type FaqCatalogUiIntent =
+  | { action: "open_catalog"; query?: string }
+  | {
+      action:
+        | "keep_catalog"
+        | "offer_consultation"
+        | "close_catalog";
+    };
+
+/**
+ * Future structured FAQ agent response (patient prose + optional catalog UI).
+ *
+ * Migration boundary:
+ * - XML `<faq_catalog_action>` remains the live codec today.
+ * - Finalize continues using {@link extractFaqCatalogAction}.
+ * - A later connector capability will provide this envelope alongside tool calls.
+ * - XML parsing remains a fallback during that migration.
+ */
+export type FaqAgentResponseEnvelope = {
+  patientText: string;
+  catalogUi: FaqCatalogUiIntent | null;
+};
+
 const FAQ_CATALOG_ACTIONS = new Set<FaqCatalogAction>([
   "keep_catalog",
   "offer_consultation",

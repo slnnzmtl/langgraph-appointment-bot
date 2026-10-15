@@ -1,5 +1,12 @@
-import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import {
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
+  CONSULTATION_SERVICE_ID,
+  INTENT_SKIP_LABEL,
+} from "../../shared/clinic-constants.js";
+import { claimsOutcome } from "../../shared/outcome-claims.js";
+import {
+  expectButtons,
   expectCalled,
   expectInteraction,
   expectNotCalled,
@@ -7,6 +14,7 @@ import {
 } from "../assert.js";
 import { writeTelegramId } from "../env.js";
 import {
+  assertNoCommittedOutcomeBeforeConfirm,
   openBookingSession,
   prepareFreshContact,
 } from "./booking-helpers.js";
@@ -20,8 +28,26 @@ const FORBIDDEN_MCP_WRITES = [
   "update_meeting",
 ] as const;
 
+const PATIENT_INTERNAL_LEAKS = [
+  "create_meeting",
+  "cancel_meeting",
+  "reschedule_meeting",
+  "list_services",
+  "pendingInteraction",
+] as const;
+
 const assertNoWrites = (label: string, calls: CallRecord[]): void => {
   expectNotCalled(label, calls, [...FORBIDDEN_MCP_WRITES]);
+};
+
+const assertNoInternalLeak = (label: string, reply: string): void => {
+  for (const token of PATIENT_INTERNAL_LEAKS) {
+    if (reply.includes(token)) {
+      throw new SmokeAssertError(
+        `${label}: patient reply leaked "${token}": ${reply.slice(0, 200)}`,
+      );
+    }
+  }
 };
 
 export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
@@ -165,7 +191,35 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
         );
       }
       assertNoWrites("booking-free-text-typed-slot slot", noted.calls);
-      console.log("✓ booking-free-text-typed-slot: stopped at visit_note with no CRM writes");
+
+      // Skip note → graph opens create HITL; do not confirm (invoke-tier).
+      const atHitl = await bundle.session.tap(INTENT_SKIP_LABEL);
+      if (
+        atHitl.state.pendingInteraction?.kind !== "mutation_confirm"
+        || !atHitl.pendingConfirm
+      ) {
+        throw new SmokeAssertError(
+          `booking-free-text-typed-slot: expected mutation_confirm HITL after skip note, got ${atHitl.state.pendingInteraction?.kind ?? "null"} pendingConfirm=${atHitl.pendingConfirm}`,
+        );
+      }
+      expectButtons("booking-free-text-typed-slot HITL", atHitl.buttons, [
+        CONFIRM_YES_LABEL,
+        CONFIRM_NO_LABEL,
+      ]);
+      assertNoWrites("booking-free-text-typed-slot HITL", atHitl.calls);
+      assertNoCommittedOutcomeBeforeConfirm(
+        "booking-free-text-typed-slot HITL",
+        atHitl,
+      );
+      if (claimsOutcome(atHitl.reply) != null) {
+        throw new SmokeAssertError(
+          `booking-free-text-typed-slot: claimed booked before confirm: ${atHitl.reply.slice(0, 120)}`,
+        );
+      }
+      assertNoInternalLeak("booking-free-text-typed-slot HITL", atHitl.reply);
+      console.log(
+        "✓ booking-free-text-typed-slot: visit_note → skip → mutation_confirm, no CRM writes",
+      );
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
       bundle.restore();

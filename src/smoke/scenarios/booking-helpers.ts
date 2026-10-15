@@ -21,11 +21,13 @@ import {
 } from "../harness.js";
 import { nextAutopilotInput } from "../autopilot.js";
 import {
+  CANCEL_CONFIRMATION_UK,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   LATER_DATE_LABEL,
 } from "../../shared/clinic-constants.js";
-import type { ScenarioContext, SoftWarning } from "../types.js";
+import { claimsOutcome } from "../../shared/outcome-claims.js";
+import type { CallRecord, ScenarioContext, SoftWarning } from "../types.js";
 
 export const WRITE_MCP_TOOLS = [
   "create_meeting",
@@ -283,6 +285,61 @@ export const driveUntilMutationConfirm = async (
     `${session.scenario}: never reached HITL interrupt (pendingInteraction=${finalSnap.state.pendingInteraction?.kind ?? "null"})`,
   );
 };
+
+/** Graph-owned reschedule HITL caption from `rescheduleCommandFromBookingDraft`. */
+export const RESCHEDULE_CONFIRM_PREFIX_UK = "Підтвердити перенесення візиту на ";
+
+/**
+ * Before HITL ✅: reply must not announce a committed CRM outcome.
+ * Runtime cancel / reschedule HITL captions are allowed.
+ */
+export const assertNoCommittedOutcomeBeforeConfirm = (
+  label: string,
+  turn: TurnResult,
+): void => {
+  const trimmed = turn.reply.trim();
+  if (trimmed === "Запис скасовано." || trimmed.startsWith("Готово! Запис")) {
+    throw new SmokeAssertError(
+      `${label}: announced committed outcome before HITL confirm: ${trimmed.slice(0, 120)}`,
+    );
+  }
+  // Runtime cancel HITL caption embeds future-tense «буде скасовано».
+  if (
+    trimmed === CANCEL_CONFIRMATION_UK
+    || (
+      trimmed.includes("Після підтвердження")
+      && trimmed.includes("буде скасовано")
+    )
+  ) {
+    return;
+  }
+  // Runtime reschedule HITL caption (slot label follows the prefix).
+  if (trimmed.startsWith(RESCHEDULE_CONFIRM_PREFIX_UK)) {
+    return;
+  }
+  const claim = claimsOutcome(trimmed);
+  if (claim != null) {
+    throw new SmokeAssertError(
+      `${label}: claimsOutcome(${claim.rule}) before HITL confirm: ${trimmed.slice(0, 120)}`,
+    );
+  }
+  if (
+    /підтвердити\s+скасування/i.test(trimmed)
+    || /підтверд(ити|жуєте)\s+(скасування|перенесення)/i.test(trimmed)
+  ) {
+    throw new SmokeAssertError(
+      `${label}: model-authored confirmation question before HITL: ${trimmed.slice(0, 120)}`,
+    );
+  }
+};
+
+/** MCP update_meeting with status Not Held (soft cancel). */
+export const notHeldUpdateCalls = (calls: CallRecord[]): CallRecord[] =>
+  calls.filter(
+    (call) =>
+      call.name === "update_meeting"
+      && (call.args as { status?: string }).status === "Not Held",
+  );
 
 /** Resume create/cancel/reschedule only while LangGraph is actually paused. */
 export const confirmOpenHitl = async (

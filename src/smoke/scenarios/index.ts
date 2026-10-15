@@ -19,6 +19,7 @@ import {
 } from "./booking-write.js";
 import { consultationSwitchScenario } from "./consultation-switch.js";
 import {
+  faqCatalogCloseScenario,
   faqCatalogScenario,
   faqChooseOtherScenario,
   faqFamilyFreeTextScenario,
@@ -35,6 +36,7 @@ export const ALL_SCENARIOS: SmokeScenario[] = [
   consultationSwitchScenario,
   faqHoursScenario,
   faqCatalogScenario,
+  faqCatalogCloseScenario,
   faqPriceScenario,
   faqChooseOtherScenario,
   faqFamilyFreeTextScenario,

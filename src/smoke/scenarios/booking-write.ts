@@ -37,16 +37,19 @@ import { installCallToolRecorder } from "../harness.js";
 import {
   assertCreateMeetingOnce,
   assertMeetingPlanned,
+  assertNoCommittedOutcomeBeforeConfirm,
   assertNoCreateMeeting,
   contactIdOrThrow,
   confirmOpenHitl,
   declineOpenHitl,
   driveUntilMutationConfirm,
+  notHeldUpdateCalls,
   openBookingSession,
   prepareFreshContact,
   resolveCreatedMeetingId,
   runBookFlow,
 } from "./booking-helpers.js";
+import { claimsOutcome } from "../../shared/outcome-claims.js";
 import {
   drillToProcedureOffer,
   expectFamilyCatalogTurn,
@@ -823,6 +826,8 @@ export const rescheduleScenario: SmokeScenario = {
         );
       }
       for (const turn of declineDrive) {
+        expectNotCalled("reschedule pre-decline drive", turn.calls, "update_meeting");
+        assertNoCommittedOutcomeBeforeConfirm("reschedule pre-decline drive", turn);
         const interaction = turn.state.pendingInteraction;
         if (interaction?.kind !== "time_select" || oldDay == null || oldHhmm == null) {
           continue;
@@ -837,6 +842,11 @@ export const rescheduleScenario: SmokeScenario = {
           );
         }
       }
+      const declineHitlTurn = declineDrive.at(-1);
+      if (declineHitlTurn == null) {
+        throw new SmokeAssertError("reschedule: decline drive produced no turns");
+      }
+      assertNoCommittedOutcomeBeforeConfirm("reschedule decline HITL", declineHitlTurn);
       const declined = await declineOpenHitl(bundle);
       expectNotCalled("reschedule decline", declined.calls, "update_meeting");
       const still = await getMeeting(ctx.callTool, meetingId);
@@ -852,17 +862,34 @@ export const rescheduleScenario: SmokeScenario = {
       expectButtons("reschedule visit menu", myVisit.buttons, [...VISIT_CHANGE_MENU]);
 
       await bundle.session.tap("Перенести");
-      const moved = await bundle.session.autopilotBooking({
+      const confirmDrive = await driveUntilMutationConfirm(bundle, {
         phone,
         ...SMOKE_CONTACT_NAME,
-        decision: "confirm",
+        expectAction: "reschedule",
         maxTurns: 12,
       });
-      const updates = moved.turns
-        .flatMap((turn) => turn.calls)
-        .filter((call) => call.name === "update_meeting");
-      if (updates.length === 0) {
-        throw new SmokeAssertError("reschedule: expected update_meeting MCP call");
+      for (const turn of confirmDrive) {
+        expectNotCalled("reschedule pre-confirm drive", turn.calls, "update_meeting");
+        assertNoCommittedOutcomeBeforeConfirm("reschedule pre-confirm drive", turn);
+      }
+      const confirmHitlTurn = confirmDrive.at(-1);
+      if (confirmHitlTurn == null) {
+        throw new SmokeAssertError("reschedule: confirm drive produced no turns");
+      }
+      assertNoCommittedOutcomeBeforeConfirm("reschedule confirm HITL", confirmHitlTurn);
+
+      const confirmed = await confirmOpenHitl(bundle);
+      const updates = confirmed.calls.filter((call) => call.name === "update_meeting");
+      if (updates.length !== 1) {
+        throw new SmokeAssertError(
+          `reschedule: expected exactly one update_meeting after ✅, got ${updates.length}`,
+        );
+      }
+      if (claimsOutcome(confirmed.reply)?.rule !== "gotovo"
+        && !confirmed.reply.includes("Запис перенесено")) {
+        throw new SmokeAssertError(
+          `reschedule: expected success announce after ✅, got ${confirmed.reply.slice(0, 120)}`,
+        );
       }
       const after = await getMeeting(ctx.callTool, meetingId);
       const newStart = String(after.dateStart);
@@ -896,22 +923,54 @@ export const cancelScenario: SmokeScenario = {
 
       const myVisit = await bundle.session.say("Мій запис");
       expectButtons("cancel visit menu", myVisit.buttons, [...VISIT_CHANGE_MENU]);
-      await bundle.session.tap("Скасувати");
-      const cancelled = await bundle.session.autopilotBooking({
-        phone,
-        ...SMOKE_CONTACT_NAME,
-        decision: "confirm",
-        maxTurns: 6,
-      });
-      const statusUpdates = cancelled.turns
-        .flatMap((turn) => turn.calls)
-        .filter(
-          (call) =>
-            call.name === "update_meeting"
-            && (call.args as { status?: string }).status === "Not Held",
+      const cancelTap = await bundle.session.tap("Скасувати");
+      let preConfirm = cancelTap;
+      if (!cancelTap.pendingConfirm) {
+        const drive = await driveUntilMutationConfirm(bundle, {
+          phone,
+          ...SMOKE_CONTACT_NAME,
+          expectAction: "cancel",
+          maxTurns: 6,
+        });
+        for (const turn of drive) {
+          expectNotCalled("cancel pre-confirm drive", turn.calls, "update_meeting");
+          assertNoCommittedOutcomeBeforeConfirm("cancel pre-confirm drive", turn);
+        }
+        const last = drive.at(-1);
+        if (last == null) {
+          throw new SmokeAssertError("cancel: drive to HITL produced no turns");
+        }
+        preConfirm = last;
+      }
+      const atCancel = await bundle.session.snapshot();
+      if (
+        atCancel.state.pendingInteraction?.kind !== "mutation_confirm"
+        || atCancel.state.pendingInteraction.action !== "cancel"
+        || !atCancel.pendingConfirm
+      ) {
+        throw new SmokeAssertError(
+          `cancel: expected cancel HITL, got ${atCancel.state.pendingInteraction?.kind ?? "null"} pendingConfirm=${atCancel.pendingConfirm}`,
         );
-      if (statusUpdates.length === 0) {
-        soft(bundle.warnings, "cancel: no update_meeting Not Held in recorder", false);
+      }
+      if (notHeldUpdateCalls(cancelTap.calls).length > 0) {
+        throw new SmokeAssertError("cancel: Not Held write before HITL confirm");
+      }
+      assertNoCommittedOutcomeBeforeConfirm("cancel before confirm", preConfirm);
+      if (preConfirm.reply.trim() === "Запис скасовано.") {
+        throw new SmokeAssertError("cancel: announced Запис скасовано. before ✅");
+      }
+
+      const cancelled = await confirmOpenHitl(bundle);
+      const statusUpdates = notHeldUpdateCalls(cancelled.calls);
+      if (statusUpdates.length !== 1) {
+        throw new SmokeAssertError(
+          `cancel: expected exactly one update_meeting Not Held after ✅, got ${statusUpdates.length}`,
+        );
+      }
+      if (cancelled.reply.trim() !== "Запис скасовано.") {
+        throw new SmokeAssertError(
+          `cancel: expected Запис скасовано. after ✅, got ${cancelled.reply.slice(0, 120)}`,
+        );
       }
       const meeting = await getMeeting(ctx.callTool, meetingId);
       if (meeting.status !== "Not Held") {
@@ -919,7 +978,7 @@ export const cancelScenario: SmokeScenario = {
           `cancel: expected Not Held, got ${String(meeting.status)}`,
         );
       }
-      expectButtons("cancel post menu", cancelled.last.buttons, [
+      expectButtons("cancel post menu", cancelled.buttons, [
         DEFAULT_MENU_NO_VISITS[0],
         MAIN_MENU_LABEL,
       ]);
