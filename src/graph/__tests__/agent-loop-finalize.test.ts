@@ -1401,8 +1401,8 @@ describe("createAgentFinalizeNode", () => {
           new ToolMessage({
             content: JSON.stringify({
               id: "m-new",
-              name: "Консультація - Ada",
-              dateStart: "2026-09-10 14:00:00",
+              success: true,
+              visitLabel: "Консультація — 10 вересня (четвер) о 14:00",
             }),
             tool_call_id: "1",
             name: "create_meeting",
@@ -1415,7 +1415,10 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.lastHandoff?.replyText).toMatch(/^Готово! Запис створено\./);
+    expect(update.lastHandoff?.replyText).toContain("Консультація");
+    expect(update.lastHandoff?.replyText).toContain("10 вересня (четвер) о 14:00");
     expect(update.lastHandoff?.replyText).toContain(CLINIC_ADDRESS);
+    expect(update.lastHandoff?.replyText).toContain("Мій запис");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });
 
@@ -1648,8 +1651,7 @@ describe("createAgentFinalizeNode", () => {
             content: JSON.stringify({
               success: true,
               id: "m-new",
-              name: "Збільшення губ Neotiva - Daniel Test",
-              dateStart: "2026-09-29 12:00:00",
+              visitLabel: "Збільшення губ Neotiva — 29 вересня (вівторок) о 12:00",
             }),
             tool_call_id: "create",
             name: "create_meeting",
@@ -1662,6 +1664,8 @@ describe("createAgentFinalizeNode", () => {
     );
 
     expect(update.lastHandoff?.replyText).toMatch(/^Готово! Запис створено\./);
+    expect(update.lastHandoff?.replyText).toContain("Збільшення губ Neotiva");
+    expect(update.lastHandoff?.replyText).toContain("29 вересня");
     expect(update.lastHandoff?.replyText).not.toContain("Найближчі вільні дні");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
   });

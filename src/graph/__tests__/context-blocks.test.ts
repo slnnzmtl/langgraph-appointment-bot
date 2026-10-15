@@ -69,13 +69,13 @@ describe("formatBookingMeetingsContext", () => {
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
       expect(formatBookingMeetingsContext(listedMeetings)).toContain(
-        '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
+        '"visitLabel":"Консультація — 17 серпня (понеділок) о 11:00"',
       );
       expect(formatBookingMeetingsContext(listedMeetings)).not.toContain('"whenLabel"');
       expect(formatBookingMeetingsContext(listedMeetings)).not.toContain('"serviceLabel"');
       vi.setSystemTime(new Date("2026-08-16T09:00:00Z"));
       expect(formatBookingMeetingsContext(listedMeetings)).toContain(
-        '"visitLabel":"Консультація - завтра, 17 серпня (понеділок) о 11:00"',
+        '"visitLabel":"Консультація — завтра, 17 серпня (понеділок) о 11:00"',
       );
     } finally {
       vi.useRealTimers();
@@ -91,7 +91,7 @@ describe("formatBookingMeetingsContext", () => {
         "When moving or cancelling, quote visitLabel from this block only — never a procedure from earlier chat.",
       );
       expect(block).toContain(
-        '"visitLabel":"Консультація - 17 серпня (понеділок) о 11:00"',
+        '"visitLabel":"Консультація — 17 серпня (понеділок) о 11:00"',
       );
       expect(
         formatBookingMeetingsContext({
@@ -105,7 +105,7 @@ describe("formatBookingMeetingsContext", () => {
             },
           ],
         }),
-      ).toContain('"visitLabel":"Контурна пластика - 2 зони - 17 серпня (понеділок) о 11:00"');
+      ).toContain('"visitLabel":"Контурна пластика - 2 зони — 17 серпня (понеділок) о 11:00"');
     } finally {
       vi.useRealTimers();
     }
@@ -163,7 +163,7 @@ describe("attachPrefetchVisits", () => {
         listedMeetings,
         "greeting",
       );
-      expect(out).toContain("🗓️ Консультація - 17 серпня (понеділок) о 11:00");
+      expect(out).toContain("🗓️ Консультація — 17 серпня (понеділок) о 11:00");
       expect(out).toContain("Чим можу допомогти?");
       expect(out.indexOf("Заплановані візити:")).toBeLessThan(out.indexOf("Чим можу допомогти?"));
     } finally {
@@ -188,7 +188,7 @@ describe("formatMyVisitReply", () => {
     try {
       vi.setSystemTime(new Date("2026-08-11T09:00:00Z"));
       expect(formatMyVisitReply(listedMeetings)).toBe(
-        "Заплановані візити:\n🗓️ Консультація - 17 серпня (понеділок) о 11:00\n\nБажаєте перенести або скасувати цей візит?",
+        "Заплановані візити:\n🗓️ Консультація — 17 серпня (понеділок) о 11:00\n\nБажаєте перенести або скасувати цей візит?",
       );
     } finally {
       vi.useRealTimers();

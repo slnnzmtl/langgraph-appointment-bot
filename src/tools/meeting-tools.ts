@@ -5,6 +5,7 @@ import { finishTrackedWrite, trackEvent, type Tier1EventName } from "../analytic
 import { asJsonRecord, committedMeetingEntityId } from "../shared/json-record.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import { normalizeLocalIsoDatetime } from "./availability-slots.js";
+import { visitLabelFromCommand } from "./visit-label.js";
 import {
   createPresentAvailabilitySlotsTool,
   KYIV_LOCAL_ISO_SCHEMA,
@@ -79,6 +80,28 @@ const augmentBookingSlotError = (
   return JSON.stringify({ ...record, hint: SLOT_REFETCH_HINT });
 };
 
+const stampVisitLabel = (
+  toolName: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
+  raw: string,
+  visitSource: { name?: string; dateStart?: string } | undefined,
+): string => {
+  if (toolName === "cancel_meeting" || visitSource == null) {
+    return raw;
+  }
+  if (committedMeetingEntityId(raw) == null) {
+    return raw;
+  }
+  const visitLabel = visitLabelFromCommand(visitSource.name, visitSource.dateStart);
+  if (visitLabel == null) {
+    return raw;
+  }
+  const record = asJsonRecord(raw);
+  if (!record) {
+    return raw;
+  }
+  return JSON.stringify({ ...record, visitLabel });
+};
+
 const finishMeetingMutation = (
   toolName: "create_meeting" | "cancel_meeting" | "reschedule_meeting",
   raw: string,
@@ -87,31 +110,36 @@ const finishMeetingMutation = (
     "meeting_created" | "meeting_cancelled" | "meeting_rescheduled"
   >,
   successProps: Record<string, unknown>,
+  visitSource?: { name?: string; dateStart?: string },
 ): string =>
-  finishTrackedWrite(
+  stampVisitLabel(
     toolName,
-    augmentBookingSlotError(
+    finishTrackedWrite(
       toolName,
-      normalizeUpdateMeetingSuccess(
+      augmentBookingSlotError(
         toolName,
-        raw,
-        typeof successProps.meeting_id === "string" ? successProps.meeting_id : undefined,
+        normalizeUpdateMeetingSuccess(
+          toolName,
+          raw,
+          typeof successProps.meeting_id === "string" ? successProps.meeting_id : undefined,
+        ),
       ),
+      (entityId) => {
+        const meetingId =
+          typeof successProps.meeting_id === "string" ? successProps.meeting_id : entityId;
+        trackEvent(successEvent, {
+          outcome: "success",
+          ...successProps,
+          ...(meetingId ? { meeting_id: meetingId } : {}),
+        });
+      },
+      {
+        skip: skipHitlPending,
+        requireEntityId: true,
+        resolveEntityId: committedMeetingEntityId,
+      },
     ),
-    (entityId) => {
-      const meetingId =
-        typeof successProps.meeting_id === "string" ? successProps.meeting_id : entityId;
-      trackEvent(successEvent, {
-        outcome: "success",
-        ...successProps,
-        ...(meetingId ? { meeting_id: meetingId } : {}),
-      });
-    },
-    {
-      skip: skipHitlPending,
-      requireEntityId: true,
-      resolveEntityId: committedMeetingEntityId,
-    },
+    visitSource,
   );
 
 const NOT_AUTHORIZED = "Not authorized";
@@ -353,6 +381,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         ),
         "meeting_created",
         writeProps,
+        { name: input.name, dateStart },
       );
     },
     {
@@ -532,6 +561,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         ),
         "meeting_rescheduled",
         writeProps,
+        { name: draft.name, dateStart },
       );
     },
     {

@@ -83,7 +83,7 @@ Rules:
 - Default service is **Консультація** (`CONSULTATION_SERVICE_ID`) unless the patient is sure about a named procedure (or FAQ already chose one).
 - At most **one Planned or Confirmed meeting**. Only Planned / Held / Confirmed block free/busy. A second booking is refused until the existing visit is **cancelled** (then the new slot can be booked). Reschedule is only offered when the patient explicitly asks about their visit («Мій запис»), not during a new-booking conflict. The bot cannot offer slots outside clinic hours, but it must still list a visit a doctor moved off-hours.
 - Collect phone/name only after a slot is chosen; incomplete contacts get `update_contact` before confirm. Phones must be E.164.
-- Book/move success includes address + Maps; cancel does not. Never put address in `confirmMessage`.
+- Book/move success includes service + Ukrainian when, address + Maps, and a «Мій запис» next-step line; cancel does not. Never put address in `confirmMessage`.
 - Slots are Europe/Kyiv. Quote TS `dayLabel` / `whenLabel` / `visitLabel`; never invent dates.
 
 ## Writes, HITL, reminder
