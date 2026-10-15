@@ -709,17 +709,17 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   );
   trackEvent("booking_invariant_violation", { reason: "stale_slot" });
 
-  // Prefer this-turn capture (exact revalidate that proved the slot gone) over
-  // a checkpoint that may still list the taken slot. Never invent visit_note.
+  // Only recover DATE/TIME from this-turn present_availability_slots. An error
+  // payload cannot be normalized; falling back to checkpoint would reoffer the
+  // slot we just failed to revalidate.
   const captured = captureAvailabilityFromMessages(state.agentMessages ?? []) ?? null;
-  const availability = captured ?? state.availabilityContext ?? null;
   const recoveryState: ClinicState = {
     ...state,
     bookingDraft: session.bookingDraft,
     pendingInteraction: session.pendingInteraction,
-    availabilityContext: availability,
+    availabilityContext: captured,
   };
-  const offer = availabilityRecoveryOffer(recoveryState);
+  const offer = captured != null ? availabilityRecoveryOffer(recoveryState) : null;
   if (offer != null) {
     return {
       kind: "render",
@@ -727,22 +727,26 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
       update: {
         bookingDraft: session.bookingDraft,
         pendingInteraction: offer.interaction,
-        ...(captured != null && captured !== state.availabilityContext
+        ...(captured !== state.availabilityContext
           ? { availabilityContext: captured }
           : {}),
       },
     };
   }
 
+  const dropStaleSnapshot = {
+    bookingDraft: session.bookingDraft,
+    pendingInteraction: session.pendingInteraction,
+    availabilityContext: null,
+    availabilityCursor: null,
+  };
+
   // At most one ungated stale force-refresh per turn.
   if (staleRevalidateRanThisTurn(state.agentMessages ?? [])) {
     return {
       kind: "render",
       reason: "missing_exact_date",
-      update: {
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      },
+      update: dropStaleSnapshot,
     };
   }
 
@@ -759,20 +763,14 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
       revalidate.args,
       revalidate.purpose,
       `${STALE_REVALIDATE_TOOL_CALL_PREFIX}${state.bookingDraft?.version ?? 0}`,
-      {
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      },
+      dropStaleSnapshot,
     );
   }
 
   return {
     kind: "render",
     reason: "missing_exact_date",
-    update: {
-      bookingDraft: session.bookingDraft,
-      pendingInteraction: session.pendingInteraction,
-    },
+    update: dropStaleSnapshot,
   };
 };
 

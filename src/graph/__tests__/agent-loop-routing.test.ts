@@ -680,6 +680,70 @@ describe("runtime-owned booking routing", () => {
       .not.toBe(BOOKING_NOTE_QUESTION_UK);
   });
 
+  it("stale-slot revalidation error does not reoffer a checkpointed time", async () => {
+    const staleSlot = {
+      id: "2026-09-10T10:00:00",
+      label: "10:00",
+      dateStart: "2026-09-10T10:00:00",
+      dateEnd: "2026-09-10T10:30:00",
+    };
+    const state = clinicState({
+      contactContext: ownedContactContext(),
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        selectedSlot: {
+          dateStart: staleSlot.dateStart,
+          dateEnd: staleSlot.dateEnd,
+          label: staleSlot.label,
+        },
+        serviceAcceptance: {
+          status: "accepted",
+          service: {
+            id: "svc-1",
+            name: "Процедура",
+            durationMinutes: 30,
+            source: "catalog",
+          },
+        },
+        pendingCommand: {
+          action: "create",
+          payload: { serviceId: "svc-1" },
+        },
+      }),
+      availabilityContext: {
+        days: [{ date: "2026-09-10", slots: [staleSlot] }],
+        stepMinutes: 30,
+        serviceId: "svc-1",
+      },
+      pendingInteraction: openMutationConfirmInteraction("create"),
+      agentMessages: [new ToolMessage({
+        content: JSON.stringify({ error: "CRM down", slots: [] }),
+        name: "present_availability_slots",
+        tool_call_id: "revalidate-crm-down",
+      })],
+    });
+
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("execute");
+    if (outcome.kind !== "execute") {
+      throw new Error("expected execute");
+    }
+    expect(outcome.toolCall).toMatchObject({
+      name: "present_availability_slots",
+      args: expect.objectContaining({
+        direction: "exact",
+        date: "2026-09-10",
+        forceRefresh: true,
+      }),
+    });
+    expect(outcome.update.pendingInteraction?.kind).not.toBe("time_select");
+    expect(outcome.update.availabilityContext).toBeNull();
+    expect(outcome.update.bookingDraft).toMatchObject({
+      selectedSlot: null,
+      pendingCommand: null,
+    });
+  });
+
   it("stale-slot without usable snapshot force-refreshes exact availability", async () => {
     const state = clinicState({
       contactContext: ownedContactContext(),
