@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { setTrackEventForTests } from "../../analytics/track.js";
@@ -8,10 +8,11 @@ import { BOOKING_RUNTIME_TOOL_NAMES } from "../../tools/index.js";
 import {
   bookingCommandContinuesAfterTools,
   bookingTurnNeedsCommandPreparation,
-  createAgentCommandPrepareNode,
   isPendingChatConfirmationReplay,
+  resolveBookingCommand,
   shouldRearmCancelAfterChatOther,
-} from "../agent-loop/command-prepare.js";
+} from "../agent-loop/booking-command.js";
+import { createAgentCommandPrepareNode } from "../agent-loop/command-prepare.js";
 import { coerceAvailabilityToolCalls } from "../agent-loop/tool-call-coercion.js";
 import type { BookingDraft } from "../booking-draft.js";
 import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
@@ -19,7 +20,7 @@ import {
   classifyPhoneLookupResult,
   resolveContactCommand,
 } from "../contact-command.js";
-import type { ClinicState } from "../state.js";
+import type { ClinicState, ClinicStateUpdate } from "../state.js";
 
 const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   messages: [],
@@ -115,14 +116,19 @@ const freshSlotsToolMessage = (
     tool_call_id: toolCallId,
   });
 
-const lastToolCall = (update: { agentMessages?: unknown }) => {
+const asUpdate = (result: Command | ClinicStateUpdate): ClinicStateUpdate =>
+  result instanceof Command ? (result.update as ClinicStateUpdate) : result;
+
+const lastToolCall = (result: Command | ClinicStateUpdate) => {
+  const update = asUpdate(result);
   const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
   const last = messages.at(-1);
   expect(last).toBeInstanceOf(AIMessage);
   return (last as AIMessage).tool_calls?.[0];
 };
 
-const lastAi = (update: { agentMessages?: unknown }): AIMessage => {
+const lastAi = (result: Command | ClinicStateUpdate): AIMessage => {
+  const update = asUpdate(result);
   const messages = (update.agentMessages as Overwrite<AIMessage[]>).value;
   const last = messages.at(-1);
   expect(last).toBeInstanceOf(AIMessage);
@@ -175,17 +181,19 @@ describe("command_prepare runtime authority", () => {
     });
     expect(JSON.stringify(tracked)).not.toMatch(/\+380|Ada|Lovelace|phoneNumber/);
 
+    const revalidateUpdate = asUpdate(revalidate);
     const afterSlots = clinicState({
       contactContext: ownedContact,
-      bookingDraft: revalidate.bookingDraft as BookingDraft,
+      bookingDraft: revalidateUpdate.bookingDraft as BookingDraft,
       agentMessages: [
-        ...(revalidate.agentMessages as Overwrite<AIMessage[]>).value,
+        ...(revalidateUpdate.agentMessages as Overwrite<AIMessage[]>).value,
         freshSlotsToolMessage("booking_revalidate_4"),
       ],
     });
     expect(bookingCommandContinuesAfterTools(afterSlots)).toBe(true);
 
     const create = await commandPrepare(afterSlots);
+    const createUpdate = asUpdate(create);
     expect(lastToolCall(create)).toMatchObject({
       name: "create_meeting",
       args: {
@@ -195,11 +203,13 @@ describe("command_prepare runtime authority", () => {
         dateEnd: "2026-09-10T14:30:00",
       },
     });
-    expect(create.bookingDraft?.pendingCommand?.action).toBe("create");
-    expect(create.pendingInteraction).toMatchObject({
+    expect(createUpdate.bookingDraft?.pendingCommand?.action).toBe("create");
+    expect(createUpdate.pendingInteraction).toMatchObject({
       kind: "mutation_confirm",
       action: "create",
     });
+    expect(create).toBeInstanceOf(Command);
+    expect(create.goto).toEqual(["booking__tools"]);
     expect(tracked).toContainEqual({
       name: "booking_runtime_tool",
       props: {
@@ -243,7 +253,7 @@ describe("command_prepare runtime authority", () => {
         dateEnd: "2026-09-10T14:30:00",
       },
     });
-    expect(update.pendingInteraction).toMatchObject({
+    expect(asUpdate(update).pendingInteraction).toMatchObject({
       kind: "mutation_confirm",
       action: "reschedule",
     });
@@ -275,7 +285,7 @@ describe("command_prepare runtime authority", () => {
       name: "cancel_meeting",
       args: { meetingId: "m-1" },
     });
-    expect(update.pendingInteraction).toMatchObject({
+    expect(asUpdate(update).pendingInteraction).toMatchObject({
       kind: "mutation_confirm",
       action: "cancel",
     });
@@ -320,7 +330,9 @@ describe("command_prepare runtime authority", () => {
     expect(shouldRearmCancelAfterChatOther(state)).toBe(false);
     expect(bookingTurnNeedsCommandPreparation(state)).toBe(false);
     const update = await commandPrepare(state);
-    expect(update.agentMessages).toBeUndefined();
+    expect(asUpdate(update).agentMessages).toBeUndefined();
+    expect(update).toBeInstanceOf(Command);
+    expect(update.goto).toEqual(["booking__llm"]);
     expect(isPendingChatConfirmationReplay(
       {
         ...state,
@@ -404,7 +416,7 @@ describe("command_prepare runtime authority", () => {
       name: "cancel_meeting",
       args: { meetingId: "m-1" },
     });
-    expect(update.pendingCancellationPurpose).toBe("replacement");
+    expect(asUpdate(update).pendingCancellationPurpose).toBe("replacement");
   });
 });
 
@@ -475,7 +487,11 @@ describe("ContactCommand decisions", () => {
       action: "request_field",
       field: "firstName",
     });
-    expect(bookingTurnNeedsCommandPreparation(state)).toBe(false);
+    expect(bookingTurnNeedsCommandPreparation(state)).toBe(true);
+    expect(resolveBookingCommand(state)).toMatchObject({
+      kind: "render",
+      reason: "contact_field",
+    });
   });
 
   it("links a single linkable phone match", async () => {
@@ -562,7 +578,11 @@ describe("ContactCommand decisions", () => {
       field: "phoneNumber",
       occupied: true,
     });
-    expect(bookingTurnNeedsCommandPreparation(state)).toBe(false);
+    expect(bookingTurnNeedsCommandPreparation(state)).toBe(true);
+    expect(resolveBookingCommand(state)).toMatchObject({
+      kind: "render",
+      reason: "contact_field",
+    });
   });
 
   it("fails closed on ambiguous phone candidates", () => {
@@ -745,5 +765,224 @@ describe("booking LLM tool surface coercion", () => {
     expect(coerced.tool_calls).toEqual([
       expect.objectContaining({ name: "list_services" }),
     ]);
+  });
+});
+
+describe("DDD-255 deterministic booking transitions", () => {
+  const commandPrepare = createAgentCommandPrepareNode("booking");
+
+  const snapshot = {
+    days: [
+      {
+        date: "2026-10-03",
+        slots: [{
+          id: "a",
+          label: "10:00",
+          dateStart: "2026-10-03T10:00:00",
+          dateEnd: "2026-10-03T10:30:00",
+        }],
+      },
+      {
+        date: "2026-10-05",
+        slots: [{
+          id: "b",
+          label: "11:00",
+          dateStart: "2026-10-05T11:00:00",
+          dateEnd: "2026-10-05T11:30:00",
+        }],
+      },
+    ],
+    stepMinutes: 30,
+    query: {
+      kind: "nearest" as const,
+      rangeFrom: "2026-10-03",
+      rangeThrough: "2026-10-05",
+      coverageComplete: true,
+    },
+  };
+
+  it.each(["Інша дата", "Another date", "раніше"] as const)(
+    "pages availability for %s with cursor anchors",
+    async (label) => {
+      const state = clinicState({
+        messages: [new HumanMessage(label)],
+        bookingDraft: readyCreateDraft({
+          selectedDate: "2026-10-03",
+          selectedSlot: null,
+          phase: "date",
+          note: { status: "unasked" },
+          contactId: null,
+        }),
+        availabilityContext: snapshot,
+        availabilityCursor: {
+          firstDate: "2026-10-03",
+          lastDate: "2026-10-05",
+          query: snapshot.query,
+        },
+        agentMessages: [],
+      });
+      const outcome = resolveBookingCommand(state);
+      expect(outcome.kind).toBe("execute");
+      if (outcome.kind !== "execute") {
+        return;
+      }
+      expect(outcome.toolCall.name).toBe("present_availability_slots");
+      if (label === "раніше") {
+        expect(outcome.toolCall.args).toMatchObject({
+          direction: "earlier",
+          beforeDate: "2026-10-03",
+        });
+      } else {
+        expect(outcome.toolCall.args).toMatchObject({
+          direction: "later",
+          afterDate: "2026-10-05",
+        });
+      }
+      const cmd = await commandPrepare(state);
+      expect(cmd).toBeInstanceOf(Command);
+      expect(cmd.goto).toEqual(["booking__tools"]);
+    },
+  );
+
+  it("does not emit a second page in the same turn", () => {
+    const state = clinicState({
+      messages: [new HumanMessage("Інша дата")],
+      bookingDraft: readyCreateDraft({
+        selectedDate: "2026-10-03",
+        selectedSlot: null,
+        phase: "date",
+        note: { status: "unasked" },
+        contactId: null,
+      }),
+      availabilityContext: snapshot,
+      availabilityCursor: {
+        firstDate: "2026-10-03",
+        lastDate: "2026-10-05",
+        query: snapshot.query,
+      },
+      agentMessages: [
+        freshSlotsToolMessage("page-1", {
+          query: { kind: "later", afterDate: "2026-10-05", coverageComplete: true },
+        }),
+      ],
+    });
+    expect(resolveBookingCommand(state).kind).toBe("none");
+  });
+
+  it("routes note-required as render without a tool call", async () => {
+    const state = clinicState({
+      contactContext: ownedContact,
+      bookingDraft: readyCreateDraft({
+        note: { status: "awaiting" },
+      }),
+      agentMessages: [
+        freshSlotsToolMessage("slots-1"),
+      ],
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome).toMatchObject({
+      kind: "render",
+      reason: "note_required",
+    });
+    const cmd = await commandPrepare(state);
+    expect(cmd.goto).toEqual(["booking__interaction_render"]);
+    expect(asUpdate(cmd).pendingInteraction).toMatchObject({ kind: "visit_note" });
+    expect(asUpdate(cmd).agentMessages).toBeUndefined();
+  });
+
+  it("fails closed for unstamped legacy runtime calls in tools", async () => {
+    const { createAgentToolsNode } = await import("../agent-loop/nodes.js");
+    const { tool } = await import("@langchain/core/tools");
+    const { z } = await import("zod");
+    const invoked: unknown[] = [];
+    const link = tool(async (input) => {
+      invoked.push(input);
+      return JSON.stringify({ id: "c-1" });
+    }, {
+      name: "link_telegram_to_contact",
+      description: "link",
+      schema: z.object({ contactId: z.string() }),
+    });
+    const update = await createAgentToolsNode([link], "booking")(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "link-legacy",
+              name: "link_telegram_to_contact",
+              args: { contactId: "c-1" },
+              type: "tool_call",
+            }],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+    expect(invoked).toEqual([]);
+    const messages = update.agentMessages instanceof Overwrite
+      ? update.agentMessages.value
+      : update.agentMessages;
+    expect((messages as AIMessage[]).some((message) => message instanceof ToolMessage)).toBe(false);
+  });
+
+  it("keeps mutation_confirm on the execute update before tools", async () => {
+    const afterSlots = clinicState({
+      contactContext: ownedContact,
+      bookingDraft: readyCreateDraft({
+        pendingCommand: {
+          action: "create",
+          payload: {
+            serviceId: CONSULTATION_SERVICE_ID,
+            contactId: "c-1",
+            dateStart: slot.dateStart,
+            dateEnd: slot.dateEnd,
+          },
+        },
+      }),
+      agentMessages: [
+        freshSlotsToolMessage("booking_revalidate_4"),
+      ],
+    });
+    const cmd = await commandPrepare(afterSlots);
+    expect(cmd.goto).toEqual(["booking__tools"]);
+    expect(asUpdate(cmd).pendingInteraction).toMatchObject({
+      kind: "mutation_confirm",
+      action: "create",
+    });
+    expect(lastToolCall(cmd)?.name).toBe("create_meeting");
+  });
+
+  it("requires fresh revalidation before create and reschedule", () => {
+    const createReady = clinicState({
+      contactContext: ownedContact,
+      bookingDraft: readyCreateDraft(),
+      agentMessages: [],
+    });
+    expect(resolveBookingCommand(createReady)).toMatchObject({
+      kind: "execute",
+      toolCall: { name: "present_availability_slots" },
+    });
+
+    const rescheduleDraft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "m-1",
+        name: "Консультація",
+        dateStart: "2026-08-17 11:00:00",
+        dateEnd: "2026-08-17 11:30:00",
+      },
+    });
+    const withSlot = reduceBookingDraft(
+      reduceBookingDraft(rescheduleDraft, { type: "date_selected", date: "2026-09-10" }),
+      { type: "slot_selected", slot },
+    );
+    expect(resolveBookingCommand(clinicState({
+      bookingDraft: withSlot,
+      agentMessages: [],
+    }))).toMatchObject({
+      kind: "execute",
+      toolCall: { name: "present_availability_slots" },
+    });
   });
 });

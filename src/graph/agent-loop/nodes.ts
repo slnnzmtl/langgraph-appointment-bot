@@ -25,11 +25,8 @@ import {
 import {
   availabilityCursorFromContext,
   tryAvailabilityCacheHit,
-  KYIV_LOCAL_ISO_SCHEMA,
   presentAvailabilitySlotsArgsSchema,
-  type AvailabilitySlotsToolArgs,
 } from "../../tools/availability-tools.js";
-import { normalizeAvailabilityToolArgs } from "../../tools/availability-args.js";
 import { kyivToday } from "../../tools/availability-slots.js";
 import {
   reconcileRequestedTime,
@@ -37,6 +34,7 @@ import {
 } from "../booking-schedule.js";
 import { parseScheduleIntent } from "../../shared/booking-schedule.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../tools/contact-tools.js";
+import { isBookingRuntimeToolName } from "../../tools/index.js";
 import {
   normalizeListServicesResult,
   type ServicesContext,
@@ -62,9 +60,8 @@ import {
 import { buildCachedMessages, buildUncachedMessages } from "../gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
-  bookingDraftCanPresentAvailability,
   availabilityMatchesBooking,
-  bookingAvailabilityScope,
+  bookingDraftCanPresentAvailability,
   createEmptyBookingDraft,
   effectiveBookingContactDetails,
   reduceBookingDraft,
@@ -78,13 +75,11 @@ import {
   closedBookingSessionUpdate,
   consultationService,
   interpretInteractionReply,
-  openVisitNoteInteraction,
   reduceBookingSession,
   repairInvalidScheduleInteraction,
 } from "../booking-session.js";
 import { restorePendingInteraction } from "../booking-interaction-restore.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
-import { renderBookingInteractionMessage } from "../booking-interaction-render.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   type PartitionServiceCandidates,
@@ -108,33 +103,23 @@ import {
   hasMutationCallDuringUnresolvedConfirmation,
   hasPendingConfirmationChatOther,
   isPendingChatConfirmationReplay,
-  normalizeMeetingMutationArgs,
+  isRuntimeOriginatedToolAi,
   shouldRearmCancelAfterChatOther,
-} from "./command-prepare.js";
+} from "./booking-command.js";
 import { bookingEntryTransitionForTurn } from "./replacement-flow.js";
 
 import {
-  BOOKING_SLOT_REQUIRED_UK,
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   CONTACT_OWNERSHIP_REQUIRED_ERROR,
-  CREATE_CONSULTATION_REQUIRED_ERROR,
-  CREATE_NOTE_REQUIRED_ERROR,
-  isFaqCatalogBrowseShortcut,
-  MEETING_MUTATION_TOOLS,
   NAME_NOT_PROVIDED_ERROR,
   PHONE_GROUNDED_TOOLS,
   PHONE_NOT_PROVIDED_ERROR,
-  RESCHEDULE_STATE_REQUIRED_ERROR,
-  SELECTED_SLOT_NOT_AVAILABLE_ERROR,
-  SLOT_SELECTION_REQUIRED_ERROR,
+  isFaqCatalogBrowseShortcut,
+  MEETING_MUTATION_TOOLS,
   advanceBookingNoteStep,
   alreadyBookedMeetingFromMessages,
-  authoritativeNoteStatus,
   authoritativeSelectedSlot,
-  availabilitySlotsRanThisTurn,
   blocksConsultationWithoutAgreement,
-  bookingDateAnchors,
-  bookingMutationNeedsModelRecovery,
   captureAvailabilityFromMessages,
   captureLatestToolContext,
   captureServicesFromMessages,
@@ -143,13 +128,10 @@ import {
   crmWriteDirtiesPrefetch,
   humanProvidedName,
   humanProvidedPhone,
-  normalizeNameForMatch,
   lastPatientText,
-  latestCreateMeetingError,
-  matchAvailabilityDay,
   meetingMutationClearsAvailability,
   meetingMutationIsHitlDecline,
-  noteStepBlocksCreate,
+  normalizeNameForMatch,
   phoneCandidateCanBeLinked,
   rescheduleTargetFromBookingContext,
   resolveContactIdentity,
@@ -162,17 +144,14 @@ import {
 
 import { coerceAvailabilityToolCalls } from "./tool-call-coercion.js";
 
-export const prepareNodeName = (agentId: string): string => `${agentId}__prepare`;
-
-export const commandPrepareNodeName = (agentId: string): string => `${agentId}__command_prepare`;
-
-export const llmNodeName = (agentId: string): string => `${agentId}__llm`;
-
-export const toolsNodeName = (agentId: string): string => `${agentId}__tools`;
-
-export const finalizeNodeName = (agentId: string): string => `${agentId}__finalize`;
-
-export const mutationFinalizeNodeName = (agentId: string): string => `${agentId}__mutation_finalize`;
+export {
+  prepareNodeName,
+  commandPrepareNodeName,
+  llmNodeName,
+  toolsNodeName,
+  finalizeNodeName,
+  mutationFinalizeNodeName,
+} from "./nodes-names.js";
 
 export type CreateAgentLoopOptions = {
   agent: ClinicAgentDefinition;
@@ -726,27 +705,6 @@ export const createAgentLlmNode = (options: CreateAgentLoopOptions) => {
     const isContinuation = last instanceof ToolMessage;
     const stepCount = isContinuation ? state.stepCount + 1 : 1;
 
-    // `Note step required` is a deterministic invariant guard, not new model
-    // context. Repair presentation from canonical state without another model
-    // pass, which otherwise repeats the same note question indefinitely.
-    if (
-      agent.id === BOOKING_AGENT_ID
-      && latestCreateMeetingError(state.agentMessages) === CREATE_NOTE_REQUIRED_ERROR
-    ) {
-      const noteInteraction = openVisitNoteInteraction();
-      const slotMissing = authoritativeSelectedSlot(state) == null;
-      const rendered = slotMissing
-        ? new AIMessage(BOOKING_SLOT_REQUIRED_UK)
-        : renderBookingInteractionMessage(noteInteraction);
-      return {
-        agentMessages: [rendered],
-        ...(slotMissing
-          ? {}
-          : { pendingInteraction: noteInteraction }),
-        stepCount,
-      };
-    }
-
     const staticPrompt = agent.systemPrompt.trim();
     const dynamicParts = [
       formatSystemMetadata(new Date(), { runtimeAgent: agent.name }).trim(),
@@ -851,85 +809,31 @@ export const createAgentToolsNode = (
 
     const synthetic: ToolMessage[] = [];
     const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
-    let noteStatusUpdate: ClinicStateUpdate = {};
-    let availabilityPagedThisTurn = availabilitySlotsRanThisTurn(agentMessages);
+    let strippedUnstampedRuntime = false;
+    let consultationAgreementStrip = false;
+    let contactRecoveryStrip: "ownership" | "link_candidate" | null = null;
 
     if (lastAiIndex >= 0) {
       const lastAi = agentMessages[lastAiIndex] as AIMessage;
+      const runtimeOriginOk = agentId === BOOKING_AGENT_ID
+        ? isRuntimeOriginatedToolAi(lastAi)
+        : true;
+
       for (const call of lastAi.tool_calls ?? []) {
+        // Legacy checkpoints may still hold model-originated runtime calls.
+        // Fail closed: do not execute unstamped runtime-owned tools.
         if (
           agentId === BOOKING_AGENT_ID
-          && call.name === "create_meeting"
-          && !blocksConsultationWithoutAgreement(agentId, call, state)
-          && noteStepBlocksCreate(authoritativeNoteStatus(state))
+          && isBookingRuntimeToolName(call.name)
+          && !runtimeOriginOk
         ) {
-          noteStatusUpdate = state.bookingDraft
-            ? {
-                bookingDraft: reduceBookingDraft(state.bookingDraft, {
-                  type: "note_status",
-                  status: "awaiting",
-                }),
-              }
-            : {};
-          trackEvent("booking_create_blocked_note", {
-            phase: authoritativeNoteStatus(state),
-          });
-          synthetic.push(
-            new ToolMessage({
-              content: JSON.stringify({
-                error: CREATE_NOTE_REQUIRED_ERROR,
-                hint:
-                  "Ask the optional visit-note question once (STEP INTENT) with the skip shortcut. Do not call create_meeting until the patient skips, declines, or shares a note.",
-              }),
-              tool_call_id: call.id ?? "",
-              name: "create_meeting",
-            }),
-          );
+          trackToolError(call.name, "unstamped_runtime_tool");
+          strippedUnstampedRuntime = true;
           continue;
         }
 
-        if (
-          blocksConsultationWithoutAgreement(agentId, call, state)
-        ) {
-          trackEvent("booking_consultation_guard", {
-            phase: state.bookingDraft?.phase ?? "service",
-            outcome: "blocked",
-          });
-          synthetic.push(
-            new ToolMessage({
-              content: JSON.stringify({
-                error: CREATE_CONSULTATION_REQUIRED_ERROR,
-                hint:
-                  "serviceId is the consultation id but the patient has not explicitly agreed to «Консультація» (Так after a consultation offer, or they named consultation). Do not present times or book consultation. If they named another procedure/family, that belongs to FAQ catalog browse — do not substitute consultation.",
-              }),
-              tool_call_id: call.id ?? "",
-              name: call.name,
-            }),
-          );
-          continue;
-        }
-
-        if (
-          agentId === BOOKING_AGENT_ID
-          && call.name === "create_meeting"
-          && authoritativeSelectedSlot(state) == null
-          && (state.availabilityContext?.days.filter((day) => day.slots.length > 0).length ?? 0) > 1
-        ) {
-          trackToolError(call.name, SLOT_SELECTION_REQUIRED_ERROR);
-          synthetic.push(
-            new ToolMessage({
-              content: JSON.stringify({
-                error: SLOT_SELECTION_REQUIRED_ERROR,
-                hint:
-                  "Ask the patient to choose a day and then a time from the current availability. Do not invent a date.",
-              }),
-              tool_call_id: call.id ?? "",
-              name: call.name,
-            }),
-          );
-          continue;
-        }
-
+        // Defense in depth: ContactCommand builds args; still refuse invented
+        // phone/name values if a stamped call somehow carries them.
         if (PHONE_GROUNDED_TOOLS.has(call.name)) {
           const openCollected = state.pendingInteraction?.kind === "contact_field"
             ? state.pendingInteraction.collected
@@ -1007,156 +911,10 @@ export const createAgentToolsNode = (
               (call.args ?? {}).phoneNumber,
             )
           ) {
+            // Fail closed — occupied phone keyboard owns recovery.
             trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
-                  field: "phoneNumber",
-                  hint:
-                    "This phone belongs to another Telegram account. Ask for a different number; do not create a Contact with it.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
-            continue;
-          }
-        }
-
-        if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
-          call.args = normalizeMeetingMutationArgs(state, call);
-          if (
-            call.name === "create_meeting"
-            && resolveContactIdentity(
-              state.contactContext,
-              state.bookingDraft?.contactId,
-            ).kind !== "owned"
-          ) {
-            trackToolError(call.name, CONTACT_OWNERSHIP_REQUIRED_ERROR);
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: CONTACT_OWNERSHIP_REQUIRED_ERROR,
-                  hint:
-                    "Resolve a Telegram-owned Contact for the current patient before creating the meeting.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
-            continue;
-          }
-          const chatConfirmationReplay = isPendingChatConfirmationReplay(
-            state,
-            call.name === "create_meeting" ? "create" : "reschedule",
-            call.args,
-          );
-          if (call.name === "reschedule_meeting") {
-            const draft = state.bookingDraft;
-            const normalizedArgs = call.args as { dateStart?: unknown; dateEnd?: unknown };
-            const datesAreValid =
-              KYIV_LOCAL_ISO_SCHEMA.safeParse(normalizedArgs.dateStart).success
-              && KYIV_LOCAL_ISO_SCHEMA.safeParse(normalizedArgs.dateEnd).success;
-            if (
-              datesAreValid
-              && (
-                draft?.mode !== "reschedule"
-                || draft.rescheduleTarget == null
-                || draft.selectedSlot == null
-                || draft.pendingCommand?.action !== "reschedule"
-                || (!chatConfirmationReplay && !freshAvailabilityValidatesSelectedSlot(state))
-              )
-            ) {
-              trackToolError(call.name, RESCHEDULE_STATE_REQUIRED_ERROR);
-              synthetic.push(
-                new ToolMessage({
-                  content: JSON.stringify({
-                    error: RESCHEDULE_STATE_REQUIRED_ERROR,
-                    hint: "Select a slot from fresh availability before rescheduling.",
-                  }),
-                  tool_call_id: call.id ?? "",
-                  name: call.name,
-                }),
-              );
-              continue;
-            }
-          }
-          const args = call.args as {
-            dateStart?: string;
-            dateEnd?: string;
-            serviceId?: string;
-            contactId?: string;
-          };
-          const selectedSlot = authoritativeSelectedSlot(state);
-          const requiresFreshCreateValidation = call.name === "create_meeting"
-            && state.bookingDraft?.pendingCommand?.action === "create"
-            && !chatConfirmationReplay;
-          if (requiresFreshCreateValidation && !freshAvailabilityValidatesSelectedSlot(state)) {
-            trackToolError(call.name, SELECTED_SLOT_NOT_AVAILABLE_ERROR);
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: SELECTED_SLOT_NOT_AVAILABLE_ERROR,
-                  hint: "Refresh availability and offer another slot before booking.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
-            continue;
-          }
-          if (selectedSlot) {
-            const availability = state.bookingDraft?.selectedSlot
-              ? state.availabilityContext
-              : null;
-            const selectedDay = availability?.days.find(
-              (day) => day.date === selectedSlot.dateStart.slice(0, 10),
-            );
-            const selectedSlotStillAvailable = availabilityMatchesBooking(
-              availability,
-              state.bookingDraft,
-            )
-              && (availability == null
-                || selectedDay == null
-                ? availability == null
-                : selectedDay.slots.some((slot) =>
-                  slot.dateStart === selectedSlot.dateStart && slot.dateEnd === selectedSlot.dateEnd,
-                ));
-            if (!selectedSlotStillAvailable) {
-              trackToolError(call.name, SELECTED_SLOT_NOT_AVAILABLE_ERROR);
-              synthetic.push(
-                new ToolMessage({
-                  content: JSON.stringify({
-                    error: SELECTED_SLOT_NOT_AVAILABLE_ERROR,
-                    hint: "Refresh availability and offer another slot before booking.",
-                  }),
-                  tool_call_id: call.id ?? "",
-                  name: call.name,
-                }),
-              );
-              continue;
-            }
-          }
-          if (
-            (call.name === "reschedule_meeting" || selectedSlot == null)
-            && (
-              !KYIV_LOCAL_ISO_SCHEMA.safeParse(args.dateStart).success
-              || !KYIV_LOCAL_ISO_SCHEMA.safeParse(args.dateEnd).success
-            )
-          ) {
-            trackToolError(call.name, "Invalid meeting datetime");
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: "Invalid meeting datetime",
-                  hint:
-                    "Use YYYY-MM-DDTHH:mm:ss from <booking_draft> or present_availability_slots.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
+            strippedUnstampedRuntime = true;
+            contactRecoveryStrip = "link_candidate";
             continue;
           }
         }
@@ -1164,63 +922,10 @@ export const createAgentToolsNode = (
         if (call.name === "present_availability_slots") {
           if (!bookingDraftCanPresentAvailability(state.bookingDraft)) {
             trackToolError(call.name, "Availability requires accepted service");
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: "Availability requires accepted service",
-                  hint:
-                    "Accept a service (or bind a reschedule target) before presenting availability.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: "present_availability_slots",
-              }),
-            );
+            strippedUnstampedRuntime = true;
             continue;
           }
-          // Own paging cursors from checkpoint — the model chooses semantic direction,
-          // but must not invent calendar boundaries.
-          const rawArgs = (call.args ?? {}) as AvailabilitySlotsToolArgs;
-          const runtimeRequest = resolveBookingScheduleRequest(lastPatientText(state), kyivToday(), {
-            availabilityContext: state.availabilityContext,
-            availabilityCursor: state.availabilityCursor,
-            selectedDate: state.bookingDraft?.selectedDate,
-          }) ?? (
-            state.bookingDraft?.selectedDate
-            && rawArgs.direction === "exact"
-            && rawArgs.date === state.bookingDraft.selectedDate
-              ? { kind: "exact" as const, date: state.bookingDraft.selectedDate }
-              : null
-          );
-          const dayPick = matchAvailabilityDay(
-            lastPatientText(state),
-            state.availabilityContext?.days ?? [],
-          );
-          const args = normalizeAvailabilityToolArgs({
-            args: rawArgs,
-            runtimeRequest,
-            offeredDayDate: dayPick?.date ?? null,
-            availabilityContext: state.availabilityContext,
-            availabilityCursor: state.availabilityCursor,
-            scope: bookingAvailabilityScope(state.bookingDraft),
-            availabilityPagedThisTurn,
-            anchors: bookingDateAnchors(state),
-          });
-          call.args = args;
-          if (args.direction === "exact" && !args.date) {
-            trackToolError(call.name, "Exact availability date missing");
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: "Exact availability date missing",
-                  hint: "Resolve the patient's named calendar date before searching availability.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: "present_availability_slots",
-              }),
-            );
-            continue;
-          }
-          const parsed = presentAvailabilitySlotsArgsSchema.safeParse(args);
+          const parsed = presentAvailabilitySlotsArgsSchema.safeParse(call.args ?? {});
           if (!parsed.success) {
             trackToolError(call.name, "Invalid availability arguments");
             synthetic.push(
@@ -1237,6 +942,20 @@ export const createAgentToolsNode = (
             continue;
           }
           call.args = parsed.data;
+          if (parsed.data.direction === "exact" && !parsed.data.date) {
+            trackToolError(call.name, "Exact availability date missing");
+            synthetic.push(
+              new ToolMessage({
+                content: JSON.stringify({
+                  error: "Exact availability date missing",
+                  hint: "Resolve the patient's named calendar date before searching availability.",
+                }),
+                tool_call_id: call.id ?? "",
+                name: "present_availability_slots",
+              }),
+            );
+            continue;
+          }
           const hit = tryAvailabilityCacheHit(state.availabilityContext, parsed.data);
           if (hit) {
             trackEvent("availability_cache_hit", {
@@ -1253,8 +972,78 @@ export const createAgentToolsNode = (
             );
             continue;
           }
-          if (args.direction === "earlier" || args.direction === "later") {
-            availabilityPagedThisTurn = true;
+        }
+
+        if (
+          (call.name === "create_meeting" || call.name === "reschedule_meeting")
+          && blocksConsultationWithoutAgreement(agentId, call, state)
+        ) {
+          trackEvent("booking_consultation_guard", {
+            phase: state.bookingDraft?.phase ?? "service",
+            outcome: "blocked",
+          });
+          strippedUnstampedRuntime = true;
+          consultationAgreementStrip = true;
+          continue;
+        }
+
+        // Defense in depth: ownership missing → strip; contact_field owns recovery.
+        if (
+          call.name === "create_meeting"
+          && resolveContactIdentity(
+            state.contactContext,
+            state.bookingDraft?.contactId,
+          ).kind !== "owned"
+        ) {
+          trackToolError(call.name, CONTACT_OWNERSHIP_REQUIRED_ERROR);
+          strippedUnstampedRuntime = true;
+          contactRecoveryStrip = "ownership";
+          continue;
+        }
+
+        if (call.name === "create_meeting" || call.name === "reschedule_meeting") {
+          const action = call.name === "create_meeting" ? "create" : "reschedule";
+          const chatConfirmationReplay = isPendingChatConfirmationReplay(
+            state,
+            action,
+            call.args,
+          );
+          const requiresFresh = state.bookingDraft?.pendingCommand?.action === action
+            && !chatConfirmationReplay;
+          if (requiresFresh && !freshAvailabilityValidatesSelectedSlot(state)) {
+            trackToolError(call.name, "Selected slot is no longer available");
+            strippedUnstampedRuntime = true;
+            continue;
+          }
+          const selected = authoritativeSelectedSlot(state);
+          const args = (call.args ?? {}) as Record<string, unknown>;
+          if (
+            selected != null
+            && !chatConfirmationReplay
+            && typeof args.dateStart === "string"
+            && typeof args.dateEnd === "string"
+            && (
+              args.dateStart !== selected.dateStart
+              || args.dateEnd !== selected.dateEnd
+            )
+          ) {
+            trackToolError(call.name, "Selected slot is no longer available");
+            strippedUnstampedRuntime = true;
+            continue;
+          }
+          if (
+            call.name === "reschedule_meeting"
+            && (
+              state.bookingDraft?.mode !== "reschedule"
+              || state.bookingDraft.rescheduleTarget == null
+              || state.bookingDraft.selectedSlot == null
+              || state.bookingDraft.pendingCommand?.action !== "reschedule"
+            )
+            && !chatConfirmationReplay
+          ) {
+            trackToolError(call.name, "Reschedule state required");
+            strippedUnstampedRuntime = true;
+            continue;
           }
         }
 
@@ -1268,23 +1057,74 @@ export const createAgentToolsNode = (
             contactId == null
             || !phoneCandidateCanBeLinked(resolveContactIdentity(state.contactContext), contactId)
           ) {
+            // Fail closed — occupied phone keyboard owns recovery.
             trackToolError(call.name, CONTACT_LINK_CANDIDATE_REQUIRED_ERROR);
-            synthetic.push(
-              new ToolMessage({
-                content: JSON.stringify({
-                  error: CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
-                  hint:
-                    "Link only the Contact returned by find_contact_by_phone for this patient.",
-                }),
-                tool_call_id: call.id ?? "",
-                name: call.name,
-              }),
-            );
+            strippedUnstampedRuntime = true;
+            contactRecoveryStrip = "link_candidate";
             continue;
           }
         }
 
         remainingCalls.push(call);
+      }
+
+      // Drop unstamped runtime calls from the AI message so the tape stays
+      // protocol-valid without synthetic invariant ToolMessages.
+      if (
+        strippedUnstampedRuntime
+        && remainingCalls.length === 0
+        && synthetic.length === 0
+      ) {
+        const lastAi = agentMessages[lastAiIndex] as AIMessage;
+        const kept = (lastAi.tool_calls ?? []).filter(
+          (call) => !isBookingRuntimeToolName(call.name),
+        );
+        const stripUpdate: ClinicStateUpdate = {
+          agentMessages: new Overwrite([
+            ...agentMessages.slice(0, lastAiIndex),
+            new AIMessage({
+              content: lastAi.content,
+              tool_calls: kept,
+              additional_kwargs: lastAi.additional_kwargs,
+              response_metadata: lastAi.response_metadata,
+              id: lastAi.id,
+            } as ConstructorParameters<typeof AIMessage>[0]),
+            ...agentMessages.slice(lastAiIndex + 1),
+          ]),
+        };
+        if (consultationAgreementStrip) {
+          const labels = bookingOfferLabels(
+            inferConversationLocaleFromText(lastPatientText(state)),
+          );
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            {
+              type: "service_offered",
+              service: consultationService("catalog"),
+              acceptLabel: labels.acceptLabel,
+              chooseOtherLabel: labels.chooseOtherLabel,
+            },
+          );
+          stripUpdate.bookingDraft = session.bookingDraft;
+          stripUpdate.pendingInteraction = session.pendingInteraction;
+        } else if (contactRecoveryStrip != null) {
+          const session = reduceBookingSession(
+            {
+              bookingDraft: state.bookingDraft ?? null,
+              pendingInteraction: state.pendingInteraction ?? null,
+            },
+            {
+              type: "contact_field_required",
+              field: "phoneNumber",
+              occupied: contactRecoveryStrip === "link_candidate",
+            },
+          );
+          stripUpdate.pendingInteraction = session.pendingInteraction;
+        }
+        return stripUpdate;
       }
     }
 
@@ -1325,7 +1165,6 @@ export const createAgentToolsNode = (
       );
     const update: ClinicStateUpdate = {
       agentMessages: resultMessages,
-      ...noteStatusUpdate,
       ...(replacementCancellationResult
         ? { pendingCancellationPurpose: "replacement" as const }
         : {}),
@@ -1893,16 +1732,31 @@ export const routeAfterAgentTools = (
     return finalizeName;
   }
 
-  if (bookingMutationNeedsModelRecovery(state)) {
-    return llmName;
-  }
-
+  // Not authorized → mutation_finalize patient-safe copy (not the LLM).
   if (mutationFinalizeName && terminalMeetingMutationOutcome(state) != null) {
     return mutationFinalizeName;
   }
 
+  // Contact incomplete / consultation agreement → command_prepare (typed recovery).
   if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
     return commandPrepareName;
+  }
+
+  // Ownership / link-candidate / consultation strips open a pending interaction
+  // without a ToolMessage — finalize renders the card.
+  if (
+    finalizeName
+    && state.pendingInteraction != null
+    && (
+      state.pendingInteraction.kind === "contact_field"
+      || (
+        state.pendingInteraction.kind === "service_confirm"
+        && state.bookingDraft?.serviceAcceptance?.status === "pending"
+      )
+    )
+    && !hasPendingToolCalls(state.agentMessages)
+  ) {
+    return finalizeName;
   }
 
   // REPLACE cancel with no frozen create: finalize renders the next booking step

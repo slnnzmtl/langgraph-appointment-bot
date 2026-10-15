@@ -1,5 +1,5 @@
 import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { setTrackEventForTests } from "../../analytics/track.js";
@@ -29,6 +29,14 @@ import {
   stickyContinueAgentId,
   supervisorState,
 } from "./supervisor-fixtures.js";
+
+const unwrapCommandUpdate = <T extends Record<string, unknown>>(result: unknown): T => {
+  if (result instanceof Command) {
+    return (result.update ?? {}) as T;
+  }
+  return result as T;
+};
+
 
 describe("createClinicSupervisorNode visit-change sticky", () => {
   const invoke = vi.fn();
@@ -343,7 +351,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
     );
 
-    expect(update.pendingInteraction).toMatchObject({
+    expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
       kind: "visit_select",
       stage: "action",
       meetingId: meetings.meetings[0]!.id,
@@ -373,11 +381,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorState({ messages: [new HumanMessage("Мій запис")] }),
     );
 
-    expect(update.pendingInteraction).toMatchObject({
+    expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
       kind: "visit_select",
       stage: "action",
     });
-    expect(update.pendingInteraction).not.toHaveProperty("meetingId");
+    expect(unwrapCommandUpdate(update).pendingInteraction).not.toHaveProperty("meetingId");
     expect(update.lastHandoff?.replyButtons).toEqual([...VISIT_CHANGE_MENU]);
     expect(update.lastHandoff?.replyText).not.toContain("Який візит перенести?");
     expect(update.lastHandoff?.replyText).not.toContain("Який візит скасувати?");
@@ -477,8 +485,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
 
-    expect(prepared.agentMessages).toBeInstanceOf(Overwrite);
-    const preparedMessages = (prepared.agentMessages as Overwrite<AIMessage[]>).value;
+    expect(unwrapCommandUpdate(prepared).agentMessages).toBeInstanceOf(Overwrite);
+    const preparedMessages = (unwrapCommandUpdate(prepared).agentMessages as Overwrite<AIMessage[]>).value;
     const ai = [...preparedMessages].reverse().find((m) => (m.tool_calls?.length ?? 0) > 0);
     expect(ai).toMatchObject({
       tool_calls: [
@@ -488,7 +496,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
         }),
       ],
     });
-    expect(prepared.pendingInteraction?.kind).toBe("mutation_confirm");
+    expect(unwrapCommandUpdate(prepared).pendingInteraction?.kind).toBe("mutation_confirm");
   });
 
   it("clears a seeded cancel pendingCommand on a later free-text turn", async () => {
@@ -511,7 +519,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
 
-    expect(update.bookingDraft?.pendingCommand).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toBeNull();
   });
 
   it("replaces a stale «Мій запис» list with prefetch labels", async () => {
@@ -589,8 +597,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
     expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
-    expect(update.bookingDraft).toBeNull();
-    expect(update.pendingInteraction).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
     expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
     expect(update.lastHandoff?.status).toBe("ok");
@@ -656,8 +664,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(update.bookingDraft).toBeNull();
-    expect(update.pendingInteraction).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
   });
 
   it("falls back to DEFAULT no-visits when «Мій запис» but list is empty", async () => {
@@ -787,8 +795,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);
     expect(reply).not.toBe(MAIN_MENU_GREETING_UK);
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(update.bookingDraft).toBeNull();
-    expect(update.pendingInteraction).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
   });
 
   it("applyModelDecision ignores next=booking without reply on Головне меню", async () => {
@@ -838,7 +846,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
     expect(invoke).not.toHaveBeenCalled();
-    expect(update.pendingInteraction).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
     expect(update.lastHandoff?.replyText).toBe(VISIT_DECLINE_REPLY_UK);
   });
 
@@ -861,7 +869,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
     expect(invoke).toHaveBeenCalled();
-    expect(update.pendingInteraction).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
     expect(update.lastHandoff?.replyText).toBe(VISIT_DECLINE_REPLY_UK);
   });
 
@@ -885,7 +893,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyText).toBe("Чим можу допомогти?");
-    expect(update.bookingDraft?.pendingCommand ?? null).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
   it("ignores a model choiceId for interactions owned by a specialist", async () => {
@@ -903,7 +911,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
         },
       }),
     );
-    expect(update.pendingInteraction?.kind).not.toBe("catalog_detour");
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind).not.toBe("catalog_detour");
   });
 
   it("routes visit_cancel intent to booking with a seeded cancel draft", async () => {
@@ -912,7 +920,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorState({ messages: [new HumanMessage("скасуй мій візит будь ласка")] }),
     );
     expect(update.next).toBe("booking");
-    expect(update.bookingDraft?.pendingCommand).toMatchObject({
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toMatchObject({
       action: "cancel",
       payload: { meetingId: "m-1" },
     });
@@ -924,13 +932,13 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorState({ messages: [new HumanMessage("хочу скасувати візит")] }),
     );
     expect(update.next).toBe("FINISH");
-    expect(update.pendingInteraction).toMatchObject({
+    expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
       kind: "visit_select",
       stage: "meeting",
       action: "cancel",
     });
     expect(update.lastHandoff?.replyText).toBe("Який візит скасувати?");
-    expect(update.bookingDraft?.pendingCommand ?? null).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
   it("does not seed a mutation when visit_cancel intent has no planned visit", async () => {
@@ -939,7 +947,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       supervisorState({ messages: [new HumanMessage("скасуйте мій запис")] }),
     );
     expect(update.next).toBe("booking");
-    expect(update.bookingDraft?.pendingCommand ?? null).toBeNull();
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
   it("routes a fresh generic book intent to booking via the supervisor LLM", async () => {
@@ -951,8 +959,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("booking");
-    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
-    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+    expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance ?? null).toBeNull();
   });
 
   it("routes English free-text book to booking via the supervisor LLM", async () => {
@@ -964,7 +972,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     );
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("booking");
-    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });
 
   it("does not FINISH-offer consultation when planned visits exist", async () => {
@@ -975,7 +983,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
     expect(update.next).toBe("booking");
-    expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind).not.toBe("service_confirm");
   });
 
   it("does not FINISH-offer consultation when a booking draft is already active", async () => {
@@ -994,7 +1002,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.next).toBe("booking");
     // Partial update must not replace the active draft with a fresh consultation offer.
     expect(update.next).not.toBe("FINISH");
-    expect(update.pendingInteraction?.kind).not.toBe("service_confirm");
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind).not.toBe("service_confirm");
   });
 
   it("routes named-procedure booking with no visit to faq without seeding consultation", async () => {
@@ -1013,8 +1021,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("faq");
     expect(update.supervisorIntent).toBe("named_procedure");
-    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
-    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+    expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });
 
   it("routes named-procedure booking with a planned visit to booking without seeding consultation", async () => {
@@ -1033,8 +1041,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(invoke).toHaveBeenCalledOnce();
     expect(update.next).toBe("booking");
     expect(update.supervisorIntent).toBeNull();
-    expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
-    expect(update.pendingInteraction?.kind ?? null).not.toBe("service_confirm");
+    expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(unwrapCommandUpdate(update).pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });
 
   it("leaves an existing service_confirm for specialist handling on unmatched free text", async () => {

@@ -20,6 +20,7 @@ import {
 } from "../../tools/availability-slots.js";
 import { resolveBookingScheduleRequest } from "../booking-schedule.js";
 import { normalizeListServicesResult, type ServicesContext } from "../../tools/service-tools.js";
+import { BOOKING_CONTACT_REQUIRED_FIELDS } from "../../tools/contact-tools.js";
 import { trackEvent } from "../../analytics/track.js";
 import {
   CONSULTATION_SERVICE_ID,
@@ -167,17 +168,11 @@ export const blocksConsultationWithoutAgreement = (
     && state.bookingDraft.serviceAcceptance.service.id === CONSULTATION_SERVICE_ID
   );
 
+/** Real CRM / tool-level outcomes only — invariant guards are typed route outcomes. */
 const BLOCKED_MEETING_ERRORS = new Set([
   "Contact incomplete",
   "Already booked",
   "Not authorized",
-  "Note step required",
-  CREATE_CONSULTATION_REQUIRED_ERROR,
-  SLOT_SELECTION_REQUIRED_ERROR,
-  SELECTED_SLOT_NOT_AVAILABLE_ERROR,
-  RESCHEDULE_STATE_REQUIRED_ERROR,
-  CONTACT_OWNERSHIP_REQUIRED_ERROR,
-  CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
 ]);
 
 /** Mutation success is runtime-owned; model prose can never prove a CRM write. */
@@ -272,15 +267,19 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     if (message.name !== "cancel_meeting") {
       const record = asJsonRecord(extractMessageTextContent(message.content).trim());
       const isReplacementConflict = record?.error === "Already booked";
-      const isInvariantGuard = record?.error === CREATE_CONSULTATION_REQUIRED_ERROR;
+      // Contact incomplete is typed ContactCommand recovery via command_prepare.
+      const isContactIncomplete = record?.error === "Contact incomplete";
+      // Not authorized is finalize-owned patient-safe copy (mutation_finalize).
+      const isNotAuthorized = record?.error === "Not authorized";
       if (
         !isReplacementConflict
+        && !isContactIncomplete
         && (
-          isInvariantGuard
-          || outcome === "committed"
+          outcome === "committed"
           || outcome === "declined"
           || outcome === "abandoned"
           || outcome === "failed"
+          || (outcome === "blocked" && isNotAuthorized)
         )
       ) {
         return message;
@@ -424,28 +423,56 @@ export const createContactPhoneMatchesOccupiedCandidate = (
   });
 };
 
-const latestMeetingMutationError = (messages: BaseMessage[]): string | undefined => {
+/**
+ * Latest JSON body from a meeting-mutation ToolMessage this turn.
+ * Optionally includes link_telegram_to_contact (error-string callers only).
+ */
+const latestMeetingMutationJson = (
+  messages: BaseMessage[],
+  options?: { includeLinkTool?: boolean },
+): Record<string, unknown> | null => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (
-      !(message instanceof ToolMessage)
-      || (!MEETING_MUTATION_TOOLS.has(message.name ?? "")
-        && message.name !== "link_telegram_to_contact")
-    ) {
+    if (!(message instanceof ToolMessage)) {
       continue;
     }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
-    return typeof record?.error === "string" ? record.error : undefined;
+    const name = message.name ?? "";
+    const isMeeting = MEETING_MUTATION_TOOLS.has(name);
+    const isLink = name === "link_telegram_to_contact";
+    if (!isMeeting && !(options?.includeLinkTool === true && isLink)) {
+      continue;
+    }
+    return asJsonRecord(extractMessageTextContent(message.content).trim()) ?? {};
   }
-  return undefined;
+  return null;
 };
 
-export const bookingMutationNeedsModelRecovery = (state: ClinicState): boolean => {
-  const error = latestMeetingMutationError(state.agentMessages ?? []);
-  return error === "Contact incomplete"
-    || error === CONTACT_OWNERSHIP_REQUIRED_ERROR
-    || error === CONTACT_LINK_CANDIDATE_REQUIRED_ERROR
-    || error === "Not authorized";
+/** Latest structured error from a meeting mutation or link tool this turn. */
+export const latestMeetingMutationError = (messages: BaseMessage[]): string | undefined => {
+  const record = latestMeetingMutationJson(messages, { includeLinkTool: true });
+  return typeof record?.error === "string" ? record.error : undefined;
+};
+
+export type ContactIncompleteField = (typeof BOOKING_CONTACT_REQUIRED_FIELDS)[number];
+
+/**
+ * When the latest meeting-mutation error is Contact incomplete, return CRM
+ * missingFields from that ToolMessage (not the cached contactContext).
+ * Meeting tools only — link_telegram_to_contact is ignored.
+ */
+export const latestContactIncompleteMissingFields = (
+  messages: BaseMessage[],
+): ContactIncompleteField[] | null => {
+  const record = latestMeetingMutationJson(messages);
+  if (record == null || record.error !== "Contact incomplete") {
+    return null;
+  }
+  const raw = Array.isArray(record.missingFields) ? record.missingFields : [];
+  const allowed = new Set<string>(BOOKING_CONTACT_REQUIRED_FIELDS);
+  return raw.filter(
+    (field): field is ContactIncompleteField =>
+      typeof field === "string" && allowed.has(field),
+  );
 };
 
 /** True when a ToolMessage for this tool is already in the current agent turn. */
@@ -801,8 +828,6 @@ export const matchAvailabilitySlot = (
 
 export const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boolean =>
   status !== "skipped" && status !== "answered";
-
-export const CREATE_NOTE_REQUIRED_ERROR = "Note step required";
 
 export const BOOKING_SLOT_REQUIRED_UK =
   "Будь ласка, спочатку оберіть дату й час із запропонованих варіантів.";

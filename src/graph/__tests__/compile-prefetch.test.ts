@@ -1214,7 +1214,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     );
 
     const reply = String(result.messages.at(-1)?.content);
-    expect(modelInvoke).toHaveBeenCalledOnce();
+    // Contact field is opened by command_prepare render — no booking LLM turn.
+    expect(modelInvoke).not.toHaveBeenCalled();
     expect(result.__interrupt__).toBeUndefined();
     expect(reply).toBe(BOOKING_PHONE_QUESTION_UK);
     expect(reply).not.toContain("Запис створено");
