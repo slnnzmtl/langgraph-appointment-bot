@@ -207,9 +207,13 @@ const pagingRequest = (
 export const exactRevalidateRequest = (
   state: ClinicState,
   purpose: "create_revalidate" | "reschedule_revalidate",
+  options?: { ignoreSlotsAlreadyThisTurn?: boolean },
 ): RuntimeAvailabilityRequest | null => {
   const selectedDate = state.bookingDraft?.selectedDate;
-  if (selectedDate == null || slotsAlreadyThisTurn(state)) {
+  if (
+    selectedDate == null
+    || (!options?.ignoreSlotsAlreadyThisTurn && slotsAlreadyThisTurn(state))
+  ) {
     return null;
   }
   const args = withDraftScope(state, {

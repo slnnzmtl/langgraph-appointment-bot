@@ -66,6 +66,9 @@ import {
   captureAvailabilityFromMessages,
   lastPatientText,
   latestMeetingMutationError,
+  latestContactIncompleteMissingFields,
+  availabilityRecoveryOffer,
+  type ContactIncompleteField,
 } from "./shared.js";
 
 export const RUNTIME_TOOL_ORIGIN = "command_prepare" as const;
@@ -602,6 +605,117 @@ const availabilityExecute = (
     update,
   );
 
+/** Overlay CRM missingFields onto cached contactContext so ContactCommand agrees with the mutation error. */
+const overlayContactIncompleteFields = (
+  context: ClinicState["contactContext"],
+  contactId: string | null | undefined,
+  missingFields: readonly ContactIncompleteField[],
+): ClinicState["contactContext"] => {
+  if (context == null || contactId == null || missingFields.length === 0) {
+    return context;
+  }
+  return {
+    ...context,
+    contacts: context.contacts.map((contact) => {
+      if (contact.id !== contactId) {
+        return contact;
+      }
+      const next: Record<string, unknown> = {
+        ...contact,
+        missingFields: [...missingFields],
+      };
+      for (const field of missingFields) {
+        next[field] = null;
+      }
+      return next;
+    }),
+  };
+};
+
+/**
+ * After create_meeting returns Contact incomplete: trust CRM missingFields,
+ * drop the HITL confirm card, and open contact_field (create) or clear confirm (reschedule).
+ */
+const contactIncompleteRecovery = (state: ClinicState): BookingCommandOutcome => {
+  const missingFromCrm = latestContactIncompleteMissingFields(state.agentMessages ?? [])
+    ?? [];
+  const clearedConfirm = reduceBookingSession(
+    {
+      bookingDraft: state.bookingDraft ?? null,
+      pendingInteraction: state.pendingInteraction ?? null,
+    },
+    { type: "mutation_confirm_cleared" },
+  );
+  let bookingDraft = clearedConfirm.bookingDraft;
+  if (bookingDraft?.pendingCommand != null) {
+    bookingDraft = reduceBookingDraft(bookingDraft, { type: "command_cleared" });
+  }
+  const contactContext = overlayContactIncompleteFields(
+    state.contactContext,
+    bookingDraft?.contactId,
+    missingFromCrm,
+  );
+  const recoveryState: ClinicState = {
+    ...state,
+    bookingDraft,
+    pendingInteraction: clearedConfirm.pendingInteraction,
+    contactContext,
+  };
+
+  const baseUpdate: ClinicStateUpdate = {
+    bookingDraft,
+    pendingInteraction: clearedConfirm.pendingInteraction,
+    ...(contactContext !== state.contactContext ? { contactContext } : {}),
+  };
+
+  // Reschedule never collects contact fields; still drop the phantom confirm card.
+  if (bookingDraft?.mode === "reschedule") {
+    return { kind: "render", reason: "contact_field", update: baseUpdate };
+  }
+
+  if (contactCommandReadyForInjection(recoveryState)) {
+    const command = resolveContactCommand(recoveryState);
+    if (command.action === "request_field") {
+      return {
+        kind: "render",
+        reason: "contact_field",
+        update: {
+          ...baseUpdate,
+          pendingInteraction: openContactFieldInteraction(
+            command.field,
+            command.occupied === true,
+          ),
+        },
+      };
+    }
+    if (contactCommandNeedsToolInjection(command) && !hasPendingToolCalls(state.agentMessages)) {
+      const toolCall = contactToolCallFromCommand(
+        command,
+        bookingDraft?.version ?? 0,
+      );
+      if (toolCall != null) {
+        return executeToolOutcome(recoveryState, toolCall, baseUpdate);
+      }
+    }
+  }
+
+  // Cached context looked complete but CRM listed fields — still open the first field.
+  const fallbackField = missingFromCrm[0];
+  if (fallbackField != null) {
+    return {
+      kind: "render",
+      reason: "contact_field",
+      update: {
+        ...baseUpdate,
+        pendingInteraction: openContactFieldInteraction(fallbackField),
+      },
+    };
+  }
+
+  // Never leave mutation_confirm active after Contact incomplete.
+  return { kind: "render", reason: "contact_field", update: baseUpdate };
+};
+
 const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   const session = reduceBookingSession(
     {
@@ -614,14 +728,62 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
     },
   );
   trackEvent("booking_invariant_violation", { reason: "stale_slot" });
+
+  // Keep the fresh exact-day snapshot that proved the slot is gone; rebuild
+  // DATE/TIME from it. Never render with a null interaction (visit_note default).
+  const availability = state.availabilityContext
+    ?? captureAvailabilityFromMessages(state.agentMessages ?? [])
+    ?? null;
+  const recoveryState: ClinicState = {
+    ...state,
+    bookingDraft: session.bookingDraft,
+    pendingInteraction: session.pendingInteraction,
+    availabilityContext: availability,
+  };
+  const offer = availabilityRecoveryOffer(recoveryState);
+  if (offer != null) {
+    return {
+      kind: "render",
+      reason: "stale_slot",
+      update: {
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: offer.interaction,
+        ...(state.availabilityContext == null && availability != null
+          ? { availabilityContext: availability }
+          : {}),
+      },
+    };
+  }
+
+  const purpose = state.bookingDraft?.mode === "reschedule"
+    ? "reschedule_revalidate"
+    : "create_revalidate";
+  const revalidateState: ClinicState = {
+    ...state,
+    bookingDraft: session.bookingDraft,
+  };
+  const revalidate = exactRevalidateRequest(revalidateState, purpose, {
+    ignoreSlotsAlreadyThisTurn: true,
+  });
+  if (revalidate != null) {
+    return availabilityExecute(
+      state,
+      revalidate.args,
+      revalidate.purpose,
+      `booking_stale_revalidate_${state.bookingDraft?.version ?? 0}`,
+      {
+        bookingDraft: session.bookingDraft,
+        pendingInteraction: session.pendingInteraction,
+      },
+    );
+  }
+
   return {
     kind: "render",
-    reason: "stale_slot",
+    reason: "missing_exact_date",
     update: {
       bookingDraft: session.bookingDraft,
       pendingInteraction: session.pendingInteraction,
-      availabilityContext: null,
-      availabilityCursor: null,
     },
   };
 };
@@ -894,34 +1056,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
 
   // CRM Contact incomplete: reopen the identity ladder; do not retry create.
   if (latestMeetingMutationError(state.agentMessages ?? []) === "Contact incomplete") {
-    if (contactCommandReadyForInjection(state)) {
-      const command = resolveContactCommand(state);
-      if (
-        command.action === "request_field"
-        && state.bookingDraft?.mode !== "reschedule"
-      ) {
-        return {
-          kind: "render",
-          reason: "contact_field",
-          update: {
-            pendingInteraction: openContactFieldInteraction(
-              command.field,
-              command.occupied === true,
-            ),
-          },
-        };
-      }
-      if (contactCommandNeedsToolInjection(command) && !hasPendingToolCalls(state.agentMessages)) {
-        const toolCall = contactToolCallFromCommand(
-          command,
-          state.bookingDraft?.version ?? 0,
-        );
-        if (toolCall != null) {
-          return executeToolOutcome(state, toolCall);
-        }
-      }
-    }
-    return { kind: "none" };
+    return contactIncompleteRecovery(state);
   }
 
   const rescheduleCommand = rescheduleCommandFromBookingDraft(state);

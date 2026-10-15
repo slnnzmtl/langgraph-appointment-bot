@@ -2,6 +2,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import { Command, Overwrite } from "@langchain/langgraph";
 
 import {
+  BOOKING_SCHEDULE_RESELECT_UK,
   RETURN_TO_BOOKING_LABEL_UK,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
@@ -485,10 +486,28 @@ export const createBookingNoteOrchestratorNode = (
 export const createBookingInteractionRenderNode = (
   agent: { id: string; name: string },
 ) => (state: ClinicState) => {
-  const interaction = state.pendingInteraction != null
-    && isBookingOwnedInteraction(state.pendingInteraction)
-    ? state.pendingInteraction
-    : openVisitNoteInteraction();
+  const pending = state.pendingInteraction;
+  const canDefaultVisitNote =
+    state.bookingDraft?.note.status === "awaiting"
+    && state.bookingDraft?.selectedSlot != null;
+  const interaction = pending != null && isBookingOwnedInteraction(pending)
+    ? pending
+    : canDefaultVisitNote
+      ? openVisitNoteInteraction()
+      : null;
+  if (interaction == null) {
+    // Stale-slot / missing-date recovery must not invent a visit-note prompt.
+    return {
+      agentMessages: new Overwrite([]),
+      lastHandoff: {
+        agentId: agent.id,
+        agentName: agent.name,
+        status: "ok" as const,
+        replyText: BOOKING_SCHEDULE_RESELECT_UK,
+        replyButtons: [],
+      },
+    };
+  }
   const message = renderBookingInteractionMessage(interaction);
   const replyText = String(message.content);
   const replyButtons = replyButtonsForInteraction(interaction);
