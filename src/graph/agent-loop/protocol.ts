@@ -36,6 +36,17 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "reschedule_meeting",
 ]);
 
+export const meetingMutationUnauthorizedThisTurn = (
+  messages: BaseMessage[],
+): boolean =>
+  messages.some((message) => {
+    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+      return false;
+    }
+    return asJsonRecord(extractMessageTextContent(message.content).trim())?.error
+      === "Not authorized";
+  });
+
 /** Contact CRM writes that must not same-turn retry after known_field / operational failure. */
 export const CONTACT_WRITE_TOOLS = new Set([
   "create_contact",
