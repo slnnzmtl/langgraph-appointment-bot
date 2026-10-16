@@ -15,12 +15,12 @@ import {
 import { z } from "zod";
 
 import {
+  createBookingPrepareNode,
+  createBookingFinalizeNode,
   advanceBookingNoteStep,
   createAgentCommandPrepareNode,
-  createAgentFinalizeNode,
   createAgentLlmNode,
   createAgentMutationFinalizeNode,
-  createAgentPrepareNode,
   createAgentToolsNode,
   availabilityOfferFromToolTurn,
   formatAvailabilityDateOffer,
@@ -119,7 +119,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
 
   it("starts a direct reschedule with a fresh nearest search", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const rescheduleDraft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "reschedule_started",
       meeting: makeListedMeetings().meetings[0]!,
@@ -170,7 +170,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         meeting: makeListedMeetings().meetings[0]!,
       }),
     });
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const seeded = await prepare(base);
     expect(unwrapCommandUpdate(seeded).bookingDraft).toMatchObject({
       mode: "reschedule",
@@ -294,7 +294,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         meeting: sixtyMinuteMeeting,
       }),
     });
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const seeded = await prepare(base);
     expect(unwrapCommandUpdate(seeded).bookingDraft).toMatchObject({
       mode: "reschedule",
@@ -481,7 +481,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("reports an unavailable requested time and offers the remaining CRM slots", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const draft = reduceBookingDraft(
       reduceBookingDraft(createEmptyBookingDraft(), {
         type: "reschedule_started",
@@ -525,7 +525,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("keeps consultation consent and the selected slot through note skip", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const offer = await finalize(
       clinicState({
         messages: [new HumanMessage("Записатись")],
@@ -533,7 +533,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       }),
     );
     expect(offer.pendingInteraction?.kind).toBe("service_confirm");
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const accepted = await prepare(
       availabilityClinicState({
         messages: [
@@ -1120,13 +1120,13 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       });
 
       expect(routeAfterAgentLlm(state, 8, "tools", "finalize", "prepare")).toBe("finalize");
-      const finalized = await createAgentFinalizeNode(agent)(state);
+      const finalized = await createBookingFinalizeNode(agent)(state);
       expect((finalized.messages as AIMessage[])[0]?.tool_calls).toHaveLength(0);
     },
   );
 
   it("invalidates a create slot when chat confirmation remains unresolved", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         bookingDraft: {
@@ -1154,7 +1154,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("does not drop the slot when keep/switch already cleared the confirm command", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         bookingDraft: canonicalBookingDraft({
@@ -1193,7 +1193,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("finalize keeps keep/switch labels in text and on the keyboard", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         contactContext: ownedContactContext(),
@@ -1308,7 +1308,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("does not rewrite HITL other-reply prose with leftover pre-confirm TIME", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         messages: [new HumanMessage("запиши на 22 жовтня")],
@@ -1424,7 +1424,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("invalidates a reschedule slot when chat confirmation remains unresolved", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         bookingDraft: {
@@ -1461,7 +1461,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("clears direct cancellation confirmation state when chat confirmation remains unresolved", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         pendingCancellationPurpose: "direct",
@@ -1497,7 +1497,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("terminates replacement cancellation when chat confirmation remains unresolved", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         pendingCancellationPurpose: "replacement",
@@ -2093,7 +2093,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("DDD-48: code-owns skip-comment keyboard while note step is awaiting", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         stepCount: 1,
@@ -2140,7 +2140,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(agentMessagesOf(toolsUpdate).some((message) => message instanceof ToolMessage))
       .toBe(false);
 
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
         stepCount: 2,
@@ -2331,7 +2331,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("records catalog consultation selection before accepting a generic procedure offer", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const prepared = await prepare(availabilityClinicState({
       messages: [
         new HumanMessage("Консультація первинна"),
@@ -3396,7 +3396,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const withTool = await finalize(
       availabilityClinicState({
         stepCount: 2,
@@ -3483,7 +3483,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("does not attach navigation when an empty-date model reply has no validated tool result", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         availabilityContext: {
@@ -3556,7 +3556,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       selectedSlot: null,
       note: { status: "unasked" },
     });
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       availabilityClinicState({
         messages: [new HumanMessage("14:00")],

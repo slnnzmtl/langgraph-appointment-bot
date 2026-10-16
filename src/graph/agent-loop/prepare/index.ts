@@ -8,38 +8,44 @@ import type {
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../../types.js";
 import { prepareBookingTurn } from "./booking.js";
 import { prepareFaqTurn } from "./faq.js";
 
-export type CreateAgentPrepareOptions = {
+export type CreateFaqPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
   /** LLM catalog filter for free-text slang («ботокс») that lexical matching misses. */
   selectCandidates?: SelectServiceCandidates;
   /** Fetch the CRM catalog when «Обрати іншу процедуру» arrives before any list_services. */
   loadServices?: () => Promise<ServicesContext | null>;
-  /** Classify first/last name replies while contact_field is open (booking). */
+};
+
+export type CreateBookingPrepareOptions = {
+  /** Classify first/last name replies while contact_field is open. */
   classifyContactName?: ClassifyContactNameTurn;
 };
 
-export const createAgentPrepareNode = (
-  agentId: string,
-  options?: CreateAgentPrepareOptions,
+/** Wipe prior agent tape and reset step count for a fresh prepare turn. */
+const wipeAgentTape = (state: ClinicState): ClinicStateUpdate => ({
+  agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
+  stepCount: 0,
+});
+
+export const createFaqPrepareNode = (
+  options?: CreateFaqPrepareOptions,
 ) =>
-  async (state: ClinicState): Promise<ClinicStateUpdate> => {
-    const update: ClinicStateUpdate = {
-      agentMessages: new Overwrite(stripToolNoiseFromMessages(state.messages)),
-      stepCount: 0,
-    };
-    if (agentId === FAQ_AGENT_ID) {
-      Object.assign(update, await prepareFaqTurn(state, options));
-    }
-    if (agentId === BOOKING_AGENT_ID) {
-      Object.assign(update, await prepareBookingTurn(state, {
-        ...(options?.classifyContactName != null
-          ? { classifyContactName: options.classifyContactName }
-          : {}),
-      }));
-    }
-    return update;
-  };
+  async (state: ClinicState): Promise<ClinicStateUpdate> => ({
+    ...wipeAgentTape(state),
+    ...await prepareFaqTurn(state, options),
+  });
+
+export const createBookingPrepareNode = (
+  options?: CreateBookingPrepareOptions,
+) =>
+  async (state: ClinicState): Promise<ClinicStateUpdate> => ({
+    ...wipeAgentTape(state),
+    ...await prepareBookingTurn(state, {
+      ...(options?.classifyContactName != null
+        ? { classifyContactName: options.classifyContactName }
+        : {}),
+    }),
+  });

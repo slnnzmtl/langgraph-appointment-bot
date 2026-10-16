@@ -8,8 +8,10 @@ import {
   SERVICE_CONFIRM_CONSULTATION_EN,
 } from "../../shared/clinic-constants.js";
 import {
-  createAgentFinalizeNode,
-  createAgentPrepareNode,
+  createFaqPrepareNode,
+  createBookingPrepareNode,
+  createFaqFinalizeNode,
+  createBookingFinalizeNode,
   routeAfterAgentPrepare,
 } from "../agent-loop/index.js";
 import {
@@ -103,7 +105,7 @@ describe("booking prepare entry (state)", () => {
   };
 
   it("opens REPLACE with null serviceAcceptance for an existing visit and a named booking", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       selectCandidates: familySelector,
     });
     const update = await prepare(
@@ -118,7 +120,7 @@ describe("booking prepare entry (state)", () => {
     expect(update.bookingDraft?.serviceAcceptance ?? null).toBeNull();
     expect(update.pendingInteraction?.kind ?? null).not.toBe("service_candidate");
 
-    const rendered = await createAgentFinalizeNode(bookingAgent)(
+    const rendered = await createBookingFinalizeNode(bookingAgent)(
       clinicState({
         messages: [new HumanMessage("запиши на ботокс")],
         bookingContext: listedMeetings,
@@ -134,7 +136,7 @@ describe("booking prepare entry (state)", () => {
   });
 
   it("opens a consultation offer for «Записатись» and skips the booking LLM", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({ messages: [new HumanMessage("Записатись")] }),
     );
@@ -160,7 +162,7 @@ describe("booking prepare entry (state)", () => {
   });
 
   it("opens consultation for idle booking when contact is owned and there is no visit", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const text = "Доброго дня. Можливо записатися на прийом?";
     const update = await prepare(
       clinicState({
@@ -177,7 +179,7 @@ describe("booking prepare entry (state)", () => {
 
   it("does not open consultation or catalog for unknown contact idle booking", async () => {
     let loadCalls = 0;
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       loadServices: async () => {
         loadCalls += 1;
         return botoxServices;
@@ -200,7 +202,7 @@ describe("booking prepare entry (state)", () => {
   });
 
   it("opens an English consultation offer for English «Book» keyboard", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({ messages: [new HumanMessage("Book")] }),
     );
@@ -210,7 +212,7 @@ describe("booking prepare entry (state)", () => {
         ...BOOKING_OFFER_MENU_EN,
       ]);
     }
-    const rendered = await createAgentFinalizeNode(bookingAgent)(
+    const rendered = await createBookingFinalizeNode(bookingAgent)(
       clinicState({
         messages: [new HumanMessage("Book")],
         bookingDraft: update.bookingDraft,
@@ -222,7 +224,7 @@ describe("booking prepare entry (state)", () => {
   });
 
   it("does not open a named catalog from idle booking prepare", async () => {
-    const update = await createAgentPrepareNode("booking", {
+    const update = await createBookingPrepareNode( {
       selectCandidates: familySelector,
     })(clinicState({
       messages: [new HumanMessage("запиши на ботокс")],
@@ -239,7 +241,7 @@ describe("booking prepare entry (state)", () => {
 
 describe("FAQ idle named_procedure catalog entry", () => {
   it("opens family chips from idle FAQ prepare on named_procedure + ботокс", async () => {
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates: familySelector,
     })(clinicState({
       messages: [new HumanMessage("запиши на ботокс")],
@@ -274,7 +276,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
   });
 
   it("opens service_confirm for a unique collagen row on named_procedure", async () => {
-    const faq = await createAgentPrepareNode("faq")(clinicState({
+    const faq = await createFaqPrepareNode()(clinicState({
       messages: [new HumanMessage("запиши на колаген")],
       servicesContext: {
         list: [
@@ -317,7 +319,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
   });
 
   it("does not open catalog on idle FAQ without named_procedure (price/info)", async () => {
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates: familySelector,
     })(clinicState({
       messages: [new HumanMessage("скільки коштує колаген")],
@@ -336,7 +338,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
   });
 
   it("does not open catalog on idle FAQ free text without supervisorIntent", async () => {
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates: familySelector,
     })(clinicState({
       messages: [new HumanMessage("запиши на ботокс")],
@@ -348,7 +350,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
 
   it("loads the catalog on named_procedure when servicesContext is empty", async () => {
     let loadCalls = 0;
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       loadServices: async () => {
         loadCalls += 1;
         return botoxServices;
@@ -365,7 +367,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
 
   it("does not fetch the catalog on idle FAQ when servicesContext is empty without named_procedure", async () => {
     let loadCalls = 0;
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       loadServices: async () => {
         loadCalls += 1;
         return botoxServices;
@@ -401,7 +403,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
       ],
     };
     // Lexical-only (no family selector) — unique CRM stem hit → service_confirm.
-    const faq = await createAgentPrepareNode("faq")(clinicState({
+    const faq = await createFaqPrepareNode()(clinicState({
       messages: [new HumanMessage("запиши на колаген")],
       servicesContext: services,
       pendingInteraction: botoxChips,
@@ -441,7 +443,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         { id: "g1", label: "Nabota", serviceIds: ["n1", "n2"] },
       ],
     };
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates: familySelector,
     })(clinicState({
       messages: [new HumanMessage("Скільки коштує?")],
@@ -483,7 +485,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         { label: "Nabota", serviceIds: ["n1", "n2"] },
       ],
     }));
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates,
     })(clinicState({
       messages: [new HumanMessage("Порівняй ціни цих варіантів")],
@@ -617,7 +619,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
   });
 
   it("opens family chips for named_procedure with a trailing question mark", async () => {
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates: familySelector,
     })(clinicState({
       messages: [new HumanMessage("можна записатись на ботокс?")],
@@ -660,7 +662,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
       ],
     };
     const selectCandidates = vi.fn(familySelector);
-    const faq = await createAgentPrepareNode("faq", {
+    const faq = await createFaqPrepareNode( {
       selectCandidates,
     })(clinicState({
       messages: [new HumanMessage("можна записатись на ботокс?")],
@@ -686,7 +688,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
   });
 
   it("accepts Так on FAQ-opened collagen service_confirm in booking prepare", async () => {
-    const offered = await createAgentPrepareNode("faq")(clinicState({
+    const offered = await createFaqPrepareNode()(clinicState({
       messages: [new HumanMessage("запиши на колаген")],
       servicesContext: {
         list: [
@@ -706,7 +708,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const rendered = await createAgentFinalizeNode(faqAgent)(
+    const rendered = await createFaqFinalizeNode(faqAgent)(
       clinicState({
         messages: [new HumanMessage("запиши на колаген")],
         bookingDraft: offered.bookingDraft ?? null,
@@ -727,7 +729,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
     expect(rendered.lastHandoff?.replyButtons).toEqual(["Так", "Обрати іншу процедуру"]);
     expect(rendered.supervisorIntent).toBeNull();
 
-    const accepted = await createAgentPrepareNode("booking")(clinicState({
+    const accepted = await createBookingPrepareNode()(clinicState({
       messages: [new HumanMessage("Так")],
       bookingDraft: offered.bookingDraft ?? null,
       pendingInteraction: offered.pendingInteraction ?? null,

@@ -21,11 +21,13 @@ import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
 import { resolveBookingScheduleRequest } from "./booking-schedule.js";
 import {
-  createAgentFinalizeNode,
+  createBookingFinalizeNode,
+  createFaqFinalizeNode,
   createAgentMutationFinalizeNode,
   createAgentCommandPrepareNode,
   createAgentLlmNode,
-  createAgentPrepareNode,
+  createBookingPrepareNode,
+  createFaqPrepareNode,
   createAgentToolsNode,
   finalizeNodeName,
   llmNodeName,
@@ -181,29 +183,27 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       ? (options.classifyContactName ?? createContactNameClassifier(options.supervisorLlm))
       : undefined;
 
-    const prepareOptions = agent.id === FAQ_AGENT_ID || isBooking
-      ? {
-          ...(faqPartitionCandidates != null
-            ? { partitionCandidates: faqPartitionCandidates }
-            : {}),
-          ...(faqSelectCandidates != null
-            ? { selectCandidates: faqSelectCandidates }
-            : {}),
-          ...(loadServices != null ? { loadServices } : {}),
-          ...(isBooking && classifyContactName != null
-            ? { classifyContactName }
-            : {}),
-        }
-      : undefined;
+    const faqCatalogOptions = {
+      ...(faqPartitionCandidates != null
+        ? { partitionCandidates: faqPartitionCandidates }
+        : {}),
+      ...(faqSelectCandidates != null
+        ? { selectCandidates: faqSelectCandidates }
+        : {}),
+      ...(loadServices != null ? { loadServices } : {}),
+    };
+
+    const prepareNode = agent.id === FAQ_AGENT_ID
+      ? createFaqPrepareNode(faqCatalogOptions)
+      : createBookingPrepareNode(
+          classifyContactName != null ? { classifyContactName } : undefined,
+        );
+    const finalizeNode = agent.id === FAQ_AGENT_ID
+      ? createFaqFinalizeNode(agent, faqCatalogOptions)
+      : createBookingFinalizeNode(agent);
 
     graph = graph
-      .addNode(
-        prepare,
-        createAgentPrepareNode(
-          agent.id,
-          prepareOptions,
-        ),
-      )
+      .addNode(prepare, prepareNode)
       .addNode(
         llm,
         createAgentLlmNode({
@@ -228,20 +228,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       )
       .addNode(
         finalize,
-        createAgentFinalizeNode(
-          agent,
-          agent.id === FAQ_AGENT_ID
-            ? {
-                ...(faqPartitionCandidates != null
-                  ? { partitionCandidates: faqPartitionCandidates }
-                  : {}),
-                ...(faqSelectCandidates != null
-                  ? { selectCandidates: faqSelectCandidates }
-                  : {}),
-                ...(loadServices != null ? { loadServices } : {}),
-              }
-            : undefined,
-        ),
+        finalizeNode,
         // Safety-net path may return the same abandon Command as mutationFinalize.
         { ends: [END, "supervisor"] },
       );

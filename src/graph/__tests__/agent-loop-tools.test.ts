@@ -15,8 +15,8 @@ import {
 import { z } from "zod";
 
 import {
+  createBookingPrepareNode,
   createAgentCommandPrepareNode,
-  createAgentPrepareNode,
   createAgentToolsNode,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
@@ -196,7 +196,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
   });
 
   it("does not promote a phone match to Telegram ownership", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         bookingDraft: canonicalBookingDraft({ contactId: null }),

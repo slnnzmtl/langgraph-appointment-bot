@@ -11,8 +11,10 @@ import {
 } from "vitest";
 
 import {
-  createAgentFinalizeNode,
-  createAgentPrepareNode,
+  createFaqPrepareNode,
+  createBookingPrepareNode,
+  createFaqFinalizeNode,
+  createBookingFinalizeNode,
   routeAfterAgentPrepare,
 } from "../agent-loop/index.js";
 import {
@@ -39,7 +41,7 @@ import {
 
 describe("agent-loop catalog (prepare+finalize)", () => {
   it("does not clear servicesContext when preparing FAQ", async () => {
-    const prepare = createAgentPrepareNode("faq");
+    const prepare = createFaqPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Послуги")],
@@ -52,7 +54,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("opens FAQ catalog chips on Обрати іншу процедуру via partitioner in prepare", async () => {
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async (input) => {
         expect(input.query).toContain("напрями");
         return [
@@ -104,7 +106,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("opens FAQ catalog chips on bare НІ after a consultation offer", async () => {
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async () => [
         { label: "Ін'єкційні процедури", serviceIds: ["svc-collagen"] },
         { label: "Дерматологія", serviceIds: ["svc-derm"] },
@@ -156,7 +158,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "g1", label: "Дерматологія", serviceIds: ["svc-derm"] },
       ],
     };
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async () => [
         { label: "Root wipe", serviceIds: ["svc-collagen", "svc-derm"] },
       ],
@@ -190,7 +192,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("does not auto-accept an open offer on bare digits", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("14")],
@@ -224,7 +226,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("does not auto-accept an open offer on anchored bare day with DATE snapshot", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("14")],
@@ -300,7 +302,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "svc-botox", name: "Ботулінотерапія Botox 1 зона" },
       ],
     };
-    const update = await createAgentFinalizeNode(faqAgent)(
+    const update = await createFaqFinalizeNode(faqAgent)(
       clinicState({
         messages: [new HumanMessage("запиши на коллаген")],
         servicesContext: services,
@@ -341,7 +343,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const update = await createAgentFinalizeNode(faqAgent)(
+    const update = await createFaqFinalizeNode(faqAgent)(
       clinicState({
         messages: [new HumanMessage("ні, запиши на колагеностимуляцію")],
         servicesContext: {
@@ -390,7 +392,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "svc-derm", name: "Видалення новоутворень" },
       ],
     }));
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       loadServices,
       partitionCandidates: async () => [
         { label: "Ін'єкційні процедури", serviceIds: ["svc-lip"] },
@@ -422,7 +424,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("does not open FAQ catalog on Послуги in prepare", async () => {
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async () => [
         { label: "should-not-open", serviceIds: ["svc-1", "svc-2"] },
       ],
@@ -442,7 +444,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("keeps Пілінг labels after a direction chip that was not that family", async () => {
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async () => [],
     });
     const update = await prepare(
@@ -477,7 +479,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("strips Пілінг only after the patient chose Пілінг", async () => {
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async () => [],
     });
     const update = await prepare(
@@ -522,7 +524,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "ff", label: "Full Face", serviceIds: ["z1", "z2"] },
       ],
     };
-    const prepare = createAgentPrepareNode("faq");
+    const prepare = createFaqPrepareNode();
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("не знаю")],
@@ -587,7 +589,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         serviceIds: ["p1"],
       },
     ];
-    const prepare = createAgentPrepareNode("faq", { selectCandidates });
+    const prepare = createFaqPrepareNode( { selectCandidates });
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("ботокс")],
@@ -626,7 +628,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent, { selectCandidates });
+    const finalize = createFaqFinalizeNode(faqAgent, { selectCandidates });
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -695,7 +697,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const update = await createAgentFinalizeNode(faqAgent, { selectCandidates })(
+    const update = await createFaqFinalizeNode(faqAgent, { selectCandidates })(
       clinicState({
         messages: [new HumanMessage("ботулінотерапія")],
         servicesContext: services,
@@ -734,7 +736,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const update = await createAgentFinalizeNode(faqAgent, {
+    const update = await createFaqFinalizeNode(faqAgent, {
       selectCandidates: async () => {
         selectCalls += 1;
         return { serviceIds: ["z1", "n1"] };
@@ -782,7 +784,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const update = await createAgentFinalizeNode(faqAgent, {
+    const update = await createFaqFinalizeNode(faqAgent, {
       selectCandidates: async () => ({
         serviceIds: ["z1", "z2", "n1", "n2", "corr", "meso"],
         groups: [
@@ -844,7 +846,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "g0", label: "Ін'єкційна косметологія", serviceIds: ["z1", "n1"] },
       ],
     };
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       selectCandidates: async () => {
         selectCalls += 1;
         return { serviceIds: ["z1", "n1"] };
@@ -877,7 +879,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "m1", name: "Мезоботокс" },
       ],
     };
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       selectCandidates: async () => ({
         serviceIds: ["z1", "z2", "n1", "n2", "c1", "m1"],
         groups: [
@@ -914,7 +916,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 6,
     };
-    const finalize = createAgentFinalizeNode(faqAgent, {
+    const finalize = createFaqFinalizeNode(faqAgent, {
       selectCandidates: async () => ({
         serviceIds: ["z1", "z2", "n1", "n2", "c1", "m1"],
         groups: [
@@ -956,7 +958,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("does not open catalog chips from idle booking prepare on «запиши на ботокс»", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       selectCandidates: async () => ({
         serviceIds: ["z1", "z2", "n1", "n2"],
         groups: [
@@ -997,7 +999,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         { id: "n1", name: "Ботулінотерапія Nabota 1 зона" },
       ],
     };
-    const prepare = createAgentPrepareNode("faq", { selectCandidates });
+    const prepare = createFaqPrepareNode( { selectCandidates });
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("botox")],
@@ -1025,7 +1027,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent, { selectCandidates });
+    const finalize = createFaqFinalizeNode(faqAgent, { selectCandidates });
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1089,7 +1091,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1128,7 +1130,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1172,7 +1174,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1213,7 +1215,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "g0", label: "Схуднення консультація", serviceIds: ["a", "b"] },
       { id: "g1", label: "Загальні", serviceIds: ["c", "d"] },
@@ -1265,7 +1267,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "g0", label: "Neotiva", serviceIds: ["n"] },
       { id: "g1", label: "Juvederm", serviceIds: ["j"] },
@@ -1306,7 +1308,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "g0", label: "Neotiva", serviceIds: ["n"] },
       { id: "g1", label: "Juvederm", serviceIds: ["j"] },
@@ -1340,7 +1342,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1388,7 +1390,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const prepare = createAgentPrepareNode("faq", {
+    const prepare = createFaqPrepareNode( {
       partitionCandidates: async () => [
         {
           label: "Консультації та діагностика",
@@ -1442,7 +1444,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
 
     expect(unwrapCommandUpdate(prepared).pendingInteraction?.kind).toBe("service_candidate");
 
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1498,7 +1500,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
 
     const families = await finalize(
       clinicState({
@@ -1601,7 +1603,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1632,7 +1634,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1654,7 +1656,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("DDD-79: booking fills Yes/Other keyboard when consultation offer omits the trailer", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1678,7 +1680,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("DDD-54: booking omits DEFAULT MENU for non-offer mid-flow replies without a trailer", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1700,7 +1702,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1752,7 +1754,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
       { id: "g1", label: "Ін'єкційна косметологія", serviceIds: ["b"] },
@@ -1801,7 +1803,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "g0", label: "Консультації та діагностика", serviceIds: ["a"] },
       { id: "g1", label: "Ін'єкційні процедури", serviceIds: ["b"] },
@@ -1835,7 +1837,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const explanation =
       "Для губ ми використовуємо кілька якісних препаратів — лікар під час консультації підбере той, що найкраще підійде саме вам 🌿";
     const update = await finalize(
@@ -1880,7 +1882,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "inj", label: "Ін'єкційна косметологія", serviceIds: ["c1", "c2"] },
       { id: "derm", label: "Дерматологія", serviceIds: ["d1"] },
@@ -1920,7 +1922,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
   });
 
   it("finalize prepends Запис скасовано. when REPLACE cancel continues with consultation offer", async () => {
-    const finalize = createAgentFinalizeNode({
+    const finalize = createBookingFinalizeNode({
       id: "booking",
       name: "Booking",
       description: "Booking",
@@ -1973,7 +1975,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const explanation =
       "Що таке Disport? Це препарат для ботулінотерапії; дозування підбирає лікар.";
     const update = await finalize(
@@ -2014,7 +2016,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const allergy = "Чи є у вас алергія на лідокаїн?";
     const update = await finalize(
       clinicState({
@@ -2049,7 +2051,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const hours = "Ми працюємо щодня з 9:00 до 20:00.";
     const update = await finalize(
       clinicState({
@@ -2082,7 +2084,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "d", label: "Disport", serviceIds: ["d"] },
       { id: "n", label: "Nabota", serviceIds: ["n"] },
@@ -2143,7 +2145,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const priceAnswer =
       "Вартість залежить від обраного препарату:\n• Neotiva — 8500 грн\n• Juvederm — 9200 грн";
     const update = await finalize(
@@ -2183,7 +2185,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const priceAnswer =
       "Вартість процедури «Лікування гіпергідрозу» — 8071 грн.\n\nБажаєте записатися на цю процедуру?";
     const update = await finalize(
@@ -2220,7 +2222,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const choices = [
       { id: "a", label: "Disport", serviceIds: ["a"] },
       { id: "b", label: "Nabota", serviceIds: ["b"] },
@@ -2274,7 +2276,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const longName =
       "Ботулінотерапія Botox, Disport 1 зона (очі або міжбрів'я) дуже довга назва";
     const choices = [
@@ -2326,7 +2328,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -2361,7 +2363,7 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,

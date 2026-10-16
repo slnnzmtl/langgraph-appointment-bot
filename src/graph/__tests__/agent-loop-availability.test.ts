@@ -13,7 +13,7 @@ import {
 import { z } from "zod";
 
 import {
-  createAgentFinalizeNode,
+  createBookingFinalizeNode,
   captureAvailabilityFromMessages,
   captureServicesFromMessages,
   classifyContactWriteToolMessage,
@@ -579,7 +579,7 @@ describe("availability draft invariant", () => {
   });
 
   it("finalize cannot build DATE/TIME UI from a null create draft", async () => {
-    const finalize = createAgentFinalizeNode({
+    const finalize = createBookingFinalizeNode({
       id: "booking",
       name: "Booking",
       description: "Booking",

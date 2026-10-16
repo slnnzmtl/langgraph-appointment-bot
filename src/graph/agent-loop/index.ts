@@ -40,7 +40,8 @@ export {
 } from "./command-prepare.js";
 
 export {
-  createAgentFinalizeNode,
+  createBookingFinalizeNode,
+  createFaqFinalizeNode,
   offeredServiceForTurn,
 } from "./finalize/index.js";
 
@@ -51,8 +52,10 @@ export {
 } from "./llm.js";
 
 export {
-  type CreateAgentPrepareOptions,
-  createAgentPrepareNode,
+  type CreateBookingPrepareOptions,
+  type CreateFaqPrepareOptions,
+  createBookingPrepareNode,
+  createFaqPrepareNode,
 } from "./prepare/index.js";
 
 export {
