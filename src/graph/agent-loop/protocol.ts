@@ -36,6 +36,17 @@ export const MEETING_MUTATION_TOOLS = new Set([
   "reschedule_meeting",
 ]);
 
+export const meetingMutationUnauthorizedThisTurn = (
+  messages: BaseMessage[],
+): boolean =>
+  messages.some((message) => {
+    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
+      return false;
+    }
+    return asJsonRecord(extractMessageTextContent(message.content).trim())?.error
+      === "Not authorized";
+  });
+
 /** Contact CRM writes that must not same-turn retry after known_field / operational failure. */
 export const CONTACT_WRITE_TOOLS = new Set([
   "create_contact",
@@ -138,6 +149,15 @@ export const classifyMeetingMutationToolMessage = (
   }
   return committedMeetingEntityId(body) != null ? "committed" : "failed";
 };
+
+/** True when any meeting mutation tool committed on this turn's tape. */
+export const mutationCommittedThisTurn = (messages: BaseMessage[]): boolean =>
+  messages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && MEETING_MUTATION_TOOLS.has(message.name ?? "")
+      && classifyMeetingMutationToolMessage(message) === "committed",
+  );
 
 /** HITL ❌ only — main-menu leave is `abandoned` and must not keep the draft for re-pick. */
 export const meetingMutationIsHitlDecline = (message: ToolMessage): boolean =>
@@ -338,6 +358,24 @@ export const captureServicesFromMessages = (
 ): ServicesContext | null | undefined =>
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
+/**
+ * Prefer the checkpointed catalog; lazy-load when empty.
+ * Callers assign `loaded` onto servicesContext only when non-null.
+ */
+export const ensureServicesContext = async (
+  current: ServicesContext | null | undefined,
+  loadServices?: () => Promise<ServicesContext | null>,
+): Promise<{ list: ServicesContext["list"]; loaded: ServicesContext | null }> => {
+  const list = current?.list ?? [];
+  if (list.length > 0 || loadServices == null) {
+    return { list, loaded: null };
+  }
+  const loaded = await loadServices().catch(() => null);
+  if (loaded != null && loaded.list.length > 0) {
+    return { list: loaded.list, loaded };
+  }
+  return { list, loaded: null };
+};
 
 const lastHumanText = (messages: BaseMessage[]): string => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {

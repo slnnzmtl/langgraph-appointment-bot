@@ -1678,75 +1678,6 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it.skip("prepares the original create command after cancellation revalidation", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
-    const originalCommand = {
-      action: "create" as const,
-      payload: {
-        serviceId: CONSULTATION_SERVICE_ID,
-        contactId: "c-1",
-        dateStart: "2026-10-17T11:30:00",
-        dateEnd: "2026-10-17T12:00:00",
-      },
-      idempotencyKey: "create:replacement",
-      expiresAt: Date.now() + 60_000,
-    };
-    const update = await commandPrepare(
-      availabilityClinicState({
-        messages: [new HumanMessage("Скасувати")],
-        bookingContext: makeListedMeetings(),
-        bookingDraft: {
-          version: 9,
-          mode: "create",
-          phase: "confirming",
-          serviceAcceptance: {
-            status: "accepted",
-            service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
-          },
-          availability: null,
-          selectedDate: "2026-10-17",
-          selectedSlot: {
-            dateStart: "2026-10-17T11:30:00",
-            dateEnd: "2026-10-17T12:00:00",
-            label: "11:30",
-          },
-          note: { status: "skipped" },
-          contactId: "c-1",
-          pendingCommand: null,
-          replacement: {
-            meeting: { id: "existing-1" },
-            status: "create_pending",
-            originalCommand,
-          },
-        },
-        agentMessages: [
-          new ToolMessage({
-            content: JSON.stringify({
-              date: "2026-10-17",
-              slots: [{
-                label: "11:30",
-                dateStart: "2026-10-17T11:30:00",
-                dateEnd: "2026-10-17T12:00:00",
-              }],
-              stepMinutes: 30,
-            }),
-            name: "present_availability_slots",
-            tool_call_id: "slots-1",
-          }),
-          new AIMessage("Готую запис"),
-        ],
-      }),
-    );
-    const messages = (unwrapCommandUpdate(update).agentMessages instanceof Overwrite ? (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value : unwrapCommandUpdate(update).agentMessages as AIMessage[])
-      ?? (update.agentMessages as AIMessage[]);
-    expect(messages.at(-1)?.tool_calls?.[0]).toMatchObject({
-      name: "create_meeting",
-      args: originalCommand.payload,
-    });
-    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand?.action).toBe("create");
-    expect(messages.at(-1)?.tool_calls?.[0]?.name).not.toBe("cancel_meeting");
-  });
-
   const bookingLlmReturning = (content: string) => {
     const invoke = vi.fn(async () => new AIMessage(content));
     const slotsTool = tool(
@@ -2230,7 +2161,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
   });
 
-  it("blocks create_meeting with consultation id without explicit agreement", async () => {
+  it("strips unstamped create_meeting with consultation id (agreement is planner-owned)", async () => {
     const createTool = tool(
       async () => JSON.stringify({ id: "should-not-run" }),
       {
@@ -2248,18 +2179,19 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new HumanMessage("запиши на ботулінотерапію"),
         ],
         agentMessages: [
-          runtimeToolAi([
-              {
-                id: "c1",
-                name: "create_meeting",
-                args: {
-                  serviceId: CONSULTATION_SERVICE_ID,
-                  dateStart: "2026-09-10T14:00:00",
-                  dateEnd: "2026-09-10T14:30:00",
-                },
-                type: "tool_call",
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "c1",
+              name: "create_meeting",
+              args: {
+                serviceId: CONSULTATION_SERVICE_ID,
+                dateStart: "2026-09-10T14:00:00",
+                dateEnd: "2026-09-10T14:30:00",
               },
-            ]),
+              type: "tool_call",
+            }],
+          }),
         ],
       }),
       { configurable: {} },
@@ -2471,7 +2403,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it("blocks reschedule_meeting with consultation id without explicit agreement", async () => {
+  it("strips unstamped reschedule_meeting with consultation id (agreement is planner-owned)", async () => {
     const rescheduleTool = tool(
       async () => JSON.stringify({ id: "should-not-run" }),
       {
@@ -2489,23 +2421,23 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new HumanMessage("запиши на ботулінотерапію"),
         ],
         agentMessages: [
-          runtimeToolAi([
-              {
-                id: "r1",
-                name: "reschedule_meeting",
-                args: {
-                  serviceId: CONSULTATION_SERVICE_ID,
-                  dateStart: "2026-09-10T14:00:00",
-                  dateEnd: "2026-09-10T14:30:00",
-                },
-                type: "tool_call",
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "r1",
+              name: "reschedule_meeting",
+              args: {
+                serviceId: CONSULTATION_SERVICE_ID,
+                dateStart: "2026-09-10T14:00:00",
+                dateEnd: "2026-09-10T14:30:00",
               },
-            ]),
+              type: "tool_call",
+            }],
+          }),
         ],
       }),
       { configurable: {} },
     );
-    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
     expect(
       (toolsUpdate.agentMessages instanceof Overwrite
         ? toolsUpdate.agentMessages.value
@@ -2601,13 +2533,11 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       { configurable: {} },
     );
 
-    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toEqual({
-      action: "create",
-      payload: originalPayload,
-    });
+    // command_prepare already checkpointed pendingCommand; tools must not rederive it.
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeUndefined();
   });
 
-  it("fails closed when create follows an unsuccessful slot revalidation", async () => {
+  it("strips unstamped create after a failed slot revalidation ToolMessage", async () => {
     const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
     const createTool = tool(invoke, {
       name: "create_meeting",
@@ -2628,7 +2558,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
             name: "present_availability_slots",
             tool_call_id: "revalidate-1",
           }),
-          runtimeToolAi([{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }]),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
         ],
       }),
       { configurable: {} },
@@ -2637,7 +2570,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("rejects a selected interval whose end does not match the service snapshot", async () => {
+  it("strips unstamped create when selected interval mismatches snapshot (freshness is planner-owned)", async () => {
     const createTool = tool(
       async () => JSON.stringify({ awaitingConfirmation: true }),
       {
@@ -2694,7 +2627,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           }],
         },
         agentMessages: [
-          runtimeToolAi([{
+          new AIMessage({
+            content: "",
+            tool_calls: [{
               id: "mismatch",
               name: "create_meeting",
               args: {
@@ -2702,7 +2637,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
                 dateEnd: "2026-11-21T13:00:00",
               },
               type: "tool_call",
-            }]),
+            }],
+          }),
         ],
       }),
       { configurable: {} },

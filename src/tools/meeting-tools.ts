@@ -561,7 +561,10 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         ),
         "meeting_rescheduled",
         writeProps,
-        { name: draft.name, dateStart },
+        {
+          ...(draft.name != null ? { name: draft.name } : {}),
+          dateStart,
+        },
       );
     },
     {

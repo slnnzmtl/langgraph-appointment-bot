@@ -6,11 +6,9 @@ import { matchingCatalogRows } from "../catalog-match.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
 import {
-  bookingCommandContinuesAfterTools,
-  bookingTurnNeedsCommandPreparation,
-  hasMutationCallDuringUnresolvedConfirmation,
+  bookingOutcomeNeedsPrepare,
   hasPendingConfirmationChatOther,
-  shouldRearmCancelAfterChatOther,
+  resolveBookingCommand,
 } from "./booking-command.js";
 import {
   lastPatientText,
@@ -21,6 +19,9 @@ import {
 } from "./protocol.js";
 import { resolveContactIdentity } from "../contact-command.js";
 
+const routeNeedsCommandPrepare = (state: ClinicState): boolean =>
+  bookingOutcomeNeedsPrepare(resolveBookingCommand(state));
+
 export const routeAfterAgentLlm = (
   state: ClinicState,
   maxSteps: number,
@@ -28,20 +29,8 @@ export const routeAfterAgentLlm = (
   finalizeName: string,
   commandPrepareName?: string,
 ): string => {
-  // Cancel chat-other re-arm outranks a model mutation call during unresolved
-  // confirm (command_prepare replaces it). Other agents still finalize.
-  if (
-    commandPrepareName
-    && hasMutationCallDuringUnresolvedConfirmation(state)
-    && !shouldRearmCancelAfterChatOther(state)
-  ) {
-    return finalizeName;
-  }
-
-  // Runtime-owned booking transitions outrank both model text and the model's
-  // step budget. Once canonical state is ready, no LLM-authored terminal claim
-  // is eligible for finalization.
-  if (commandPrepareName && bookingTurnNeedsCommandPreparation(state)) {
+  // Abort-mutation during unresolved HITL is planner-owned (continue_llm).
+  if (commandPrepareName && routeNeedsCommandPrepare(state)) {
     return commandPrepareName;
   }
 
@@ -49,10 +38,11 @@ export const routeAfterAgentLlm = (
     return finalizeName;
   }
 
-  if (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages)) {
-    if (commandPrepareName) {
-      return commandPrepareName;
-    }
+  // FAQ agents have no command_prepare; pending model tools go straight to ToolNode.
+  if (
+    !commandPrepareName
+    && (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages))
+  ) {
     return toolsName;
   }
 
@@ -156,7 +146,7 @@ export const routeAfterAgentPrepare = (
       }
     }
   }
-  return commandPrepareName && bookingTurnNeedsCommandPreparation(state)
+  return commandPrepareName && routeNeedsCommandPrepare(state)
     ? commandPrepareName
     : llmName;
 };
@@ -169,6 +159,7 @@ export const routeAfterAgentTools = (
   commandPrepareName?: string,
   noteOrchestratorName?: string,
   finalizeName?: string,
+  faqPrepareName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
@@ -187,13 +178,8 @@ export const routeAfterAgentTools = (
     return mutationFinalizeName;
   }
 
-  // Contact incomplete / consultation agreement → command_prepare (typed recovery).
-  if (commandPrepareName && bookingCommandContinuesAfterTools(state)) {
-    return commandPrepareName;
-  }
-
-  // Ownership / link-candidate / consultation strips open a pending interaction
-  // without a ToolMessage — finalize renders the card.
+  // Open pending interactions (contact_field / service_confirm) finalize without
+  // bouncing through the planner.
   if (
     finalizeName
     && state.pendingInteraction != null
@@ -209,8 +195,29 @@ export const routeAfterAgentTools = (
     return finalizeName;
   }
 
-  // REPLACE cancel with no frozen create: finalize renders the next booking step
-  // (FAQ catalog guide, consultation offer, or date/time after accepted service).
+  if (commandPrepareName && routeNeedsCommandPrepare(state)) {
+    return commandPrepareName;
+  }
+
+  // REPLACE cancel with no accepted service: FAQ prepare opens the catalog.
+  // Unit graphs without FAQ fall through to booking finalize.
+  if (
+    state.pendingCancellationPurpose === "replacement"
+    && state.bookingDraft?.mode === "create"
+    && state.bookingDraft.replacement == null
+    && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+    && state.bookingDraft.serviceAcceptance?.status !== "accepted"
+  ) {
+    if (faqPrepareName) {
+      return faqPrepareName;
+    }
+    if (finalizeName) {
+      return finalizeName;
+    }
+  }
+
+  // REPLACE cancel with accepted service (or catalog already open): finalize
+  // renders the next booking step (date/time / chips).
   if (
     finalizeName
     && state.pendingCancellationPurpose === "replacement"

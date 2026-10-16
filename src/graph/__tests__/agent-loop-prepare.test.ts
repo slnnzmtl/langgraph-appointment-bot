@@ -17,6 +17,7 @@ import {
   createAgentFinalizeNode,
   createAgentPrepareNode,
   createAgentToolsNode,
+  offeredServiceForTurn,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
@@ -31,7 +32,6 @@ import {
   reduceBookingDraft,
 } from "../booking-draft.js";
 import { reduceBookingSession } from "../booking-session.js";
-import { offeredServiceForTurn } from "../agent-loop/finalize.js";
 import { type ClinicAgentDefinition } from "../types.js";
 
 import {
@@ -636,16 +636,8 @@ describe("createAgentPrepareNode", () => {
     expect(unwrapCommandUpdate(update).bookingDraft?.replacement).toBeNull();
     expect(unwrapCommandUpdate(update).bookingDraft?.mode).toBe("create");
     expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toBeNull();
-    expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
-      kind: "service_candidate",
-      owner: "faq",
-      consultationDeclined: true,
-    });
-    expect(
-      unwrapCommandUpdate(update).pendingInteraction?.kind === "service_candidate"
-        ? unwrapCommandUpdate(update).pendingInteraction.choices.length
-        : 0,
-    ).toBeGreaterThan(0);
+    // Tools only complete cancel — FAQ prepare owns the catalog open.
+    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
     expect(update.bookingContext?.meetings).toEqual([]);
     expect(
       routeAfterAgentTools(
@@ -661,14 +653,54 @@ describe("createAgentPrepareNode", () => {
         "booking__command_prepare",
         undefined,
         "booking__finalize",
+        "faq__prepare",
+      ),
+    ).toBe("faq__prepare");
+    // Without FAQ compiled, fall back to booking finalize.
+    expect(
+      routeAfterAgentTools(
+        clinicState({
+          bookingDraft: unwrapCommandUpdate(update).bookingDraft,
+          pendingInteraction: null,
+          pendingCancellationPurpose: "replacement",
+          agentMessages: update.agentMessages as never,
+        }),
+        "booking__llm",
+        "booking__tools",
+        "booking__mutation_finalize",
+        "booking__command_prepare",
+        undefined,
+        "booking__finalize",
       ),
     ).toBe("booking__finalize");
+
+    const faqPrepare = createAgentPrepareNode("faq");
+    const prepared = await faqPrepare(
+      clinicState({
+        bookingDraft: unwrapCommandUpdate(update).bookingDraft,
+        servicesContext,
+        pendingCancellationPurpose: "replacement",
+        pendingInteraction: null,
+        agentMessages: update.agentMessages as never,
+      }),
+    );
+    expect(unwrapCommandUpdate(prepared).pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      consultationDeclined: true,
+    });
+    expect(
+      unwrapCommandUpdate(prepared).pendingInteraction?.kind === "service_candidate"
+        ? unwrapCommandUpdate(prepared).pendingInteraction.choices.length
+        : 0,
+    ).toBeGreaterThan(0);
 
     const finalize = createAgentFinalizeNode(bookingAgent);
     const rendered = await finalize(
       clinicState({
-        bookingDraft: unwrapCommandUpdate(update).bookingDraft,
-        pendingInteraction: unwrapCommandUpdate(update).pendingInteraction,
+        bookingDraft: unwrapCommandUpdate(prepared).bookingDraft
+          ?? unwrapCommandUpdate(update).bookingDraft,
+        pendingInteraction: unwrapCommandUpdate(prepared).pendingInteraction,
         servicesContext,
         pendingCancellationPurpose: "replacement",
         agentMessages: update.agentMessages as never,

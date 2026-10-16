@@ -575,7 +575,7 @@ describe("availability draft invariant", () => {
     expect(resolveBookingCommand(clinicState({
       bookingDraft: null,
       messages: [new HumanMessage("Так")],
-    })).kind).toBe("none");
+    })).kind).toBe("continue_llm");
   });
 
   it("finalize cannot build DATE/TIME UI from a null create draft", async () => {

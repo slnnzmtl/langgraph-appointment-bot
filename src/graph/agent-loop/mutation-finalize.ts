@@ -204,10 +204,12 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
     }
 
     const replacementCancellation = state.pendingCancellationPurpose === "replacement";
+    const committedVisitLabel =
+      outcome === "committed" ? visitLabelFromToolResult(result) : undefined;
     const replyText = meetingMutationReplyText({
       mutationName,
       outcome,
-      visitLabel: outcome === "committed" ? visitLabelFromToolResult(result) : undefined,
+      ...(committedVisitLabel != null ? { visitLabel: committedVisitLabel } : {}),
       replacementCancellation,
     });
 
