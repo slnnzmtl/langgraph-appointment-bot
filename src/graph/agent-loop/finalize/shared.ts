@@ -3,9 +3,16 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
+import { Overwrite } from "@langchain/langgraph";
 import type { ClinicHandoffStatus } from "../../types.js";
 import { extractMessageTextContent } from "../../../shared/message-content.js";
 import { isModelFailureMessage } from "../../sub-agent-messages.js";
+
+/** Cleared agent tape + step counter returned by finalize early exits. */
+export type ClearedTape = {
+  agentMessages: Overwrite<BaseMessage[]>;
+  stepCount: number;
+};
 
 export const resolveHandoffStatus = (
   message: AIMessage,

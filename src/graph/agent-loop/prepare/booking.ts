@@ -30,15 +30,13 @@ import {
 import { lastPatientText } from "../protocol.js";
 import { bookingEntryTransitionForTurn } from "../replacement-flow.js";
 
-export type BookingPrepareOptions = {
-  classifyContactName?: ClassifyContactNameTurn;
-};
-
 /** Booking prepare: schedule repair, restore UI, contact sync, note/schedule ladder. */
 export const applyBookingPrepareTurn = async (
   state: ClinicState,
   update: ClinicStateUpdate,
-  options?: BookingPrepareOptions,
+  options?: {
+    classifyContactName?: ClassifyContactNameTurn;
+  },
 ): Promise<void> => {
   const scheduleRepair = repairInvalidScheduleInteraction(
     state.bookingDraft,

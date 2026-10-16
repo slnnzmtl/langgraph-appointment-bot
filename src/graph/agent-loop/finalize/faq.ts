@@ -3,7 +3,6 @@ import {
   HumanMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
 import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
@@ -15,6 +14,7 @@ import {
   extractMessageTextContent,
   isFaqServicesGuideLabel,
   labelIdFor,
+  type FaqCatalogAction,
 } from "../../../shared/message-content.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
@@ -43,6 +43,8 @@ import type {
 } from "../../service-resolution.js";
 import { tagRuntimeAgentMessage } from "../../sub-agent-messages.js";
 import { lastPatientText, toolRanThisTurn } from "../protocol.js";
+import type { BookingAiReplyBag } from "./booking.js";
+import type { ClearedTape } from "./shared.js";
 
 /**
  * When the graph opens service_confirm it owns the only trailing question.
@@ -139,11 +141,6 @@ export const offeredServiceForTurn = (
   return null;
 };
 
-type ClearedTape = {
-  agentMessages: Overwrite<BaseMessage[]>;
-  stepCount: number;
-};
-
 /** Prepare opened FAQ catalog or a catalog offer without an LLM turn. */
 export const finalizeNonAiFaq = (
   agent: ClinicAgentDefinition,
@@ -201,35 +198,21 @@ export const finalizeNonAiFaq = (
   return null;
 };
 
-export type FaqAiCatalogOptions = {
-  partitionCandidates?: PartitionServiceCandidates;
-  selectCandidates?: SelectServiceCandidates;
-  loadServices?: () => Promise<ServicesContext | null>;
-};
-
-export type FaqAiReplyBag = {
-  replyText: string;
-  replyButtons: string[];
-  replySource: "model" | "runtime";
-  yieldFlag: boolean;
-  serviceOfferUpdate: ClinicStateUpdate;
-};
-
 /**
  * FAQ catalog strip / catalog-action reply shaping used in the AI branch.
- * Mutates bag in place. Returns true when the FAQ agent branch owned the turn.
+ * Mutates bag in place.
  */
 export const applyFaqAiCatalogShaping = async (
   state: ClinicState,
-  faqCatalogAction: string | null | undefined,
-  faqCatalogQuery: string | null | undefined,
-  bag: FaqAiReplyBag,
-  options?: FaqAiCatalogOptions,
-): Promise<boolean> => {
-  const openFaqCatalog =
-    state.pendingInteraction?.kind === "service_candidate"
-    && state.pendingInteraction.owner === "faq";
-  const openCatalogDetour = state.pendingInteraction?.kind === "catalog_detour";
+  faqCatalogAction: FaqCatalogAction | null,
+  faqCatalogQuery: string | null,
+  bag: BookingAiReplyBag,
+  options?: {
+    partitionCandidates?: PartitionServiceCandidates;
+    selectCandidates?: SelectServiceCandidates;
+    loadServices?: () => Promise<ServicesContext | null>;
+  },
+): Promise<void> => {
   if (faqCatalogAction === "open_catalog") {
     // Model-authored open — matcher runs only on the tag query (not patient prose).
     let services = state.servicesContext?.list ?? [];
@@ -303,77 +286,80 @@ export const applyFaqAiCatalogShaping = async (
     } else if (Object.keys(servicesUpdate).length > 0) {
       bag.serviceOfferUpdate = servicesUpdate;
     }
-  } else if (openFaqCatalog) {
-    const catalog = state.pendingInteraction as PendingInteraction & {
-      kind: "service_candidate";
-      owner: "faq";
-    };
-    if (faqCatalogAction === "offer_consultation") {
-      // Patient already declined consultation («Обрати іншу процедуру» /
-      // bare «Ні») — keep browsing. Singleton catalog level → offer that
-      // procedure instead of reopening the consultation yes/no.
-      if (catalog.consultationDeclined === true) {
-        const singletonIds = catalog.choices.length === 1
-          ? catalog.choices[0]?.serviceIds
-          : undefined;
-        const singletonService =
-          singletonIds != null && singletonIds.length === 1
-            ? (state.servicesContext?.list ?? []).find(
-                (row) => row.id === singletonIds[0],
-              )
+    return;
+  }
+
+  const pending = state.pendingInteraction;
+  if (pending?.kind === "service_candidate" && pending.owner === "faq") {
+    const catalog = pending;
+    switch (faqCatalogAction) {
+      case "offer_consultation": {
+        // Patient already declined consultation («Обрати іншу процедуру» /
+        // bare «Ні») — keep browsing. Singleton catalog level → offer that
+        // procedure instead of reopening the consultation yes/no.
+        if (catalog.consultationDeclined === true) {
+          const singletonIds = catalog.choices.length === 1
+            ? catalog.choices[0]?.serviceIds
             : undefined;
-        if (singletonService != null) {
-          const session = reduceBookingSession(
-            {
-              bookingDraft: state.bookingDraft ?? null,
-              pendingInteraction: catalog,
-            },
-            {
-              type: "service_offered",
-              service: {
-                id: singletonService.id,
-                name: singletonService.name,
-                ...(singletonService.duration != null
-                  ? { durationMinutes: singletonService.duration }
-                  : {}),
-                source: "catalog",
+          const singletonService =
+            singletonIds != null && singletonIds.length === 1
+              ? (state.servicesContext?.list ?? []).find(
+                  (row) => row.id === singletonIds[0],
+                )
+              : undefined;
+          if (singletonService != null) {
+            const session = reduceBookingSession(
+              {
+                bookingDraft: state.bookingDraft ?? null,
+                pendingInteraction: catalog,
               },
-            },
-          );
-          bag.serviceOfferUpdate = {
-            bookingDraft: session.bookingDraft,
-            pendingInteraction: session.pendingInteraction,
-          };
-          if (session.pendingInteraction?.kind === "service_confirm") {
-            bag.replyText = withServiceConfirmQuestion(
-              bag.replyText,
-              session.pendingInteraction,
+              {
+                type: "service_offered",
+                service: {
+                  id: singletonService.id,
+                  name: singletonService.name,
+                  ...(singletonService.duration != null
+                    ? { durationMinutes: singletonService.duration }
+                    : {}),
+                  source: "catalog",
+                },
+              },
             );
-            bag.replyButtons = replyButtonsForInteraction(
-              session.pendingInteraction,
+            bag.serviceOfferUpdate = {
+              bookingDraft: session.bookingDraft,
+              pendingInteraction: session.pendingInteraction,
+            };
+            if (session.pendingInteraction?.kind === "service_confirm") {
+              bag.replyText = withServiceConfirmQuestion(
+                bag.replyText,
+                session.pendingInteraction,
+              );
+              bag.replyButtons = replyButtonsForInteraction(
+                session.pendingInteraction,
+              );
+              bag.yieldFlag = true;
+              trackEvent("reply_menu_filled", {
+                menu: "service_confirm",
+                reason: "faq_catalog_declined_singleton",
+              });
+            }
+          } else {
+            const modelIntro = faqCatalogIntroFromModel(bag.replyText);
+            bag.replyText = renderFaqCatalogReply(
+              catalog.choices,
+              state.servicesContext?.list ?? [],
+              modelIntro,
             );
-            bag.yieldFlag = true;
+            bag.replyButtons = replyButtonsForInteraction(catalog);
+            // Keep the open catalog explicitly so the decline flag survives.
+            bag.serviceOfferUpdate = { pendingInteraction: catalog };
             trackEvent("reply_menu_filled", {
-              menu: "service_confirm",
-              reason: "faq_catalog_declined_singleton",
+              menu: "service_candidate",
+              reason: "faq_offer_blocked_declined",
             });
           }
-        } else {
-          const modelIntro = faqCatalogIntroFromModel(bag.replyText);
-          bag.replyText = renderFaqCatalogReply(
-            catalog.choices,
-            state.servicesContext?.list ?? [],
-            modelIntro,
-          );
-          bag.replyButtons = replyButtonsForInteraction(catalog);
-          // Keep the open catalog explicitly so the decline flag survives.
-          bag.serviceOfferUpdate = { pendingInteraction: catalog };
-          trackEvent("reply_menu_filled", {
-            menu: "service_candidate",
-            reason: "faq_offer_blocked_declined",
-          });
+          return;
         }
-      } else {
         const session = reduceBookingSession(
           {
             bookingDraft: state.bookingDraft ?? null,
@@ -397,60 +383,58 @@ export const applyFaqAiCatalogShaping = async (
             reason: "faq_catalog_action",
           });
         }
+        return;
       }
-    } else if (faqCatalogAction === "close_catalog") {
-      bag.serviceOfferUpdate = { pendingInteraction: null };
-      // Keep model prose; drop catalog chips.
-      bag.replyButtons = [];
-      trackEvent("reply_menu_filled", {
-        menu: "service_candidate",
-        reason: "faq_catalog_close",
-      });
-    } else {
-      // keep_catalog may keep a short clarification; missing/invalid drop
-      // model prose so stale choose_other copy cannot diverge from chips.
-      const modelIntro = faqCatalogAction === "keep_catalog"
-        ? faqCatalogIntroFromModel(bag.replyText)
-        : "";
-      bag.replyText = renderFaqCatalogReply(
-        catalog.choices,
-        state.servicesContext?.list ?? [],
-        modelIntro,
-      );
-      bag.replyButtons = replyButtonsForInteraction(catalog);
-      trackEvent("reply_menu_filled", {
-        menu: "service_candidate",
-        reason: "pending_interaction",
-      });
-    }
-  } else if (openCatalogDetour) {
-    bag.replyText = String(
-      renderBookingInteractionMessage(state.pendingInteraction!).content,
-    );
-    bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction!);
-    trackEvent("reply_menu_filled", {
-      menu: state.pendingInteraction!.kind,
-      reason: "pending_interaction",
-    });
-  } else {
-    // Accidental trailers / bullets never become FAQ chips — only reducer-
-    // opened catalog interactions own replyButtons.
-    bag.replyButtons = [];
-    const returnLabel = state.pendingInteraction?.choices.find(
-      (choice) => choice.id === "return_to_booking",
-    )?.label;
-    if (returnLabel != null && returnLabel.length > 0) {
-      bag.replyButtons = [returnLabel];
+      case "close_catalog": {
+        bag.serviceOfferUpdate = { pendingInteraction: null };
+        // Keep model prose; drop catalog chips.
+        bag.replyButtons = [];
+        trackEvent("reply_menu_filled", {
+          menu: "service_candidate",
+          reason: "faq_catalog_close",
+        });
+        return;
+      }
+      default: {
+        // keep_catalog may keep a short clarification; missing/invalid drop
+        // model prose so stale choose_other copy cannot diverge from chips.
+        const modelIntro = faqCatalogAction === "keep_catalog"
+          ? faqCatalogIntroFromModel(bag.replyText)
+          : "";
+        bag.replyText = renderFaqCatalogReply(
+          catalog.choices,
+          state.servicesContext?.list ?? [],
+          modelIntro,
+        );
+        bag.replyButtons = replyButtonsForInteraction(catalog);
+        trackEvent("reply_menu_filled", {
+          menu: "service_candidate",
+          reason: "pending_interaction",
+        });
+        return;
+      }
     }
   }
-  return true;
-};
 
-export type ServiceConfirmOfferBag = FaqAiReplyBag & {
-  alreadyBooked: boolean;
-  slotOffer: unknown;
-  availabilityInteraction: unknown;
-  detailsStep: { replyText: string; interaction: PendingInteraction } | null;
+  if (pending?.kind === "catalog_detour") {
+    bag.replyText = String(renderBookingInteractionMessage(pending).content);
+    bag.replyButtons = replyButtonsForInteraction(pending);
+    trackEvent("reply_menu_filled", {
+      menu: pending.kind,
+      reason: "pending_interaction",
+    });
+    return;
+  }
+
+  // Accidental trailers / bullets never become FAQ chips — only reducer-
+  // opened catalog interactions own replyButtons.
+  bag.replyButtons = [];
+  const returnLabel = pending?.choices.find(
+    (choice) => choice.id === "return_to_booking",
+  )?.label;
+  if (returnLabel != null && returnLabel.length > 0) {
+    bag.replyButtons = [returnLabel];
+  }
 };
 
 /**
@@ -462,7 +446,7 @@ export const applyServiceConfirmOfferShaping = (
   agent: ClinicAgentDefinition,
   state: ClinicState,
   agentMessages: BaseMessage[],
-  bag: ServiceConfirmOfferBag,
+  bag: BookingAiReplyBag,
 ): void => {
   if (
     !bag.alreadyBooked
@@ -508,7 +492,9 @@ export const applyServiceConfirmOfferShaping = (
         trackEvent("reply_menu_filled", { menu: "service_confirm", reason: "pending_interaction" });
       }
     }
-  } else if (
+    return;
+  }
+  if (
     state.pendingInteraction?.kind === "service_confirm"
     && bag.detailsStep == null
     && !bag.alreadyBooked

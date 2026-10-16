@@ -1,5 +1,4 @@
-import { AIMessage, type BaseMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { AIMessage } from "@langchain/core/messages";
 import {
   BOOKING_AGENT_ID,
   type ClinicAgentDefinition,
@@ -33,6 +32,7 @@ import {
   phoneLookupFailedThisTurn,
   terminalContactWriteOutcome,
 } from "../protocol.js";
+import type { ClearedTape } from "./shared.js";
 
 /** True when the create draft is past service / slot / note and ready for identity. */
 export const bookingDetailsReady = (state: ClinicState): boolean => {
@@ -129,11 +129,6 @@ export const bookingDetailsInteraction = (
     replyText: String(renderBookingInteractionMessage(session.pendingInteraction).content),
     interaction: session.pendingInteraction,
   };
-};
-
-type ClearedTape = {
-  agentMessages: Overwrite<BaseMessage[]>;
-  stepCount: number;
 };
 
 /**

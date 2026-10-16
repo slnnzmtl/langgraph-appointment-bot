@@ -134,6 +134,16 @@ export const applyMutationToolEffects = async (
   );
   const cancelOnlyCommitted =
     committed.length > 0 && committed.every((message) => message.name === "cancel_meeting");
+  const trackHitlDecline = (): void => {
+    if (
+      resultMessages.some(
+        (message) => message instanceof ToolMessage && meetingMutationIsHitlDecline(message),
+      )
+    ) {
+      trackEvent("booking_note_step", { phase: "reset", reason: "hitl_declined" });
+    }
+  };
+
   if (cancelCommitted && state.bookingDraft?.replacement?.status === "cancelling") {
     const hadOriginal =
       state.bookingDraft.replacement.originalCommand?.action === "create"
@@ -158,43 +168,50 @@ export const applyMutationToolEffects = async (
     if (completed != null) {
       await applyReplacementCatalogOpen(state, update, completed, hadOriginal, options);
     }
-  } else if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
+    trackHitlDecline();
+    return;
+  }
+  if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
     Object.assign(update, closedBookingSessionUpdate());
-  } else if (!cancelOnlyCommitted) {
-    const mutationFailed = resultMessages.some(
-      (message) =>
-        message instanceof ToolMessage
-        && classifyMeetingMutationToolMessage(message) === "failed",
-    );
-    const mutationDeclined = resultMessages.some(
-      (message) =>
-        message instanceof ToolMessage
-        && (message.name === "create_meeting" || message.name === "reschedule_meeting")
-        && meetingMutationIsHitlDecline(message),
-    );
-    const mutationCommitted = committed.length > 0;
-    if (state.bookingDraft && (mutationFailed || mutationDeclined) && !mutationCommitted) {
-      // A CRM race/error or a patient-declined booking invalidates only the
-      // selected slot. Keep the accepted service and note so a later
-      // availability search still uses the service duration.
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        { type: "draft_event", event: { type: "slot_invalidated" } },
-      );
-      update.bookingDraft = session.bookingDraft;
-      update.pendingInteraction = session.pendingInteraction;
-    } else if (state.bookingDraft) {
-      Object.assign(update, closedBookingSessionUpdate());
-    }
+    trackHitlDecline();
+    return;
   }
-  if (
-    resultMessages.some(
-      (message) => message instanceof ToolMessage && meetingMutationIsHitlDecline(message),
-    )
-  ) {
-    trackEvent("booking_note_step", { phase: "reset", reason: "hitl_declined" });
+  if (cancelOnlyCommitted) {
+    trackHitlDecline();
+    return;
   }
+  if (!state.bookingDraft) {
+    trackHitlDecline();
+    return;
+  }
+
+  const mutationFailed = resultMessages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && classifyMeetingMutationToolMessage(message) === "failed",
+  );
+  const mutationDeclined = resultMessages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && (message.name === "create_meeting" || message.name === "reschedule_meeting")
+      && meetingMutationIsHitlDecline(message),
+  );
+  const mutationCommitted = committed.length > 0;
+  if ((mutationFailed || mutationDeclined) && !mutationCommitted) {
+    // A CRM race/error or a patient-declined booking invalidates only the
+    // selected slot. Keep the accepted service and note so a later
+    // availability search still uses the service duration.
+    const session = reduceBookingSession(
+      {
+        bookingDraft: state.bookingDraft,
+        pendingInteraction: state.pendingInteraction ?? null,
+      },
+      { type: "draft_event", event: { type: "slot_invalidated" } },
+    );
+    update.bookingDraft = session.bookingDraft;
+    update.pendingInteraction = session.pendingInteraction;
+  } else {
+    Object.assign(update, closedBookingSessionUpdate());
+  }
+  trackHitlDecline();
 };

@@ -3,7 +3,6 @@ import {
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
 import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
@@ -72,14 +71,10 @@ import {
   bookingDetailsInteraction,
   bookingDetailsReady,
 } from "./contact.js";
+import type { ClearedTape } from "./shared.js";
 
 /** Prefix when REPLACE cancel continues into the date/time keyboard. */
 const REPLACEMENT_CANCELLED_CONTINUE_PREFIX = "Запис скасовано.";
-
-type ClearedTape = {
-  agentMessages: Overwrite<BaseMessage[]>;
-  stepCount: number;
-};
 
 /**
  * Non-AI booking paths: REPLACE menus, booking-owned prepare/tools UIs,
@@ -243,6 +238,18 @@ export type BookingAiReplyBag = {
   unavailableTime: string | null | undefined;
 };
 
+const consumeServiceChangeNotice = (
+  state: ClinicState,
+  bag: BookingAiReplyBag,
+): string | null => {
+  const notice = state.serviceChangeNotice;
+  if (notice == null || notice.length === 0) {
+    return null;
+  }
+  bag.clearServiceChangeNotice = true;
+  return notice;
+};
+
 /** Compute booking AI prelude flags and contact details step. */
 export const initBookingAiReplyBag = (
   agent: ClinicAgentDefinition,
@@ -367,15 +374,6 @@ export const applyBookingPresentPaths = (
   agentMessages: BaseMessage[],
   bag: BookingAiReplyBag,
 ): BookingPresentBranch => {
-  const consumeServiceChangeNotice = (): string | null => {
-    const notice = state.serviceChangeNotice;
-    if (notice == null || notice.length === 0) {
-      return null;
-    }
-    bag.clearServiceChangeNotice = true;
-    return notice;
-  };
-
   if (bag.replacementOffered) {
     const meeting = state.bookingDraft?.replacement?.meeting;
     if (meeting != null) {
@@ -406,7 +404,7 @@ export const applyBookingPresentPaths = (
           ? `${SLOT_JUST_TAKEN_PREFIX}${bag.slotOffer.replyText}`
           : bag.slotOffer.replyText
       );
-    const notice = consumeServiceChangeNotice();
+    const notice = consumeServiceChangeNotice(state, bag);
     bag.replyText = notice != null ? `${notice}\n\n${offerBody}` : offerBody;
     bag.replyButtons = bag.slotOffer.replyButtons;
     bag.availabilityInteraction = bag.slotOffer.interaction;
@@ -525,15 +523,6 @@ export const applyBookingOutcomeRisk = (
   agentMessages: BaseMessage[],
   bag: BookingAiReplyBag,
 ): void => {
-  const consumeServiceChangeNotice = (): string | null => {
-    const notice = state.serviceChangeNotice;
-    if (notice == null || notice.length === 0) {
-      return null;
-    }
-    bag.clearServiceChangeNotice = true;
-    return notice;
-  };
-
   // Fail closed: in any booking-outcome risk state (non-committed write,
   // details/confirming, open ✅/❌), model prose never ships. Runtime owns
   // the next step. DATE/TIME/SERVICE without a slot card are included.
@@ -555,66 +544,73 @@ export const applyBookingOutcomeRisk = (
       || state.bookingDraft.phase === "service"
     );
   if (
-    (outcomeRisk || scheduleReselectPending)
-    && bag.replySource !== "runtime"
-    && !bag.alreadyBooked
-    && !bag.replacementOffered
-    && !bag.slotOffer
-    && bag.detailsStep == null
+    !(outcomeRisk || scheduleReselectPending)
+    || bag.replySource === "runtime"
+    || bag.alreadyBooked
+    || bag.replacementOffered
+    || bag.slotOffer
+    || bag.detailsStep != null
   ) {
-    const pendingConfirmation = agentMessages.some(
-      (message) =>
-        message instanceof ToolMessage
-        && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
-    ) || state.pendingInteraction?.kind === "mutation_confirm";
-    if (pendingConfirmation) {
-      // Open ✅/❌ outranks a stale visit/DATE menu left from before HITL.
-      bag.replyText = BOOKING_AWAITING_CONFIRM_UK;
-      bag.replyButtons = [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL];
-      bag.replySource = "runtime";
-      trackEvent("reply_menu_filled", {
-        menu: "mutation_confirm",
-        reason: "outcome_risk",
-      });
-    } else if (
-      state.pendingInteraction != null
-      && isBookingOwnedInteraction(state.pendingInteraction)
-    ) {
-      bag.replyText = String(
-        renderBookingInteractionMessage(state.pendingInteraction).content,
-      );
-      bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction);
-      bag.replySource = "runtime";
-      trackEvent("reply_menu_filled", {
-        menu: state.pendingInteraction.kind,
-        reason: "outcome_risk",
-      });
-    } else {
-      const recovered = availabilityRecoveryOffer(state);
-      if (recovered != null) {
-        const notice = consumeServiceChangeNotice();
-        const body = bag.createError != null
-          ? `${SLOT_JUST_TAKEN_PREFIX}${recovered.replyText}`
-          : recovered.replyText;
-        bag.replyText = notice != null ? `${notice}\n\n${body}` : body;
-        bag.replyButtons = recovered.replyButtons;
-        bag.availabilityInteraction = recovered.interaction;
-        bag.replySource = "runtime";
-      } else if (scheduleReselectPending) {
-        bag.replyText = consumeServiceChangeNotice() ?? BOOKING_SCHEDULE_RESELECT_UK;
-        bag.replyButtons = [];
-        bag.replySource = "runtime";
-      } else {
-        // Uncommitted ready / details with no card — DEFAULT MENU, not error fallback.
-        bag.replyText = consumeServiceChangeNotice() ?? MAIN_MENU_GREETING_UK;
-        bag.replyButtons = bag.replyButtons.length > 0
-          ? bag.replyButtons
-          : [...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext))];
-        bag.replySource = "runtime";
-        trackEvent("reply_menu_filled", { menu: "default", reason: "outcome_risk" });
-      }
-    }
+    return;
   }
+
+  const pendingConfirmation = agentMessages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
+  ) || state.pendingInteraction?.kind === "mutation_confirm";
+  if (pendingConfirmation) {
+    // Open ✅/❌ outranks a stale visit/DATE menu left from before HITL.
+    bag.replyText = BOOKING_AWAITING_CONFIRM_UK;
+    bag.replyButtons = [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL];
+    bag.replySource = "runtime";
+    trackEvent("reply_menu_filled", {
+      menu: "mutation_confirm",
+      reason: "outcome_risk",
+    });
+    return;
+  }
+  if (
+    state.pendingInteraction != null
+    && isBookingOwnedInteraction(state.pendingInteraction)
+  ) {
+    bag.replyText = String(
+      renderBookingInteractionMessage(state.pendingInteraction).content,
+    );
+    bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction);
+    bag.replySource = "runtime";
+    trackEvent("reply_menu_filled", {
+      menu: state.pendingInteraction.kind,
+      reason: "outcome_risk",
+    });
+    return;
+  }
+
+  const recovered = availabilityRecoveryOffer(state);
+  if (recovered != null) {
+    const notice = consumeServiceChangeNotice(state, bag);
+    const body = bag.createError != null
+      ? `${SLOT_JUST_TAKEN_PREFIX}${recovered.replyText}`
+      : recovered.replyText;
+    bag.replyText = notice != null ? `${notice}\n\n${body}` : body;
+    bag.replyButtons = recovered.replyButtons;
+    bag.availabilityInteraction = recovered.interaction;
+    bag.replySource = "runtime";
+    return;
+  }
+  if (scheduleReselectPending) {
+    bag.replyText = consumeServiceChangeNotice(state, bag) ?? BOOKING_SCHEDULE_RESELECT_UK;
+    bag.replyButtons = [];
+    bag.replySource = "runtime";
+    return;
+  }
+  // Uncommitted ready / details with no card — DEFAULT MENU, not error fallback.
+  bag.replyText = consumeServiceChangeNotice(state, bag) ?? MAIN_MENU_GREETING_UK;
+  bag.replyButtons = bag.replyButtons.length > 0
+    ? bag.replyButtons
+    : [...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext))];
+  bag.replySource = "runtime";
+  trackEvent("reply_menu_filled", { menu: "default", reason: "outcome_risk" });
 };
 
 /** Never ship model claimsOutcome unless this turn committed a meeting mutation. */

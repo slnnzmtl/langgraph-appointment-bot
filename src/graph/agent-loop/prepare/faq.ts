@@ -14,21 +14,20 @@ import {
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { lastPatientText } from "../protocol.js";
 
-export type FaqPrepareOptions = {
-  partitionCandidates?: PartitionServiceCandidates;
-  selectCandidates?: SelectServiceCandidates;
-  loadServices?: () => Promise<ServicesContext | null>;
-};
-
 /** FAQ prepare: catalog choice / rematch / browse shortcut / named_procedure. */
 export const applyFaqPrepareTurn = async (
   state: ClinicState,
   update: ClinicStateUpdate,
-  options?: FaqPrepareOptions,
+  options?: {
+    partitionCandidates?: PartitionServiceCandidates;
+    selectCandidates?: SelectServiceCandidates;
+    loadServices?: () => Promise<ServicesContext | null>;
+  },
 ): Promise<void> => {
   const interaction = state.pendingInteraction;
   const patientText = lastPatientText(state).trim();
   let handledCatalogChoice = false;
+
   if (interaction?.kind === "service_candidate" && interaction.owner === "faq") {
     const match = interpretInteractionReply(interaction, patientText);
     if (match.kind === "choice") {
