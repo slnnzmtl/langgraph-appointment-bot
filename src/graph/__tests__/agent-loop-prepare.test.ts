@@ -17,6 +17,7 @@ import {
   createAgentFinalizeNode,
   createAgentPrepareNode,
   createAgentToolsNode,
+  offeredServiceForTurn,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
@@ -31,7 +32,6 @@ import {
   reduceBookingDraft,
 } from "../booking-draft.js";
 import { reduceBookingSession } from "../booking-session.js";
-import { offeredServiceForTurn } from "../agent-loop/finalize.js";
 import { type ClinicAgentDefinition } from "../types.js";
 
 import {

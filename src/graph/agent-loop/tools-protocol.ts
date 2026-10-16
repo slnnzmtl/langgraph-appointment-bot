@@ -27,6 +27,7 @@ import {
   freshAvailabilityValidatesSelectedSlot,
   isPendingChatConfirmationReplay,
 } from "./booking-command.js";
+import { isRuntimeOriginatedToolAi } from "./runtime-tool-stamp.js";
 import {
   isRuntimeOriginatedToolAi,
   rewriteAiToolCalls,

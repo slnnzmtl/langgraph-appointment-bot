@@ -8,7 +8,6 @@ import { Overwrite } from "@langchain/langgraph";
 
 import { trackEvent } from "../../analytics/track.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
-import { rewriteAiToolCalls } from "./runtime-tool-stamp.js";
 import {
   BOOKING_AGENT_ID,
   type BookingNoteStatus,
@@ -74,13 +73,22 @@ import {
 import {
   MEETING_MUTATION_TOOLS,
   classifyMeetingMutationToolMessage,
+  phoneLookupFailedThisTurn,
   toolRanThisTurn,
+  terminalContactWriteOutcome,
   captureAvailabilityFromMessages,
   lastPatientText,
   latestMeetingMutationError,
   latestContactIncompleteMissingFields,
   type ContactIncompleteField,
 } from "./protocol.js";
+import { stampRuntimeToolAi } from "./runtime-tool-stamp.js";
+
+export {
+  RUNTIME_TOOL_ORIGIN,
+  isRuntimeOriginatedToolAi,
+  stampRuntimeToolAi,
+} from "./runtime-tool-stamp.js";
 
 export type RuntimeToolCall = {
   id: string;
@@ -99,20 +107,32 @@ export type BookingGuardReason =
 export type BookingCommandOutcome =
   | { kind: "execute"; toolCall: RuntimeToolCall; update: ClinicStateUpdate }
   | { kind: "render"; reason: BookingGuardReason; update: ClinicStateUpdate }
-  | { kind: "continue_tools"; update?: ClinicStateUpdate }
-  | { kind: "continue_llm"; update?: ClinicStateUpdate };
+  | { kind: "none"; update?: ClinicStateUpdate };
 
 /**
- * True when the outcome must enter command_prepare so domain updates (and
- * continue_tools tape rewrites) are applied. Conditional edges cannot write.
+ * Add a runtime-owned tool call without breaking the AI/tool protocol. Replace
+ * the latest AI message only while its tool call is still pending; after a
+ * fulfilled prerequisite (for example slot revalidation), append the next call.
  */
-export const bookingOutcomeNeedsPrepare = (
-  outcome: BookingCommandOutcome,
-): boolean =>
-  outcome.kind === "execute"
-  || outcome.kind === "render"
-  || outcome.kind === "continue_tools"
-  || outcome.update != null;
+export const appendOrReplacePendingToolCall = (
+  messages: BaseMessage[],
+  runtimeCall: AIMessage,
+): BaseMessage[] => {
+  if (!hasPendingToolCalls(messages)) {
+    return [...messages, runtimeCall];
+  }
+  const lastAiIndex = [...messages]
+    .map((message, index) => ({ message, index }))
+    .reverse()
+    .find(({ message }) => message instanceof AIMessage)?.index;
+  return lastAiIndex == null
+    ? [...messages, runtimeCall]
+    : [
+        ...messages.slice(0, lastAiIndex),
+        runtimeCall,
+        ...messages.slice(lastAiIndex + 1),
+      ];
+};
 
 /** Open mutation_confirm in the same node return as the mutation tool call. */
 export const withMutationConfirm = (
@@ -536,85 +556,42 @@ const contactToolCallFromCommand = (
   }
 };
 
-/** Domain-only execute outcome — stamp/telemetry happen in command mapping. */
 const executeToolOutcome = (
+  state: ClinicState,
   toolCall: RuntimeToolCall,
   update: ClinicStateUpdate = {},
-): BookingCommandOutcome => ({
-  kind: "execute",
-  toolCall,
-  update,
-});
-
-const messagesForContinue = (
-  state: ClinicState,
-  update?: ClinicStateUpdate,
-): BaseMessage[] => {
-  if (update?.agentMessages == null) {
-    return state.agentMessages ?? [];
-  }
-  const agentMessages = update.agentMessages;
-  if (agentMessages instanceof Overwrite) {
-    return agentMessages.value;
-  }
-  return Array.isArray(agentMessages) ? agentMessages : state.agentMessages ?? [];
-};
-
-const lastAiWithToolCalls = (
-  messages: BaseMessage[],
-): { index: number; message: AIMessage } | null => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message instanceof AIMessage && (message.tool_calls?.length ?? 0) > 0) {
-      return { index, message };
-    }
-  }
-  return null;
-};
-
-/**
- * Former `none`: pick continue_tools vs continue_llm from effective tape.
- * Pending mutation calls during unresolved HITL (non-rearm) → continue_llm so
- * routers finalize model prose instead of re-entering command_prepare/tools.
- */
-const continueWithoutCommand = (
-  state: ClinicState,
-  update?: ClinicStateUpdate,
 ): BookingCommandOutcome => {
-  const messages = messagesForContinue(state, update);
-  const pending =
-    hasPendingToolCalls(messages) || lastMessageRequestsTools(messages);
-  if (pending) {
-    if (
-      hasMutationCallDuringUnresolvedConfirmation(state)
-      && !shouldRearmCancelAfterChatOther(state)
-    ) {
-      const lastAi = lastAiWithToolCalls(messages);
-      const calls = lastAi?.message.tool_calls ?? [];
-      const informationalOnly = calls.length > 0
-        && calls.every((call) => commandActionForTool(call.name) == null);
-      if (!informationalOnly) {
-        return update != null
-          ? { kind: "continue_llm", update }
-          : { kind: "continue_llm" };
-      }
-    }
-    return update != null
-      ? { kind: "continue_tools", update }
-      : { kind: "continue_tools" };
-  }
-  return update != null
-    ? { kind: "continue_llm", update }
-    : { kind: "continue_llm" };
+  const stamped = stampRuntimeToolAi(
+    toolCall.name,
+    [{
+      id: toolCall.id,
+      name: toolCall.name,
+      args: toolCall.args,
+      type: "tool_call" as const,
+    }],
+    toolCall.action,
+  );
+  return {
+    kind: "execute",
+    toolCall,
+    update: {
+      ...update,
+      agentMessages: new Overwrite(
+        appendOrReplacePendingToolCall(state.agentMessages ?? [], stamped),
+      ),
+    },
+  };
 };
 
 const availabilityExecute = (
+  state: ClinicState,
   args: AvailabilitySlotsToolArgs,
   purpose: RuntimeAvailabilityPurpose,
   toolCallId: string,
   update: ClinicStateUpdate = {},
 ): BookingCommandOutcome =>
   executeToolOutcome(
+    state,
     {
       id: toolCallId,
       name: "present_availability_slots",
@@ -725,6 +702,8 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
       event: { type: "slot_invalidated", keepDate: true },
     },
   );
+  trackEvent("booking_invariant_violation", { reason: "stale_slot" });
+
   // Only recover DATE/TIME from this-turn present_availability_slots. An error
   // payload cannot be normalized; falling back to checkpoint would reoffer the
   // slot we just failed to revalidate.
@@ -775,6 +754,7 @@ const staleSlotRender = (state: ClinicState): BookingCommandOutcome => {
   );
   if (revalidate != null) {
     return availabilityExecute(
+      state,
       revalidate.args,
       revalidate.purpose,
       `${STALE_REVALIDATE_TOOL_CALL_PREFIX}${state.bookingDraft?.version ?? 0}`,
@@ -839,6 +819,10 @@ const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome 
       chooseOtherLabel: labels.chooseOtherLabel,
     },
   );
+  trackEvent("booking_consultation_guard", {
+    phase: draft?.phase ?? "service",
+    outcome: "render",
+  });
   return {
     kind: "render",
     reason: "consultation_agreement",
@@ -856,11 +840,11 @@ const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome 
 export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome => {
   if (hasPendingConfirmationChatOther(state)) {
     if (!shouldRearmCancelAfterChatOther(state)) {
-      return continueWithoutCommand(state);
+      return { kind: "none" };
     }
     const messages = state.agentMessages ?? [];
-    const lastAiEntry = lastAiWithToolCalls(messages);
-    const pendingCalls = lastAiEntry?.message.tool_calls ?? [];
+    const lastAi = [...messages].reverse().find((message) => message instanceof AIMessage);
+    const pendingCalls = lastAi?.tool_calls ?? [];
     const nonMutationCalls = pendingCalls.filter(
       (call) => commandActionForTool(call.name) == null,
     );
@@ -869,17 +853,30 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
       && (hasPendingToolCalls(messages) || lastMessageRequestsTools(messages))
     ) {
       if (nonMutationCalls.length === pendingCalls.length) {
-        return continueWithoutCommand(state);
+        return { kind: "none" };
       }
-      return continueWithoutCommand(state, {
-        agentMessages: new Overwrite(
-          rewriteAiToolCalls(messages, lastAiEntry!.index, nonMutationCalls),
-        ),
-      });
+      const strippedAi = new AIMessage({
+        content: lastAi!.content,
+        tool_calls: nonMutationCalls,
+        additional_kwargs: lastAi!.additional_kwargs,
+        response_metadata: lastAi!.response_metadata,
+        id: lastAi!.id,
+      } as ConstructorParameters<typeof AIMessage>[0]);
+      const lastIndex = messages.lastIndexOf(lastAi!);
+      return {
+        kind: "none",
+        update: {
+          agentMessages: new Overwrite([
+            ...messages.slice(0, lastIndex),
+            strippedAi,
+            ...messages.slice(lastIndex + 1),
+          ]),
+        },
+      };
     }
     const rearmCancel = cancelCommandFromPlannedVisit(state);
     if (rearmCancel == null) {
-      return continueWithoutCommand(state);
+      return { kind: "none" };
     }
     const answerText = lastSpecialistReplyText(state);
     const toolCall: RuntimeToolCall = {
@@ -905,7 +902,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
           }
         : {}),
     });
-    return executeToolOutcome(toolCall, prepared);
+    return executeToolOutcome(state, toolCall, prepared);
   }
 
   const directCancelCommand = directCancelCommandForTurn(state);
@@ -917,6 +914,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
       action: "cancel",
     };
     return executeToolOutcome(
+      state,
       toolCall,
       withMutationConfirm(state, "cancel", {
         bookingDraft: reduceBookingDraft(state.bookingDraft, {
@@ -930,10 +928,13 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
 
   const replacementAction = replacementActionForTurn(state);
   if (replacementAction === "decline") {
-    return continueWithoutCommand(state, {
-      ...closedBookingSessionUpdate(),
-      agentMessages: new Overwrite([]),
-    });
+    return {
+      kind: "none",
+      update: {
+        ...closedBookingSessionUpdate(),
+        agentMessages: new Overwrite([]),
+      },
+    };
   }
   if (replacementAction === "cancel") {
     const cancelCommand = cancelCommandFromReplacement(state);
@@ -945,6 +946,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         action: "replace_cancel",
       };
       return executeToolOutcome(
+        state,
         toolCall,
         withMutationConfirm(state, "cancel", {
           bookingDraft: reduceBookingDraft(state.bookingDraft, {
@@ -960,7 +962,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     state.bookingDraft?.replacement?.status === "offered"
     || state.bookingDraft?.replacement?.status === "cancelling"
   ) {
-    return continueWithoutCommand(state);
+    return { kind: "none" };
   }
 
   // Consultation agreement before contact / availability mutation so an
@@ -974,6 +976,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
   const availability = resolveRuntimeAvailabilityRequest(state);
   if (availability != null) {
     return availabilityExecute(
+      state,
       availability.args,
       availability.purpose,
       `booking_${availability.purpose}_${state.bookingDraft?.version ?? 0}`,
@@ -1005,12 +1008,15 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         state.bookingDraft?.version ?? 0,
       );
       if (toolCall != null) {
-        return executeToolOutcome(toolCall);
+        return executeToolOutcome(state, toolCall);
       }
     }
   }
 
   if (createBlockedOnlyByNote(state)) {
+    trackEvent("booking_create_blocked_note", {
+      phase: authoritativeNoteStatus(state),
+    });
     const draft = state.bookingDraft;
     return {
       kind: "render",
@@ -1042,6 +1048,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         return { kind: "render", reason: "missing_exact_date", update: {} };
       }
       return availabilityExecute(
+        state,
         revalidate.args,
         revalidate.purpose,
         `booking_reschedule_revalidate_${state.bookingDraft?.version ?? 0}`,
@@ -1058,6 +1065,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     }
     if (!toolRanThisTurn(state.agentMessages ?? [], "reschedule_meeting")) {
       return executeToolOutcome(
+        state,
         {
           id: `booking_reschedule_${state.bookingDraft?.version ?? 0}`,
           name: "reschedule_meeting",
@@ -1085,6 +1093,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         return { kind: "render", reason: "missing_exact_date", update: {} };
       }
       return availabilityExecute(
+        state,
         revalidate.args,
         revalidate.purpose,
         `booking_revalidate_${state.bookingDraft.version}`,
@@ -1102,6 +1111,7 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     }
     if (freshAvailabilityValidatesSelectedSlot(state)) {
       return executeToolOutcome(
+        state,
         {
           id: `booking_draft_create_${state.bookingDraft?.version ?? 0}`,
           name: "create_meeting",
@@ -1118,7 +1128,125 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     }
   }
 
-  return continueWithoutCommand(state);
+  return { kind: "none" };
+};
+
+export const bookingTurnNeedsCommandPreparation = (state: ClinicState): boolean => {
+  if (phoneLookupFailedThisTurn(state)) {
+    return false;
+  }
+  // Real CRM Contact incomplete → ContactCommand / contact_field, not the LLM.
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Contact incomplete") {
+    return true;
+  }
+  // Not authorized is finalize-owned; do not re-enter command_prepare.
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Not authorized") {
+    return false;
+  }
+  if (hasPendingConfirmationChatOther(state)) {
+    return shouldRearmCancelAfterChatOther(state)
+      && !hasPendingToolCalls(state.agentMessages)
+      && !lastMessageRequestsTools(state.agentMessages);
+  }
+  if (
+    replacementActionForTurn(state) != null
+    || directCancelCommandForTurn(state) != null
+  ) {
+    return true;
+  }
+  if (contactCommandReadyForInjection(state)) {
+    const command = resolveContactCommand(state);
+    if (contactCommandNeedsToolInjection(command)) {
+      return true;
+    }
+    if (
+      command.action === "request_field"
+      && state.bookingDraft?.mode !== "reschedule"
+    ) {
+      return true;
+    }
+  }
+  if (resolveRuntimeAvailabilityRequest(state) != null) {
+    return true;
+  }
+  if (createBlockedOnlyByNote(state)) {
+    return true;
+  }
+  if (consultationAgreementRequired(state)) {
+    return true;
+  }
+  const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
+  if (rescheduleCommand != null) {
+    return !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      || (
+        freshAvailabilityValidatesSelectedSlot(state)
+        && !toolRanThisTurn(state.agentMessages ?? [], "reschedule_meeting")
+      )
+      || (
+        toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+        && !freshAvailabilityValidatesSelectedSlot(state)
+      );
+  }
+  if (createCommandFromBookingDraft(state) == null) {
+    return false;
+  }
+  return !toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+    || freshAvailabilityValidatesSelectedSlot(state)
+    || (
+      toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      && !freshAvailabilityValidatesSelectedSlot(state)
+    );
+};
+
+export const bookingCommandContinuesAfterTools = (state: ClinicState): boolean => {
+  if (hasPendingConfirmationChatOther(state)) {
+    return false;
+  }
+  if (terminalContactWriteOutcome(state) != null || phoneLookupFailedThisTurn(state)) {
+    return false;
+  }
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Not authorized") {
+    return false;
+  }
+  if (latestMeetingMutationError(state.agentMessages ?? []) === "Contact incomplete") {
+    return true;
+  }
+  if (consultationAgreementRequired(state)) {
+    return true;
+  }
+  if (state.bookingDraft?.replacement?.status === "create_pending") {
+    return true;
+  }
+  if (resolveRuntimeAvailabilityRequest(state) != null) {
+    return true;
+  }
+  if (
+    contactCommandReadyForInjection(state)
+    && contactCommandNeedsToolInjection(resolveContactCommand(state))
+    && !hasPendingToolCalls(state.agentMessages)
+  ) {
+    return true;
+  }
+  const contactOwned = resolveContactIdentity(state.contactContext).kind === "owned";
+  const contactWriteThisTurn =
+    toolRanThisTurn(state.agentMessages ?? [], "create_contact")
+    || toolRanThisTurn(state.agentMessages ?? [], "link_telegram_to_contact")
+    || toolRanThisTurn(state.agentMessages ?? [], "update_contact")
+    || toolRanThisTurn(state.agentMessages ?? [], "find_contact_by_phone");
+  if (contactOwned && contactWriteThisTurn && createCommandFromBookingDraft(state) != null) {
+    return true;
+  }
+  const rescheduleCommand = rescheduleCommandFromBookingDraft(state);
+  if (rescheduleCommand != null) {
+    return toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+      && (
+        freshAvailabilityValidatesSelectedSlot(state)
+          ? !toolRanThisTurn(state.agentMessages ?? [], "reschedule_meeting")
+          : true
+      );
+  }
+  return toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+    && createCommandFromBookingDraft(state) != null;
 };
 
 /**

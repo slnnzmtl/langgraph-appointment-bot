@@ -1,16 +1,16 @@
 import { Overwrite } from "@langchain/langgraph";
 
-import type { ServicesContext } from "../../tools/service-tools.js";
-import type { ClassifyContactNameTurn } from "../contact-name-classifier.js";
+import type { ServicesContext } from "../../../tools/service-tools.js";
+import type { ClassifyContactNameTurn } from "../../contact-name-classifier.js";
 import type {
   PartitionServiceCandidates,
   SelectServiceCandidates,
-} from "../service-resolution.js";
-import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { stripToolNoiseFromMessages } from "../supervisor-history.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
-import { prepareBookingTurn } from "./prepare-booking.js";
-import { prepareFaqTurn } from "./prepare-faq.js";
+} from "../../service-resolution.js";
+import type { ClinicState, ClinicStateUpdate } from "../../state.js";
+import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../../types.js";
+import { applyBookingPrepareTurn } from "./booking.js";
+import { applyFaqPrepareTurn } from "./faq.js";
 
 export type CreateAgentPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -32,14 +32,10 @@ export const createAgentPrepareNode = (
       stepCount: 0,
     };
     if (agentId === FAQ_AGENT_ID) {
-      Object.assign(update, await prepareFaqTurn(state, options));
+      await applyFaqPrepareTurn(state, update, options);
     }
     if (agentId === BOOKING_AGENT_ID) {
-      Object.assign(update, await prepareBookingTurn(state, {
-        ...(options?.classifyContactName != null
-          ? { classifyContactName: options.classifyContactName }
-          : {}),
-      }));
+      await applyBookingPrepareTurn(state, update, options);
     }
     return update;
   };

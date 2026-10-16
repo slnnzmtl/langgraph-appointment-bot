@@ -41,7 +41,8 @@ export {
 
 export {
   createAgentFinalizeNode,
-} from "./finalize.js";
+  offeredServiceForTurn,
+} from "./finalize/index.js";
 
 export {
   type CreateAgentLoopOptions,
@@ -52,7 +53,7 @@ export {
 export {
   type CreateAgentPrepareOptions,
   createAgentPrepareNode,
-} from "./prepare.js";
+} from "./prepare/index.js";
 
 export {
   createAgentToolsNode,

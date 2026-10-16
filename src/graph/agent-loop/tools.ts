@@ -8,7 +8,7 @@ import { findLastAIMessage } from "../tool-routing.js";
 import {
   applyToolEffects,
   type CreateAgentToolsOptions,
-} from "./tools-effects.js";
+} from "./tool-effects/index.js";
 import { filterToolTape } from "./tools-protocol.js";
 
 export type { CreateAgentToolsOptions };
