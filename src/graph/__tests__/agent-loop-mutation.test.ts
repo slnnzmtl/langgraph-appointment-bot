@@ -13,9 +13,10 @@ import {
 import { z } from "zod";
 
 import {
+  createFaqFinalizeNode,
+  createBookingFinalizeNode,
   advanceBookingNoteStep,
   bookingOutcomeRiskState,
-  createAgentFinalizeNode,
   createAgentMutationFinalizeNode,
   classifyMeetingMutationToolMessage,
   createAgentToolsNode,
@@ -318,7 +319,7 @@ describe("booking outcome risk: no model success text without a committed entity
     systemPrompt: "book",
     maxSteps: 8,
   };
-  const finalize = createAgentFinalizeNode(agent);
+  const finalize = createBookingFinalizeNode(agent);
   const claims = [
     "Готово! Запис створено.",
     "Готово! Запис перенесено.",
@@ -479,7 +480,7 @@ describe("booking outcome risk: no model success text without a committed entity
         maxSteps: 4,
       };
       const address = `Ми за адресою:\n\n${CLINIC_ADDRESS}`;
-      const update = await createAgentFinalizeNode(faqAgent)(clinicState({
+      const update = await createFaqFinalizeNode(faqAgent)(clinicState({
         stepCount: 1,
         agentMessages: [new AIMessage(address)],
       }));

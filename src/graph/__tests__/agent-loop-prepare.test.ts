@@ -14,8 +14,9 @@ import { z } from "zod";
 
 import {
   createAgentCommandPrepareNode,
-  createAgentFinalizeNode,
-  createAgentPrepareNode,
+  createBookingFinalizeNode,
+  createBookingPrepareNode,
+  createFaqPrepareNode,
   createAgentToolsNode,
   offeredServiceForTurn,
   routeAfterAgentPrepare,
@@ -45,9 +46,9 @@ import {
 } from "./agent-loop-fixtures.js";
 
 
-describe("createAgentPrepareNode", () => {
+describe("createBookingPrepareNode / createFaqPrepareNode", () => {
   it("keeps original human message without synthetic ToolMessages or CRM writes", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
 
     const update = await prepare(
       clinicState({
@@ -73,7 +74,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("offers REPLACE when bookingContext already has a Planned visit", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Записатись")],
@@ -102,7 +103,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("supersedes an action-stage visit menu with REPLACE on explicit Записатись", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const actionInteraction = {
       kind: "visit_select" as const,
       stage: "action" as const,
@@ -142,7 +143,7 @@ describe("createAgentPrepareNode", () => {
       ),
     ).toBe("booking__finalize");
 
-    const finalized = await createAgentFinalizeNode(bookingAgent)(effectiveState);
+    const finalized = await createBookingFinalizeNode(bookingAgent)(effectiveState);
     expect(finalized.pendingInteraction).toMatchObject({
       kind: "visit_select",
       stage: "replacement",
@@ -152,7 +153,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("supersedes a stale action-stage menu with consultation when no visit exists", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Записатись")],
@@ -180,7 +181,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("opens consultation offer on Записатись when bookingContext has no visits", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Записатись")],
@@ -208,7 +209,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("honors null bookingDraft from invalid reschedule schedule repair", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const dateSelect = {
       kind: "date_select" as const,
       snapshot: {
@@ -263,7 +264,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("honors null pendingInteraction from mismatched TIME schedule repair", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const accepted = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",
       service: { id: "svc-botox", name: "Botox", source: "catalog" },
@@ -315,7 +316,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("keeps accepted service when REPLACE is offered before a slot", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",
       service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
@@ -344,7 +345,7 @@ describe("createAgentPrepareNode", () => {
   };
 
   it("does not guess a named procedure into the draft when REPLACE opens", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("запиши на колаген")],
@@ -365,7 +366,7 @@ describe("createAgentPrepareNode", () => {
     expect(unwrapCommandUpdate(update).bookingDraft?.replacement?.status).toBe("offered");
     expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance ?? null).toBeNull();
 
-    const finalize = createAgentFinalizeNode(bookingAgent);
+    const finalize = createBookingFinalizeNode(bookingAgent);
     const rendered = await finalize(
       clinicState({
         messages: [new HumanMessage("запиши на колаген")],
@@ -452,7 +453,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("leaves unmatched free text on an open booking offer for the booking LLM", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const offered = reduceBookingSession(
       { bookingDraft: null, pendingInteraction: null },
       {
@@ -499,7 +500,7 @@ describe("createAgentPrepareNode", () => {
       type: "existing_booking_detected",
       meeting: makeListedMeetings().meetings[0]!,
     });
-    const finalize = createAgentFinalizeNode(bookingAgent);
+    const finalize = createBookingFinalizeNode(bookingAgent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Записатись")],
@@ -521,7 +522,7 @@ describe("createAgentPrepareNode", () => {
       type: "existing_booking_detected",
       meeting: makeListedMeetings().meetings[0]!,
     });
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       clinicState({
         messages: [new HumanMessage("Скасувати")],
@@ -554,7 +555,7 @@ describe("createAgentPrepareNode", () => {
       type: "existing_booking_detected",
       meeting: makeListedMeetings().meetings[0]!,
     });
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       clinicState({
         messages: [new HumanMessage("Ні, дякую")],
@@ -674,7 +675,7 @@ describe("createAgentPrepareNode", () => {
       ),
     ).toBe("booking__finalize");
 
-    const faqPrepare = createAgentPrepareNode("faq");
+    const faqPrepare = createFaqPrepareNode();
     const prepared = await faqPrepare(
       clinicState({
         bookingDraft: unwrapCommandUpdate(update).bookingDraft,
@@ -695,7 +696,7 @@ describe("createAgentPrepareNode", () => {
         : 0,
     ).toBeGreaterThan(0);
 
-    const finalize = createAgentFinalizeNode(bookingAgent);
+    const finalize = createBookingFinalizeNode(bookingAgent);
     const rendered = await finalize(
       clinicState({
         bookingDraft: unwrapCommandUpdate(prepared).bookingDraft
@@ -739,7 +740,7 @@ describe("createAgentPrepareNode", () => {
         name: "cancel_meeting",
       }),
     ];
-    const update = await createAgentCommandPrepareNode("booking")(
+    const update = await createAgentCommandPrepareNode()(
       clinicState({
         messages: [new HumanMessage("✅")],
         bookingDraft: draft,
@@ -903,7 +904,7 @@ describe("createAgentPrepareNode", () => {
         name: "present_availability_slots",
       }),
     ];
-    const update = await createAgentFinalizeNode(bookingAgent)(
+    const update = await createBookingFinalizeNode(bookingAgent)(
       clinicState({
         bookingDraft: draft,
         pendingInteraction: null,
@@ -921,7 +922,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("does not clear servicesContext when preparing booking", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [new HumanMessage("Book tomorrow")],
@@ -975,7 +976,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("passes full thread history including other agents' replies", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const faqReply = new AIMessage({
       content: "hours are 9-18",
       additional_kwargs: { runtimeAgentId: "faq" },
@@ -1011,7 +1012,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("does not repair a malformed draft from consultation prose", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [
@@ -1056,7 +1057,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("folds a date after a pending consultation offer into the draft", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [
@@ -1091,7 +1092,7 @@ describe("createAgentPrepareNode", () => {
   ])(
     "does not rewrite Juvederm to Consultation when note orch owns: %s",
     async (patientText) => {
-      const prepare = createAgentPrepareNode("booking");
+      const prepare = createBookingPrepareNode();
       const juvedermDraft = canonicalBookingDraft({
         phase: "note",
         serviceAcceptance: {
@@ -1132,7 +1133,7 @@ describe("createAgentPrepareNode", () => {
   );
 
   it("applies a date onto a supervisor-seeded reschedule draft", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [
@@ -1173,7 +1174,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("opens a fresh session from an empty draft on «Записатись»", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         messages: [
@@ -1205,7 +1206,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("leaves a malformed draft untouched when the turn does not open a session", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const malformed = {
       ...createEmptyBookingDraft(),
       version: 6,
@@ -1240,7 +1241,7 @@ describe("createAgentPrepareNode", () => {
   });
 
   it("does not open consultation from prose on a malformed draft", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const malformed = {
       ...createEmptyBookingDraft(),
       version: 6,

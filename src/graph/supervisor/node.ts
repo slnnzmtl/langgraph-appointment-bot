@@ -23,7 +23,7 @@ import {
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
   type AgentPrefetchResult,
-  type ClinicAgentDefinition,
+  type ClinicSpecialists,
   type ILLMConnector,
 } from "../types.js";
 import type { ServicesContext } from "../../tools/service-tools.js";
@@ -52,7 +52,7 @@ export type SupervisorContextCacheOptions = {
 };
 
 export type CreateClinicSupervisorNodeOptions = {
-  agents: ClinicAgentDefinition[];
+  specialists: ClinicSpecialists;
   supervisorLlm: ILLMConnector;
   loadSupervisorPrompt: () => string;
   buildSupervisorDynamicContext?: () => string;
@@ -85,8 +85,11 @@ const finalize = (
 };
 
 export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOptions) => {
-  const schema = buildClinicRoutingSchema(options.agents);
-  const enabledIds = new Set(options.agents.map((agent) => agent.id));
+  const schema = buildClinicRoutingSchema(options.specialists);
+  const enabledIds = new Set([
+    options.specialists.faq.id,
+    options.specialists.booking.id,
+  ]);
   const cache = options.contextCache;
 
   const invokeUncached = async (

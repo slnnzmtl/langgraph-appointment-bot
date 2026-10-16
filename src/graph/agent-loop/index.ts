@@ -15,9 +15,15 @@ export {
 } from "./protocol.js";
 
 export {
-  advanceBookingNoteStep,
   bookingOutcomeRiskState,
 } from "./booking-command.js";
+
+export {
+  advanceBookingNoteStep,
+  authoritativeNoteStatus,
+  authoritativeSelectedSlot,
+  noteStepBlocksCreate,
+} from "./booking-note-step.js";
 
 export {
   availabilityOfferFromToolTurn,
@@ -40,19 +46,21 @@ export {
 } from "./command-prepare.js";
 
 export {
-  createAgentFinalizeNode,
+  createBookingFinalizeNode,
+  createFaqFinalizeNode,
   offeredServiceForTurn,
 } from "./finalize/index.js";
 
 export {
-  type CreateAgentLoopOptions,
   type CreateAgentLlmOptions,
   createAgentLlmNode,
 } from "./llm.js";
 
 export {
-  type CreateAgentPrepareOptions,
-  createAgentPrepareNode,
+  type CreateBookingPrepareOptions,
+  type CreateFaqPrepareOptions,
+  createBookingPrepareNode,
+  createFaqPrepareNode,
 } from "./prepare/index.js";
 
 export {

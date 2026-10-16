@@ -123,9 +123,14 @@ export const CATALOG_FAMILY_SELECTOR_QUERY =
   + "Group exactly one guide level (brand or zone), the same level as tapping that family.";
 
 /**
- * Narrow free-text to a procedure-family catalog level. Exact CRM name → one
- * offer; otherwise the LLM selector expands slang («ботокс») to the full
- * family. Lexical substring hits alone must not skip the selector.
+ * Free-text catalog resolution (DDD-266 order):
+ * 1. Structured CRM id / chip — handled in FAQ prepare before this helper.
+ * 2. Exact CRM title (`normalizeReplyLabel` equality on lexical row).
+ * 3. One `selectCandidates` pass after lexical stems gate slang/families.
+ * 4. Consultation / clarification — booking-session + FAQ LLM when this returns `none`.
+ *
+ * Partitioning (`partitionCandidates`) runs only after step 3 yields many ids
+ * (chip rendering), not as a parallel classifier.
  *
  * `allowTerminalQuestion`: named_procedure only — strip trailing `?`/`？` into a
  * local matcher string so rematch / model `open_catalog` keep rejecting `?`.

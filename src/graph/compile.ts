@@ -21,31 +21,25 @@ import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
 import { resolveBookingScheduleRequest } from "./booking-schedule.js";
 import {
-  createAgentFinalizeNode,
+  createBookingFinalizeNode,
+  createFaqFinalizeNode,
   createAgentMutationFinalizeNode,
   createAgentCommandPrepareNode,
   createAgentLlmNode,
-  createAgentPrepareNode,
+  createBookingPrepareNode,
+  createFaqPrepareNode,
   createAgentToolsNode,
-  finalizeNodeName,
-  llmNodeName,
   matchAvailabilityDay,
   matchAvailabilitySlot,
-  prepareNodeName,
-  commandPrepareNodeName,
-  mutationFinalizeNodeName,
   routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
-  toolsNodeName,
 } from "./agent-loop/index.js";
 import { createNoteTurnClassifier } from "./booking-note-classifier.js";
 import { createContactNameClassifier } from "./contact-name-classifier.js";
 import {
   createBookingInteractionRenderNode,
   createBookingNoteOrchestratorNode,
-  interactionRenderNodeName,
-  noteOrchestratorNodeName,
   type ResolveServiceChange,
 } from "./booking-note-orchestrator.js";
 import {
@@ -54,7 +48,7 @@ import {
   createServiceCandidateSelector,
 } from "./service-resolution.js";
 import type { AgentPrefetchResult } from "./types.js";
-import { createClinicStateAnnotation } from "./state.js";
+import { createClinicStateAnnotation, type ClinicState } from "./state.js";
 import {
   PREFETCH_TTL_MS,
   createClinicSupervisorNode,
@@ -64,11 +58,27 @@ import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
   FINISH_ROUTE,
-  type ClinicAgentDefinition,
+  type ClinicAgentId,
+  type ClinicRouteId,
+  type ClinicSpecialists,
   type ILLMConnector,
 } from "./types.js";
 
 export { PREFETCH_TTL_MS };
+
+const FAQ_PREPARE = "faq__prepare" as const;
+const FAQ_LLM = "faq__llm" as const;
+const FAQ_TOOLS = "faq__tools" as const;
+const FAQ_FINALIZE = "faq__finalize" as const;
+
+const BOOKING_PREPARE = "booking__prepare" as const;
+const BOOKING_COMMAND_PREPARE = "booking__command_prepare" as const;
+const BOOKING_LLM = "booking__llm" as const;
+const BOOKING_TOOLS = "booking__tools" as const;
+const BOOKING_FINALIZE = "booking__finalize" as const;
+const BOOKING_MUTATION_FINALIZE = "booking__mutation_finalize" as const;
+const BOOKING_NOTE_ORCH = "booking__note_orchestrator" as const;
+const BOOKING_INTERACTION_RENDER = "booking__interaction_render" as const;
 
 /** Fallback when no MCP callTool is wired (unit graphs without CRM). */
 const unresolvedServiceChange: ResolveServiceChange = async () => ({
@@ -76,8 +86,8 @@ const unresolvedServiceChange: ResolveServiceChange = async () => ({
 });
 
 export type CompileClinicGraphOptions = {
-  agents: ClinicAgentDefinition[];
-  agentTools: Record<string, StructuredToolInterface[]>;
+  specialists: ClinicSpecialists;
+  agentTools: Record<ClinicAgentId, StructuredToolInterface[]>;
   agentModel: BaseChatModel;
   agentModelName?: string;
   supervisorLlm: ILLMConnector;
@@ -99,6 +109,17 @@ export type CompileClinicGraphOptions = {
   resolveServiceChange?: ResolveServiceChange;
 };
 
+const assertClinicSpecialists = (specialists: ClinicSpecialists): void => {
+  if (
+    specialists.faq.id !== FAQ_AGENT_ID
+    || specialists.booking.id !== BOOKING_AGENT_ID
+  ) {
+    throw new Error(
+      "compileClinicGraph requires FAQ and booking specialists with matching ids",
+    );
+  }
+};
+
 export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
   const contactJson = await lookupContactByTelegram(callTool);
   const normalizedContactContext = normalizeContactLookupResult(contactJson);
@@ -118,6 +139,9 @@ export const prefetchBookingContext = async (callTool: McpCallTool): Promise<Age
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
+  assertClinicSpecialists(options.specialists);
+  const faqAgent = options.specialists.faq;
+  const bookingAgent = options.specialists.booking;
   const checkpointer = options.checkpointer ?? new MemorySaver();
   const stateAnnotation = createClinicStateAnnotation({
     messageHistoryMaxTokens: options.messageHistoryMaxTokens,
@@ -132,8 +156,16 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ? async () => normalizeListServicesResult(String(await faqListServicesTool.invoke({})))
     : undefined;
 
+  const faqPartitionCandidates = createServiceCandidatePartitioner(options.supervisorLlm);
+  const faqSelectCandidates = createServiceCandidateSelector(options.supervisorLlm);
+  const faqCatalogOptions = {
+    partitionCandidates: faqPartitionCandidates,
+    selectCandidates: faqSelectCandidates,
+    ...(loadServices != null ? { loadServices } : {}),
+  };
+
   const supervisorNode = createClinicSupervisorNode({
-    agents: options.agents,
+    specialists: options.specialists,
     supervisorLlm: options.supervisorLlm,
     loadSupervisorPrompt: options.loadSupervisorPrompt,
     ...(options.buildSupervisorDynamicContext
@@ -145,267 +177,261 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(loadServices != null ? { loadServices } : {}),
   });
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- StateGraph generics are verbose for dynamic agent nodes
-  let graph: any = new StateGraph(stateAnnotation).addNode("supervisor", supervisorNode);
+  const faqPrepare = FAQ_PREPARE;
+  const faqLlm = FAQ_LLM;
+  const faqTools = FAQ_TOOLS;
+  const faqFinalize = FAQ_FINALIZE;
 
-  const supervisorRoutes: Record<string, string> = {
+  const bookingPrepare = BOOKING_PREPARE;
+  const bookingCommandPrepare = BOOKING_COMMAND_PREPARE;
+  const bookingLlm = BOOKING_LLM;
+  const bookingTools = BOOKING_TOOLS;
+  const bookingFinalize = BOOKING_FINALIZE;
+  const bookingMutationFinalize = BOOKING_MUTATION_FINALIZE;
+  const bookingNoteOrch = BOOKING_NOTE_ORCH;
+  const bookingInteractionRender = BOOKING_INTERACTION_RENDER;
+
+  const faqToolList = options.agentTools[FAQ_AGENT_ID] ?? [];
+  const bookingToolList = options.agentTools[BOOKING_AGENT_ID] ?? [];
+  const bookingLlmTools = filterBookingInformationalTools(bookingToolList);
+
+  const classifyContactName = options.classifyContactName
+    ?? createContactNameClassifier(options.supervisorLlm);
+
+  const llmContextCache = options.contextCache && options.agentModelName
+    ? {
+        contextCache: {
+          manager: options.contextCache.manager,
+          apiKey: options.contextCache.apiKey,
+          modelName: options.agentModelName,
+        },
+      }
+    : {};
+
+  const classify = options.classifyNoteTurn
+    ?? createNoteTurnClassifier(options.supervisorLlm);
+  const resolve = options.resolveServiceChange
+    ?? (callTool != null
+      ? createResolveServiceChange(callTool, options.supervisorLlm)
+      : unresolvedServiceChange);
+
+  const supervisorRoutes: Record<
+    ClinicRouteId,
+    typeof END | typeof FAQ_PREPARE | typeof BOOKING_PREPARE
+  > = {
     [FINISH_ROUTE]: END,
+    [FAQ_AGENT_ID]: faqPrepare,
+    [BOOKING_AGENT_ID]: bookingPrepare,
   };
 
-  const faqPartitionCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
-    ? createServiceCandidatePartitioner(options.supervisorLlm)
-    : undefined;
-  const faqSelectCandidates = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
-    ? createServiceCandidateSelector(options.supervisorLlm)
-    : undefined;
-
-  for (const agent of options.agents) {
-    const tools = options.agentTools[agent.id] ?? [];
-    const prepare = prepareNodeName(agent.id);
-    const commandPrepare = commandPrepareNodeName(agent.id);
-    const llm = llmNodeName(agent.id);
-    const toolsNode = toolsNodeName(agent.id);
-    const finalize = finalizeNodeName(agent.id);
-    const mutationFinalize = mutationFinalizeNodeName(agent.id);
-    const noteOrch = noteOrchestratorNodeName(agent.id);
-    const interactionRender = interactionRenderNodeName(agent.id);
-    const isBooking = agent.id === BOOKING_AGENT_ID;
-    const faqPrepare = isBooking && options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
-      ? prepareNodeName(FAQ_AGENT_ID)
-      : null;
-    // Booking LLM binds informational reads only; ToolNode keeps the full set
-    // so command_prepare can inject runtime-owned availability/contact/mutations.
-    const llmTools = isBooking ? filterBookingInformationalTools(tools) : tools;
-
-    const classifyContactName = isBooking
-      ? (options.classifyContactName ?? createContactNameClassifier(options.supervisorLlm))
-      : undefined;
-
-    const prepareOptions = agent.id === FAQ_AGENT_ID || isBooking
-      ? {
-          ...(faqPartitionCandidates != null
-            ? { partitionCandidates: faqPartitionCandidates }
-            : {}),
-          ...(faqSelectCandidates != null
-            ? { selectCandidates: faqSelectCandidates }
-            : {}),
-          ...(loadServices != null ? { loadServices } : {}),
-          ...(isBooking && classifyContactName != null
-            ? { classifyContactName }
-            : {}),
-        }
-      : undefined;
-
-    graph = graph
-      .addNode(
-        prepare,
-        createAgentPrepareNode(
-          agent.id,
-          prepareOptions,
+  const compiled = new StateGraph(stateAnnotation)
+    .addNode("supervisor", supervisorNode)
+    .addNode(faqPrepare, createFaqPrepareNode(faqCatalogOptions))
+    .addNode(
+      faqLlm,
+      createAgentLlmNode({
+        agent: faqAgent,
+        model: options.agentModel,
+        tools: faqToolList,
+        formatSystemMetadata: options.formatSystemMetadata,
+        ...llmContextCache,
+      }),
+    )
+    .addNode(faqTools, createAgentToolsNode(faqToolList, FAQ_AGENT_ID))
+    .addNode(
+      faqFinalize,
+      createFaqFinalizeNode(faqAgent, faqCatalogOptions),
+      { ends: [END, "supervisor"] },
+    )
+    .addConditionalEdges(
+      faqPrepare,
+      (state: ClinicState) =>
+        routeAfterAgentPrepare(
+          state,
+          faqLlm,
+          undefined,
+          undefined,
+          faqFinalize,
+          FAQ_AGENT_ID,
         ),
-      )
-      .addNode(
-        llm,
-        createAgentLlmNode({
-          agent,
-          model: options.agentModel,
-          tools: llmTools,
-          formatSystemMetadata: options.formatSystemMetadata,
-          ...(options.contextCache && options.agentModelName
-            ? {
-                contextCache: {
-                  manager: options.contextCache.manager,
-                  apiKey: options.contextCache.apiKey,
-                  modelName: options.agentModelName,
-                },
-              }
-            : {}),
-        }),
-      )
-      .addNode(
-        toolsNode,
-        createAgentToolsNode(tools, agent.id),
-      )
-      .addNode(
-        finalize,
-        createAgentFinalizeNode(
-          agent,
-          agent.id === FAQ_AGENT_ID
-            ? {
-                ...(faqPartitionCandidates != null
-                  ? { partitionCandidates: faqPartitionCandidates }
-                  : {}),
-                ...(faqSelectCandidates != null
-                  ? { selectCandidates: faqSelectCandidates }
-                  : {}),
-                ...(loadServices != null ? { loadServices } : {}),
-              }
-            : undefined,
+      {
+        [faqLlm]: faqLlm,
+        [faqFinalize]: faqFinalize,
+      },
+    )
+    .addConditionalEdges(
+      faqLlm,
+      (state: ClinicState) =>
+        routeAfterAgentLlm(
+          state,
+          faqAgent.maxSteps,
+          faqTools,
+          faqFinalize,
         ),
-        // Safety-net path may return the same abandon Command as mutationFinalize.
-        { ends: [END, "supervisor"] },
-      );
-
-    if (isBooking) {
-      const classify = options.classifyNoteTurn
-        ?? createNoteTurnClassifier(options.supervisorLlm);
-      const resolve = options.resolveServiceChange
-        ?? (callTool != null
-          ? createResolveServiceChange(callTool, options.supervisorLlm)
-          : unresolvedServiceChange);
-      const orchEnds = [
-        llm,
-        commandPrepare,
-        interactionRender,
-        ...(faqPrepare != null ? [faqPrepare] : []),
-      ];
-      const commandPrepareEnds = [toolsNode, interactionRender, llm, finalize];
-      graph = graph
-        .addNode(
-          commandPrepare,
-          createAgentCommandPrepareNode(agent.id, {
-            tools: toolsNode,
-            interactionRender,
-            llm,
-            finalize,
-          }),
-          { ends: commandPrepareEnds },
-        )
-        .addNode(
-          mutationFinalize,
-          createAgentMutationFinalizeNode(agent),
-          // Plain updates follow the static edge to END; main-menu leave Command
-          // hands control back to the supervisor's existing greeting path.
-          { ends: [END, "supervisor"] },
-        )
-        .addNode(
-          noteOrch,
-          createBookingNoteOrchestratorNode({
-            classify,
-            resolveServiceChange: resolve,
-            matchScheduleFromState: (text, state) => {
-              const days = state.availabilityContext?.days ?? [];
-              const day = matchAvailabilityDay(text, days);
-              if (day) {
-                return { type: "date_selected", date: day.date };
-              }
-              const slot = matchAvailabilitySlot(
-                text,
-                state.availabilityContext,
-                state.bookingDraft?.selectedDate,
-              );
-              if (slot != null) {
-                // Same-slot reaffirm while visit_note is open → trusted no-op
-                // (skip classifier; keep skip chip via unresolved → interaction_render).
-                if (
-                  state.pendingInteraction?.kind === "visit_note"
-                  && state.bookingDraft?.selectedSlot?.dateStart === slot.dateStart
-                ) {
-                  return { type: "same_slot_ignored" };
-                }
-                return { type: "slot_selected", slot };
-              }
-              // Lexical exact date («завтра», «20 жовтня») while DATE/TIME/note open.
-              const schedule = resolveBookingScheduleRequest(text, kyivToday(), {
-                availabilityContext: state.availabilityContext,
-                availabilityCursor: state.availabilityCursor,
-                selectedDate: state.bookingDraft?.selectedDate,
-              });
-              if (schedule?.kind === "exact" && schedule.date != null) {
-                return { type: "date_selected", date: schedule.date };
-              }
-              return null;
-            },
-            nodes: {
-              bookingLlm: llm,
-              commandPrepare,
-              interactionRender,
-              // When FAQ is not compiled into this graph (unit tests), re-ask in booking.
-              faqPrepare: faqPrepare ?? interactionRender,
-            },
-          }),
-          {
-            ends: orchEnds,
-          },
-        )
-        .addNode(interactionRender, createBookingInteractionRenderNode(agent))
-        .addEdge(interactionRender, finalize)
-        .addEdge(mutationFinalize, END);
-    }
-
-    graph = graph
-      .addConditionalEdges(
-        prepare,
-        (state: { agentMessages: unknown[] }) =>
-          routeAfterAgentPrepare(
-            state as never,
-            llm,
-            isBooking ? commandPrepare : undefined,
-            isBooking ? noteOrch : undefined,
-            finalize,
-            agent.id,
-          ),
-        {
-          [llm]: llm,
-          [finalize]: finalize,
-          ...(isBooking
-            ? { [commandPrepare]: commandPrepare, [noteOrch]: noteOrch }
-            : {}),
+      {
+        [faqTools]: faqTools,
+        [faqFinalize]: faqFinalize,
+      },
+    )
+    .addConditionalEdges(
+      faqTools,
+      (state: ClinicState) =>
+        routeAfterAgentTools(state, faqLlm, faqTools),
+      {
+        [faqLlm]: faqLlm,
+        [faqTools]: faqTools,
+      },
+    )
+    .addEdge(faqFinalize, END)
+    .addNode(
+      bookingPrepare,
+      createBookingPrepareNode({ classifyContactName }),
+    )
+    .addNode(
+      bookingLlm,
+      createAgentLlmNode({
+        agent: bookingAgent,
+        model: options.agentModel,
+        tools: bookingLlmTools,
+        formatSystemMetadata: options.formatSystemMetadata,
+        ...llmContextCache,
+      }),
+    )
+    .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))
+    .addNode(
+      bookingFinalize,
+      createBookingFinalizeNode(bookingAgent),
+      { ends: [END, "supervisor"] },
+    )
+    .addNode(
+      bookingCommandPrepare,
+      createAgentCommandPrepareNode({
+        tools: bookingTools,
+        interactionRender: bookingInteractionRender,
+        llm: bookingLlm,
+        finalize: bookingFinalize,
+      }),
+      { ends: [bookingTools, bookingInteractionRender, bookingLlm, bookingFinalize] },
+    )
+    .addNode(
+      bookingMutationFinalize,
+      createAgentMutationFinalizeNode(bookingAgent),
+      { ends: [END, "supervisor"] },
+    )
+    .addNode(
+      bookingNoteOrch,
+      createBookingNoteOrchestratorNode({
+        classify,
+        resolveServiceChange: resolve,
+        matchScheduleFromState: (text, state) => {
+          const days = state.availabilityContext?.days ?? [];
+          const day = matchAvailabilityDay(text, days);
+          if (day) {
+            return { type: "date_selected", date: day.date };
+          }
+          const slot = matchAvailabilitySlot(
+            text,
+            state.availabilityContext,
+            state.bookingDraft?.selectedDate,
+          );
+          if (slot != null) {
+            if (
+              state.pendingInteraction?.kind === "visit_note"
+              && state.bookingDraft?.selectedSlot?.dateStart === slot.dateStart
+            ) {
+              return { type: "same_slot_ignored" };
+            }
+            return { type: "slot_selected", slot };
+          }
+          const schedule = resolveBookingScheduleRequest(text, kyivToday(), {
+            availabilityContext: state.availabilityContext,
+            availabilityCursor: state.availabilityCursor,
+            selectedDate: state.bookingDraft?.selectedDate,
+          });
+          if (schedule?.kind === "exact" && schedule.date != null) {
+            return { type: "date_selected", date: schedule.date };
+          }
+          return null;
         },
-      )
-      .addConditionalEdges(
-        llm,
-        (state: { stepCount: number; agentMessages: unknown[] }) =>
-          routeAfterAgentLlm(
-            state as never,
-            agent.maxSteps,
-            toolsNode,
-            finalize,
-            isBooking ? commandPrepare : undefined,
-          ),
-        {
-          [toolsNode]: toolsNode,
-          [finalize]: finalize,
-          ...(isBooking ? { [commandPrepare]: commandPrepare } : {}),
+        nodes: {
+          bookingLlm,
+          commandPrepare: bookingCommandPrepare,
+          interactionRender: bookingInteractionRender,
+          faqPrepare,
         },
-      )
-      .addConditionalEdges(
-        toolsNode,
-        (state: { agentMessages: unknown[] }) =>
-          routeAfterAgentTools(
-            state as never,
-            llm,
-            toolsNode,
-            isBooking ? mutationFinalize : undefined,
-            isBooking ? commandPrepare : undefined,
-            isBooking ? noteOrch : undefined,
-            isBooking ? finalize : undefined,
-            isBooking ? (faqPrepare ?? undefined) : undefined,
-          ),
-        {
-          [llm]: llm,
-          [toolsNode]: toolsNode,
-          ...(isBooking
-            ? {
-                [mutationFinalize]: mutationFinalize,
-                [commandPrepare]: commandPrepare,
-                [noteOrch]: noteOrch,
-                [finalize]: finalize,
-                ...(faqPrepare != null ? { [faqPrepare]: faqPrepare } : {}),
-              }
-            : {}),
-        },
-      )
-      .addEdge(finalize, END);
-
-    supervisorRoutes[agent.id] = prepare;
-  }
-
-  const compiled = graph
+      }),
+      {
+        ends: [bookingLlm, bookingCommandPrepare, bookingInteractionRender, faqPrepare],
+      },
+    )
+    .addNode(
+      bookingInteractionRender,
+      createBookingInteractionRenderNode(bookingAgent),
+    )
+    .addEdge(bookingInteractionRender, bookingFinalize)
+    .addEdge(bookingMutationFinalize, END)
+    .addConditionalEdges(
+      bookingPrepare,
+      (state: ClinicState) =>
+        routeAfterAgentPrepare(
+          state,
+          bookingLlm,
+          bookingCommandPrepare,
+          bookingNoteOrch,
+          bookingFinalize,
+          BOOKING_AGENT_ID,
+        ),
+      {
+        [bookingLlm]: bookingLlm,
+        [bookingFinalize]: bookingFinalize,
+        [bookingCommandPrepare]: bookingCommandPrepare,
+        [bookingNoteOrch]: bookingNoteOrch,
+      },
+    )
+    .addConditionalEdges(
+      bookingLlm,
+      (state: ClinicState) =>
+        routeAfterAgentLlm(
+          state,
+          bookingAgent.maxSteps,
+          bookingTools,
+          bookingFinalize,
+          bookingCommandPrepare,
+        ),
+      {
+        [bookingTools]: bookingTools,
+        [bookingFinalize]: bookingFinalize,
+        [bookingCommandPrepare]: bookingCommandPrepare,
+      },
+    )
+    .addConditionalEdges(
+      bookingTools,
+      (state: ClinicState) =>
+        routeAfterAgentTools(
+          state,
+          bookingLlm,
+          bookingTools,
+          bookingMutationFinalize,
+          bookingCommandPrepare,
+          bookingNoteOrch,
+          bookingFinalize,
+          faqPrepare,
+        ),
+      {
+        [bookingLlm]: bookingLlm,
+        [bookingTools]: bookingTools,
+        [bookingMutationFinalize]: bookingMutationFinalize,
+        [bookingCommandPrepare]: bookingCommandPrepare,
+        [bookingNoteOrch]: bookingNoteOrch,
+        [bookingFinalize]: bookingFinalize,
+        [faqPrepare]: faqPrepare,
+      },
+    )
+    .addEdge(bookingFinalize, END)
     .addEdge(START, "supervisor")
     .addConditionalEdges(
       "supervisor",
-      (state: { next?: string }) => state.next ?? FINISH_ROUTE,
+      (state: ClinicState) => state.next ?? FINISH_ROUTE,
       supervisorRoutes,
     )
     .compile({ checkpointer });

@@ -1,19 +1,13 @@
 import {
   AIMessage,
-  HumanMessage,
   ToolMessage,
   type BaseMessage,
 } from "@langchain/core/messages";
 import { Overwrite } from "@langchain/langgraph";
 
-import { trackEvent } from "../../analytics/track.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
 import { rewriteAiToolCalls } from "./runtime-tool-stamp.js";
-import {
-  BOOKING_AGENT_ID,
-  type BookingNoteStatus,
-  type SelectedBookingSlot,
-} from "../types.js";
+import { BOOKING_AGENT_ID } from "../types.js";
 import type { AvailabilitySlotsToolArgs } from "../../tools/availability-tools.js";
 import { contactMissingFields } from "../../tools/contact-tools.js";
 import type {
@@ -21,7 +15,6 @@ import type {
   ClinicStateUpdate,
 } from "../state.js";
 import {
-  availabilityMatchesBooking,
   availabilityRequestFieldsFromDraft,
   reduceBookingDraft,
   type PendingBookingCommand,
@@ -46,10 +39,8 @@ import {
   bookingOfferLabels,
   inferConversationLocaleFromText,
 } from "../../shared/conversation-locale.js";
-import { CONSULTATION_SERVICE_ID, MAIN_MENU_LABEL } from "../../shared/clinic-constants.js";
-import { kyivToday } from "../../tools/availability-slots.js";
-import { resolveBookingScheduleRequest } from "../booking-schedule.js";
-import { matchAvailabilityDay, matchAvailabilitySlot, availabilityRecoveryOffer } from "../booking-interaction-render.js";
+import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
+import { availabilityRecoveryOffer } from "../booking-interaction-render.js";
 import {
   contactCommandNeedsToolInjection,
   contactCommandReadyForInjection,
@@ -81,6 +72,10 @@ import {
   latestContactIncompleteMissingFields,
   type ContactIncompleteField,
 } from "./protocol.js";
+import {
+  authoritativeNoteStatus,
+  noteStepBlocksCreate,
+} from "./booking-note-step.js";
 
 export type RuntimeToolCall = {
   id: string;
@@ -96,23 +91,34 @@ export type BookingGuardReason =
   | "contact_field"
   | "consultation_agreement";
 
+export type BookingFinalizeReason =
+  | "pending_interaction"
+  | "replacement_catalog"
+  | "replacement_continue";
+
 export type BookingCommandOutcome =
   | { kind: "execute"; toolCall: RuntimeToolCall; update: ClinicStateUpdate }
   | { kind: "render"; reason: BookingGuardReason; update: ClinicStateUpdate }
   | { kind: "continue_tools"; update?: ClinicStateUpdate }
-  | { kind: "continue_llm"; update?: ClinicStateUpdate };
+  | { kind: "continue_llm"; update?: ClinicStateUpdate }
+  | { kind: "finalize"; reason: BookingFinalizeReason; update?: ClinicStateUpdate };
 
 /**
  * True when the outcome must enter command_prepare so domain updates (and
  * continue_tools tape rewrites) are applied. Conditional edges cannot write.
+ * finalize never prepares — routers project it directly.
  */
 export const bookingOutcomeNeedsPrepare = (
   outcome: BookingCommandOutcome,
-): boolean =>
-  outcome.kind === "execute"
-  || outcome.kind === "render"
-  || outcome.kind === "continue_tools"
-  || outcome.update != null;
+): boolean => {
+  if (outcome.kind === "finalize") {
+    return false;
+  }
+  return outcome.kind === "execute"
+    || outcome.kind === "render"
+    || outcome.kind === "continue_tools"
+    || outcome.update != null;
+};
 
 /** Open mutation_confirm in the same node return as the mutation tool call. */
 export const withMutationConfirm = (
@@ -381,21 +387,34 @@ export const createCommandFromBookingDraft = (
   state: ClinicState,
 ): PendingBookingCommand | null => {
   const draft = state.bookingDraft;
-  if (draft?.replacement?.status === "offered" || draft?.replacement?.status === "cancelling") {
+  if (draft == null || (draft.mode !== "create" && draft.mode !== "replace")) {
     return null;
   }
+  if (draft.replacement?.status === "offered" || draft.replacement?.status === "cancelling") {
+    return null;
+  }
+  const acceptance = draft.serviceAcceptance;
+  const slot = draft.selectedSlot;
   if (
-    draft?.replacement?.status === "create_pending"
+    draft.replacement?.status === "create_pending"
     && draft.replacement.originalCommand?.action === "create"
   ) {
-    return { ...draft.replacement.originalCommand };
+    const payload = draft.replacement.originalCommand.payload;
+    const frozenMatchesCanonical = acceptance?.status === "accepted"
+      && slot != null
+      && (draft.note.status === "skipped" || draft.note.status === "answered")
+      && payload.serviceId === acceptance.service.id
+      && payload.contactId === draft.contactId
+      && payload.dateStart === slot.dateStart
+      && payload.dateEnd === slot.dateEnd;
+    if (frozenMatchesCanonical) {
+      return { ...draft.replacement.originalCommand };
+    }
+    // Mismatched frozen create must not execute; fall through and derive.
   }
-  const acceptance = draft?.serviceAcceptance;
-  const slot = draft?.selectedSlot;
-  const contactIdentity = resolveContactIdentity(state.contactContext, draft?.contactId);
+  const contactIdentity = resolveContactIdentity(state.contactContext, draft.contactId);
   if (
-    !draft
-    || acceptance?.status !== "accepted"
+    acceptance?.status !== "accepted"
     || slot == null
     || contactIdentity.kind !== "owned"
     || (draft.note.status !== "skipped" && draft.note.status !== "answered")
@@ -850,8 +869,58 @@ const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome 
 };
 
 /**
- * Pure booking transition: availability, contact, mutations, or a renderable
- * guard. Does not write a durable outcome onto checkpoint state.
+ * Already-open contact_field / pending service_confirm ship via finalize —
+ * do not bounce through command_prepare to re-render the same card.
+ */
+const openPendingInteractionFinalize = (
+  state: ClinicState,
+): BookingCommandOutcome | null => {
+  if (state.pendingInteraction?.kind === "contact_field") {
+    return { kind: "finalize", reason: "pending_interaction" };
+  }
+  if (
+    state.pendingInteraction?.kind === "service_confirm"
+    && state.bookingDraft?.serviceAcceptance?.status === "pending"
+  ) {
+    return { kind: "finalize", reason: "pending_interaction" };
+  }
+  return null;
+};
+
+/**
+ * After REPLACE cancel_meeting this turn: leave the booking tools loop.
+ * No accepted service → FAQ catalog handoff; otherwise continue booking UI.
+ */
+const replacementCancelFinalize = (
+  state: ClinicState,
+): BookingCommandOutcome | null => {
+  if (
+    state.pendingCancellationPurpose !== "replacement"
+    || state.bookingDraft?.mode !== "create"
+    || state.bookingDraft.replacement != null
+    || !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+  ) {
+    return null;
+  }
+  if (state.bookingDraft.serviceAcceptance?.status !== "accepted") {
+    return { kind: "finalize", reason: "replacement_catalog" };
+  }
+  if (
+    state.pendingInteraction?.kind === "service_confirm"
+    || (
+      state.pendingInteraction?.kind === "service_candidate"
+      && state.pendingInteraction.owner === "faq"
+    )
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return { kind: "finalize", reason: "replacement_continue" };
+  }
+  return null;
+};
+
+/**
+ * Pure booking transition: availability, contact, mutations, finalize, or a
+ * renderable guard. Does not write a durable outcome onto checkpoint state.
  */
 export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome => {
   if (hasPendingConfirmationChatOther(state)) {
@@ -961,6 +1030,11 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     || state.bookingDraft?.replacement?.status === "cancelling"
   ) {
     return continueWithoutCommand(state);
+  }
+
+  const openInteraction = openPendingInteractionFinalize(state);
+  if (openInteraction != null) {
+    return openInteraction;
   }
 
   // Consultation agreement before contact / availability mutation so an
@@ -1118,6 +1192,11 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     }
   }
 
+  const replacementFinalize = replacementCancelFinalize(state);
+  if (replacementFinalize != null) {
+    return replacementFinalize;
+  }
+
   return continueWithoutCommand(state);
 };
 
@@ -1157,22 +1236,6 @@ export const bookingOutcomeRiskState = (state: ClinicState): boolean => {
   }
   return state.pendingInteraction?.kind === "mutation_confirm";
 };
-
-const lastHumanText = (messages: BaseMessage[]): string => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message instanceof HumanMessage) {
-      return extractMessageTextContent(message.content).trim();
-    }
-  }
-  return "";
-};
-
-export const authoritativeSelectedSlot = (state: ClinicState): SelectedBookingSlot | null =>
-  state.bookingDraft?.selectedSlot ?? null;
-
-export const authoritativeNoteStatus = (state: ClinicState): BookingNoteStatus =>
-  state.bookingDraft?.note.status ?? "unasked";
 
 /**
  * A direct move from «Мій запис» has one authoritative target. Keep the
@@ -1238,177 +1301,3 @@ export const rescheduleTargetFromBookingContext = (
   });
   return exactLabel.length === 1 ? exactLabel[0]! : null;
 };
-
-export const noteStepBlocksCreate = (status: BookingNoteStatus | null | undefined): boolean =>
-  status !== "skipped" && status !== "answered";
-
-/**
- * Advance / reset the note ladder from the latest human line before the booking LLM runs.
- * Always ask once after a time pick — even if they named a procedure earlier.
- */
-export const advanceBookingNoteStep = (state: ClinicState): ClinicStateUpdate => {
-  const human = lastHumanText(state.messages);
-  if (!human || human === MAIN_MENU_LABEL) {
-    return {};
-  }
-  const status = authoritativeNoteStatus(state);
-  const availability = state.availabilityContext;
-  const bareNumber = /^(\d{1,2})$/.exec(human.trim());
-  const currentSelectedDate = state.bookingDraft?.selectedDate;
-  const currentSelectedDay = currentSelectedDate == null
-    ? undefined
-    : availability?.days.find((day) => day.date === currentSelectedDate);
-  const bareNumberIsTime = bareNumber != null
-    && Number(bareNumber[1]) <= 23
-    && currentSelectedDay != null
-    && currentSelectedDay.slots.length > 0;
-  const matchedDay = bareNumberIsTime
-    ? null
-    : matchAvailabilityDay(human, availability?.days ?? []);
-  const explicitDate = resolveBookingScheduleRequest(human, kyivToday(), {
-    availabilityContext: state.availabilityContext,
-    availabilityCursor: state.availabilityCursor,
-    selectedDate: state.bookingDraft?.selectedDate,
-  });
-
-  // Date intent wins over free-text note interpretation. A date outside the
-  // current snapshot is still a date change, not a visit note.
-  if (
-    explicitDate?.kind === "exact"
-    && explicitDate.date !== state.bookingDraft?.selectedDate
-  ) {
-    trackEvent("booking_date_selected", { date: explicitDate.date });
-    const session = reduceBookingSession(
-      {
-        bookingDraft: state.bookingDraft ?? null,
-        pendingInteraction: state.pendingInteraction ?? null,
-      },
-      { type: "date_selected", date: explicitDate.date },
-    );
-    return {
-      bookingDraft: session.bookingDraft,
-      pendingInteraction: session.pendingInteraction,
-      ...(session.clearAvailability
-        ? { availabilityContext: null, availabilityCursor: null }
-        : {}),
-    };
-  }
-
-  // DATE is a state transition, not just a presentation choice. Keep it until
-  // the following TIME message so repeated clock labels cannot resolve against
-  // another day in the same availability page.
-  if (matchedDay) {
-    trackEvent("booking_date_selected", { date: matchedDay.date });
-    const session = reduceBookingSession(
-      {
-        bookingDraft: state.bookingDraft ?? null,
-        pendingInteraction: state.pendingInteraction ?? null,
-      },
-      { type: "date_selected", date: matchedDay.date },
-    );
-    return {
-      bookingDraft: session.bookingDraft,
-      pendingInteraction: session.pendingInteraction,
-      ...(session.clearAvailability
-        ? { availabilityContext: null, availabilityCursor: null }
-        : {}),
-    };
-  }
-
-  // A same-message requested time is reconciled only after the exact fresh
-  // availability tool result. Do not let a checkpointed snapshot or the note
-  // ladder turn that intent into a stale slot/free-text note.
-  if (state.bookingDraft?.requestedTime?.status === "pending") {
-    return {};
-  }
-
-  const selectedDate = state.bookingDraft?.selectedDate
-    ?? (authoritativeSelectedSlot(state)?.dateStart.slice(0, 10) || null);
-  const matchedSlot = availabilityMatchesBooking(availability, state.bookingDraft)
-    ? matchAvailabilitySlot(human, availability, selectedDate)
-    : null;
-
-  const sameSlot =
-    matchedSlot != null
-    && authoritativeSelectedSlot(state) != null
-    && authoritativeSelectedSlot(state)!.dateStart === matchedSlot.dateStart;
-
-  const reduceSlotSelection = (slot: SelectedBookingSlot): ClinicStateUpdate | null => {
-    let draft = state.bookingDraft;
-    if (draft == null) {
-      return null;
-    }
-    if (draft.selectedDate == null) {
-      draft = reduceBookingDraft(draft, {
-        type: "date_selected",
-        date: slot.dateStart.slice(0, 10),
-      });
-    }
-    if (draft == null) {
-      return null;
-    }
-    const session = reduceBookingSession(
-      {
-        bookingDraft: draft,
-        pendingInteraction: state.pendingInteraction ?? null,
-      },
-      { type: "slot_selected", slot },
-    );
-    return {
-      bookingDraft: session.bookingDraft,
-      pendingInteraction: session.pendingInteraction,
-      ...(session.clearAvailability
-        ? { availabilityContext: null, availabilityCursor: null }
-        : {}),
-    };
-  };
-
-  // Rescheduling has no create-booking note/details ladder. Once the slot is
-  // selected, leave all later free text to the normal booking agent flow.
-  if (state.bookingDraft?.mode === "reschedule") {
-    if (matchedSlot && !sameSlot) {
-      trackEvent("booking_note_step", { phase: "reschedule_slot" });
-      return reduceSlotSelection(matchedSlot) ?? {};
-    }
-    return {};
-  }
-
-  // Chip skip while visit_note is open. Free-text synonyms belong to the note
-  // orchestrator classifier — never a phrase list here.
-  if (
-    (authoritativeSelectedSlot(state) != null && status === "unasked")
-    || status === "awaiting"
-  ) {
-    const skipMatch = interpretInteractionReply(state.pendingInteraction, human);
-    if (skipMatch.kind === "choice" && skipMatch.choiceId === "skip") {
-      trackEvent("booking_note_step", { phase: "skipped" });
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        { type: "note_skipped" },
-      );
-      return {
-        bookingDraft: session.bookingDraft,
-        pendingInteraction: session.pendingInteraction,
-      };
-    }
-    // Same-slot reaffirm while awaiting — keep the note open (no auto-skip).
-    if (status === "awaiting" && sameSlot) {
-      return {};
-    }
-    if (status === "awaiting" && matchedSlot) {
-      trackEvent("booking_note_step", { phase: "awaiting" });
-      return reduceSlotSelection(matchedSlot) ?? {};
-    }
-  }
-
-  if (matchedSlot && (status === "unasked" || !sameSlot)) {
-    trackEvent("booking_note_step", { phase: "awaiting" });
-    return reduceSlotSelection(matchedSlot) ?? {};
-  }
-
-  return {};
-};
-

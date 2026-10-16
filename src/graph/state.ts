@@ -87,17 +87,22 @@ export const createClinicStateAnnotation = ({
       reducer: (_left, right) => right ?? null,
       default: () => null,
     }),
-    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
+    /**
+     * @deprecated Legacy checkpoint projection — read only in
+     * `upgradeBookingDraftCheckpoint` / adapter upgrade. Live graph code must use
+     * `bookingDraft`. Cleared on upgrade; remove these channels once production
+     * checkpoints no longer depend on them.
+     */
     bookingNoteStatus: Annotation<BookingNoteStatus>({
       reducer: (_left, right) => right,
       default: () => "unasked",
     }),
-    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
+    /** @deprecated Legacy checkpoint projection — migration boundary only (see bookingNoteStatus). */
     selectedSlot: Annotation<SelectedBookingSlot | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
-    /** @deprecated Kept only so old checkpoints can be read. BookingDraft is authoritative. */
+    /** @deprecated Legacy checkpoint projection — migration boundary only (see bookingNoteStatus). */
     selectedAvailabilityDate: Annotation<string | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
@@ -122,6 +127,15 @@ export const createClinicStateAnnotation = ({
      * picks that open visit_note from immediately re-entering the orchestrator.
      */
     noteOrchQueued: Annotation<boolean>({
+      reducer: (_left, right) => right,
+      default: () => false,
+    }),
+    /**
+     * One-turn FAQ prepare evidence: true when this prepare produced catalog chips
+     * or a service_confirm card. Cleared next prepare. Lets the router skip the FAQ
+     * LLM without inferring a new offer from the current utterance.
+     */
+    faqSkipLlm: Annotation<boolean>({
       reducer: (_left, right) => right,
       default: () => false,
     }),

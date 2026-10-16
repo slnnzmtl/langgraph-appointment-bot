@@ -2,8 +2,8 @@ import { z } from "zod";
 
 import {
   FINISH_ROUTE,
-  type ClinicAgentDefinition,
   type ClinicRouteId,
+  type ClinicSpecialists,
 } from "./types.js";
 
 const PLACEHOLDER_REPLY_VALUES = new Set(["null", "undefined", "none", "n/a"]);
@@ -51,7 +51,8 @@ export type ClinicRoutingDecision = {
   choiceId?: string;
 };
 
-export const buildClinicRoutingSchema = (agents: ClinicAgentDefinition[]) => {
+export const buildClinicRoutingSchema = (specialists: ClinicSpecialists) => {
+  const agents = [specialists.faq, specialists.booking];
   const agentIds = agents.map((agent) => agent.id);
   const nextValues = [FINISH_ROUTE, ...agentIds] as [ClinicRouteId, ...ClinicRouteId[]];
 

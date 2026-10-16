@@ -38,11 +38,11 @@ import {
 } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { BOOKING_AGENT_ID } from "../../types.js";
+import { bookingOutcomeRiskState } from "../booking-command.js";
 import {
   authoritativeNoteStatus,
   authoritativeSelectedSlot,
-  bookingOutcomeRiskState,
-} from "../booking-command.js";
+} from "../booking-note-step.js";
 import {
   alreadyBookedMeetingFromMessages,
   classifyMeetingMutationToolMessage,

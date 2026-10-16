@@ -3,7 +3,7 @@ import { vi } from "vitest";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import { openServiceConfirmInteraction } from "../booking-session.js";
 import type { ClinicState } from "../state.js";
-import type { ClinicAgentDefinition } from "../types.js";
+import type { ClinicAgentDefinition, ClinicSpecialists } from "../types.js";
 
 export const createCachedGeminiModel = vi.fn(
   (_apiKey: string, _model: string, handle: { cacheName: string }) => ({
@@ -56,27 +56,32 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   bookingSchemaVersion: 1,
   pendingInteraction: null,
   noteOrchQueued: false,
+  faqSkipLlm: false,
   serviceChangeNotice: null,
   pendingCancellationPurpose: null,
   ...overrides,
 });
 
-export const agents: ClinicAgentDefinition[] = [
-  {
-    id: "faq",
-    name: "FAQ",
-    description: "FAQ",
-    systemPrompt: "faq",
-    maxSteps: 4,
-  },
-  {
-    id: "booking",
-    name: "Booking",
-    description: "Booking",
-    systemPrompt: "booking",
-    maxSteps: 10,
-  },
-];
+const faqAgent: ClinicAgentDefinition = {
+  id: "faq",
+  name: "FAQ",
+  description: "FAQ",
+  systemPrompt: "faq",
+  maxSteps: 4,
+};
+
+const bookingAgent: ClinicAgentDefinition = {
+  id: "booking",
+  name: "Booking",
+  description: "Booking",
+  systemPrompt: "booking",
+  maxSteps: 10,
+};
+
+export const specialists: ClinicSpecialists = {
+  faq: faqAgent,
+  booking: bookingAgent,
+};
 
 export const serviceConfirmPending = openServiceConfirmInteraction({
   id: CONSULTATION_SERVICE_ID,

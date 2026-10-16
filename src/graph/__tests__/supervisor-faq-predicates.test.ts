@@ -21,7 +21,7 @@ import {
 import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
-  agents,
+  specialists,
   createClinicSupervisorNode,
   faqCatalogPending,
   serviceConfirmPending,
@@ -321,7 +321,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     } as unknown as ILLMConnector;
     invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -364,7 +364,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     } as unknown as ILLMConnector;
     invoke.mockResolvedValue({ next: "FINISH", intent: "faq", reply: "Орієнтовна ціна…" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -408,7 +408,7 @@ describe("shouldRouteProcedureBrowseToFaq", () => {
     } as unknown as ILLMConnector;
     invoke.mockResolvedValue({ next: "faq", intent: "faq" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -525,7 +525,7 @@ describe("shouldStayInFaqCatalog", () => {
     } as unknown as ILLMConnector;
     invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -547,7 +547,7 @@ describe("shouldStayInFaqCatalog", () => {
       bindRoutingTools: vi.fn(() => ({ invoke })),
     } as unknown as ILLMConnector;
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });

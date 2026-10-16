@@ -54,6 +54,7 @@ export const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState =
   bookingDraft: null,
   pendingInteraction: null,
   noteOrchQueued: false,
+  faqSkipLlm: false,
   serviceChangeNotice: null,
   bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,

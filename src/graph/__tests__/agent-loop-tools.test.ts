@@ -4,7 +4,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import {
   afterEach,
   describe,
@@ -15,12 +15,16 @@ import {
 import { z } from "zod";
 
 import {
+  createBookingPrepareNode,
   createAgentCommandPrepareNode,
-  createAgentPrepareNode,
   createAgentToolsNode,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
+import {
+  isToolNodeMessageUpdate,
+  toolMessagesFromToolNodeInvoke,
+} from "../agent-loop/tool-node-result.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { createContactTools } from "../../tools/contact-tools.js";
 import {
@@ -196,7 +200,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
   });
 
   it("does not promote a phone match to Telegram ownership", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const update = await prepare(
       clinicState({
         bookingDraft: canonicalBookingDraft({ contactId: null }),
@@ -215,7 +219,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
   });
 
   it("does not prepare a runtime booking command from a phone candidate", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const availability = {
       days: [{
         date: "2026-09-10",
@@ -261,7 +265,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       }],
       stepMinutes: 30,
     };
-    const update = await createAgentCommandPrepareNode("booking")(
+    const update = await createAgentCommandPrepareNode()(
       clinicState({
         contactContext: null,
         bookingDraft: canonicalBookingDraft({ contactId: "unverified-contact" }),
@@ -1125,51 +1129,8 @@ describe("DDD-59: name must appear in patient messages", () => {
     expect(CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION).toContain("O'Brien");
   });
 
-  it.skip.each(["create_contact", "update_contact"] as const)(
-    "allows %s when collected.firstName apostrophe glyph differs from tool args (DDD-206)",
-    async (toolName) => {
-      const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
-      const toolsNode = createAgentToolsNode(
-        nameTools((name, args) => {
-          invoked.push({ name, args });
-        }),
-        "booking",
-      );
-      const args =
-        toolName === "create_contact"
-          ? {
-              firstName: DARYA_ASCII,
-              lastName: "Коваленко",
-              phoneNumber: "+380501112233",
-            }
-          : {
-              contactId: "c-1",
-              firstName: DARYA_ASCII,
-              lastName: "Коваленко",
-            };
-      await toolsNode(
-        clinicState({
-          // Human typed a different glyph; grounding comes from collected.
-          messages: [new HumanMessage("0501112233")],
-          pendingInteraction: {
-            kind: "contact_field",
-            field: "lastName",
-            collected: { firstName: DARYA_MODIFIER, lastName: "Коваленко" },
-            choices: [],
-          },
-          agentMessages: [
-            new AIMessage({
-              content: "",
-              tool_calls: [{ id: "n1", name: toolName, args, type: "tool_call" }],
-            }),
-          ],
-        }),
-        { configurable: {} },
-      );
-      expect(invoked).toEqual([{ name: toolName, args }]);
-      expect(invoked[0]?.args.firstName).toBe(DARYA_ASCII);
-    },
-  );
+  // DDD-267: removed skipped DDD-206 cases where contact_field stamp gate blocks
+  // unstamped writes; glyph equivalence is covered by humanProvidedName above.
 
   it("forwards create_contact firstName with the original apostrophe glyph (DDD-206)", async () => {
     const invoked: Array<{ name: string; args: Record<string, unknown> }> = [];
@@ -1214,6 +1175,25 @@ describe("DDD-59: name must appear in patient messages", () => {
       },
     ]);
     expect(invoked[0]?.args.firstName).toBe(DARYA_MODIFIER);
+  });
+});
+
+describe("DDD-263 ToolNode.invoke result boundary", () => {
+  it("recognizes a message-update shape", () => {
+    const messages = [new AIMessage("ok")];
+    expect(isToolNodeMessageUpdate({ messages })).toBe(true);
+    expect(toolMessagesFromToolNodeInvoke({ messages })).toEqual(messages);
+  });
+
+  it("returns an empty list when messages are missing", () => {
+    expect(isToolNodeMessageUpdate({})).toBe(false);
+    expect(toolMessagesFromToolNodeInvoke({})).toEqual([]);
+  });
+
+  it("rejects LangGraph Command at the boundary", () => {
+    const command = new Command({ update: { messages: [] } });
+    expect(isToolNodeMessageUpdate(command)).toBe(false);
+    expect(() => toolMessagesFromToolNodeInvoke(command)).toThrow(/Command/);
   });
 });
 

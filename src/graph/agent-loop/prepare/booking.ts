@@ -23,8 +23,8 @@ import {
 import { resolveContactIdentity } from "../../contact-command.js";
 import type { ClassifyContactNameTurn } from "../../contact-name-classifier.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
+import { advanceBookingNoteStep } from "../booking-note-step.js";
 import {
-  advanceBookingNoteStep,
   rescheduleTargetFromBookingContext,
 } from "../booking-command.js";
 import { lastPatientText } from "../protocol.js";

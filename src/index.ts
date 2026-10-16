@@ -24,12 +24,12 @@ const main = async (): Promise<void> => {
   );
 
   const runtime = await createClinicRuntime(config);
-  const agents = runtime.getBootstrap().agents;
+  const { specialists } = runtime.getBootstrap();
 
   console.log("Clinic graph runtime ready.");
   console.log(
     "Agents:",
-    agents.map((agent) => agent.id).join(", "),
+    [specialists.faq.id, specialists.booking.id].join(", "),
   );
 
   if (!config.telegramBotToken) {

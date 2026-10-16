@@ -22,7 +22,7 @@ import {
 import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
-  agents,
+  specialists,
   createClinicSupervisorNode,
   isVisitStatusSignal,
   serviceConfirmPending,
@@ -65,7 +65,7 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       },
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -121,7 +121,7 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       },
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -243,7 +243,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       reply: "У вас точно є запис.",
     });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => ({
@@ -268,7 +268,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     }));
     invoke.mockResolvedValue({ next: "faq", intent: "visit_status", reply: "У вас точно є запис." });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -292,7 +292,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   it("reports unverifiable status when the fresh prefetch fails on «Мій запис»", async () => {
     invoke.mockResolvedValue({ next: "faq", reply: "Так, ваш запис підтверджено." });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => { throw new Error("CRM down"); },
@@ -316,7 +316,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   const nodeWithPrefetch = (bookingContext: typeof meetings | null) =>
     createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => ({
@@ -474,7 +474,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       payload: { meetingId: "m-2" },
     });
 
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const prepared = await commandPrepare(
       supervisorState({
         messages: [new HumanMessage(label)],
@@ -606,7 +606,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   it("does not personalize Main menu from a phone-owned contact", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
@@ -1098,7 +1098,7 @@ describe("supervisor_routing_decision telemetry", () => {
 
   it("emits exactly one event on a pre-LLM status path", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => ({
@@ -1129,7 +1129,7 @@ describe("supervisor_routing_decision telemetry", () => {
   it("emits exactly one event on a post-LLM path", async () => {
     invoke.mockResolvedValue({ next: "faq", intent: "faq", reply: "Ось відповідь" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => ({

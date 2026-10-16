@@ -13,9 +13,10 @@ import {
 } from "vitest";
 
 import {
-  createAgentFinalizeNode,
+  createBookingFinalizeNode,
+  createFaqFinalizeNode,
   createAgentLlmNode,
-  createAgentPrepareNode,
+  createBookingPrepareNode,
   formatAvailabilityDateOffer,
   formatAvailabilityTimeOffer,
   routeAfterAgentTools,
@@ -66,9 +67,9 @@ import {
 /** Ukrainian modifier letter apostrophe (U+02BC). */
 const DARYA_MODIFIER = "Дарʼя";
 
-describe("createAgentFinalizeNode", () => {
+describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
   it("replaces model prose with the service-change notice while DATE reselection is open", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
     const update = await finalize(
       clinicState({
@@ -98,7 +99,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("replaces any-language model prose with the code-owned DATE prompt", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
@@ -115,7 +116,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("recovers the TIME card from checkpoint when selectedDate is still open", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const days: AvailabilityContext["days"] = [
       {
         date: "2026-10-19",
@@ -184,7 +185,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("recovers the DATE card from checkpoint when selectedDate is cleared", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const days: AvailabilityContext["days"] = [
       {
         date: "2026-10-20",
@@ -230,7 +231,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("does not reuse a checkpoint snapshot for a different accepted service", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
@@ -274,7 +275,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prefixes a recovered TIME card with the service-change notice", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const notice = serviceChangedNoticeUk("Консультація");
     const day: AvailabilityContext["days"][number] = {
       date: "2026-10-22",
@@ -308,7 +309,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prefixes the DATE card with the service-change notice and then clears it", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
     const days: AvailabilityContext["days"] = [
       {
@@ -399,7 +400,7 @@ describe("createAgentFinalizeNode", () => {
     "Ви записані на процедуру.",
     "Бронювання підтверджено.",
   ])("code-owns the unresolved-contact question regardless of model prose: %s", async (claim) => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
@@ -417,7 +418,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("leftover mutation_confirm cannot attach ✅/❌ on the phone details step", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
@@ -490,7 +491,7 @@ describe("createAgentFinalizeNode", () => {
       ),
     ).toBe("booking__finalize");
 
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
     expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
@@ -535,7 +536,7 @@ describe("createAgentFinalizeNode", () => {
         "booking__finalize",
       ),
     ).toBe("booking__finalize");
-    const update = await createAgentFinalizeNode(agent)(state);
+    const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
   });
 
@@ -569,13 +570,13 @@ describe("createAgentFinalizeNode", () => {
         "booking__finalize",
       ),
     ).toBe("booking__finalize");
-    const update = await createAgentFinalizeNode(agent)(state);
+    const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
     expect(update.contactContext).toBeUndefined();
   });
 
   it("asks only lastName for an owned contact missing lastName", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         contactContext: {
@@ -605,7 +606,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("known_field Name not provided reopens only lastName when still missing", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
@@ -636,7 +637,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("never reopens an already accepted field after known_field naming it", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingDraft: canonicalBookingDraft({
@@ -708,7 +709,7 @@ describe("createAgentFinalizeNode", () => {
         "booking__finalize",
       ),
     ).toBe("booking__finalize");
-    const update = await createAgentFinalizeNode(agent)(state);
+    const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_OCCUPIED_UK);
     expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
       kind: "contact_field",
@@ -719,7 +720,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("Contact link candidate required retries linking when the candidate is free", async () => {
-    const update = await createAgentFinalizeNode(agent)(
+    const update = await createBookingFinalizeNode(agent)(
       clinicState({
         contactContext: {
           ownership: "phone",
@@ -794,7 +795,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("code-owns the occupied-phone reply and clears the phone candidate", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         contactContext: {
@@ -824,7 +825,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("keeps the linkable phone-candidate fallback until link succeeds", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         contactContext: {
@@ -851,7 +852,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("advances unresolved contact_field from phone to firstName after a valid phone", async () => {
-    const prepare = createAgentPrepareNode("booking");
+    const prepare = createBookingPrepareNode();
     const prepared = await prepare(
       clinicState({
         messages: [new HumanMessage("+380501112233")],
@@ -874,7 +875,7 @@ describe("createAgentFinalizeNode", () => {
       field: "firstName",
     });
 
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("+380501112233")],
@@ -895,7 +896,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("stays on firstName when collected has no firstName (aside)", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("скільки коштує")],
@@ -923,7 +924,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("stays on lastName when collected has no lastName (aside)", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("добрий день")],
@@ -952,7 +953,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("advances unresolved contact_field from firstName to lastName after collected firstName", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Smoke")],
@@ -982,7 +983,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("clears contact_field after collected lastName so create_contact can run", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Tester")],
@@ -1012,7 +1013,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prepare lastName on owned CRM with phone and firstName clears contact_field", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       classifyContactName: async () => ({ kind: "name", value: "Коваль" }),
     });
     const update = await prepare(
@@ -1046,7 +1047,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prepare stores a classified firstName and advances to lastName", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       classifyContactName: async () => ({ kind: "name", value: "Олена" }),
     });
     const update = await prepare(
@@ -1078,7 +1079,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prepare leaves firstName open when the classifier returns aside", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       classifyContactName: async () => ({ kind: "aside" }),
     });
     const update = await prepare(
@@ -1101,7 +1102,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prepare stores classified lastName on contactDetails and clears the field", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       classifyContactName: async () => ({ kind: "name", value: "Коваль" }),
     });
     const update = await prepare(
@@ -1132,7 +1133,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prepare preserves Дарʼя apostrophe glyph exactly on contactDetails (DDD-206)", async () => {
-    const prepare = createAgentPrepareNode("booking", {
+    const prepare = createBookingPrepareNode( {
       classifyContactName: async () => ({ kind: "name", value: DARYA_MODIFIER }),
     });
     const update = await prepare(
@@ -1161,7 +1162,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("clears create mutation_confirm and invalidates the slot after awaitingConfirmation chat-other", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         contactContext: ownedContactContext(),
@@ -1205,7 +1206,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("keeps ✅/❌ after cancel chat-other instead of a stale visit menu", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         bookingContext: makeListedMeetings(),
@@ -1253,7 +1254,7 @@ describe("createAgentFinalizeNode", () => {
   };
 
   it("strips reply_buttons from checkpointed history and code-owns consultation shortcuts", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1278,7 +1279,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("persists the consultation as a pending service when the offer is shown", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         messages: [new HumanMessage("Записатись")],
@@ -1293,7 +1294,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("does not send leaked Gemini tool XML as the patient reply", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1312,7 +1313,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("DDD-53: attaches BOOKING OFFER when the consultation question has no trailer", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1327,7 +1328,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("replaces a wrong consultation trailer with BOOKING OFFER", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1346,7 +1347,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("strips an empty reply_buttons trailer and omits DEFAULT MENU for mid-flow booking", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1366,7 +1367,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("attaches REPLACE when create_meeting returned Already booked and no trailer", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 2,
@@ -1392,7 +1393,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("attaches DEFAULT has-visits after a committed create_meeting", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 2,
@@ -1423,7 +1424,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("attaches DEFAULT no-visits after cancelling the only planned meeting", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 2,
@@ -1450,7 +1451,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("keeps DEFAULT has-visits after cancelling one of several meetings", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const twoMeetings: BookingContext = {
       meetings: [
         ...makeListedMeetings().meetings,
@@ -1486,7 +1487,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("DDD-54: attaches DEFAULT MENU after HITL decline on create_meeting", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 2,
@@ -1506,7 +1507,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("DDD-54: attaches DEFAULT has-visits after a committed reschedule_meeting", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 2,
@@ -1539,7 +1540,7 @@ describe("createAgentFinalizeNode", () => {
       seen.push({ name, props });
     });
     try {
-      const finalize = createAgentFinalizeNode(agent);
+      const finalize = createBookingFinalizeNode(agent);
       await finalize(
         clinicState({
           stepCount: 2,
@@ -1569,7 +1570,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("keeps REPLACE when Already booked and present_availability_slots ran same turn", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const days = [
       {
         date: "2026-09-10",
@@ -1618,7 +1619,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("keeps Готово + DEFAULT when committed create and present_availability_slots ran same turn", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const days = [
       {
         date: "2026-09-29",
@@ -1671,7 +1672,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prefixes DATE offer when create_meeting overlaps and slots ran same turn", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const days = [
       {
         date: "2026-09-15",
@@ -1738,7 +1739,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("prefixes TIME offer when create_meeting overlaps and same-day slots ran this turn", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const day = {
       date: "2026-09-15",
       dayLabel: "15 вересня (вівторок)",
@@ -1809,7 +1810,7 @@ describe("createAgentFinalizeNode", () => {
     const llmUpdate = await llm(
       clinicState({ agentMessages: [new HumanMessage("hi")], next: "booking" }),
     );
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: llmUpdate.stepCount ?? 1,
@@ -1834,7 +1835,7 @@ describe("createAgentFinalizeNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1864,7 +1865,7 @@ describe("createAgentFinalizeNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1888,7 +1889,7 @@ describe("createAgentFinalizeNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1924,7 +1925,7 @@ describe("createAgentFinalizeNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -1953,7 +1954,7 @@ describe("createAgentFinalizeNode", () => {
       systemPrompt: "faq",
       maxSteps: 4,
     };
-    const finalize = createAgentFinalizeNode(faqAgent);
+    const finalize = createFaqFinalizeNode(faqAgent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -2010,7 +2011,7 @@ describe("createAgentFinalizeNode", () => {
   };
 
   it("replaces invented 09:00–18:00 with DATE offer (hours in text, date keyboard)", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 2,
@@ -2057,7 +2058,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("on day pick without a new tool call, rewrites to TIME from availabilityContext", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -2084,7 +2085,7 @@ describe("createAgentFinalizeNode", () => {
   });
 
   it("omits DEFAULT MENU when availability snapshot is empty and there is no trailer", async () => {
-    const finalize = createAgentFinalizeNode(agent);
+    const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       clinicState({
         stepCount: 1,
@@ -2112,7 +2113,7 @@ describe("replacement offer menu precedence", () => {
   };
 
   it("keeps replacement consent buttons when the note step is still awaiting", async () => {
-    const update = await createAgentFinalizeNode(agent)(clinicState({
+    const update = await createBookingFinalizeNode(agent)(clinicState({
       bookingDraft: {
         version: 3,
         mode: "replace",

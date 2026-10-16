@@ -15,13 +15,15 @@ import {
   effectiveBookingContactDetails,
   nextMissingContactField,
   reduceBookingDraft,
-  upgradeBookingDraftCheckpoint,
-  type BookingCheckpointLegacyState,
-  type BookingCheckpointUpgradeResult,
   type BookingContactField,
   type BookingDraft,
   type BookingService,
 } from "./booking-draft.js";
+import {
+  type BookingCheckpointLegacyState,
+  type BookingCheckpointUpgradeResult,
+  upgradeBookingDraftCheckpoint,
+} from "./booking-checkpoint-upgrade.js";
 import { cancelCommandFromMeeting } from "./cancel-command.js";
 
 export const consultationService = (source: "catalog" | "direct"): {
@@ -1288,21 +1290,15 @@ export const upgradeBookingCheckpoint = (
   };
 };
 
-/** Atomically close a booking session, including deprecated checkpoint projections. */
+/** Atomically close a booking session (draft + booking-owned interaction only). */
 export const closedBookingSessionUpdate = (
   pendingInteraction?: PendingInteraction | null,
 ): {
   bookingDraft: null;
-  bookingNoteStatus: "unasked";
-  selectedSlot: null;
-  selectedAvailabilityDate: null;
   pendingInteraction: PendingInteraction | null;
   serviceChangeNotice: null;
 } => ({
   bookingDraft: null,
-  bookingNoteStatus: "unasked",
-  selectedSlot: null,
-  selectedAvailabilityDate: null,
   pendingInteraction: clearBookingOwnedInteraction(pendingInteraction),
   serviceChangeNotice: null,
 });

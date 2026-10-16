@@ -19,12 +19,7 @@ import {
   extractReplyButtons,
 } from "../../../shared/message-content.js";
 import { clearPendingConfirmForRuntime } from "../../../tools/meeting-confirm.js";
-import type { ServicesContext } from "../../../tools/service-tools.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import type {
-  PartitionServiceCandidates,
-  SelectServiceCandidates,
-} from "../../service-resolution.js";
 import { isModelFailureMessage, tagRuntimeAgentMessage } from "../../sub-agent-messages.js";
 import {
   applyMutationChatOtherCleanup,
@@ -61,17 +56,8 @@ import {
   type FinalizeReply,
 } from "./shared.js";
 
-export type CreateAgentFinalizeOptions = {
-  partitionCandidates?: PartitionServiceCandidates;
-  selectCandidates?: SelectServiceCandidates;
-  loadServices?: () => Promise<ServicesContext | null>;
-};
-
 /** Re-export for existing tests that import from finalize.js. */
 export { offeredServiceForTurn };
-
-/** Assemble AI-path finalize update (empty / max_steps / ok). */
-export const assembleFinalize = finalizeAiUpdate;
 
 export type FinalizeBookingAiInput = {
   state: ClinicState;
@@ -251,9 +237,33 @@ export const finalizeFaqAi = async (
   };
 };
 
-export const createAgentFinalizeNode = (
+/** Clear agent tape after finalize ships a handoff. */
+const clearedAgentTape = (): ClinicStateUpdate => ({
+  agentMessages: new Overwrite([] as BaseMessage[]),
+  stepCount: 0,
+});
+
+type FinalizeSpecialist = {
+  tryNoAi: (
+    state: ClinicState,
+    agentMessages: BaseMessage[],
+  ) => FinalizeReply | null;
+  finalizeAi: (input: {
+    state: ClinicState;
+    agentMessages: BaseMessage[];
+    reply: FinalizeReply;
+    rawText: string;
+    yieldTag: boolean;
+    chatOther: boolean;
+    confirmationCleanup: ClinicStateUpdate;
+    consumeServiceChangeNotice: () => string | null;
+  }) => FinalizeReply | Promise<FinalizeReply>;
+  modelFailureButtons: (state: ClinicState) => string[] | undefined;
+};
+
+const createSpecialistFinalizeNode = (
   agent: ClinicAgentDefinition,
-  options?: CreateAgentFinalizeOptions,
+  specialist: FinalizeSpecialist,
 ) =>
   async (
     state: ClinicState,
@@ -266,10 +276,7 @@ export const createAgentFinalizeNode = (
     const stepCount = state.stepCount ?? 0;
     const lastMessage = agentMessages[agentMessages.length - 1];
 
-    const cleared: ClinicStateUpdate = {
-      agentMessages: new Overwrite([] as BaseMessage[]),
-      stepCount: 0,
-    };
+    const cleared = clearedAgentTape();
     const chatOther = hasPendingConfirmationChatOther(state);
     const confirmationCleanup = chatOther
       ? applyMutationChatOtherCleanup(state)
@@ -279,11 +286,7 @@ export const createAgentFinalizeNode = (
     }
 
     if (!(lastMessage instanceof AIMessage)) {
-      const noAi = agent.id === BOOKING_AGENT_ID
-        ? tryBookingNoAiFinalize(state, agentMessages)
-        : agent.id === FAQ_AGENT_ID
-          ? tryFaqNoAiFinalize(state)
-          : null;
+      const noAi = specialist.tryNoAi(state, agentMessages);
       if (noAi != null) {
         return {
           ...cleared,
@@ -325,13 +328,11 @@ export const createAgentFinalizeNode = (
     };
 
     if (status === "error" && isModelFailureMessage(tagged)) {
-      const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+      const failureButtons = specialist.modelFailureButtons(state);
       reply = {
         ...emptyFinalizeReply("error"),
         replyText: PATIENT_FALLBACK_MESSAGE,
-        ...(agent.id === BOOKING_AGENT_ID
-          ? { replyButtons: [...defaultMenuLabels(hasVisit)] }
-          : {}),
+        ...(failureButtons != null ? { replyButtons: failureButtons } : {}),
         persistMessage: false,
         replySource: "runtime",
       };
@@ -345,35 +346,16 @@ export const createAgentFinalizeNode = (
       };
     }
 
-    if (agent.id === BOOKING_AGENT_ID) {
-      reply = finalizeBookingAi({
-        state,
-        agentMessages,
-        reply,
-        chatOther,
-        consumeServiceChangeNotice,
-        confirmationCleanup,
-      });
-    } else if (agent.id === FAQ_AGENT_ID) {
-      reply = await finalizeFaqAi({
-        state,
-        agentMessages,
-        reply,
-        rawText,
-        yieldTag,
-        confirmationCleanup,
-        ...(options != null ? { options } : {}),
-      });
-    } else {
-      reply = {
-        ...reply,
-        patch: {
-          ...confirmationCleanup,
-          supervisorIntent: null,
-          ...reply.patch,
-        },
-      };
-    }
+    reply = await specialist.finalizeAi({
+      state,
+      agentMessages,
+      reply,
+      rawText,
+      yieldTag,
+      chatOther,
+      confirmationCleanup,
+      consumeServiceChangeNotice,
+    });
 
     const blockedConfirmationMutation =
       hasMutationCallDuringUnresolvedConfirmation(state);
@@ -391,10 +373,47 @@ export const createAgentFinalizeNode = (
           })
         : tagged;
 
-    return assembleFinalize({
+    return finalizeAiUpdate({
       agent,
       extras: { ...cleared, ...reply.patch },
       reply,
       replyMessage,
     });
   };
+
+export const createBookingFinalizeNode = (
+  agent: ClinicAgentDefinition,
+) =>
+  createSpecialistFinalizeNode(agent, {
+    tryNoAi: tryBookingNoAiFinalize,
+    finalizeAi: (input) => finalizeBookingAi({
+      state: input.state,
+      agentMessages: input.agentMessages,
+      reply: input.reply,
+      chatOther: input.chatOther,
+      consumeServiceChangeNotice: input.consumeServiceChangeNotice,
+      confirmationCleanup: input.confirmationCleanup,
+    }),
+    modelFailureButtons: (state) => {
+      const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+      return [...defaultMenuLabels(hasVisit)];
+    },
+  });
+
+export const createFaqFinalizeNode = (
+  agent: ClinicAgentDefinition,
+  options?: FinalizeFaqOptions,
+) =>
+  createSpecialistFinalizeNode(agent, {
+    tryNoAi: (state) => tryFaqNoAiFinalize(state),
+    finalizeAi: (input) => finalizeFaqAi({
+      state: input.state,
+      agentMessages: input.agentMessages,
+      reply: input.reply,
+      rawText: input.rawText,
+      yieldTag: input.yieldTag,
+      confirmationCleanup: input.confirmationCleanup,
+      ...(options != null ? { options } : {}),
+    }),
+    modelFailureButtons: () => undefined,
+  });

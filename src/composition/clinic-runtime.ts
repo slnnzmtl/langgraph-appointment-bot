@@ -7,9 +7,9 @@ import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 
 import type { AppConfig } from "../config.js";
 import { compileClinicGraph } from "../graph/compile.js";
-import type { ClinicAgentDefinition } from "../graph/types.js";
+import type { ClinicAgentId, ClinicSpecialists } from "../graph/types.js";
 import { SUPERVISOR_PROMPT } from "../prompts/supervisor.js";
-import { clinicAgents } from "./agents.js";
+import { clinicSpecialists } from "./agents.js";
 import { buildClinicAgentTools } from "./clinic-agent-tools.js";
 import { setupClinicAdapters, type ClinicAdapters } from "./clinic-adapters.js";
 import {
@@ -22,8 +22,8 @@ import { configurePendingConfirmStore } from "../tools/meeting-confirm.js";
 export type ClinicBootstrap = {
   config: AppConfig;
   adapters: ClinicAdapters;
-  agents: ClinicAgentDefinition[];
-  agentTools: Record<string, StructuredToolInterface[]>;
+  specialists: ClinicSpecialists;
+  agentTools: Record<ClinicAgentId, StructuredToolInterface[]>;
 };
 
 export type ClinicRuntime = {
@@ -46,7 +46,7 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
   const checkpointer = SqliteSaver.fromConnString(config.checkpointDbPath);
 
   const { graph } = compileClinicGraph({
-    agents: clinicAgents,
+    specialists: clinicSpecialists,
     agentTools,
     agentModel,
     agentModelName,
@@ -63,7 +63,7 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
   const bootstrap: ClinicBootstrap = {
     config,
     adapters,
-    agents: clinicAgents,
+    specialists: clinicSpecialists,
     agentTools,
   };
 

@@ -22,7 +22,7 @@ import {
 import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
-  agents,
+  specialists,
   createCachedGeminiModel,
   createClinicSupervisorNode,
   dateSelectPending,
@@ -495,7 +495,7 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 
   it("skips the LLM and routes to faq when a catalog shortcut is tapped", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -522,7 +522,7 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 
   it("still calls the LLM after a yielded FAQ consultation offer", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -549,7 +549,7 @@ describe("createClinicSupervisorNode sticky faq continue", () => {
 
   it("does not seed a cancel of the listed visit when Так accepts a consultation offer", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -599,7 +599,7 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
       bookingContext: { meetings: [], dateFrom: "2026-08-11" },
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -634,7 +634,7 @@ describe("createClinicSupervisorNode sticky booking continue", () => {
 
   it("still calls the LLM for free text after a booking turn", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -702,7 +702,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
         bookingContext: listedMeetings,
       }));
       const node = createClinicSupervisorNode({
-        agents,
+        specialists,
         supervisorLlm,
         loadSupervisorPrompt: () => "STATIC",
         prefetch,
@@ -736,7 +736,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
   it("nulls availabilityContext when FAQ routes to booking", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "consultation_request" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -774,7 +774,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -809,7 +809,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
   it("keeps availabilityContext on in-booking free text routed to booking", async () => {
     invoke.mockResolvedValue({ next: "booking", reply: "" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
