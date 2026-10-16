@@ -15,13 +15,15 @@ import {
   effectiveBookingContactDetails,
   nextMissingContactField,
   reduceBookingDraft,
-  upgradeBookingDraftCheckpoint,
-  type BookingCheckpointLegacyState,
-  type BookingCheckpointUpgradeResult,
   type BookingContactField,
   type BookingDraft,
   type BookingService,
 } from "./booking-draft.js";
+import {
+  type BookingCheckpointLegacyState,
+  type BookingCheckpointUpgradeResult,
+  upgradeBookingDraftCheckpoint,
+} from "./booking-checkpoint-upgrade.js";
 import { cancelCommandFromMeeting } from "./cancel-command.js";
 
 export const consultationService = (source: "catalog" | "direct"): {

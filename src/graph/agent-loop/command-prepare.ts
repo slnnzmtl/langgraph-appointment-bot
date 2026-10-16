@@ -9,10 +9,10 @@ import {
 } from "./nodes-names.js";
 import { interactionRenderNodeName } from "../booking-note-orchestrator.js";
 import {
-  authoritativeNoteStatus,
   resolveBookingCommand,
   type BookingCommandOutcome,
 } from "./booking-command.js";
+import { authoritativeNoteStatus } from "./booking-note-step.js";
 import {
   appendOrReplacePendingToolCall,
   stampRuntimeToolAi,

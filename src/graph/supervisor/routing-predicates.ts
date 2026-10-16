@@ -15,7 +15,7 @@ import { kyivToday } from "../../tools/availability-slots.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import type { ClinicState } from "../state.js";
-import { authoritativeSelectedSlot } from "../agent-loop/booking-command.js";
+import { authoritativeSelectedSlot } from "../agent-loop/booking-note-step.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
 export type CancelTap = "abandon" | "visit" | "replace";
 

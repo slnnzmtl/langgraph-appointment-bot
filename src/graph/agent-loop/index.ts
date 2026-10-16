@@ -15,9 +15,15 @@ export {
 } from "./protocol.js";
 
 export {
-  advanceBookingNoteStep,
   bookingOutcomeRiskState,
 } from "./booking-command.js";
+
+export {
+  advanceBookingNoteStep,
+  authoritativeNoteStatus,
+  authoritativeSelectedSlot,
+  noteStepBlocksCreate,
+} from "./booking-note-step.js";
 
 export {
   availabilityOfferFromToolTurn,
