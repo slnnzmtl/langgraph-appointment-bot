@@ -453,6 +453,7 @@ const hasRescheduleOrReplacementTarget = (draft: BookingDraft): boolean =>
   (draft.mode === "reschedule" && trimmedTargetId(draft.rescheduleTarget) != null)
   || trimmedTargetId(draft.replacement?.meeting) != null;
 
+/** Migration boundary only — do not use in live graph routing or nodes. */
 const hasActiveLegacyProjection = (state: BookingCheckpointLegacyState): boolean =>
   (state.bookingNoteStatus != null && state.bookingNoteStatus !== "unasked")
   || state.selectedSlot != null
