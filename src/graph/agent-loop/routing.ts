@@ -35,9 +35,6 @@ const routeFromBookingOutcome = (
     llmName: string;
   },
 ): string | null => {
-  if (outcome.kind === "noop") {
-    return options.finalizeName ?? options.llmName;
-  }
   if (outcome.kind === "finalize") {
     if (outcome.reason === "replacement_catalog" && options.faqPrepareName) {
       return options.faqPrepareName;

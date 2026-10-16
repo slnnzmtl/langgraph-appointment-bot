@@ -39,8 +39,6 @@ export type CreateAgentLlmOptions = {
   contextCache?: SupervisorContextCacheOptions;
 };
 
-export type CreateAgentLoopOptions = CreateAgentLlmOptions;
-
 export const createAgentLlmNode = (options: CreateAgentLlmOptions) => {
   const { agent, model, tools, formatSystemMetadata } = options;
   const cache = options.contextCache;

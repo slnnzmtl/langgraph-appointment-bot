@@ -147,7 +147,7 @@ describe("runtime-owned booking routing", () => {
       routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"),
     ).toBe("booking__command_prepare");
 
-    const update = await createAgentCommandPrepareNode("booking")(state);
+    const update = await createAgentCommandPrepareNode()(state);
     const prepared = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value;
     const call = prepared.at(-1)?.tool_calls?.[0];
     expect(call).toMatchObject({
@@ -183,7 +183,7 @@ describe("runtime-owned booking routing", () => {
       routeAfterAgentPrepare(state, "booking__llm", "booking__command_prepare"),
     ).toBe("booking__command_prepare");
 
-    const update = await createAgentCommandPrepareNode("booking")(state);
+    const update = await createAgentCommandPrepareNode()(state);
     const prepared = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value;
     const call = prepared.at(-1)?.tool_calls?.[0];
     expect(call).toMatchObject({
@@ -379,7 +379,7 @@ describe("runtime-owned booking routing", () => {
       "booking__command_prepare",
     )).toBe("booking__command_prepare");
 
-    const prepared = await createAgentCommandPrepareNode("booking")(state);
+    const prepared = await createAgentCommandPrepareNode()(state);
     const update = unwrapCommandUpdate(prepared);
     expect(update.pendingInteraction).toMatchObject({
       kind: "contact_field",

@@ -29,25 +29,17 @@ import {
   createBookingPrepareNode,
   createFaqPrepareNode,
   createAgentToolsNode,
-  finalizeNodeName,
-  llmNodeName,
   matchAvailabilityDay,
   matchAvailabilitySlot,
-  prepareNodeName,
-  commandPrepareNodeName,
-  mutationFinalizeNodeName,
   routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
-  toolsNodeName,
 } from "./agent-loop/index.js";
 import { createNoteTurnClassifier } from "./booking-note-classifier.js";
 import { createContactNameClassifier } from "./contact-name-classifier.js";
 import {
   createBookingInteractionRenderNode,
   createBookingNoteOrchestratorNode,
-  interactionRenderNodeName,
-  noteOrchestratorNodeName,
   type ResolveServiceChange,
 } from "./booking-note-orchestrator.js";
 import {
@@ -66,11 +58,27 @@ import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
   FINISH_ROUTE,
-  type ClinicAgentDefinition,
+  type ClinicAgentId,
+  type ClinicRouteId,
+  type ClinicSpecialists,
   type ILLMConnector,
 } from "./types.js";
 
 export { PREFETCH_TTL_MS };
+
+const FAQ_PREPARE = "faq__prepare" as const;
+const FAQ_LLM = "faq__llm" as const;
+const FAQ_TOOLS = "faq__tools" as const;
+const FAQ_FINALIZE = "faq__finalize" as const;
+
+const BOOKING_PREPARE = "booking__prepare" as const;
+const BOOKING_COMMAND_PREPARE = "booking__command_prepare" as const;
+const BOOKING_LLM = "booking__llm" as const;
+const BOOKING_TOOLS = "booking__tools" as const;
+const BOOKING_FINALIZE = "booking__finalize" as const;
+const BOOKING_MUTATION_FINALIZE = "booking__mutation_finalize" as const;
+const BOOKING_NOTE_ORCH = "booking__note_orchestrator" as const;
+const BOOKING_INTERACTION_RENDER = "booking__interaction_render" as const;
 
 /** Fallback when no MCP callTool is wired (unit graphs without CRM). */
 const unresolvedServiceChange: ResolveServiceChange = async () => ({
@@ -78,9 +86,8 @@ const unresolvedServiceChange: ResolveServiceChange = async () => ({
 });
 
 export type CompileClinicGraphOptions = {
-  /** Exactly one FAQ and one booking specialist (see `clinicAgents`). */
-  agents: ClinicAgentDefinition[];
-  agentTools: Record<string, StructuredToolInterface[]>;
+  specialists: ClinicSpecialists;
+  agentTools: Record<ClinicAgentId, StructuredToolInterface[]>;
   agentModel: BaseChatModel;
   agentModelName?: string;
   supervisorLlm: ILLMConnector;
@@ -102,17 +109,15 @@ export type CompileClinicGraphOptions = {
   resolveServiceChange?: ResolveServiceChange;
 };
 
-const resolveClinicSpecialists = (
-  agents: ClinicAgentDefinition[],
-): { faqAgent: ClinicAgentDefinition; bookingAgent: ClinicAgentDefinition } => {
-  const faqAgent = agents.find((entry) => entry.id === FAQ_AGENT_ID);
-  const bookingAgent = agents.find((entry) => entry.id === BOOKING_AGENT_ID);
-  if (agents.length !== 2 || faqAgent == null || bookingAgent == null) {
+const assertClinicSpecialists = (specialists: ClinicSpecialists): void => {
+  if (
+    specialists.faq.id !== FAQ_AGENT_ID
+    || specialists.booking.id !== BOOKING_AGENT_ID
+  ) {
     throw new Error(
-      "compileClinicGraph requires exactly one FAQ and one booking specialist",
+      "compileClinicGraph requires FAQ and booking specialists with matching ids",
     );
   }
-  return { faqAgent, bookingAgent };
 };
 
 export const prefetchBookingContext = async (callTool: McpCallTool): Promise<AgentPrefetchResult> => {
@@ -134,7 +139,9 @@ export const prefetchBookingContext = async (callTool: McpCallTool): Promise<Age
 };
 
 export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
-  const { faqAgent, bookingAgent } = resolveClinicSpecialists(options.agents);
+  assertClinicSpecialists(options.specialists);
+  const faqAgent = options.specialists.faq;
+  const bookingAgent = options.specialists.booking;
   const checkpointer = options.checkpointer ?? new MemorySaver();
   const stateAnnotation = createClinicStateAnnotation({
     messageHistoryMaxTokens: options.messageHistoryMaxTokens,
@@ -158,7 +165,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   };
 
   const supervisorNode = createClinicSupervisorNode({
-    agents: [faqAgent, bookingAgent],
+    specialists: options.specialists,
     supervisorLlm: options.supervisorLlm,
     loadSupervisorPrompt: options.loadSupervisorPrompt,
     ...(options.buildSupervisorDynamicContext
@@ -170,19 +177,19 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(loadServices != null ? { loadServices } : {}),
   });
 
-  const faqPrepare = prepareNodeName(FAQ_AGENT_ID);
-  const faqLlm = llmNodeName(FAQ_AGENT_ID);
-  const faqTools = toolsNodeName(FAQ_AGENT_ID);
-  const faqFinalize = finalizeNodeName(FAQ_AGENT_ID);
+  const faqPrepare = FAQ_PREPARE;
+  const faqLlm = FAQ_LLM;
+  const faqTools = FAQ_TOOLS;
+  const faqFinalize = FAQ_FINALIZE;
 
-  const bookingPrepare = prepareNodeName(BOOKING_AGENT_ID);
-  const bookingCommandPrepare = commandPrepareNodeName(BOOKING_AGENT_ID);
-  const bookingLlm = llmNodeName(BOOKING_AGENT_ID);
-  const bookingTools = toolsNodeName(BOOKING_AGENT_ID);
-  const bookingFinalize = finalizeNodeName(BOOKING_AGENT_ID);
-  const bookingMutationFinalize = mutationFinalizeNodeName(BOOKING_AGENT_ID);
-  const bookingNoteOrch = noteOrchestratorNodeName(BOOKING_AGENT_ID);
-  const bookingInteractionRender = interactionRenderNodeName(BOOKING_AGENT_ID);
+  const bookingPrepare = BOOKING_PREPARE;
+  const bookingCommandPrepare = BOOKING_COMMAND_PREPARE;
+  const bookingLlm = BOOKING_LLM;
+  const bookingTools = BOOKING_TOOLS;
+  const bookingFinalize = BOOKING_FINALIZE;
+  const bookingMutationFinalize = BOOKING_MUTATION_FINALIZE;
+  const bookingNoteOrch = BOOKING_NOTE_ORCH;
+  const bookingInteractionRender = BOOKING_INTERACTION_RENDER;
 
   const faqToolList = options.agentTools[FAQ_AGENT_ID] ?? [];
   const bookingToolList = options.agentTools[BOOKING_AGENT_ID] ?? [];
@@ -208,7 +215,10 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       ? createResolveServiceChange(callTool, options.supervisorLlm)
       : unresolvedServiceChange);
 
-  const supervisorRoutes: Record<string, string> = {
+  const supervisorRoutes: Record<
+    ClinicRouteId,
+    typeof END | typeof FAQ_PREPARE | typeof BOOKING_PREPARE
+  > = {
     [FINISH_ROUTE]: END,
     [FAQ_AGENT_ID]: faqPrepare,
     [BOOKING_AGENT_ID]: bookingPrepare,
@@ -295,7 +305,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     )
     .addNode(
       bookingCommandPrepare,
-      createAgentCommandPrepareNode(BOOKING_AGENT_ID, {
+      createAgentCommandPrepareNode({
         tools: bookingTools,
         interactionRender: bookingInteractionRender,
         llm: bookingLlm,

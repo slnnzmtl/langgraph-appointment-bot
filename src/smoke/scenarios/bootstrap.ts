@@ -18,7 +18,7 @@ const BOOKING_EXTRA_TOOL_NAMES = [
 
 export const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => {
   const bootstrap = runtime.getBootstrap();
-  const agentIds = bootstrap.agents.map((agent) => agent.id).sort();
+  const agentIds = [bootstrap.specialists.faq.id, bootstrap.specialists.booking.id].sort();
   const expected = [...EXPECTED_AGENT_IDS].sort();
 
   if (agentIds.join(",") !== expected.join(",")) {
@@ -30,15 +30,15 @@ export const assertBootstrap = async (runtime: ClinicRuntime): Promise<void> => 
   console.log("✓ Runtime bootstrapped");
   console.log(
     "✓ Agents:",
-    bootstrap.agents.map((agent) => agent.id).join(", "),
+    agentIds.join(", "),
   );
 
-  const faqRuntime = bootstrap.agents.find((agent) => agent.id === "faq");
-  const bookingRuntime = bootstrap.agents.find((agent) => agent.id === "booking");
-  if (faqRuntime?.systemPrompt !== faqAgent.systemPrompt) {
+  const faqRuntime = bootstrap.specialists.faq;
+  const bookingRuntime = bootstrap.specialists.booking;
+  if (faqRuntime.systemPrompt !== faqAgent.systemPrompt) {
     throw new Error("faq systemPrompt in runtime does not match src/composition/agents.ts");
   }
-  if (bookingRuntime?.systemPrompt !== bookingAgent.systemPrompt) {
+  if (bookingRuntime.systemPrompt !== bookingAgent.systemPrompt) {
     throw new Error("booking systemPrompt in runtime does not match src/composition/agents.ts");
   }
   console.log("✓ Agent prompts loaded from build-time agents.ts");

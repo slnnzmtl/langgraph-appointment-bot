@@ -56,13 +56,8 @@ import {
   type FinalizeReply,
 } from "./shared.js";
 
-export type CreateFaqFinalizeOptions = FinalizeFaqOptions;
-
 /** Re-export for existing tests that import from finalize.js. */
 export { offeredServiceForTurn };
-
-/** Assemble AI-path finalize update (empty / max_steps / ok). */
-export const assembleFinalize = finalizeAiUpdate;
 
 export type FinalizeBookingAiInput = {
   state: ClinicState;
@@ -378,7 +373,7 @@ const createSpecialistFinalizeNode = (
           })
         : tagged;
 
-    return assembleFinalize({
+    return finalizeAiUpdate({
       agent,
       extras: { ...cleared, ...reply.patch },
       reply,
@@ -407,7 +402,7 @@ export const createBookingFinalizeNode = (
 
 export const createFaqFinalizeNode = (
   agent: ClinicAgentDefinition,
-  options?: CreateFaqFinalizeOptions,
+  options?: FinalizeFaqOptions,
 ) =>
   createSpecialistFinalizeNode(agent, {
     tryNoAi: (state) => tryFaqNoAiFinalize(state),

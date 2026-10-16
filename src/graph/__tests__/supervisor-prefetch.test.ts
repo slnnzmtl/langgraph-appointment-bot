@@ -21,7 +21,7 @@ import {
 import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
-  agents,
+  specialists,
   createCachedGeminiModel,
   createClinicSupervisorNode,
   isCachedContentNotFoundError,
@@ -58,7 +58,7 @@ describe("createClinicSupervisorNode context cache", () => {
     };
 
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC PROMPT",
       buildSupervisorDynamicContext: () => "DYNAMIC",
@@ -91,7 +91,7 @@ describe("createClinicSupervisorNode context cache", () => {
     };
 
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC PROMPT",
       buildSupervisorDynamicContext: () => "DYNAMIC KYIV",
@@ -137,7 +137,7 @@ describe("createClinicSupervisorNode context cache", () => {
       .mockResolvedValueOnce({ next: "faq" });
 
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       buildSupervisorDynamicContext: () => "DYN",
@@ -174,7 +174,7 @@ describe("createClinicSupervisorNode context cache", () => {
       .mockResolvedValueOnce({ next: "FINISH", reply: "Uncached reply" });
 
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       buildSupervisorDynamicContext: () => "DYN",
@@ -203,7 +203,7 @@ describe("createClinicSupervisorNode context cache", () => {
 
   it("skips the LLM on Головне меню and attaches code-owned DEFAULT MENU", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -226,7 +226,7 @@ describe("createClinicSupervisorNode context cache", () => {
   it("routes to booking without rewriting a specialist prompt", async () => {
     invoke.mockResolvedValue({ next: "booking", reply: "ignored when delegating" });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
     });
@@ -274,7 +274,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
   it("injects contact and planned meetings into dynamic context and state", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       buildSupervisorDynamicContext: () => "DYNAMIC",
@@ -313,7 +313,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       buildSupervisorDynamicContext: () => "DYNAMIC",
@@ -344,7 +344,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -391,7 +391,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -433,7 +433,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -481,7 +481,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -524,7 +524,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -552,7 +552,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -576,7 +576,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -600,7 +600,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: { meetings: [], dateFrom: "2026-08-11" },
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -626,7 +626,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     }));
     invoke.mockResolvedValue({ next: "FINISH", reply: "Записів немає." });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -665,7 +665,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -706,7 +706,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -750,7 +750,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -787,7 +787,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -812,7 +812,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -840,7 +840,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch,
@@ -865,7 +865,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
   it("still greets when prefetch throws", async () => {
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       buildSupervisorDynamicContext: () => "DYNAMIC",
@@ -901,7 +901,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     };
     activeDraft.phase = "note";
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
@@ -942,7 +942,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     activeDraft.selectedDate = "2026-10-17";
     activeDraft.phase = "time";
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
@@ -986,7 +986,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     activeDraft.phase = "note";
     invoke.mockRejectedValue(new Error("LLM down"));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {

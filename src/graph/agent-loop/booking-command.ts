@@ -106,18 +106,17 @@ export type BookingCommandOutcome =
   | { kind: "render"; reason: BookingGuardReason; update: ClinicStateUpdate }
   | { kind: "continue_tools"; update?: ClinicStateUpdate }
   | { kind: "continue_llm"; update?: ClinicStateUpdate }
-  | { kind: "finalize"; reason: BookingFinalizeReason; update?: ClinicStateUpdate }
-  | { kind: "noop" };
+  | { kind: "finalize"; reason: BookingFinalizeReason; update?: ClinicStateUpdate };
 
 /**
  * True when the outcome must enter command_prepare so domain updates (and
  * continue_tools tape rewrites) are applied. Conditional edges cannot write.
- * finalize / noop never prepare — routers project them directly.
+ * finalize never prepares — routers project it directly.
  */
 export const bookingOutcomeNeedsPrepare = (
   outcome: BookingCommandOutcome,
 ): boolean => {
-  if (outcome.kind === "finalize" || outcome.kind === "noop") {
+  if (outcome.kind === "finalize") {
     return false;
   }
   return outcome.kind === "execute"

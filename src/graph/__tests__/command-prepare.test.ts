@@ -14,7 +14,7 @@ import {
 import {
   commandFromBookingOutcome,
   createAgentCommandPrepareNode,
-  defaultCommandPrepareNodes,
+  defaultBookingCommandPrepareNodes,
 } from "../agent-loop/command-prepare.js";
 import {
   routeAfterAgentLlm,
@@ -146,7 +146,7 @@ const lastAi = (result: Command | ClinicStateUpdate): AIMessage => {
 };
 
 describe("command_prepare runtime authority", () => {
-  const commandPrepare = createAgentCommandPrepareNode("booking");
+  const commandPrepare = createAgentCommandPrepareNode();
   const tracked: Array<{ name: string; props: Record<string, unknown> }> = [];
 
   afterEach(() => {
@@ -439,7 +439,7 @@ describe("command_prepare runtime authority", () => {
 });
 
 describe("ContactCommand decisions", () => {
-  const commandPrepare = createAgentCommandPrepareNode("booking");
+  const commandPrepare = createAgentCommandPrepareNode();
 
   const detailsDraft = (overrides: Partial<BookingDraft> = {}): BookingDraft =>
     readyCreateDraft({
@@ -785,7 +785,7 @@ describe("booking LLM tool surface coercion", () => {
 });
 
 describe("DDD-255 deterministic booking transitions", () => {
-  const commandPrepare = createAgentCommandPrepareNode("booking");
+  const commandPrepare = createAgentCommandPrepareNode();
 
   const snapshot = {
     days: [
@@ -1004,8 +1004,8 @@ describe("DDD-255 deterministic booking transitions", () => {
 });
 
 describe("DDD-261 unified booking transition planner", () => {
-  const commandPrepare = createAgentCommandPrepareNode("booking");
-  const nodes = defaultCommandPrepareNodes("booking");
+  const commandPrepare = createAgentCommandPrepareNode();
+  const nodes = defaultBookingCommandPrepareNodes();
   const tracked: Array<{ name: string; props: Record<string, unknown> }> = [];
 
   afterEach(() => {

@@ -18,6 +18,12 @@ export type ClinicAgentDefinition = {
   maxSteps: number;
 };
 
+/** Fixed FAQ + booking topology wired by compileClinicGraph. */
+export type ClinicSpecialists = {
+  faq: ClinicAgentDefinition;
+  booking: ClinicAgentDefinition;
+};
+
 export type ClinicHandoffStatus = "ok" | "empty" | "max_steps" | "error";
 
 export type ClinicHandoff = {

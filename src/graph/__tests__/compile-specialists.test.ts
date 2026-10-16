@@ -38,19 +38,22 @@ const minimalCompileOptions = {
 };
 
 describe("DDD-264 compileClinicGraph specialists", () => {
-  it("requires FAQ and booking specialists", () => {
+  it("requires FAQ and booking specialist ids", () => {
     expect(() =>
       compileClinicGraph({
         ...minimalCompileOptions,
-        agents: [bookingAgent],
+        specialists: {
+          faq: { ...faqAgent, id: "wrong" as "faq" },
+          booking: bookingAgent,
+        },
       }),
-    ).toThrow(/one FAQ and one booking specialist/i);
+    ).toThrow(/matching ids/i);
   });
 
   it("compiles when both specialists are present", () => {
     const { graph } = compileClinicGraph({
       ...minimalCompileOptions,
-      agents: [faqAgent, bookingAgent],
+      specialists: { faq: faqAgent, booking: bookingAgent },
     });
     expect(graph).toBeDefined();
   });

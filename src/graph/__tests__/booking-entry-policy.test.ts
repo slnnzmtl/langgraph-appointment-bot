@@ -24,7 +24,7 @@ import { resolveCatalogLexicalEvidence } from "../catalog-match.js";
 import type { ClinicState } from "../state.js";
 import { FAQ_AGENT_ID, type ClinicAgentDefinition, type ILLMConnector } from "../types.js";
 import {
-  agents,
+  specialists,
   createClinicSupervisorNode,
   supervisorState,
 } from "./supervisor-fixtures.js";
@@ -891,7 +891,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
       }],
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -920,7 +920,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
       list: [{ id: "other", name: "Other" }],
     }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -953,7 +953,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
     const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
     const loadServices = vi.fn(async () => botoxServices);
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -992,7 +992,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
     const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
     const loadServices = vi.fn(async () => zapisCatalog);
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -1018,7 +1018,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
   it("routes idle named booking to FAQ catalog, not booking consultation", async () => {
     const invoke = vi.fn(async () => ({ next: "booking", intent: "book" }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -1043,7 +1043,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
   it("routes named booking with an existing visit to REPLACE without guessing a service", async () => {
     const invoke = vi.fn(async () => ({ next: "faq", intent: "named_procedure" }));
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -1070,7 +1070,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
     const invoke = vi.fn(async () => ({ next: "faq", intent: "faq" }));
     const loadServices = vi.fn(async () => botoxServices);
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,
@@ -1098,7 +1098,7 @@ describe("supervisor idle free text (named_booking post-LLM refine)", () => {
       throw new Error("CRM down");
     });
     const node = createClinicSupervisorNode({
-      agents,
+      specialists,
       supervisorLlm: {
         bindRoutingTools: () => ({ invoke }),
       } as unknown as ILLMConnector,

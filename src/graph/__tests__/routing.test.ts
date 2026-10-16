@@ -5,36 +5,36 @@ import {
   buildClinicRoutingSchema,
   normalizeSupervisorReply,
 } from "../routing.js";
-import type { ClinicAgentDefinition } from "../types.js";
+import type { ClinicSpecialists } from "../types.js";
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 
-const agents: ClinicAgentDefinition[] = [
-  {
+const specialists: ClinicSpecialists = {
+  faq: {
     id: "faq",
     name: "FAQ",
     description: "FAQ",
     systemPrompt: "faq",
     maxSteps: 4,
   },
-  {
+  booking: {
     id: "booking",
     name: "Booking",
     description: "Booking",
     systemPrompt: "booking",
     maxSteps: 10,
   },
-];
+};
 
 describe("clinic routing schema", () => {
   it("accepts faq, booking, and FINISH", () => {
-    const schema = buildClinicRoutingSchema(agents);
+    const schema = buildClinicRoutingSchema(specialists);
     expect(schema.parse({ next: "FINISH", reply: "Hello" }).next).toBe("FINISH");
     expect(schema.parse({ next: "faq" }).next).toBe("faq");
     expect(schema.parse({ next: "booking" }).next).toBe("booking");
   });
 
   it("accepts optional FINISH menu", () => {
-    const schema = buildClinicRoutingSchema(agents);
+    const schema = buildClinicRoutingSchema(specialists);
     expect(schema.parse({ next: "FINISH", reply: "Hi", menu: "default" }).menu).toBe("default");
     expect(schema.parse({ next: "FINISH", reply: "Visits", menu: "visit_change" }).menu).toBe(
       "visit_change",
@@ -42,7 +42,7 @@ describe("clinic routing schema", () => {
   });
 
   it("accepts optional intent and choiceId", () => {
-    const schema = buildClinicRoutingSchema(agents);
+    const schema = buildClinicRoutingSchema(specialists);
     expect(
       schema.parse({ next: "booking", intent: "visit_cancel" }).intent,
     ).toBe("visit_cancel");

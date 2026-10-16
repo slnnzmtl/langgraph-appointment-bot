@@ -522,7 +522,7 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       type: "existing_booking_detected",
       meeting: makeListedMeetings().meetings[0]!,
     });
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       clinicState({
         messages: [new HumanMessage("Скасувати")],
@@ -555,7 +555,7 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       type: "existing_booking_detected",
       meeting: makeListedMeetings().meetings[0]!,
     });
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       clinicState({
         messages: [new HumanMessage("Ні, дякую")],
@@ -740,7 +740,7 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
         name: "cancel_meeting",
       }),
     ];
-    const update = await createAgentCommandPrepareNode("booking")(
+    const update = await createAgentCommandPrepareNode()(
       clinicState({
         messages: [new HumanMessage("✅")],
         bookingDraft: draft,

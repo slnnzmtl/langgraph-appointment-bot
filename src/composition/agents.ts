@@ -4,6 +4,7 @@ import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
   type ClinicAgentDefinition,
+  type ClinicSpecialists,
 } from "../graph/types.js";
 
 export const faqAgent: ClinicAgentDefinition = {
@@ -22,4 +23,10 @@ export const bookingAgent: ClinicAgentDefinition = {
   maxSteps: 10,
 };
 
+export const clinicSpecialists: ClinicSpecialists = {
+  faq: faqAgent,
+  booking: bookingAgent,
+};
+
+/** @deprecated Prefer `clinicSpecialists`. */
 export const clinicAgents: ClinicAgentDefinition[] = [faqAgent, bookingAgent];

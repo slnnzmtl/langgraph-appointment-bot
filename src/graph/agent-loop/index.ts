@@ -46,7 +46,6 @@ export {
 } from "./finalize/index.js";
 
 export {
-  type CreateAgentLoopOptions,
   type CreateAgentLlmOptions,
   createAgentLlmNode,
 } from "./llm.js";

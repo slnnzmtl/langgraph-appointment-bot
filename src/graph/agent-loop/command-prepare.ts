@@ -1,7 +1,6 @@
 import { Command, Overwrite } from "@langchain/langgraph";
 
 import { trackEvent } from "../../analytics/track.js";
-import { BOOKING_AGENT_ID } from "../types.js";
 import type { ClinicState } from "../state.js";
 import {
   finalizeNodeName,
@@ -26,11 +25,11 @@ export type CommandPrepareNodes = {
   finalize: string;
 };
 
-export const defaultCommandPrepareNodes = (agentId: string): CommandPrepareNodes => ({
-  tools: toolsNodeName(agentId),
-  interactionRender: interactionRenderNodeName(agentId),
-  llm: llmNodeName(agentId),
-  finalize: finalizeNodeName(agentId),
+export const defaultBookingCommandPrepareNodes = (): CommandPrepareNodes => ({
+  tools: toolsNodeName("booking"),
+  interactionRender: interactionRenderNodeName("booking"),
+  llm: llmNodeName("booking"),
+  finalize: finalizeNodeName("booking"),
 });
 
 const emitRenderTelemetry = (
@@ -102,9 +101,9 @@ export const commandFromBookingOutcome = (
       goto: nodes.tools,
     });
   }
-  if (outcome.kind === "finalize" || outcome.kind === "noop") {
+  if (outcome.kind === "finalize") {
     return new Command({
-      update: outcome.kind === "finalize" ? (outcome.update ?? {}) : {},
+      update: outcome.update ?? {},
       goto: nodes.finalize,
     });
   }
@@ -120,12 +119,7 @@ export const commandFromBookingOutcome = (
  * so preparing this in the tools node is too late for restart-safe confirmation.
  */
 export const createAgentCommandPrepareNode = (
-  agentId: string,
-  nodes: CommandPrepareNodes = defaultCommandPrepareNodes(agentId),
+  nodes: CommandPrepareNodes = defaultBookingCommandPrepareNodes(),
 ) =>
-  async (state: ClinicState): Promise<Command> => {
-    if (agentId !== BOOKING_AGENT_ID) {
-      return new Command({ update: {}, goto: nodes.llm });
-    }
-    return commandFromBookingOutcome(state, resolveBookingCommand(state), nodes);
-  };
+  async (state: ClinicState): Promise<Command> =>
+    commandFromBookingOutcome(state, resolveBookingCommand(state), nodes);

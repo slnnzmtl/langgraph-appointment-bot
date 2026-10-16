@@ -219,7 +219,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
   });
 
   it("does not prepare a runtime booking command from a phone candidate", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const availability = {
       days: [{
         date: "2026-09-10",
@@ -265,7 +265,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       }],
       stepMinutes: 30,
     };
-    const update = await createAgentCommandPrepareNode("booking")(
+    const update = await createAgentCommandPrepareNode()(
       clinicState({
         contactContext: null,
         bookingDraft: canonicalBookingDraft({ contactId: "unverified-contact" }),

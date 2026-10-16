@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import {
   BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
+  type ClinicAgentId,
 } from "../graph/types.js";
 import { createBookingTools, createReadTools } from "../tools/index.js";
 import type { ClinicAdapters } from "./clinic-adapters.js";
@@ -12,7 +13,7 @@ import type { ClinicAdapters } from "./clinic-adapters.js";
 export const buildClinicAgentTools = (
   config: AppConfig,
   adapters: ClinicAdapters,
-): Record<string, StructuredToolInterface[]> => {
+): Record<ClinicAgentId, StructuredToolInterface[]> => {
   const callTool: typeof adapters.callTool = (name, args) => adapters.callTool(name, args);
   const readTools = createReadTools({
     callTool,

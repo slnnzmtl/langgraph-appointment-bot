@@ -142,7 +142,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       selectedSlot: null,
     });
 
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Перенести")],
@@ -189,7 +189,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       bookingDraft: unwrapCommandUpdate(seeded).bookingDraft,
       agentMessages: (unwrapCommandUpdate(seeded).agentMessages as Overwrite<AIMessage[]>).value,
     });
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const lookup = await commandPrepare(preparedState);
     const lookupCall = ((unwrapCommandUpdate(lookup).agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
       .tool_calls?.[0];
@@ -312,7 +312,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       bookingDraft: unwrapCommandUpdate(seeded).bookingDraft,
       agentMessages: (unwrapCommandUpdate(seeded).agentMessages as Overwrite<AIMessage[]>).value,
     });
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const lookup = await commandPrepare(preparedState);
     const lookupCall = ((unwrapCommandUpdate(lookup).agentMessages as Overwrite<AIMessage[]>).value.at(-1) as AIMessage)
       .tool_calls?.[0];
@@ -582,7 +582,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("checkpoints a normalized mutation command before the tools node", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const draft = {
       version: 3,
       mode: "create" as const,
@@ -648,7 +648,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("prepares a create call from a ready draft without an LLM mutation call", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         contactContext: {
@@ -727,7 +727,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("does not replay a frozen create from awaitingConfirmation (affirm uses confirmed resume)", async () => {
     // NL affirm is classified in the adapter against mutation_confirm and
     // resumes { confirmed: true }. awaitingConfirmation means chat-other only.
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const originalPayload = {
       name: "Видалення бородавки 1 шт - Test Patient",
       dateStart: "2026-10-10T11:00:00",
@@ -781,7 +781,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("does not replay a pending mutation for a non-affirmative chat reply", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("А можна інший час?")],
@@ -807,7 +807,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("re-arms cancel HITL after cancel chat-other once the model answered", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const state = availabilityClinicState({
       messages: [new HumanMessage("скільки коштує консультація")],
       bookingContext: makeListedMeetings(),
@@ -867,7 +867,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("re-arms cancel HITL from awaitingConfirmation draft when bookingContext is empty", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const state = availabilityClinicState({
       messages: [new HumanMessage("Скільки коштує консультація?")],
       bookingContext: null,
@@ -926,7 +926,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("re-arms cancel HITL when pendingCommand is the CRM write payload", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const state = availabilityClinicState({
       messages: [new HumanMessage("Скільки коштує консультація?")],
       bookingContext: makeListedMeetings(),
@@ -987,7 +987,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("re-arms cancel HITL when visit_select is still open after cancel chat-other", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const state = availabilityClinicState({
       messages: [new HumanMessage("Скільки коштує консультація?")],
       bookingContext: null,
@@ -1053,7 +1053,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("does not re-arm create chat-other as a mutation", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("скільки коштує консультація")],
@@ -1362,7 +1362,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it("command_prepare injects post-HITL exact-date slots despite leftover pre-confirm slots", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-07T12:00:00+03:00"));
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const draft = reduceBookingDraft(
       canonicalBookingDraft({
         selectedDate: "2026-10-20",
@@ -1538,7 +1538,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   it.each(["Так", "Cancel"])(
     "dispatches cancel_meeting for replacement consent (%s)",
     async (consent) => {
-      const commandPrepare = createAgentCommandPrepareNode("booking");
+      const commandPrepare = createAgentCommandPrepareNode();
       const update = await commandPrepare(
         availabilityClinicState({
           messages: [new HumanMessage(consent)],
@@ -1591,7 +1591,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   );
 
   it("dispatches direct cancellation from the authoritative single-visit list", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Скасувати")],
@@ -1641,14 +1641,14 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       ),
     ).not.toBe("booking__command_prepare");
 
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(state);
     expect(unwrapCommandUpdate(update).pendingInteraction?.kind).not.toBe("mutation_confirm");
     expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand?.action).not.toBe("cancel");
   });
 
   it("reuses the cancellation command for explicit chat confirmation", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Скасувати")],
@@ -2749,7 +2749,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
         },
       );
       // Runtime owns paging: command_prepare builds later args from the cursor/snapshot.
-      const prepared = await createAgentCommandPrepareNode("booking")(
+      const prepared = await createAgentCommandPrepareNode()(
         availabilityClinicState({
           messages: [new HumanMessage(label)],
           availabilityContext: multiDay,
@@ -2871,7 +2871,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("command_prepare injects present_availability_slots when DATE has no snapshot", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Так")],
@@ -2890,7 +2890,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("command_prepare forces availability lookup for direct reschedule instead of a day prompt", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Перенести")],
@@ -2919,7 +2919,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   });
 
   it("command_prepare starts a fresh nearest search after service accept clears stale snapshot", async () => {
-    const commandPrepare = createAgentCommandPrepareNode("booking");
+    const commandPrepare = createAgentCommandPrepareNode();
     const update = await commandPrepare(
       availabilityClinicState({
         messages: [new HumanMessage("Так")],
@@ -2967,7 +2967,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-24T09:00:00Z"));
-      const commandPrepare = createAgentCommandPrepareNode("booking");
+      const commandPrepare = createAgentCommandPrepareNode();
       const draft = reduceBookingDraft(
         acceptedCreateDraft({ phase: "date", note: { status: "unasked" } }),
         { type: "schedule_requested", date: "2026-10-20" },
@@ -3001,7 +3001,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date("2026-09-28T09:00:00Z"));
-      const commandPrepare = createAgentCommandPrepareNode("booking");
+      const commandPrepare = createAgentCommandPrepareNode();
       const draft = reduceBookingDraft(
         canonicalBookingDraft({
           phase: "time",
