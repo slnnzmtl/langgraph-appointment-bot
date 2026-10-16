@@ -4,7 +4,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
 import {
   afterEach,
   describe,
@@ -21,6 +21,10 @@ import {
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
+import {
+  isToolNodeMessageUpdate,
+  toolMessagesFromToolNodeInvoke,
+} from "../agent-loop/tool-node-result.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { createContactTools } from "../../tools/contact-tools.js";
 import {
@@ -1214,6 +1218,25 @@ describe("DDD-59: name must appear in patient messages", () => {
       },
     ]);
     expect(invoked[0]?.args.firstName).toBe(DARYA_MODIFIER);
+  });
+});
+
+describe("DDD-263 ToolNode.invoke result boundary", () => {
+  it("recognizes a message-update shape", () => {
+    const messages = [new AIMessage("ok")];
+    expect(isToolNodeMessageUpdate({ messages })).toBe(true);
+    expect(toolMessagesFromToolNodeInvoke({ messages })).toEqual(messages);
+  });
+
+  it("returns an empty list when messages are missing", () => {
+    expect(isToolNodeMessageUpdate({})).toBe(false);
+    expect(toolMessagesFromToolNodeInvoke({})).toEqual([]);
+  });
+
+  it("rejects LangGraph Command at the boundary", () => {
+    const command = new Command({ update: { messages: [] } });
+    expect(isToolNodeMessageUpdate(command)).toBe(false);
+    expect(() => toolMessagesFromToolNodeInvoke(command)).toThrow(/Command/);
   });
 });
 

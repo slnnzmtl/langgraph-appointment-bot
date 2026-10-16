@@ -1,12 +1,12 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { RunnableConfig } from "@langchain/core/runnables";
 import type { StructuredToolInterface } from "@langchain/core/tools";
-import { Command } from "@langchain/langgraph";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { findLastAIMessage } from "../tool-routing.js";
 import { applyToolEffects } from "./tool-effects/index.js";
+import { toolMessagesFromToolNodeInvoke } from "./tool-node-result.js";
 import { filterToolTape } from "./tools-protocol.js";
 
 export const createAgentToolsNode = (
@@ -34,13 +34,7 @@ export const createAgentToolsNode = (
           },
         },
       );
-      if (result instanceof Command) {
-        throw new Error(
-          "ToolNode returned a LangGraph Command; agent tools must return message updates only",
-        );
-      }
-      const messages = (result as { messages?: BaseMessage[] }).messages;
-      toolResultMessages = Array.isArray(messages) ? messages : [];
+      toolResultMessages = toolMessagesFromToolNodeInvoke(result);
     }
 
     return applyToolEffects(state, protocol, toolResultMessages);
