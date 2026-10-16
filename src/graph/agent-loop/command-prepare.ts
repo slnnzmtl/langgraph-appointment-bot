@@ -102,6 +102,12 @@ export const commandFromBookingOutcome = (
       goto: nodes.tools,
     });
   }
+  if (outcome.kind === "finalize" || outcome.kind === "noop") {
+    return new Command({
+      update: outcome.kind === "finalize" ? (outcome.update ?? {}) : {},
+      goto: nodes.finalize,
+    });
+  }
   return new Command({
     update: outcome.update ?? {},
     goto: nodes.llm,

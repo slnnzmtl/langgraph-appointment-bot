@@ -96,23 +96,35 @@ export type BookingGuardReason =
   | "contact_field"
   | "consultation_agreement";
 
+export type BookingFinalizeReason =
+  | "pending_interaction"
+  | "replacement_catalog"
+  | "replacement_continue";
+
 export type BookingCommandOutcome =
   | { kind: "execute"; toolCall: RuntimeToolCall; update: ClinicStateUpdate }
   | { kind: "render"; reason: BookingGuardReason; update: ClinicStateUpdate }
   | { kind: "continue_tools"; update?: ClinicStateUpdate }
-  | { kind: "continue_llm"; update?: ClinicStateUpdate };
+  | { kind: "continue_llm"; update?: ClinicStateUpdate }
+  | { kind: "finalize"; reason: BookingFinalizeReason; update?: ClinicStateUpdate }
+  | { kind: "noop" };
 
 /**
  * True when the outcome must enter command_prepare so domain updates (and
  * continue_tools tape rewrites) are applied. Conditional edges cannot write.
+ * finalize / noop never prepare — routers project them directly.
  */
 export const bookingOutcomeNeedsPrepare = (
   outcome: BookingCommandOutcome,
-): boolean =>
-  outcome.kind === "execute"
-  || outcome.kind === "render"
-  || outcome.kind === "continue_tools"
-  || outcome.update != null;
+): boolean => {
+  if (outcome.kind === "finalize" || outcome.kind === "noop") {
+    return false;
+  }
+  return outcome.kind === "execute"
+    || outcome.kind === "render"
+    || outcome.kind === "continue_tools"
+    || outcome.update != null;
+};
 
 /** Open mutation_confirm in the same node return as the mutation tool call. */
 export const withMutationConfirm = (
@@ -850,8 +862,58 @@ const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome 
 };
 
 /**
- * Pure booking transition: availability, contact, mutations, or a renderable
- * guard. Does not write a durable outcome onto checkpoint state.
+ * Already-open contact_field / pending service_confirm ship via finalize —
+ * do not bounce through command_prepare to re-render the same card.
+ */
+const openPendingInteractionFinalize = (
+  state: ClinicState,
+): BookingCommandOutcome | null => {
+  if (state.pendingInteraction?.kind === "contact_field") {
+    return { kind: "finalize", reason: "pending_interaction" };
+  }
+  if (
+    state.pendingInteraction?.kind === "service_confirm"
+    && state.bookingDraft?.serviceAcceptance?.status === "pending"
+  ) {
+    return { kind: "finalize", reason: "pending_interaction" };
+  }
+  return null;
+};
+
+/**
+ * After REPLACE cancel_meeting this turn: leave the booking tools loop.
+ * No accepted service → FAQ catalog handoff; otherwise continue booking UI.
+ */
+const replacementCancelFinalize = (
+  state: ClinicState,
+): BookingCommandOutcome | null => {
+  if (
+    state.pendingCancellationPurpose !== "replacement"
+    || state.bookingDraft?.mode !== "create"
+    || state.bookingDraft.replacement != null
+    || !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+  ) {
+    return null;
+  }
+  if (state.bookingDraft.serviceAcceptance?.status !== "accepted") {
+    return { kind: "finalize", reason: "replacement_catalog" };
+  }
+  if (
+    state.pendingInteraction?.kind === "service_confirm"
+    || (
+      state.pendingInteraction?.kind === "service_candidate"
+      && state.pendingInteraction.owner === "faq"
+    )
+    || toolRanThisTurn(state.agentMessages ?? [], "present_availability_slots")
+  ) {
+    return { kind: "finalize", reason: "replacement_continue" };
+  }
+  return null;
+};
+
+/**
+ * Pure booking transition: availability, contact, mutations, finalize, or a
+ * renderable guard. Does not write a durable outcome onto checkpoint state.
  */
 export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome => {
   if (hasPendingConfirmationChatOther(state)) {
@@ -961,6 +1023,11 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
     || state.bookingDraft?.replacement?.status === "cancelling"
   ) {
     return continueWithoutCommand(state);
+  }
+
+  const openInteraction = openPendingInteractionFinalize(state);
+  if (openInteraction != null) {
+    return openInteraction;
   }
 
   // Consultation agreement before contact / availability mutation so an
@@ -1116,6 +1183,11 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         }),
       );
     }
+  }
+
+  const replacementFinalize = replacementCancelFinalize(state);
+  if (replacementFinalize != null) {
+    return replacementFinalize;
   }
 
   return continueWithoutCommand(state);

@@ -25,7 +25,10 @@ import {
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
-import { resolveBookingCommand } from "../agent-loop/booking-command.js";
+import {
+  bookingOutcomeNeedsPrepare,
+  resolveBookingCommand,
+} from "../agent-loop/booking-command.js";
 import { stampRuntimeToolAi } from "../agent-loop/runtime-tool-stamp.js";
 import {
   latestContactIncompleteMissingFields,
@@ -892,6 +895,100 @@ describe("runtime-owned booking routing", () => {
       field: "lastName",
     });
     expect(outcome.kind).not.toBe("execute");
+  });
+});
+
+describe("DDD-261 router projections from booking planner", () => {
+  it("projects finalize outcomes from the planner after tools", () => {
+    const contactField = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "details",
+        contactId: null,
+        selectedSlot: null,
+        note: { status: "unasked" },
+      }),
+      pendingInteraction: {
+        kind: "contact_field",
+        field: "firstName",
+        choices: [],
+      },
+      agentMessages: [],
+    });
+    expect(resolveBookingCommand(contactField).kind).toBe("finalize");
+    expect(routeAfterAgentTools(
+      contactField,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      undefined,
+      "booking__finalize",
+    )).toBe("booking__finalize");
+  });
+
+  it("projects execute / render needing prepare to command_prepare after tools", () => {
+    const state = clinicState({
+      contactContext: ownedContactContext(),
+      bookingDraft: canonicalBookingDraft({
+        phase: "confirming",
+        note: { status: "skipped" },
+      }),
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            days: [{
+              date: "2026-09-10",
+              slots: [{
+                label: "14:00",
+                dateStart: "2026-09-10T14:00:00",
+                dateEnd: "2026-09-10T14:30:00",
+              }],
+            }],
+            stepMinutes: 30,
+          }),
+          name: "present_availability_slots",
+          tool_call_id: "revalidate-1",
+        }),
+      ],
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("execute");
+    expect(bookingOutcomeNeedsPrepare(outcome)).toBe(true);
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      undefined,
+      "booking__finalize",
+    )).toBe("booking__command_prepare");
+  });
+
+  it("projects continue_llm without prepare to the LLM after tools", () => {
+    const state = clinicState({
+      bookingDraft: canonicalBookingDraft({
+        phase: "date",
+        selectedDate: null,
+        selectedSlot: null,
+        note: { status: "unasked" },
+        contactId: null,
+        serviceAcceptance: null,
+      }),
+      agentMessages: [new AIMessage("Підкажіть дату")],
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("continue_llm");
+    expect(bookingOutcomeNeedsPrepare(outcome)).toBe(false);
+    expect(routeAfterAgentTools(
+      state,
+      "booking__llm",
+      "booking__tools",
+      "booking__mutation_finalize",
+      "booking__command_prepare",
+      undefined,
+      "booking__finalize",
+    )).toBe("booking__llm");
   });
 });
 
