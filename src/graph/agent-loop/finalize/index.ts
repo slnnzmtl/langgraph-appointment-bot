@@ -113,6 +113,7 @@ export const finalizeBookingAi = (
     consumeServiceChangeNotice,
   });
   reply = primary.reply;
+  const { facts } = primary;
 
   const risk = applyBookingOutcomeRiskOverride({
     state,
@@ -120,13 +121,7 @@ export const finalizeBookingAi = (
     reply,
     chatOther,
     consumeServiceChangeNotice,
-    alreadyBooked: primary.alreadyBooked,
-    createCommitted: primary.createCommitted,
-    createError: primary.createError,
-    detailsStep: primary.detailsStep,
-    availabilityInteraction: primary.availabilityInteraction,
-    slotOfferPresent: primary.slotOfferPresent,
-    replacementOffered: primary.replacementOffered,
+    ...facts,
   });
   reply = risk.reply;
   const availabilityInteraction = risk.availabilityInteraction;
@@ -136,13 +131,13 @@ export const finalizeBookingAi = (
     BOOKING_AGENT_ID,
     agentMessages,
     reply,
-    primary.mutationCommitted,
+    facts.mutationCommitted,
   );
 
   const noteStatusForHandoff = noteStatusHandoffUpdate(
     state,
-    primary.awaitingNote,
-    primary.slotOfferPresent,
+    facts.awaitingNote,
+    facts.slotOfferPresent,
   );
 
   const synthesis = applyServiceOfferSynthesis(
@@ -151,16 +146,13 @@ export const finalizeBookingAi = (
     agentMessages,
     reply,
     {
-      alreadyBooked: primary.alreadyBooked,
-      slotOfferPresent: primary.slotOfferPresent,
+      alreadyBooked: facts.alreadyBooked,
+      slotOfferPresent: facts.slotOfferPresent,
       availabilityInteractionPresent: availabilityInteraction != null,
-      detailsStepActive: primary.detailsStep != null,
+      detailsStepActive: facts.detailsStep != null,
     },
   );
   reply = synthesis.reply;
-  const serviceOfferUpdate = Object.keys(synthesis.serviceOfferUpdate).length > 0
-    ? synthesis.serviceOfferUpdate
-    : primary.serviceOfferUpdate;
 
   const availabilityInteractionUpdate = availabilityPresentedUpdate(
     state,
@@ -171,12 +163,10 @@ export const finalizeBookingAi = (
     ...reply,
     patch: {
       ...noteStatusForHandoff,
-      ...serviceOfferUpdate,
+      ...primary.patch,
+      ...synthesis.serviceOfferUpdate,
       ...availabilityInteractionUpdate,
-      ...primary.visitSelectUpdate,
-      ...primary.contactFieldUpdate,
       ...confirmationCleanup,
-      ...primary.clearOccupiedPhoneCandidate,
       ...(clearServiceChangeNotice ? { serviceChangeNotice: null } : {}),
       supervisorIntent: null,
       ...reply.patch,

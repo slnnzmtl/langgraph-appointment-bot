@@ -18,9 +18,6 @@ export const createAgentToolsNode = (
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {
     const protocol = filterToolTape(state, agentId, allowedToolNames);
-    if (protocol.stateTapeRewrite != null) {
-      return applyToolEffects(state, protocol, []);
-    }
 
     let toolResultMessages: BaseMessage[] = [];
     // Executable AI may sit mid-tape with trailing ToolMessages after rewriteAiToolCalls.

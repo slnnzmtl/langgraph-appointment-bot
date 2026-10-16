@@ -190,13 +190,8 @@ export type BookingAiFinalizeContext = {
   consumeServiceChangeNotice: () => string | null;
 };
 
-export type BookingAiFinalizeResult = {
-  reply: FinalizeReply;
+export type BookingAiFinalizeFacts = {
   availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null;
-  contactFieldUpdate: ClinicStateUpdate;
-  clearOccupiedPhoneCandidate: ClinicStateUpdate;
-  visitSelectUpdate: ClinicStateUpdate;
-  serviceOfferUpdate: ClinicStateUpdate;
   awaitingNote: boolean;
   alreadyBooked: boolean;
   createCommitted: boolean;
@@ -206,6 +201,13 @@ export type BookingAiFinalizeResult = {
   /** True when resolveAvailabilityOffer produced a card this turn. */
   slotOfferPresent: boolean;
   replacementOffered: boolean;
+};
+
+export type BookingAiFinalizeResult = {
+  reply: FinalizeReply;
+  /** serviceOffer → visitSelect → contactField → clearOccupied (later wins). */
+  patch: ClinicStateUpdate;
+  facts: BookingAiFinalizeFacts;
 };
 
 /**
@@ -410,33 +412,29 @@ export const applyBookingPrimaryReply = (
 
   return {
     reply,
-    availabilityInteraction,
-    contactFieldUpdate,
-    clearOccupiedPhoneCandidate,
-    visitSelectUpdate,
-    serviceOfferUpdate,
-    awaitingNote,
-    alreadyBooked,
-    createCommitted,
-    mutationCommitted,
-    createError,
-    detailsStep,
-    slotOfferPresent: slotOffer != null,
-    replacementOffered,
+    patch: {
+      ...serviceOfferUpdate,
+      ...visitSelectUpdate,
+      ...contactFieldUpdate,
+      ...clearOccupiedPhoneCandidate,
+    },
+    facts: {
+      availabilityInteraction,
+      awaitingNote,
+      alreadyBooked,
+      createCommitted,
+      mutationCommitted,
+      createError,
+      detailsStep,
+      slotOfferPresent: slotOffer != null,
+      replacementOffered,
+    },
   };
 };
 
 /** Outcome-risk / schedule-reselect override for booking AI path. */
 export const applyBookingOutcomeRiskOverride = (
-  ctx: BookingAiFinalizeContext & {
-    alreadyBooked: boolean;
-    createCommitted: boolean;
-    createError: string | null | undefined;
-    detailsStep: ReturnType<typeof bookingDetailsInteraction>;
-    availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null;
-    slotOfferPresent: boolean;
-    replacementOffered: boolean;
-  },
+  ctx: BookingAiFinalizeContext & BookingAiFinalizeFacts,
 ): {
   reply: FinalizeReply;
   availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null;

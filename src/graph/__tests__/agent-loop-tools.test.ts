@@ -4,6 +4,7 @@ import {
   ToolMessage,
 } from "@langchain/core/messages";
 import { tool } from "@langchain/core/tools";
+import { Overwrite } from "@langchain/langgraph";
 import {
   afterEach,
   describe,
@@ -1258,6 +1259,127 @@ describe("createAgentToolsNode mid-tape ToolNode gate", () => {
       list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
       total: 1,
     });
+  });
+});
+
+const expectMatchedToolTape = (update: { agentMessages?: unknown }) => {
+  expect(update.agentMessages).toBeInstanceOf(Overwrite);
+  const tape = agentMessagesOf(update);
+  const lastAiIndex = [...tape]
+    .map((message, index) => ({ message, index }))
+    .reverse()
+    .find(({ message }) => message instanceof AIMessage)?.index;
+  expect(lastAiIndex).toBeDefined();
+  const lastAi = tape[lastAiIndex!] as AIMessage;
+  const retained = lastAi.tool_calls ?? [];
+  const toolMessages = tape.filter((message): message is ToolMessage =>
+    message instanceof ToolMessage
+  );
+  expect(toolMessages).toHaveLength(retained.length);
+  expect(new Set(toolMessages.map((message) => message.tool_call_id))).toEqual(
+    new Set(retained.map((call) => call.id)),
+  );
+  return { tape, lastAi, retained, toolMessages };
+};
+
+describe("createAgentToolsNode persists filtered tool_calls", () => {
+  const listServices = () =>
+    tool(
+      async () =>
+        JSON.stringify({
+          list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+          total: 1,
+        }),
+      {
+        name: "list_services",
+        description: "List services",
+        schema: z.object({}),
+      },
+    );
+
+  it("executes allowed calls and overwrites mixed unstamped runtime tool_calls", async () => {
+    const createInvoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
+    const createTool = tool(createInvoke, {
+      name: "create_meeting",
+      description: "create",
+      schema: z.object({ contactId: z.string().optional() }),
+    });
+    const update = await createAgentToolsNode([listServices(), createTool], "booking")(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "svc-1", name: "list_services", args: {}, type: "tool_call" },
+              {
+                id: "create-1",
+                name: "create_meeting",
+                args: { contactId: "unverified" },
+                type: "tool_call",
+              },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    expect(createInvoke).not.toHaveBeenCalled();
+    const { lastAi, retained, toolMessages } = expectMatchedToolTape(update);
+    expect(retained).toEqual([
+      expect.objectContaining({ id: "svc-1", name: "list_services" }),
+    ]);
+    expect(lastAi.tool_calls?.some((call) => call.name === "create_meeting")).toBe(false);
+    expect(toolMessages.map((message) => message.name)).toEqual(["list_services"]);
+    expect(update.servicesContext).toEqual({
+      list: [{ id: "svc-1", name: "Консультація", duration: 30 }],
+      total: 1,
+    });
+  });
+
+  it("executes allowed calls and overwrites mixed unknown tool_calls", async () => {
+    const update = await createAgentToolsNode([listServices()], "booking")(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "svc-1", name: "list_services", args: {}, type: "tool_call" },
+              { id: "web-1", name: "search_web", args: {}, type: "tool_call" },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    const { lastAi, retained, toolMessages } = expectMatchedToolTape(update);
+    expect(retained).toEqual([
+      expect.objectContaining({ id: "svc-1", name: "list_services" }),
+    ]);
+    expect(lastAi.tool_calls?.some((call) => call.name === "search_web")).toBe(false);
+    expect(toolMessages.map((message) => message.name)).toEqual(["list_services"]);
+  });
+
+  it("overwrites a tape that contains only unknown or disallowed calls", async () => {
+    const update = await createAgentToolsNode([listServices()], "booking")(
+      clinicState({
+        agentMessages: [
+          new AIMessage({
+            content: "",
+            tool_calls: [
+              { id: "web-1", name: "search_web", args: {}, type: "tool_call" },
+            ],
+          }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    const { lastAi, retained, toolMessages } = expectMatchedToolTape(update);
+    expect(lastAi.tool_calls ?? []).toEqual([]);
+    expect(retained).toEqual([]);
+    expect(toolMessages).toEqual([]);
   });
 });
 

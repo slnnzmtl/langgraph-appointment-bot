@@ -16,10 +16,7 @@ import {
 
 export type ToolProtocolResult = {
   messagesForTools: BaseMessage[];
-  /** Always empty — invariants live in planner / CRM / tool schemas. */
-  syntheticMessages: [];
   stateTapeRewrite?: BaseMessage[];
-  recovery: null;
 };
 
 /**
@@ -43,66 +40,43 @@ export const filterToolTape = (
   }
 
   const remainingCalls: NonNullable<AIMessage["tool_calls"]> = [];
-  let strippedUnstampedRuntime = false;
 
-  if (lastAiIndex >= 0) {
-    const lastAi = agentMessages[lastAiIndex] as AIMessage;
-    const runtimeOriginOk = agentId === BOOKING_AGENT_ID
-      ? isRuntimeOriginatedToolAi(lastAi)
-      : true;
+  if (lastAiIndex < 0) {
+    return { messagesForTools: agentMessages };
+  }
 
-    for (const call of lastAi.tool_calls ?? []) {
-      if (isBookingRuntimeToolName(call.name)) {
-        if (agentId === BOOKING_AGENT_ID && !runtimeOriginOk) {
-          trackToolError(call.name, "unstamped_runtime_tool");
-          strippedUnstampedRuntime = true;
-          continue;
-        }
-        remainingCalls.push(call);
-        continue;
-      }
+  const lastAi = agentMessages[lastAiIndex] as AIMessage;
+  const originalCalls = lastAi.tool_calls ?? [];
+  const runtimeOriginOk = agentId === BOOKING_AGENT_ID
+    ? isRuntimeOriginatedToolAi(lastAi)
+    : true;
 
-      const allowlisted = allowedToolNames != null
-        ? allowedToolNames.has(call.name)
-        : agentId === BOOKING_AGENT_ID
-          ? BOOKING_INFORMATIONAL_TOOL_NAMES.has(call.name)
-          : true;
-      if (!allowlisted) {
-        trackToolError(call.name, "disallowed_tool_call");
+  for (const call of originalCalls) {
+    if (isBookingRuntimeToolName(call.name)) {
+      if (agentId === BOOKING_AGENT_ID && !runtimeOriginOk) {
+        trackToolError(call.name, "unstamped_runtime_tool");
         continue;
       }
       remainingCalls.push(call);
+      continue;
     }
 
-    // Drop unstamped runtime calls from the AI message so the tape stays
-    // protocol-valid without synthetic invariant ToolMessages.
-    if (strippedUnstampedRuntime && remainingCalls.length === 0) {
-      const kept = (lastAi.tool_calls ?? []).filter(
-        (call) => !isBookingRuntimeToolName(call.name),
-      );
-      const rewritten = [
-        ...agentMessages.slice(0, lastAiIndex),
-        new AIMessage({
-          content: lastAi.content,
-          tool_calls: kept,
-          additional_kwargs: lastAi.additional_kwargs,
-          response_metadata: lastAi.response_metadata,
-          id: lastAi.id,
-        } as ConstructorParameters<typeof AIMessage>[0]),
-        ...agentMessages.slice(lastAiIndex + 1),
-      ];
-      return {
-        messagesForTools: rewritten,
-        syntheticMessages: [],
-        stateTapeRewrite: rewritten,
-        recovery: null,
-      };
+    const allowlisted = allowedToolNames != null
+      ? allowedToolNames.has(call.name)
+      : agentId === BOOKING_AGENT_ID
+        ? BOOKING_INFORMATIONAL_TOOL_NAMES.has(call.name)
+        : true;
+    if (!allowlisted) {
+      trackToolError(call.name, "disallowed_tool_call");
+      continue;
     }
+    remainingCalls.push(call);
   }
 
+  const rewritten = rewriteAiToolCalls(agentMessages, lastAiIndex, remainingCalls);
+  const callsChanged = remainingCalls.length !== originalCalls.length;
   return {
-    messagesForTools: rewriteAiToolCalls(agentMessages, lastAiIndex, remainingCalls),
-    syntheticMessages: [],
-    recovery: null,
+    messagesForTools: rewritten,
+    ...(callsChanged ? { stateTapeRewrite: rewritten } : {}),
   };
 };

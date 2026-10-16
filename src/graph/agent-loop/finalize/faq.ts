@@ -23,6 +23,7 @@ import type {
   SelectServiceCandidates,
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
+import { ensureServicesContext } from "../protocol.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,
@@ -118,15 +119,13 @@ export const applyFaqCatalogAiFinalize = async (
   const openCatalogDetour = state.pendingInteraction?.kind === "catalog_detour";
 
   if (faqCatalogAction === "open_catalog") {
-    let services = state.servicesContext?.list ?? [];
-    let servicesUpdate: ClinicStateUpdate = {};
-    if (services.length === 0 && options?.loadServices != null) {
-      const loaded = await options.loadServices().catch(() => null);
-      if (loaded != null && loaded.list.length > 0) {
-        servicesUpdate = { servicesContext: loaded };
-        services = loaded.list;
-      }
-    }
+    const ensured = await ensureServicesContext(
+      state.servicesContext,
+      options?.loadServices,
+    );
+    const services = ensured.list;
+    const servicesUpdate: ClinicStateUpdate =
+      ensured.loaded != null ? { servicesContext: ensured.loaded } : {};
     const query = (faqCatalogQuery ?? "").trim();
     const session = query.length > 0
       ? await openCatalogFromFreeText({

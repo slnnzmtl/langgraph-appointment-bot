@@ -27,19 +27,17 @@ export const applyToolEffects = (
   protocol: ToolProtocolResult,
   toolResultMessages: BaseMessage[],
 ): ClinicStateUpdate => {
-  if (protocol.stateTapeRewrite != null) {
-    return {
-      agentMessages: new Overwrite(protocol.stateTapeRewrite),
-    };
-  }
-
-  const resultMessages = [...protocol.syntheticMessages, ...toolResultMessages];
+  const resultMessages = toolResultMessages;
 
   let effectiveState = state;
   // Keep resultMessages on the return update only — contact projection must
   // resolve tool-call args against the original agentMessages tape.
+  // Filtering that changes tool_calls must Overwrite the AI message; otherwise
+  // messagesStateReducer appends ToolMessages onto the unfiltered tape.
   let update: ClinicStateUpdate = {
-    agentMessages: resultMessages,
+    agentMessages: protocol.stateTapeRewrite != null
+      ? new Overwrite([...protocol.stateTapeRewrite, ...resultMessages])
+      : resultMessages,
   };
 
   const mutation = projectMutationEffects({

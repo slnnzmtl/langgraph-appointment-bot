@@ -16,7 +16,11 @@ import {
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
-import { lastPatientText, toolRanThisTurn } from "../protocol.js";
+import {
+  ensureServicesContext,
+  lastPatientText,
+  toolRanThisTurn,
+} from "../protocol.js";
 
 export type PrepareFaqOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -97,18 +101,17 @@ export const prepareFaqTurn = async (
       // Unmatched prose: rematch the full catalog (same helper as idle
       // named_procedure / model open_catalog). one/many replaces the
       // picker; none leaves chips for the FAQ LLM (price, compare, …).
-      let rematchServices = state.servicesContext?.list ?? [];
-      if (rematchServices.length === 0 && options?.loadServices != null) {
-        const loaded = await options.loadServices().catch(() => null);
-        if (loaded != null && loaded.list.length > 0) {
-          update.servicesContext = loaded;
-          rematchServices = loaded.list;
-        }
+      const rematch = await ensureServicesContext(
+        state.servicesContext,
+        options?.loadServices,
+      );
+      if (rematch.loaded != null) {
+        update.servicesContext = rematch.loaded;
       }
-      if (rematchServices.length > 0) {
+      if (rematch.list.length > 0) {
         const rematchSession = await openCatalogFromFreeText({
           text: patientText,
-          services: rematchServices,
+          services: rematch.list,
           session: {
             bookingDraft: state.bookingDraft ?? null,
             pendingInteraction: interaction,
@@ -157,17 +160,16 @@ export const prepareFaqTurn = async (
     )
     && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting");
   if (replacementCancelNeedsCatalog) {
-    let services = state.servicesContext?.list ?? [];
-    if (services.length === 0 && options?.loadServices != null) {
-      const loaded = await options.loadServices().catch(() => null);
-      if (loaded != null && loaded.list.length > 0) {
-        update.servicesContext = loaded;
-        services = loaded.list;
-      }
+    const catalog = await ensureServicesContext(
+      state.servicesContext,
+      options?.loadServices,
+    );
+    if (catalog.loaded != null) {
+      update.servicesContext = catalog.loaded;
     }
-    if (services.length > 0) {
+    if (catalog.list.length > 0) {
       const session = await openRootFaqCatalog({
-        services,
+        services: catalog.list,
         bookingDraft: state.bookingDraft ?? null,
         ...(options?.partitionCandidates != null
           ? { partitionCandidates: options.partitionCandidates }
@@ -182,29 +184,27 @@ export const prepareFaqTurn = async (
   }
 
   // Browse open: «Обрати іншу процедуру» / bare «Ні» (not «Послуги») — root partition.
-  let browseServices = state.servicesContext?.list ?? [];
   const browseShortcut = isFaqCatalogBrowseShortcut(
     patientText,
     state.pendingInteraction,
   );
-  if (
-    !handledCatalogChoice
-    && browseShortcut
-    && browseServices.length === 0
-    && options?.loadServices != null
-  ) {
-    const loaded = await options.loadServices().catch(() => null);
-    if (loaded != null && loaded.list.length > 0) {
-      update.servicesContext = loaded;
-      browseServices = loaded.list;
+  let browseList = state.servicesContext?.list ?? [];
+  if (!handledCatalogChoice && browseShortcut) {
+    const browse = await ensureServicesContext(
+      state.servicesContext,
+      options?.loadServices,
+    );
+    if (browse.loaded != null) {
+      update.servicesContext = browse.loaded;
     }
+    browseList = browse.list;
   }
   if (
     !handledCatalogChoice
     && browseShortcut
-    && browseServices.length > 0
+    && browseList.length > 0
   ) {
-    const services = browseServices;
+    const services = browseList;
     const choices = await resolveFaqCatalogChoices({
       services,
       utterance: patientText,
@@ -239,18 +239,17 @@ export const prepareFaqTurn = async (
       interaction?.kind === "service_candidate" && interaction.owner === "faq"
     );
   if (namedProcedureIdle) {
-    let namedServices = state.servicesContext?.list ?? [];
-    if (namedServices.length === 0 && options?.loadServices != null) {
-      const loaded = await options.loadServices().catch(() => null);
-      if (loaded != null && loaded.list.length > 0) {
-        update.servicesContext = loaded;
-        namedServices = loaded.list;
-      }
+    const named = await ensureServicesContext(
+      state.servicesContext,
+      options?.loadServices,
+    );
+    if (named.loaded != null) {
+      update.servicesContext = named.loaded;
     }
     const namedSession = await faqNamedProcedureEntryForTurn({
       supervisorIntent: state.supervisorIntent,
       patientText,
-      services: namedServices,
+      services: named.list,
       session: {
         bookingDraft: state.bookingDraft ?? null,
         pendingInteraction: state.pendingInteraction ?? null,

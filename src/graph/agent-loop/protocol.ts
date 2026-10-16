@@ -358,6 +358,24 @@ export const captureServicesFromMessages = (
 ): ServicesContext | null | undefined =>
   captureLatestToolContext(messages, "list_services", normalizeListServicesResult);
 
+/**
+ * Prefer the checkpointed catalog; lazy-load when empty.
+ * Callers assign `loaded` onto servicesContext only when non-null.
+ */
+export const ensureServicesContext = async (
+  current: ServicesContext | null | undefined,
+  loadServices?: () => Promise<ServicesContext | null>,
+): Promise<{ list: ServicesContext["list"]; loaded: ServicesContext | null }> => {
+  const list = current?.list ?? [];
+  if (list.length > 0 || loadServices == null) {
+    return { list, loaded: null };
+  }
+  const loaded = await loadServices().catch(() => null);
+  if (loaded != null && loaded.list.length > 0) {
+    return { list: loaded.list, loaded };
+  }
+  return { list, loaded: null };
+};
 
 const lastHumanText = (messages: BaseMessage[]): string => {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
