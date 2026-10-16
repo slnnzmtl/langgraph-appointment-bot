@@ -3,50 +3,51 @@ import { availabilityCursorFromContext } from "../../../tools/availability-tools
 import {
   availabilityMatchesBooking,
   reduceBookingDraft,
-  type BookingDraft,
 } from "../../booking-draft.js";
 import { reconcileRequestedTime } from "../../booking-schedule.js";
 import { reduceBookingSession } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { captureAvailabilityFromMessages } from "../protocol.js";
 
-/**
- * Non-mutation path: capture availability from tool messages, reconcile
- * requested time, and invalidate day/slot when the offer no longer matches.
- */
-export const applyAvailabilityToolEffects = (
-  state: ClinicState,
-  resultMessages: BaseMessage[],
-  update: ClinicStateUpdate,
-): void => {
+/** Capture / reconcile availability when mutation did not clear it. */
+export const projectAvailabilityEffects = (input: {
+  state: ClinicState;
+  resultMessages: BaseMessage[];
+}): ClinicStateUpdate => {
+  const { state, resultMessages } = input;
+  const patch: ClinicStateUpdate = {};
   const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
   if (capturedAvailability === undefined) {
-    return;
+    return patch;
   }
   const acceptedService = state.bookingDraft?.serviceAcceptance;
   const bookingAvailability = capturedAvailability != null
     && acceptedService?.status === "accepted"
     ? { ...capturedAvailability, serviceId: acceptedService.service.id }
     : capturedAvailability;
-  update.availabilityContext = bookingAvailability;
-  update.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
+  patch.availabilityContext = bookingAvailability;
+  patch.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
   const reconciliation = reconcileRequestedTime(state.bookingDraft, bookingAvailability);
-  if (reconciliation.kind === "matched" && state.bookingDraft) {
+  let bookingDraft = state.bookingDraft;
+  let pendingInteraction = state.pendingInteraction ?? null;
+  if (reconciliation.kind === "matched" && bookingDraft) {
     const session = reduceBookingSession(
       {
-        bookingDraft: state.bookingDraft,
-        pendingInteraction: state.pendingInteraction ?? null,
+        bookingDraft,
+        pendingInteraction,
       },
       { type: "slot_selected", slot: reconciliation.slot },
     );
-    update.bookingDraft = session.bookingDraft;
-    update.pendingInteraction = session.pendingInteraction;
-  } else if (reconciliation.kind === "unavailable" && state.bookingDraft) {
-    update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+    bookingDraft = session.bookingDraft ?? null;
+    pendingInteraction = session.pendingInteraction;
+    patch.bookingDraft = session.bookingDraft;
+    patch.pendingInteraction = session.pendingInteraction;
+  } else if (reconciliation.kind === "unavailable" && bookingDraft) {
+    bookingDraft = reduceBookingDraft(bookingDraft, {
       type: "requested_time_unavailable",
     });
+    patch.bookingDraft = bookingDraft;
   }
-  const bookingDraft = (update.bookingDraft as BookingDraft | undefined) ?? state.bookingDraft;
   const selectedDate = bookingDraft?.selectedDate;
   const selectedSlot = bookingDraft?.selectedSlot ?? null;
   const selectedDay = selectedDate == null
@@ -72,10 +73,7 @@ export const applyAvailabilityToolEffects = (
       const session = reduceBookingSession(
         {
           bookingDraft,
-          pendingInteraction:
-            (update.pendingInteraction as typeof state.pendingInteraction | undefined)
-            ?? state.pendingInteraction
-            ?? null,
+          pendingInteraction,
         },
         {
           type: "draft_event",
@@ -85,8 +83,9 @@ export const applyAvailabilityToolEffects = (
           },
         },
       );
-      update.bookingDraft = session.bookingDraft;
-      update.pendingInteraction = session.pendingInteraction;
+      patch.bookingDraft = session.bookingDraft;
+      patch.pendingInteraction = session.pendingInteraction;
     }
   }
+  return patch;
 };

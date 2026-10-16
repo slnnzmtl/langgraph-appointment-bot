@@ -31,26 +31,35 @@ import {
   hasMutationCallDuringUnresolvedConfirmation,
   hasPendingConfirmationChatOther,
 } from "../booking-command.js";
-import { createAgentMutationFinalizeNode } from "../mutation-finalize.js";
-import { terminalMeetingMutationOutcome } from "../protocol.js";
 import {
-  applyBookingDefaultMenuButtons,
-  applyBookingFalseSuccessGuard,
-  applyBookingOutcomeRisk,
-  applyBookingPresentPaths,
+  createAgentMutationFinalizeNode,
+} from "../mutation-finalize.js";
+import {
+  mutationCommittedThisTurn,
+  terminalMeetingMutationOutcome,
+} from "../protocol.js";
+import {
+  applyBookingOutcomeRiskOverride,
+  applyBookingPrimaryReply,
+  applyFalseSuccessClaimOverride,
   availabilityPresentedUpdate,
-  finalizeNonAiBooking,
-  initBookingAiReplyBag,
-  noteStatusForHandoffUpdate,
+  noteStatusHandoffUpdate,
+  tryBookingNoAiFinalize,
 } from "./booking.js";
-import { finalizeNonAiContactFailures } from "./contact.js";
 import {
-  applyFaqAiCatalogShaping,
-  applyServiceConfirmOfferShaping,
-  finalizeNonAiFaq,
-  offeredServiceForTurn,
+  applyFaqCatalogAiFinalize,
+  tryFaqNoAiFinalize,
+  type FinalizeFaqOptions,
 } from "./faq.js";
-import { resolveHandoffStatus } from "./shared.js";
+import {
+  applyServiceOfferSynthesis,
+  emptyFinalizeReply,
+  finalizeAiUpdate,
+  lastHandoffFromReply,
+  offeredServiceForTurn,
+  resolveHandoffStatus,
+  type FinalizeReply,
+} from "./shared.js";
 
 export type CreateAgentFinalizeOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -58,7 +67,199 @@ export type CreateAgentFinalizeOptions = {
   loadServices?: () => Promise<ServicesContext | null>;
 };
 
+/** Re-export for existing tests that import from finalize.js. */
 export { offeredServiceForTurn };
+
+/** Assemble AI-path finalize update (empty / max_steps / ok). */
+export const assembleFinalize = finalizeAiUpdate;
+
+export type FinalizeBookingAiInput = {
+  state: ClinicState;
+  agentMessages: BaseMessage[];
+  reply: FinalizeReply;
+  chatOther: boolean;
+  consumeServiceChangeNotice: () => string | null;
+  confirmationCleanup: ClinicStateUpdate;
+};
+
+/**
+ * Booking AI finalize: pure helpers → immutable FinalizeReply.
+ * Extras land on reply.patch; no shared mutable bag.
+ */
+export const finalizeBookingAi = (
+  input: FinalizeBookingAiInput,
+): FinalizeReply => {
+  const {
+    state,
+    agentMessages,
+    chatOther,
+    confirmationCleanup,
+  } = input;
+  let reply = input.reply;
+  let clearServiceChangeNotice = false;
+  const consumeServiceChangeNotice = (): string | null => {
+    const notice = input.consumeServiceChangeNotice();
+    if (notice != null) {
+      clearServiceChangeNotice = true;
+    }
+    return notice;
+  };
+
+  const primary = applyBookingPrimaryReply({
+    state,
+    agentMessages,
+    reply,
+    chatOther,
+    consumeServiceChangeNotice,
+  });
+  reply = primary.reply;
+
+  const risk = applyBookingOutcomeRiskOverride({
+    state,
+    agentMessages,
+    reply,
+    chatOther,
+    consumeServiceChangeNotice,
+    alreadyBooked: primary.alreadyBooked,
+    createCommitted: primary.createCommitted,
+    createError: primary.createError,
+    detailsStep: primary.detailsStep,
+    availabilityInteraction: primary.availabilityInteraction,
+    slotOfferPresent: primary.slotOfferPresent,
+    replacementOffered: primary.replacementOffered,
+  });
+  reply = risk.reply;
+  const availabilityInteraction = risk.availabilityInteraction;
+
+  reply = applyFalseSuccessClaimOverride(
+    state,
+    BOOKING_AGENT_ID,
+    agentMessages,
+    reply,
+    primary.mutationCommitted,
+  );
+
+  const noteStatusForHandoff = noteStatusHandoffUpdate(
+    state,
+    primary.awaitingNote,
+    primary.slotOfferPresent,
+  );
+
+  const synthesis = applyServiceOfferSynthesis(
+    state,
+    BOOKING_AGENT_ID,
+    agentMessages,
+    reply,
+    {
+      alreadyBooked: primary.alreadyBooked,
+      slotOfferPresent: primary.slotOfferPresent,
+      availabilityInteractionPresent: availabilityInteraction != null,
+      detailsStepActive: primary.detailsStep != null,
+    },
+  );
+  reply = synthesis.reply;
+  const serviceOfferUpdate = Object.keys(synthesis.serviceOfferUpdate).length > 0
+    ? synthesis.serviceOfferUpdate
+    : primary.serviceOfferUpdate;
+
+  const availabilityInteractionUpdate = availabilityPresentedUpdate(
+    state,
+    availabilityInteraction,
+  );
+
+  return {
+    ...reply,
+    patch: {
+      ...noteStatusForHandoff,
+      ...serviceOfferUpdate,
+      ...availabilityInteractionUpdate,
+      ...primary.visitSelectUpdate,
+      ...primary.contactFieldUpdate,
+      ...confirmationCleanup,
+      ...primary.clearOccupiedPhoneCandidate,
+      ...(clearServiceChangeNotice ? { serviceChangeNotice: null } : {}),
+      supervisorIntent: null,
+      ...reply.patch,
+    },
+  };
+};
+
+export type FinalizeFaqAiInput = {
+  state: ClinicState;
+  agentMessages: BaseMessage[];
+  reply: FinalizeReply;
+  rawText: string;
+  yieldTag: boolean;
+  confirmationCleanup: ClinicStateUpdate;
+  options?: FinalizeFaqOptions;
+};
+
+/**
+ * FAQ AI finalize: pure helpers → immutable FinalizeReply.
+ * Does not import or mutate booking bags.
+ */
+export const finalizeFaqAi = async (
+  input: FinalizeFaqAiInput,
+): Promise<FinalizeReply> => {
+  const {
+    state,
+    agentMessages,
+    rawText,
+    yieldTag,
+    confirmationCleanup,
+    options,
+  } = input;
+  let reply = input.reply;
+
+  const mutationCommitted = mutationCommittedThisTurn(agentMessages);
+  const faqResult = await applyFaqCatalogAiFinalize(
+    state,
+    reply,
+    rawText,
+    options,
+  );
+  reply = faqResult.reply;
+  let serviceOfferUpdate = faqResult.serviceOfferUpdate;
+
+  reply = applyFalseSuccessClaimOverride(
+    state,
+    FAQ_AGENT_ID,
+    agentMessages,
+    reply,
+    mutationCommitted,
+  );
+
+  if (yieldTag) {
+    reply = { ...reply, yieldToSupervisor: true };
+  }
+
+  const synthesis = applyServiceOfferSynthesis(
+    state,
+    FAQ_AGENT_ID,
+    agentMessages,
+    reply,
+    {
+      alreadyBooked: false,
+      slotOfferPresent: false,
+      availabilityInteractionPresent: false,
+      detailsStepActive: false,
+    },
+  );
+  if (Object.keys(synthesis.serviceOfferUpdate).length > 0) {
+    serviceOfferUpdate = synthesis.serviceOfferUpdate;
+  }
+  reply = synthesis.reply;
+
+  return {
+    ...reply,
+    patch: {
+      ...serviceOfferUpdate,
+      ...confirmationCleanup,
+      supervisorIntent: null,
+      ...reply.patch,
+    },
+  };
+};
 
 export const createAgentFinalizeNode = (
   agent: ClinicAgentDefinition,
@@ -70,13 +271,12 @@ export const createAgentFinalizeNode = (
   ): Promise<ClinicStateUpdate | Command> => {
     const agentMessages = state.agentMessages ?? [];
     if (terminalMeetingMutationOutcome(state) != null) {
-      // Includes main-menu leave → Command({ goto: "supervisor" }).
       return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;
     const lastMessage = agentMessages[agentMessages.length - 1];
 
-    const cleared = {
+    const cleared: ClinicStateUpdate = {
       agentMessages: new Overwrite([] as BaseMessage[]),
       stepCount: 0,
     };
@@ -89,187 +289,122 @@ export const createAgentFinalizeNode = (
     }
 
     if (!(lastMessage instanceof AIMessage)) {
-      const contactFailure = finalizeNonAiContactFailures(
-        agent,
-        state,
-        cleared,
-        confirmationCleanup,
-      );
-      if (contactFailure != null) {
-        return contactFailure;
-      }
-      const bookingNonAi = finalizeNonAiBooking(
-        agent,
-        state,
-        agentMessages,
-        cleared,
-        confirmationCleanup,
-      );
-      if (bookingNonAi != null) {
-        return bookingNonAi;
-      }
-      const faqNonAi = finalizeNonAiFaq(agent, state, cleared, confirmationCleanup);
-      if (faqNonAi != null) {
-        return faqNonAi;
+      const noAi = agent.id === BOOKING_AGENT_ID
+        ? tryBookingNoAiFinalize(state, agentMessages)
+        : agent.id === FAQ_AGENT_ID
+          ? tryFaqNoAiFinalize(state)
+          : null;
+      if (noAi != null) {
+        return {
+          ...cleared,
+          ...confirmationCleanup,
+          ...noAi.patch,
+          messages: [
+            tagRuntimeAgentMessage(new AIMessage(noAi.replyText), agent.id),
+          ],
+          lastHandoff: lastHandoffFromReply(agent, noAi),
+        };
       }
       return {
         ...cleared,
         ...confirmationCleanup,
-        lastHandoff: {
-          agentId: agent.id,
-          agentName: agent.name,
-          status: "empty",
-        },
+        lastHandoff: lastHandoffFromReply(agent, emptyFinalizeReply("empty")),
       };
     }
 
     const tagged = tagRuntimeAgentMessage(lastMessage, agent.id);
     const status = resolveHandoffStatus(tagged, stepCount, agent.maxSteps, agentMessages);
     const rawText = extractMessageTextContent(tagged.content);
-    // Catalog control is the parsed tag only; every tag shape is stripped from text.
     const {
       text: textWithoutCatalogAction,
-      action: faqCatalogAction,
-      query: faqCatalogQuery,
     } = extractFaqCatalogAction(rawText);
     const { text, buttons: accidentalButtons, yieldToSupervisor: yieldTag } =
       extractReplyButtons(textWithoutCatalogAction);
 
-    const bag = initBookingAiReplyBag(
-      agent,
-      state,
-      agentMessages,
-      text.trim(),
-      chatOther,
-    );
+    let reply: FinalizeReply = {
+      ...emptyFinalizeReply(status),
+      replyText: text.trim(),
+    };
 
-    // Model failure: deliver via handoff only — do not persist into conversation history.
+    const consumeServiceChangeNotice = (): string | null => {
+      const notice = state.serviceChangeNotice;
+      if (notice == null || notice.length === 0) {
+        return null;
+      }
+      return notice;
+    };
+
     if (status === "error" && isModelFailureMessage(tagged)) {
       const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
+      reply = {
+        ...emptyFinalizeReply("error"),
+        replyText: PATIENT_FALLBACK_MESSAGE,
+        ...(agent.id === BOOKING_AGENT_ID
+          ? { replyButtons: [...defaultMenuLabels(hasVisit)] }
+          : {}),
+        persistMessage: false,
+        replySource: "runtime",
+      };
+    }
+
+    if (!reply.persistMessage) {
       return {
         ...cleared,
         ...confirmationCleanup,
-        lastHandoff: {
-          agentId: agent.id,
-          agentName: agent.name,
-          status: "error",
-          replyText: PATIENT_FALLBACK_MESSAGE,
-          ...(agent.id === BOOKING_AGENT_ID
-            ? { replyButtons: [...defaultMenuLabels(hasVisit)] }
-            : {}),
+        lastHandoff: lastHandoffFromReply(agent, reply),
+      };
+    }
+
+    if (agent.id === BOOKING_AGENT_ID) {
+      reply = finalizeBookingAi({
+        state,
+        agentMessages,
+        reply,
+        chatOther,
+        consumeServiceChangeNotice,
+        confirmationCleanup,
+      });
+    } else if (agent.id === FAQ_AGENT_ID) {
+      reply = await finalizeFaqAi({
+        state,
+        agentMessages,
+        reply,
+        rawText,
+        yieldTag,
+        confirmationCleanup,
+        ...(options != null ? { options } : {}),
+      });
+    } else {
+      reply = {
+        ...reply,
+        patch: {
+          ...confirmationCleanup,
+          supervisorIntent: null,
+          ...reply.patch,
         },
       };
     }
 
-    const presentBranch = applyBookingPresentPaths(agent, state, agentMessages, bag);
-    if (presentBranch === "none" && agent.id === FAQ_AGENT_ID) {
-      await applyFaqAiCatalogShaping(
-        state,
-        faqCatalogAction,
-        faqCatalogQuery,
-        bag,
-        options,
-      );
-    } else if (presentBranch === "none") {
-      applyBookingDefaultMenuButtons(agent, state, agentMessages, bag);
-    }
-
-    applyBookingOutcomeRisk(agent, state, agentMessages, bag);
-    applyBookingFalseSuccessGuard(agent, state, agentMessages, bag);
-
-    if (yieldTag && agent.id === FAQ_AGENT_ID) {
-      bag.yieldFlag = true;
-    }
-
-    const noteStatusForHandoff = noteStatusForHandoffUpdate(state, bag);
-
-    applyServiceConfirmOfferShaping(agent, state, agentMessages, bag);
-
-    const availabilityInteractionUpdate = availabilityPresentedUpdate(state, bag);
-    const bookingDraftOfferUpdate = bag.serviceOfferUpdate;
     const blockedConfirmationMutation =
       hasMutationCallDuringUnresolvedConfirmation(state);
 
     const replyMessage =
-      bag.replyText !== extractMessageTextContent(tagged.content).trim()
+      reply.replyText !== extractMessageTextContent(tagged.content).trim()
         || accidentalButtons.length > 0
         || yieldTag
-        || bag.slotOffer != null
+        || reply.replySource === "runtime"
         || blockedConfirmationMutation
         ? new AIMessage({
-            content: bag.replyText,
+            content: reply.replyText,
             additional_kwargs: tagged.additional_kwargs,
             response_metadata: tagged.response_metadata,
           })
         : tagged;
 
-    const lastHandoff = {
-      agentId: agent.id,
-      agentName: agent.name,
-      status,
-      ...(bag.replyText.length > 0 ? { replyText: bag.replyText } : {}),
-      ...(bag.replyButtons.length > 0 ? { replyButtons: bag.replyButtons } : {}),
-      ...(bag.yieldFlag ? { yieldToSupervisor: true } : {}),
-    };
-    const serviceChangeNoticeClear: { serviceChangeNotice?: null } =
-      bag.clearServiceChangeNotice ? { serviceChangeNotice: null } : {};
-    // One-turn named_procedure gate — consume after FAQ (or any) finalize.
-    const supervisorIntentClear: { supervisorIntent: null } = { supervisorIntent: null };
-
-    if (status === "empty") {
-      return {
-        ...cleared,
-        lastHandoff,
-        ...noteStatusForHandoff,
-        ...bookingDraftOfferUpdate,
-        ...availabilityInteractionUpdate,
-        ...bag.visitSelectUpdate,
-        ...bag.contactFieldUpdate,
-        ...confirmationCleanup,
-        ...bag.clearOccupiedPhoneCandidate,
-        ...serviceChangeNoticeClear,
-        ...supervisorIntentClear,
-      };
-    }
-
-    if (status === "max_steps") {
-      if (bag.replyText.length === 0) {
-        console.error(
-          `[clinic-${agent.id}] exceeded the maximum of ${agent.maxSteps} tool steps.`,
-        );
-      }
-      return {
-        ...cleared,
-        lastHandoff,
-        ...noteStatusForHandoff,
-        ...bookingDraftOfferUpdate,
-        ...availabilityInteractionUpdate,
-        ...bag.visitSelectUpdate,
-        ...bag.contactFieldUpdate,
-        ...confirmationCleanup,
-        ...bag.clearOccupiedPhoneCandidate,
-        ...serviceChangeNoticeClear,
-        ...supervisorIntentClear,
-        messages: [
-          bag.replyText.length > 0
-            ? replyMessage
-            : tagRuntimeAgentMessage(new AIMessage(PATIENT_FALLBACK_MESSAGE), agent.id),
-        ],
-      };
-    }
-
-    return {
-      ...cleared,
-      lastHandoff,
-      ...noteStatusForHandoff,
-      ...bookingDraftOfferUpdate,
-      ...availabilityInteractionUpdate,
-      ...bag.visitSelectUpdate,
-      ...bag.contactFieldUpdate,
-      ...confirmationCleanup,
-      ...bag.clearOccupiedPhoneCandidate,
-      ...serviceChangeNoticeClear,
-      ...supervisorIntentClear,
-      messages: [replyMessage],
-    };
+    return assembleFinalize({
+      agent,
+      extras: { ...cleared, ...reply.patch },
+      reply,
+      replyMessage,
+    });
   };

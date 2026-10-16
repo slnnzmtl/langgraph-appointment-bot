@@ -9,8 +9,8 @@ import type {
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../../types.js";
-import { applyBookingPrepareTurn } from "./booking.js";
-import { applyFaqPrepareTurn } from "./faq.js";
+import { prepareBookingTurn } from "./booking.js";
+import { prepareFaqTurn } from "./faq.js";
 
 export type CreateAgentPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -32,10 +32,14 @@ export const createAgentPrepareNode = (
       stepCount: 0,
     };
     if (agentId === FAQ_AGENT_ID) {
-      await applyFaqPrepareTurn(state, update, options);
+      Object.assign(update, await prepareFaqTurn(state, options));
     }
     if (agentId === BOOKING_AGENT_ID) {
-      await applyBookingPrepareTurn(state, update, options);
+      Object.assign(update, await prepareBookingTurn(state, {
+        ...(options?.classifyContactName != null
+          ? { classifyContactName: options.classifyContactName }
+          : {}),
+      }));
     }
     return update;
   };

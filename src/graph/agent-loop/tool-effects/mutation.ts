@@ -1,11 +1,10 @@
-import {
-  ToolMessage,
-  type BaseMessage,
-} from "@langchain/core/messages";
+import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import type { StructuredToolInterface } from "@langchain/core/tools";
 import { trackEvent } from "../../../analytics/track.js";
 import { asJsonRecord } from "../../../shared/json-record.js";
 import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { normalizeListServicesResult } from "../../../tools/service-tools.js";
+import { openRootFaqCatalog } from "../../booking-entry-policy.js";
 import {
   reduceBookingDraft,
   type PendingBookingCommand,
@@ -22,32 +21,43 @@ import {
   classifyMeetingMutationToolMessage,
   meetingMutationClearsAvailability,
   meetingMutationIsHitlDecline,
+  meetingMutationUnauthorizedThisTurn,
 } from "../protocol.js";
-import { applyReplacementCatalogOpen } from "./service.js";
 
-type MutationToolEffectsOptions = {
+export type MutationProjectionOptions = {
   partitionCandidates?: PartitionServiceCandidates;
   listServicesTool?: StructuredToolInterface;
 };
 
-/**
- * Mutation-side tool effects: pendingCancellationPurpose, awaitingConfirmation
- * persist, existing_booking_detected, and meetingMutationClearsAvailability
- * (catalog open delegated to service.applyReplacementCatalogOpen).
- */
-export const applyMutationToolEffects = async (
-  state: ClinicState,
-  resultMessages: BaseMessage[],
-  update: ClinicStateUpdate,
-  options?: MutationToolEffectsOptions,
-): Promise<void> => {
-  const replacementCancellationResult =
-    state.bookingDraft?.replacement?.status === "cancelling"
-    && resultMessages.some(
-      (message) => message instanceof ToolMessage && message.name === "cancel_meeting",
-    );
-  if (replacementCancellationResult) {
-    update.pendingCancellationPurpose = "replacement";
+export type MutationProjectionResult = {
+  patch: ClinicStateUpdate;
+  /** When true, orchestrator must not capture/reconcile availability. */
+  skipAvailability: boolean;
+};
+
+/** Auth failure, pending command, already-booked, cancel/HITL/REPLACE catalog. */
+export const projectMutationEffects = async (input: {
+  state: ClinicState;
+  resultMessages: BaseMessage[];
+  options?: MutationProjectionOptions;
+}): Promise<MutationProjectionResult> => {
+  const { state, resultMessages, options } = input;
+  const patch: ClinicStateUpdate = {};
+  const listServicesTool = options?.listServicesTool;
+
+  const authorizationFailure = meetingMutationUnauthorizedThisTurn(resultMessages);
+  if (authorizationFailure) {
+    // The contact must be linked before this mutation can be retried. Clear
+    // every projection that could reconstruct the rejected command so the
+    // next route returns to identity resolution instead of replaying it.
+    if (state.bookingDraft) {
+      patch.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+        type: "contact_unresolved",
+      });
+    }
+    patch.contactContext = null;
+    patch.bookingContext = null;
+    patch.prefetchDirty = true;
   }
 
   const pendingCommand = resultMessages
@@ -70,7 +80,6 @@ export const applyMutationToolEffects = async (
         return null;
       }
       if (command?.action === "cancel") {
-        // draft.command.payload is the CRM write, not cancel_meeting args.
         const displayName = typeof draft?.name === "string" ? draft.name : undefined;
         const displayStart = typeof draft?.dateStart === "string" ? draft.dateStart : undefined;
         const displayEnd = typeof draft?.dateEnd === "string" ? draft.dateEnd : undefined;
@@ -92,7 +101,7 @@ export const applyMutationToolEffects = async (
     ? state.bookingDraft.pendingCommand
     : pendingCommand;
   if (commandToPersist && state.bookingDraft) {
-    update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+    patch.bookingDraft = reduceBookingDraft(state.bookingDraft, {
       type: "command_prepared",
       command: commandToPersist,
     });
@@ -100,15 +109,19 @@ export const applyMutationToolEffects = async (
 
   const conflictMeeting = alreadyBookedMeetingFromMessages(resultMessages);
   if (conflictMeeting && state.bookingDraft) {
-    update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
+    patch.bookingDraft = reduceBookingDraft(state.bookingDraft, {
       type: "existing_booking_detected",
       meeting: conflictMeeting,
     });
   }
 
-  if (!meetingMutationClearsAvailability(resultMessages)) {
-    return;
+  const skipAvailability = meetingMutationClearsAvailability(resultMessages);
+  if (!skipAvailability) {
+    return { patch, skipAvailability: false };
   }
+
+  patch.availabilityContext = null;
+  patch.availabilityCursor = null;
 
   const cancelCommitted = resultMessages.some(
     (message) =>
@@ -123,8 +136,12 @@ export const applyMutationToolEffects = async (
       && meetingMutationIsHitlDecline(message),
   );
 
-  update.availabilityContext = null;
-  update.availabilityCursor = null;
+  // Effective draft after auth / command / conflict writes above.
+  const draft =
+    (Object.prototype.hasOwnProperty.call(patch, "bookingDraft")
+      ? (patch.bookingDraft as typeof state.bookingDraft)
+      : state.bookingDraft) ?? null;
+
   // REPLACE cancel-and-rebook: keep selectedSlot + note so create_meeting can reuse them.
   // Only skip reset when cancel_meeting is the sole committed mutation this turn.
   const committed = resultMessages.filter(
@@ -134,84 +151,93 @@ export const applyMutationToolEffects = async (
   );
   const cancelOnlyCommitted =
     committed.length > 0 && committed.every((message) => message.name === "cancel_meeting");
-  const trackHitlDecline = (): void => {
-    if (
-      resultMessages.some(
-        (message) => message instanceof ToolMessage && meetingMutationIsHitlDecline(message),
-      )
-    ) {
-      trackEvent("booking_note_step", { phase: "reset", reason: "hitl_declined" });
-    }
-  };
-
-  if (cancelCommitted && state.bookingDraft?.replacement?.status === "cancelling") {
+  if (cancelCommitted && draft?.replacement?.status === "cancelling") {
     const hadOriginal =
-      state.bookingDraft.replacement.originalCommand?.action === "create"
-      || state.bookingDraft.replacement.originalCommand?.action === "reschedule";
-    const completed = reduceBookingDraft(state.bookingDraft, {
+      draft.replacement.originalCommand?.action === "create"
+      || draft.replacement.originalCommand?.action === "reschedule";
+    const completed = reduceBookingDraft(draft, {
       type: "cancel_existing_completed",
     });
-    update.bookingDraft = completed;
+    patch.bookingDraft = completed;
     // HITL card is done; do not leave mutation_confirm stuck for the continue path.
-    update.pendingInteraction = null;
-    const cancelledId = state.bookingDraft.replacement.meeting.id;
+    patch.pendingInteraction = null;
+    const cancelledId = draft.replacement.meeting.id;
     if (state.bookingContext != null && cancelledId.length > 0) {
-      // Prefetch is dirty but not refreshed mid-turn — drop the cancelled
-      // visit so the continue LLM/prepare does not re-offer REPLACE.
-      update.bookingContext = {
+      patch.bookingContext = {
         ...state.bookingContext,
         meetings: state.bookingContext.meetings.filter(
           (meeting) => meeting.id !== cancelledId,
         ),
       };
     }
-    if (completed != null) {
-      await applyReplacementCatalogOpen(state, update, completed, hadOriginal, options);
+    // Pre-slot REPLACE with no accepted service — open the FAQ catalog guide
+    // (same as «Обрати іншу процедуру») instead of guessing consultation.
+    if (
+      !hadOriginal
+      && completed != null
+      && completed.serviceAcceptance?.status !== "accepted"
+    ) {
+      let services = state.servicesContext?.list ?? [];
+      if (services.length === 0 && listServicesTool != null) {
+        const loaded = await listServicesTool.invoke({}).catch(() => null);
+        const normalized = loaded != null
+          ? normalizeListServicesResult(String(loaded))
+          : null;
+        if (normalized != null && normalized.list.length > 0) {
+          patch.servicesContext = normalized;
+          services = normalized.list;
+        }
+      }
+      if (services.length > 0) {
+        const session = await openRootFaqCatalog({
+          services,
+          bookingDraft: completed,
+          ...(options?.partitionCandidates != null
+            ? { partitionCandidates: options.partitionCandidates }
+            : {}),
+        });
+        if (session != null) {
+          patch.bookingDraft = session.bookingDraft;
+          patch.pendingInteraction = session.pendingInteraction;
+        }
+      }
     }
-    trackHitlDecline();
-    return;
+  } else if (cancelDeclined && draft?.replacement?.status === "cancelling") {
+    Object.assign(patch, closedBookingSessionUpdate());
+  } else if (!cancelOnlyCommitted) {
+    const mutationFailed = resultMessages.some(
+      (message) =>
+        message instanceof ToolMessage
+        && classifyMeetingMutationToolMessage(message) === "failed",
+    );
+    const mutationDeclined = resultMessages.some(
+      (message) =>
+        message instanceof ToolMessage
+        && (message.name === "create_meeting" || message.name === "reschedule_meeting")
+        && meetingMutationIsHitlDecline(message),
+    );
+    const mutationCommitted = committed.length > 0;
+    if (draft && (mutationFailed || mutationDeclined) && !mutationCommitted) {
+      const session = reduceBookingSession(
+        {
+          bookingDraft: draft,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        { type: "draft_event", event: { type: "slot_invalidated" } },
+      );
+      patch.bookingDraft = session.bookingDraft;
+      patch.pendingInteraction = session.pendingInteraction;
+    } else if (draft) {
+      Object.assign(patch, closedBookingSessionUpdate());
+    }
   }
-  if (cancelDeclined && state.bookingDraft?.replacement?.status === "cancelling") {
-    Object.assign(update, closedBookingSessionUpdate());
-    trackHitlDecline();
-    return;
-  }
-  if (cancelOnlyCommitted) {
-    trackHitlDecline();
-    return;
-  }
-  if (!state.bookingDraft) {
-    trackHitlDecline();
-    return;
+  if (
+    resultMessages.some(
+      (message) => message instanceof ToolMessage && meetingMutationIsHitlDecline(message),
+    )
+  ) {
+    trackEvent("booking_note_step", { phase: "reset", reason: "hitl_declined" });
   }
 
-  const mutationFailed = resultMessages.some(
-    (message) =>
-      message instanceof ToolMessage
-      && classifyMeetingMutationToolMessage(message) === "failed",
-  );
-  const mutationDeclined = resultMessages.some(
-    (message) =>
-      message instanceof ToolMessage
-      && (message.name === "create_meeting" || message.name === "reschedule_meeting")
-      && meetingMutationIsHitlDecline(message),
-  );
-  const mutationCommitted = committed.length > 0;
-  if ((mutationFailed || mutationDeclined) && !mutationCommitted) {
-    // A CRM race/error or a patient-declined booking invalidates only the
-    // selected slot. Keep the accepted service and note so a later
-    // availability search still uses the service duration.
-    const session = reduceBookingSession(
-      {
-        bookingDraft: state.bookingDraft,
-        pendingInteraction: state.pendingInteraction ?? null,
-      },
-      { type: "draft_event", event: { type: "slot_invalidated" } },
-    );
-    update.bookingDraft = session.bookingDraft;
-    update.pendingInteraction = session.pendingInteraction;
-  } else {
-    Object.assign(update, closedBookingSessionUpdate());
-  }
-  trackHitlDecline();
+  return { patch, skipAvailability: true };
 };

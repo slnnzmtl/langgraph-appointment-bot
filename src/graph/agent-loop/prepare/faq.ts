@@ -1,10 +1,12 @@
-import type { ServicesContext } from "../../../tools/service-tools.js";
 import {
   isFaqCatalogBrowseShortcut,
   faqNamedProcedureEntryForTurn,
   openCatalogFromFreeText,
 } from "../../booking-entry-policy.js";
-import { interpretInteractionReply, reduceBookingSession } from "../../booking-session.js";
+import {
+  interpretInteractionReply,
+  reduceBookingSession,
+} from "../../booking-session.js";
 import { resolveFaqCatalogChoices } from "../../faq-catalog.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
@@ -12,22 +14,24 @@ import {
   type SelectServiceCandidates,
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
+import type { ServicesContext } from "../../../tools/service-tools.js";
 import { lastPatientText } from "../protocol.js";
 
-/** FAQ prepare: catalog choice / rematch / browse shortcut / named_procedure. */
-export const applyFaqPrepareTurn = async (
+export type PrepareFaqOptions = {
+  partitionCandidates?: PartitionServiceCandidates;
+  selectCandidates?: SelectServiceCandidates;
+  loadServices?: () => Promise<ServicesContext | null>;
+};
+
+/** FAQ prepare: catalog chips, rematch, browse shortcut, named-procedure entry. */
+export const prepareFaqTurn = async (
   state: ClinicState,
-  update: ClinicStateUpdate,
-  options?: {
-    partitionCandidates?: PartitionServiceCandidates;
-    selectCandidates?: SelectServiceCandidates;
-    loadServices?: () => Promise<ServicesContext | null>;
-  },
-): Promise<void> => {
+  options?: PrepareFaqOptions,
+): Promise<ClinicStateUpdate> => {
+  const update: ClinicStateUpdate = {};
   const interaction = state.pendingInteraction;
   const patientText = lastPatientText(state).trim();
   let handledCatalogChoice = false;
-
   if (interaction?.kind === "service_candidate" && interaction.owner === "faq") {
     const match = interpretInteractionReply(interaction, patientText);
     if (match.kind === "choice") {
@@ -226,4 +230,5 @@ export const applyFaqPrepareTurn = async (
       update.pendingInteraction = namedSession.pendingInteraction;
     }
   }
+  return update;
 };

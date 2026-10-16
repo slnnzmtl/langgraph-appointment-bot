@@ -7,94 +7,35 @@ import { asJsonRecord } from "../../../shared/json-record.js";
 import { extractMessageTextContent } from "../../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../../shared/phone.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../../tools/contact-tools.js";
-import {
-  reduceBookingDraft,
-  type BookingDraft,
-} from "../../booking-draft.js";
-import { reduceBookingSession } from "../../booking-session.js";
+import { reduceBookingDraft, type BookingDraft } from "../../booking-draft.js";
 import { classifyPhoneLookupResult } from "../../contact-command.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import {
-  MEETING_MUTATION_TOOLS,
   captureLatestToolContext,
+  meetingMutationUnauthorizedThisTurn,
 } from "../protocol.js";
-import type { ToolProtocolResult } from "../tools-protocol.js";
 
-/** Tape-rewrite recovery: reopen contact_field HITL. */
-export const applyContactFieldRequiredRecovery = (
-  state: ClinicState,
-  protocol: ToolProtocolResult,
-  update: ClinicStateUpdate,
-): void => {
-  if (protocol.recovery?.type !== "contact_field_required") {
-    return;
-  }
-  const session = reduceBookingSession(
-    {
-      bookingDraft: state.bookingDraft ?? null,
-      pendingInteraction: state.pendingInteraction ?? null,
-    },
-    {
-      type: "contact_field_required",
-      field: protocol.recovery.field,
-      ...(protocol.recovery.occupied === true ? { occupied: true } : {}),
-    },
-  );
-  update.pendingInteraction = session.pendingInteraction;
-};
-
-const authorizationFailureInMessages = (resultMessages: BaseMessage[]): boolean =>
-  resultMessages.some((message) => {
-    if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
-      return false;
-    }
-    return asJsonRecord(extractMessageTextContent(message.content).trim())?.error === "Not authorized";
-  });
-
-/**
- * Auth-failure contact clear: drop every projection that could reconstruct
- * the rejected command so the next route returns to identity resolution.
- */
-export const applyAuthFailureContactClear = (
-  state: ClinicState,
-  resultMessages: BaseMessage[],
-  update: ClinicStateUpdate,
-): boolean => {
-  const authorizationFailure = authorizationFailureInMessages(resultMessages);
-  if (!authorizationFailure) {
-    return false;
-  }
-  if (state.bookingDraft) {
-    update.bookingDraft = reduceBookingDraft(state.bookingDraft, {
-      type: "contact_unresolved",
-    });
-  }
-  update.contactContext = null;
-  update.bookingContext = null;
-  update.prefetchDirty = true;
-  return true;
-};
-
-/** find_contact_by_phone / create/link/update projection onto contact + draft. */
-export const applyContactProjection = (
-  state: ClinicState,
-  resultMessages: BaseMessage[],
-  update: ClinicStateUpdate,
-  authorizationFailure: boolean,
-): void => {
+/** Phone lookup evidence + create/link/update CRM row projection. */
+export const projectContactEffects = (input: {
+  state: ClinicState;
+  resultMessages: BaseMessage[];
+}): ClinicStateUpdate => {
+  const { state, resultMessages } = input;
+  const patch: ClinicStateUpdate = {};
   const agentMessages = state.agentMessages ?? [];
+
+  const authorizationFailure = meetingMutationUnauthorizedThisTurn(resultMessages);
+
   const found = captureLatestToolContext(
     resultMessages,
     "find_contact_by_phone",
     normalizeContactLookupResult,
   );
-  let projectedBookingDraft = Object.prototype.hasOwnProperty.call(update, "bookingDraft")
-    ? (update.bookingDraft as BookingDraft | null)
-    : state.bookingDraft;
+  let projectedBookingDraft: BookingDraft | null | undefined = state.bookingDraft;
 
   if (found && !found.error) {
     if (found.contacts.length > 0) {
-      update.contactContext = { ...found, ownership: "phone" };
+      patch.contactContext = { ...found, ownership: "phone" };
     }
     const lookupMessage = [...resultMessages]
       .reverse()
@@ -116,7 +57,7 @@ export const applyContactProjection = (
         type: "phone_lookup_recorded",
         evidence,
       });
-      update.bookingDraft = projectedBookingDraft;
+      patch.bookingDraft = projectedBookingDraft;
     }
   }
 
@@ -160,8 +101,9 @@ export const applyContactProjection = (
     ) {
       continue;
     }
-    const previous = (update.contactContext as ClinicState["contactContext"] | undefined)
-      ?? state.contactContext;
+    const previous = (Object.prototype.hasOwnProperty.call(patch, "contactContext")
+      ? (patch.contactContext as ClinicState["contactContext"])
+      : state.contactContext);
     const previousRow = previous?.contacts.find((contact) => contact.id === resolvedContactId) ?? {};
     if (message.name === "update_contact" && Object.keys(previousRow).length === 0) {
       continue;
@@ -188,7 +130,7 @@ export const applyContactProjection = (
       ? "telegram" as const
       : previous?.ownership;
     const missing = contactMissingFields(createdRow);
-    update.contactContext = {
+    patch.contactContext = {
       ...(ownership ? { ownership } : {}),
       contacts: [{ ...createdRow, missingFields: missing }],
     };
@@ -202,7 +144,9 @@ export const applyContactProjection = (
         contactId: resolvedContactId,
         ...(clearDetails ? { clearDetails: true } : {}),
       });
-      update.bookingDraft = projectedBookingDraft;
+      patch.bookingDraft = projectedBookingDraft;
     }
   }
+
+  return patch;
 };

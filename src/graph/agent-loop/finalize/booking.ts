@@ -1,17 +1,4 @@
-import {
-  AIMessage,
-  ToolMessage,
-  type BaseMessage,
-} from "@langchain/core/messages";
-import {
-  BOOKING_AGENT_ID,
-  FAQ_AGENT_ID,
-  type ClinicAgentDefinition,
-} from "../../types.js";
-import {
-  formatKyivDayLabel,
-  kyivToday,
-} from "../../../tools/availability-slots.js";
+import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { trackEvent } from "../../../analytics/track.js";
 import {
   BOOKING_AWAITING_CONFIRM_UK,
@@ -27,71 +14,73 @@ import {
   defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
 import { claimsOutcome } from "../../../shared/outcome-claims.js";
-import type { ClinicState, ClinicStateUpdate } from "../../state.js";
+import { formatKyivDayLabel, kyivToday } from "../../../tools/availability-slots.js";
+import { visitLabelForMeetingStart } from "../../../tools/visit-label.js";
 import {
   bookingDraftCanPresentAvailability,
   reduceBookingDraft,
 } from "../../booking-draft.js";
-import { visitLabelForMeetingStart } from "../../../tools/visit-label.js";
+import {
+  SLOT_JUST_TAKEN_PREFIX,
+  availabilityOfferFromToolTurn,
+  availabilityRecoveryOffer,
+  replyButtonsForInteraction,
+  renderBookingInteractionMessage,
+  resolveAvailabilityOffer,
+} from "../../booking-interaction-render.js";
 import {
   isBookingOwnedInteraction,
   openVisitNoteInteraction,
   openVisitReplacementInteraction,
   reduceBookingSession,
   type DateSelectInteraction,
-  type PendingInteraction,
   type TimeSelectInteraction,
 } from "../../booking-session.js";
-import {
-  replyButtonsForInteraction,
-  renderBookingInteractionMessage,
-  SLOT_JUST_TAKEN_PREFIX,
-  availabilityOfferFromToolTurn,
-  availabilityRecoveryOffer,
-  resolveAvailabilityOffer,
-} from "../../booking-interaction-render.js";
-import {
-  renderFaqCatalogReply,
-} from "../../faq-catalog.js";
-import { tagRuntimeAgentMessage } from "../../sub-agent-messages.js";
+import type { ClinicState, ClinicStateUpdate } from "../../state.js";
+import { BOOKING_AGENT_ID } from "../../types.js";
 import {
   authoritativeNoteStatus,
   authoritativeSelectedSlot,
   bookingOutcomeRiskState,
 } from "../booking-command.js";
-import { defaultMenuHasVisit } from "../mutation-finalize.js";
 import {
   alreadyBookedMeetingFromMessages,
   classifyMeetingMutationToolMessage,
   createMeetingAlreadyBooked,
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
+  mutationCommittedThisTurn,
 } from "../protocol.js";
+import { defaultMenuHasVisit } from "../mutation-finalize.js";
 import {
   bookingDetailsInteraction,
   bookingDetailsReady,
+  tryBookingContactNoAiFinalize,
 } from "./contact.js";
-import type { ClearedTape } from "./shared.js";
+import {
+  emptyFinalizeReply,
+  faqCatalogChipReply,
+  type FinalizeReply,
+} from "./shared.js";
 
 /** Prefix when REPLACE cancel continues into the date/time keyboard. */
 const REPLACEMENT_CANCELLED_CONTINUE_PREFIX = "Запис скасовано.";
 
 /**
- * Non-AI booking paths: REPLACE menus, booking-owned prepare/tools UIs,
- * REPLACE-cancel availability offer.
+ * No-AI booking paths: contact failures, REPLACE menu, graph-owned interactions,
+ * replacement-cancel availability continue. Returns null when none match.
  */
-export const finalizeNonAiBooking = (
-  agent: ClinicAgentDefinition,
+export const tryBookingNoAiFinalize = (
   state: ClinicState,
   agentMessages: BaseMessage[],
-  cleared: ClearedTape,
-  confirmationCleanup: ClinicStateUpdate,
-): ClinicStateUpdate | null => {
+): FinalizeReply | null => {
+  const contact = tryBookingContactNoAiFinalize(state);
+  if (contact != null) {
+    return contact;
+  }
+
   // Graph-owned REPLACE after prepare (no LLM turn): still open the menu.
-  if (
-    agent.id === BOOKING_AGENT_ID
-    && state.bookingDraft?.replacement?.status === "offered"
-  ) {
+  if (state.bookingDraft?.replacement?.status === "offered") {
     const meeting = state.bookingDraft.replacement.meeting;
     const visitInteraction = openVisitReplacementInteraction(meeting);
     const session = reduceBookingSession(
@@ -104,24 +93,18 @@ export const finalizeNonAiBooking = (
     const replyText = String(renderBookingInteractionMessage(visitInteraction).content);
     const replyButtons = replyButtonsForInteraction(visitInteraction);
     return {
-      ...cleared,
-      ...confirmationCleanup,
-      pendingInteraction: session.pendingInteraction,
-      messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
-      lastHandoff: {
-        agentId: agent.id,
-        agentName: agent.name,
-        status: "ok",
-        replyText,
-        replyButtons,
-      },
+      ...emptyFinalizeReply("ok"),
+      replyText,
+      replyButtons,
+      replySource: "runtime",
+      patch: { pendingInteraction: session.pendingInteraction },
     };
   }
+
   // Prepare/tools opened a booking-owned menu without an LLM turn (REPLACE
   // cancel continue into catalog, book-intent family chips, or «Записатись»).
   if (
-    agent.id === BOOKING_AGENT_ID
-    && state.pendingInteraction != null
+    state.pendingInteraction != null
     && isBookingOwnedInteraction(state.pendingInteraction)
     && (
       state.pendingCancellationPurpose === "replacement"
@@ -136,40 +119,35 @@ export const finalizeNonAiBooking = (
     const isFaqCatalog =
       interaction.kind === "service_candidate"
       && interaction.owner === "faq";
-    const body = isFaqCatalog
-      ? renderFaqCatalogReply(
-          interaction.choices,
-          state.servicesContext?.list ?? [],
-        )
-      : String(renderBookingInteractionMessage(interaction).content);
+    const chips = isFaqCatalog
+      ? faqCatalogChipReply(interaction, state.servicesContext?.list ?? [])
+      : {
+          replyText: String(renderBookingInteractionMessage(interaction).content),
+          replyButtons: replyButtonsForInteraction(interaction),
+        };
     const replyText =
       state.pendingCancellationPurpose === "replacement"
-        ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${body}`
-        : body;
-    const replyButtons = replyButtonsForInteraction(interaction);
+        ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${chips.replyText}`
+        : chips.replyText;
     return {
-      ...cleared,
-      ...confirmationCleanup,
-      ...(state.pendingCancellationPurpose === "replacement"
-        ? { pendingCancellationPurpose: null }
-        : {}),
-      pendingInteraction: interaction,
-      messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
-      lastHandoff: {
-        agentId: agent.id,
-        agentName: agent.name,
-        status: "ok",
-        replyText,
-        replyButtons,
+      ...emptyFinalizeReply("ok"),
+      replyText,
+      replyButtons: chips.replyButtons,
+      replySource: "runtime",
+      patch: {
+        pendingInteraction: interaction,
+        ...(state.pendingCancellationPurpose === "replacement"
+          ? { pendingCancellationPurpose: null }
+          : {}),
       },
     };
   }
+
   // Accepted-procedure REPLACE cancel: tools cleared pendingInteraction and
   // ran present_availability_slots. Last message is a ToolMessage — render
   // the date/time offer here so the turn does not fall through to empty.
   if (
-    agent.id === BOOKING_AGENT_ID
-    && state.pendingCancellationPurpose === "replacement"
+    state.pendingCancellationPurpose === "replacement"
     && state.bookingDraft?.mode === "create"
     && state.bookingDraft.replacement == null
     && state.bookingDraft.serviceAcceptance?.status === "accepted"
@@ -179,17 +157,13 @@ export const finalizeNonAiBooking = (
       const replyText =
         `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${offer.replyText}`;
       return {
-        ...cleared,
-        ...confirmationCleanup,
-        pendingCancellationPurpose: null,
-        pendingInteraction: offer.interaction,
-        messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
-        lastHandoff: {
-          agentId: agent.id,
-          agentName: agent.name,
-          status: "ok",
-          replyText,
-          replyButtons: offer.replyButtons,
+        ...emptyFinalizeReply("ok"),
+        replyText,
+        replyButtons: offer.replyButtons,
+        replySource: "runtime",
+        patch: {
+          pendingCancellationPurpose: null,
+          pendingInteraction: offer.interaction,
         },
       };
     }
@@ -197,122 +171,89 @@ export const finalizeNonAiBooking = (
     // booking (clear purpose) rather than the default menu.
     const replyText = `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\nНа жаль, зараз немає вільних слотів. Спробуйте іншу дату.`;
     return {
-      ...cleared,
-      ...confirmationCleanup,
-      pendingCancellationPurpose: null,
-      messages: [tagRuntimeAgentMessage(new AIMessage(replyText), agent.id)],
-      lastHandoff: {
-        agentId: agent.id,
-        agentName: agent.name,
-        status: "ok",
-        replyText,
-        replyButtons: [OTHER_DATE_LABEL, MAIN_MENU_LABEL],
-      },
+      ...emptyFinalizeReply("ok"),
+      replyText,
+      replyButtons: [OTHER_DATE_LABEL, MAIN_MENU_LABEL],
+      replySource: "runtime",
+      patch: { pendingCancellationPurpose: null },
     };
   }
+
   return null;
 };
 
-export type BookingAiReplyBag = {
-  replyText: string;
-  replyButtons: string[];
-  replySource: "model" | "runtime";
-  yieldFlag: boolean;
+export type BookingAiFinalizeContext = {
+  state: ClinicState;
+  agentMessages: BaseMessage[];
+  reply: FinalizeReply;
+  chatOther: boolean;
+  consumeServiceChangeNotice: () => string | null;
+};
+
+export type BookingAiFinalizeResult = {
+  reply: FinalizeReply;
   availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null;
-  serviceOfferUpdate: ClinicStateUpdate;
-  visitSelectUpdate: ClinicStateUpdate;
-  clearServiceChangeNotice: boolean;
-  detailsStep: { replyText: string; interaction: PendingInteraction } | null;
   contactFieldUpdate: ClinicStateUpdate;
   clearOccupiedPhoneCandidate: ClinicStateUpdate;
-  chatOther: boolean;
+  visitSelectUpdate: ClinicStateUpdate;
+  serviceOfferUpdate: ClinicStateUpdate;
+  awaitingNote: boolean;
   alreadyBooked: boolean;
-  replacementOffered: boolean;
   createCommitted: boolean;
   mutationCommitted: boolean;
-  createError: string | undefined;
-  awaitingNote: boolean;
-  slotOffer: ReturnType<typeof resolveAvailabilityOffer>;
-  requestedTimeUnavailable: boolean;
-  unavailableDate: string | null | undefined;
-  unavailableTime: string | null | undefined;
+  createError: string | null | undefined;
+  detailsStep: ReturnType<typeof bookingDetailsInteraction>;
+  /** True when resolveAvailabilityOffer produced a card this turn. */
+  slotOfferPresent: boolean;
+  replacementOffered: boolean;
 };
 
-const consumeServiceChangeNotice = (
-  state: ClinicState,
-  bag: BookingAiReplyBag,
-): string | null => {
-  const notice = state.serviceChangeNotice;
-  if (notice == null || notice.length === 0) {
-    return null;
-  }
-  bag.clearServiceChangeNotice = true;
-  return notice;
-};
+/**
+ * Contact details ladder + REPLACE / already-booked / slot / pending / note /
+ * default-menu rendering for the booking AI path (before FAQ / outcome-risk).
+ */
+export const applyBookingPrimaryReply = (
+  ctx: BookingAiFinalizeContext,
+): BookingAiFinalizeResult => {
+  const { state, agentMessages } = ctx;
+  let reply = ctx.reply;
 
-/** Compute booking AI prelude flags and contact details step. */
-export const initBookingAiReplyBag = (
-  agent: ClinicAgentDefinition,
-  state: ClinicState,
-  agentMessages: BaseMessage[],
-  replyText: string,
-  chatOther: boolean,
-): BookingAiReplyBag => {
-  const detailsStep = agent.id === BOOKING_AGENT_ID ? bookingDetailsInteraction(state) : null;
+  const detailsStep = bookingDetailsInteraction(state);
   let contactFieldUpdate: ClinicStateUpdate = {};
-  let shapedReplyText = replyText;
-  let replyButtons: string[] = [];
-  let replySource: "model" | "runtime" = "model";
   if (detailsStep != null) {
-    // Identity collection is a deterministic graph phase. The model may call
-    // contact tools, but prose cannot skip or redefine the missing-field step.
-    shapedReplyText = detailsStep.replyText;
-    replyButtons = replyButtonsForInteraction(detailsStep.interaction);
-    replySource = "runtime";
+    reply = {
+      ...reply,
+      replyText: detailsStep.replyText,
+      replyButtons: replyButtonsForInteraction(detailsStep.interaction),
+      replySource: "runtime",
+    };
     contactFieldUpdate = { pendingInteraction: detailsStep.interaction };
   } else if (
-    agent.id === BOOKING_AGENT_ID
-    && bookingDetailsReady(state)
+    bookingDetailsReady(state)
     && state.pendingInteraction?.kind === "contact_field"
   ) {
-    // Ladder finished (or owned contact is complete) — clear so create_contact can run.
     contactFieldUpdate = { pendingInteraction: null };
   }
   const clearOccupiedPhoneCandidate = detailsStep?.replyText === BOOKING_PHONE_OCCUPIED_UK
     ? { contactContext: null }
     : {};
 
-  const alreadyBooked =
-    agent.id === BOOKING_AGENT_ID && createMeetingAlreadyBooked(agentMessages);
-  const replacementOffered =
-    agent.id === BOOKING_AGENT_ID
-    && state.bookingDraft?.replacement?.status === "offered";
-  const createCommitted =
-    agent.id === BOOKING_AGENT_ID
-    && agentMessages.some(
-      (message) =>
-        message instanceof ToolMessage
-        && message.name === "create_meeting"
-        && classifyMeetingMutationToolMessage(message) === "committed",
-    );
-  const mutationCommitted =
-    createCommitted
-    || agentMessages.some(
-      (message) =>
-        message instanceof ToolMessage
-        && (message.name === "cancel_meeting" || message.name === "reschedule_meeting")
-        && classifyMeetingMutationToolMessage(message) === "committed",
-    );
+  const alreadyBooked = createMeetingAlreadyBooked(agentMessages);
+  const replacementOffered = state.bookingDraft?.replacement?.status === "offered";
+  const createCommitted = agentMessages.some(
+    (message) =>
+      message instanceof ToolMessage
+      && message.name === "create_meeting"
+      && classifyMeetingMutationToolMessage(message) === "committed",
+  );
+  const mutationCommitted = mutationCommittedThisTurn(agentMessages);
   const createError = latestCreateMeetingError(agentMessages);
   const awaitingNote =
-    agent.id === BOOKING_AGENT_ID
-    && authoritativeNoteStatus(state) === "awaiting"
+    authoritativeNoteStatus(state) === "awaiting"
     && authoritativeSelectedSlot(state) != null
     && !alreadyBooked;
-  // Slot offer: code-own DATE/TIME from tool snapshot or day-pick against checkpoint.
   const slotOffer =
-    agent.id === BOOKING_AGENT_ID
-    && !alreadyBooked
+    !alreadyBooked
     && !createCommitted
     && bookingDraftCanPresentAvailability(state.bookingDraft)
       ? resolveAvailabilityOffer(
@@ -322,59 +263,17 @@ export const initBookingAiReplyBag = (
         )
       : null;
   const requestedTimeUnavailable =
-    agent.id === BOOKING_AGENT_ID
-    && state.bookingDraft?.requestedTime?.status === "unavailable"
+    state.bookingDraft?.requestedTime?.status === "unavailable"
     && state.bookingDraft.selectedDate != null;
   const unavailableDate = state.bookingDraft?.selectedDate;
   const unavailableTime = state.bookingDraft?.requestedTime?.value;
 
-  return {
-    replyText: shapedReplyText,
-    replyButtons,
-    replySource,
-    yieldFlag: false,
-    availabilityInteraction: slotOffer?.interaction ?? null,
-    serviceOfferUpdate: {},
-    visitSelectUpdate: {},
-    clearServiceChangeNotice: false,
-    detailsStep,
-    contactFieldUpdate,
-    clearOccupiedPhoneCandidate,
-    chatOther,
-    alreadyBooked,
-    replacementOffered,
-    createCommitted,
-    mutationCommitted,
-    createError,
-    awaitingNote,
-    slotOffer,
-    requestedTimeUnavailable,
-    unavailableDate,
-    unavailableTime,
-  };
-};
+  let availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null =
+    slotOffer?.interaction ?? null;
+  let serviceOfferUpdate: ClinicStateUpdate = {};
+  let visitSelectUpdate: ClinicStateUpdate = {};
 
-/**
- * REPLACE / slot / visit-note / already-booked / pending-interaction /
- * default-menu present paths for the booking AI branch.
- * Returns which branch fired so index can dispatch FAQ next.
- */
-export type BookingPresentBranch =
-  | "replacement"
-  | "slot"
-  | "pending_owned"
-  | "awaiting_note"
-  | "already_booked"
-  | "default_menu"
-  | "none";
-
-export const applyBookingPresentPaths = (
-  agent: ClinicAgentDefinition,
-  state: ClinicState,
-  agentMessages: BaseMessage[],
-  bag: BookingAiReplyBag,
-): BookingPresentBranch => {
-  if (bag.replacementOffered) {
+  if (replacementOffered) {
     const meeting = state.bookingDraft?.replacement?.meeting;
     if (meeting != null) {
       const visitInteraction = openVisitReplacementInteraction(meeting);
@@ -385,35 +284,36 @@ export const applyBookingPresentPaths = (
         },
         { type: "visit_menu_opened", interaction: visitInteraction },
       );
-      bag.visitSelectUpdate = { pendingInteraction: session.pendingInteraction };
-      bag.replyText = String(renderBookingInteractionMessage(visitInteraction).content);
-      bag.replyButtons = replyButtonsForInteraction(visitInteraction);
-      bag.replySource = "runtime";
+      visitSelectUpdate = { pendingInteraction: session.pendingInteraction };
+      reply = {
+        ...reply,
+        replyText: String(renderBookingInteractionMessage(visitInteraction).content),
+        replyButtons: replyButtonsForInteraction(visitInteraction),
+        replySource: "runtime",
+      };
     } else {
-      bag.replyButtons = [...BOOKING_REPLACE_MENU];
+      reply = { ...reply, replyButtons: [...BOOKING_REPLACE_MENU] };
     }
-    return "replacement";
-  }
-  if (bag.slotOffer) {
-    const unavailablePrefix = bag.requestedTimeUnavailable
-      ? `На жаль, о ${bag.unavailableTime} на ${formatKyivDayLabel(bag.unavailableDate!, kyivToday())} немає вільного часу.\n\n`
+  } else if (slotOffer) {
+    const unavailablePrefix = requestedTimeUnavailable
+      ? `На жаль, о ${unavailableTime} на ${formatKyivDayLabel(unavailableDate!, kyivToday())} немає вільного часу.\n\n`
       : "";
     const offerBody = unavailablePrefix
       + (
-        bag.createError != null
-          ? `${SLOT_JUST_TAKEN_PREFIX}${bag.slotOffer.replyText}`
-          : bag.slotOffer.replyText
+        createError != null
+          ? `${SLOT_JUST_TAKEN_PREFIX}${slotOffer.replyText}`
+          : slotOffer.replyText
       );
-    const notice = consumeServiceChangeNotice(state, bag);
-    bag.replyText = notice != null ? `${notice}\n\n${offerBody}` : offerBody;
-    bag.replyButtons = bag.slotOffer.replyButtons;
-    bag.availabilityInteraction = bag.slotOffer.interaction;
-    bag.replySource = "runtime";
-    return "slot";
-  }
-  if (
-    agent.id === BOOKING_AGENT_ID
-    && state.pendingInteraction != null
+    const notice = ctx.consumeServiceChangeNotice();
+    reply = {
+      ...reply,
+      replyText: notice != null ? `${notice}\n\n${offerBody}` : offerBody,
+      replyButtons: slotOffer.replyButtons,
+      replySource: "runtime",
+    };
+    availabilityInteraction = slotOffer.interaction;
+  } else if (
+    state.pendingInteraction != null
     && isBookingOwnedInteraction(state.pendingInteraction)
     && (state.pendingInteraction.kind === "service_or_note"
       || state.pendingInteraction.kind === "service_candidate"
@@ -422,120 +322,137 @@ export const applyBookingPresentPaths = (
       || state.pendingInteraction.kind === "date_select"
       || state.pendingInteraction.kind === "time_select"
       || state.pendingInteraction.kind === "catalog_detour")
-    && !bag.slotOffer
-    && !bag.alreadyBooked
+    && !slotOffer
+    && !alreadyBooked
   ) {
     const rendered = renderBookingInteractionMessage(state.pendingInteraction);
-    bag.replyText = String(rendered.content);
-    bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction);
-    bag.replySource = "runtime";
+    reply = {
+      ...reply,
+      replyText: String(rendered.content),
+      replyButtons: replyButtonsForInteraction(state.pendingInteraction),
+      replySource: "runtime",
+    };
     trackEvent("reply_menu_filled", {
       menu: state.pendingInteraction.kind,
       reason: "pending_interaction",
     });
-    return "pending_owned";
-  }
-  if (bag.awaitingNote) {
+  } else if (awaitingNote) {
     const noteInteraction =
       state.pendingInteraction?.kind === "visit_note"
         ? state.pendingInteraction
         : openVisitNoteInteraction();
     const rendered = renderBookingInteractionMessage(noteInteraction);
-    bag.replyText = String(rendered.content);
-    bag.replyButtons = replyButtonsForInteraction(noteInteraction);
-    bag.replySource = "runtime";
+    reply = {
+      ...reply,
+      replyText: String(rendered.content),
+      replyButtons: replyButtonsForInteraction(noteInteraction),
+      replySource: "runtime",
+    };
     if (state.pendingInteraction?.kind !== "visit_note") {
-      bag.serviceOfferUpdate = {
-        ...bag.serviceOfferUpdate,
+      serviceOfferUpdate = {
+        ...serviceOfferUpdate,
         pendingInteraction: noteInteraction,
       };
     }
     trackEvent("reply_menu_filled", { menu: "visit_note", reason: "pending_interaction" });
-    return "awaiting_note";
-  }
-  if (bag.alreadyBooked) {
+  } else if (alreadyBooked) {
     const conflict = alreadyBookedMeetingFromMessages(agentMessages);
     const visitLabel = conflict?.name != null && conflict.dateStart != null
       ? visitLabelForMeetingStart(conflict.name, conflict.dateStart)
       : undefined;
-    bag.replyText = alreadyBookedReplaceReplyUk(visitLabel);
-    bag.replyButtons = [...BOOKING_REPLACE_MENU];
-    bag.replySource = "runtime";
+    reply = {
+      ...reply,
+      replyText: alreadyBookedReplaceReplyUk(visitLabel),
+      replyButtons: [...BOOKING_REPLACE_MENU],
+      replySource: "runtime",
+    };
     trackEvent("reply_menu_filled", { menu: "replace", reason: "already_booked" });
-    return "already_booked";
-  }
-  return "none";
-};
-
-/** Default-menu / cancel-chat-other button fill when booking AI has model prose. */
-export const applyBookingDefaultMenuButtons = (
-  agent: ClinicAgentDefinition,
-  state: ClinicState,
-  agentMessages: BaseMessage[],
-  bag: BookingAiReplyBag,
-): void => {
-  if (
-    agent.id !== BOOKING_AGENT_ID
-    || bag.replyText.length === 0
-    || bag.detailsStep != null
-  ) {
-    return;
-  }
-  // DDD-54: DEFAULT MENU only on idle mutation turns — not phone/name mid-flow.
-  // When detailsStep owns the handoff, do not reattach leftover mutation_confirm ✅/❌.
-  const idle = agentMessages.some(
-    (message) =>
-      message instanceof ToolMessage
-      && (classifyMeetingMutationToolMessage(message) === "committed"
-        || meetingMutationIsHitlDecline(message)),
-  );
-  const cancelChatOther = bag.chatOther
-    && agentMessages.some(
+  } else if (reply.replyText.length > 0 && detailsStep == null) {
+    const idle = agentMessages.some(
       (message) =>
         message instanceof ToolMessage
-        && message.name === "cancel_meeting"
-        && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
+        && (classifyMeetingMutationToolMessage(message) === "committed"
+          || meetingMutationIsHitlDecline(message)),
     );
-  if (idle) {
-    bag.replyButtons = [
-      ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
-    ];
-    trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
-  } else if (cancelChatOther) {
-    // Prefer ✅/❌ over a stale visit menu when cancel HITL chat-other
-    // reaches finalize instead of command_prepare re-arm.
-    bag.replyButtons = [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL];
-    trackEvent("reply_menu_filled", { menu: "mutation_confirm", reason: "cancel_chat_other" });
-  } else if (
-    state.pendingInteraction != null
-    && isBookingOwnedInteraction(state.pendingInteraction)
-  ) {
-    bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction);
-  } else {
-    bag.replyButtons = [];
+    const cancelChatOther = ctx.chatOther
+      && agentMessages.some(
+        (message) =>
+          message instanceof ToolMessage
+          && message.name === "cancel_meeting"
+          && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
+      );
+    if (idle) {
+      reply = {
+        ...reply,
+        replyButtons: [
+          ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+        ],
+      };
+      trackEvent("reply_menu_filled", { menu: "default", reason: "idle" });
+    } else if (cancelChatOther) {
+      reply = {
+        ...reply,
+        replyButtons: [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL],
+      };
+      trackEvent("reply_menu_filled", { menu: "mutation_confirm", reason: "cancel_chat_other" });
+    } else if (
+      state.pendingInteraction != null
+      && isBookingOwnedInteraction(state.pendingInteraction)
+    ) {
+      reply = {
+        ...reply,
+        replyButtons: replyButtonsForInteraction(state.pendingInteraction),
+      };
+    } else {
+      reply = { ...reply, replyButtons: [] };
+    }
   }
+
+  return {
+    reply,
+    availabilityInteraction,
+    contactFieldUpdate,
+    clearOccupiedPhoneCandidate,
+    visitSelectUpdate,
+    serviceOfferUpdate,
+    awaitingNote,
+    alreadyBooked,
+    createCommitted,
+    mutationCommitted,
+    createError,
+    detailsStep,
+    slotOfferPresent: slotOffer != null,
+    replacementOffered,
+  };
 };
 
-/** Outcome-risk / schedule-reselect fail-closed rewrite. */
-export const applyBookingOutcomeRisk = (
-  agent: ClinicAgentDefinition,
-  state: ClinicState,
-  agentMessages: BaseMessage[],
-  bag: BookingAiReplyBag,
-): void => {
-  // Fail closed: in any booking-outcome risk state (non-committed write,
-  // details/confirming, open ✅/❌), model prose never ships. Runtime owns
-  // the next step. DATE/TIME/SERVICE without a slot card are included.
+/** Outcome-risk / schedule-reselect override for booking AI path. */
+export const applyBookingOutcomeRiskOverride = (
+  ctx: BookingAiFinalizeContext & {
+    alreadyBooked: boolean;
+    createCommitted: boolean;
+    createError: string | null | undefined;
+    detailsStep: ReturnType<typeof bookingDetailsInteraction>;
+    availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null;
+    slotOfferPresent: boolean;
+    replacementOffered: boolean;
+  },
+): {
+  reply: FinalizeReply;
+  availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null;
+} => {
+  const { state, agentMessages } = ctx;
+  let reply = ctx.reply;
+  let availabilityInteraction = ctx.availabilityInteraction;
+
   const outcomeRisk =
-    agent.id === BOOKING_AGENT_ID
-    && !bag.createCommitted
+    !ctx.createCommitted
     && bookingOutcomeRiskState(state);
   const scheduleReselectPending =
-    agent.id === BOOKING_AGENT_ID
-    && !bag.createCommitted
-    && !bag.alreadyBooked
-    && !bag.slotOffer
-    && !bag.replacementOffered
+    !ctx.createCommitted
+    && !ctx.alreadyBooked
+    && !ctx.slotOfferPresent
+    && !ctx.replacementOffered
     && !isBookingOwnedInteraction(state.pendingInteraction)
     && state.bookingDraft != null
     && (
@@ -544,155 +461,171 @@ export const applyBookingOutcomeRisk = (
       || state.bookingDraft.phase === "service"
     );
   if (
-    !(outcomeRisk || scheduleReselectPending)
-    || bag.replySource === "runtime"
-    || bag.alreadyBooked
-    || bag.replacementOffered
-    || bag.slotOffer
-    || bag.detailsStep != null
+    (outcomeRisk || scheduleReselectPending)
+    && reply.replySource !== "runtime"
+    && !ctx.alreadyBooked
+    && !ctx.replacementOffered
+    && !ctx.slotOfferPresent
+    && ctx.detailsStep == null
   ) {
-    return;
-  }
-
-  const pendingConfirmation = agentMessages.some(
-    (message) =>
-      message instanceof ToolMessage
-      && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
-  ) || state.pendingInteraction?.kind === "mutation_confirm";
-  if (pendingConfirmation) {
-    // Open ✅/❌ outranks a stale visit/DATE menu left from before HITL.
-    bag.replyText = BOOKING_AWAITING_CONFIRM_UK;
-    bag.replyButtons = [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL];
-    bag.replySource = "runtime";
-    trackEvent("reply_menu_filled", {
-      menu: "mutation_confirm",
-      reason: "outcome_risk",
-    });
-    return;
-  }
-  if (
-    state.pendingInteraction != null
-    && isBookingOwnedInteraction(state.pendingInteraction)
-  ) {
-    bag.replyText = String(
-      renderBookingInteractionMessage(state.pendingInteraction).content,
-    );
-    bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction);
-    bag.replySource = "runtime";
-    trackEvent("reply_menu_filled", {
-      menu: state.pendingInteraction.kind,
-      reason: "outcome_risk",
-    });
-    return;
-  }
-
-  const recovered = availabilityRecoveryOffer(state);
-  if (recovered != null) {
-    const notice = consumeServiceChangeNotice(state, bag);
-    const body = bag.createError != null
-      ? `${SLOT_JUST_TAKEN_PREFIX}${recovered.replyText}`
-      : recovered.replyText;
-    bag.replyText = notice != null ? `${notice}\n\n${body}` : body;
-    bag.replyButtons = recovered.replyButtons;
-    bag.availabilityInteraction = recovered.interaction;
-    bag.replySource = "runtime";
-    return;
-  }
-  if (scheduleReselectPending) {
-    bag.replyText = consumeServiceChangeNotice(state, bag) ?? BOOKING_SCHEDULE_RESELECT_UK;
-    bag.replyButtons = [];
-    bag.replySource = "runtime";
-    return;
-  }
-  // Uncommitted ready / details with no card — DEFAULT MENU, not error fallback.
-  bag.replyText = consumeServiceChangeNotice(state, bag) ?? MAIN_MENU_GREETING_UK;
-  bag.replyButtons = bag.replyButtons.length > 0
-    ? bag.replyButtons
-    : [...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext))];
-  bag.replySource = "runtime";
-  trackEvent("reply_menu_filled", { menu: "default", reason: "outcome_risk" });
-};
-
-/** Never ship model claimsOutcome unless this turn committed a meeting mutation. */
-export const applyBookingFalseSuccessGuard = (
-  agent: ClinicAgentDefinition,
-  state: ClinicState,
-  agentMessages: BaseMessage[],
-  bag: BookingAiReplyBag,
-): void => {
-  if (
-    bag.replySource === "model"
-    && (agent.id === BOOKING_AGENT_ID || agent.id === FAQ_AGENT_ID)
-    && !bag.mutationCommitted
-  ) {
-    const claim = claimsOutcome(bag.replyText);
-    if (claim != null) {
-      trackEvent("false_success_claim", {
-        rule: claim.rule,
-        phase: state.bookingDraft?.phase ?? null,
-        agent: agent.id,
+    const pendingConfirmation = agentMessages.some(
+      (message) =>
+        message instanceof ToolMessage
+        && classifyMeetingMutationToolMessage(message) === "pending_confirmation",
+    ) || state.pendingInteraction?.kind === "mutation_confirm";
+    if (pendingConfirmation) {
+      reply = {
+        ...reply,
+        replyText: BOOKING_AWAITING_CONFIRM_UK,
+        replyButtons: [CONFIRM_YES_LABEL, CONFIRM_NO_LABEL],
+        replySource: "runtime",
+      };
+      trackEvent("reply_menu_filled", {
+        menu: "mutation_confirm",
+        reason: "outcome_risk",
       });
-      if (
-        agent.id === BOOKING_AGENT_ID
-        && state.pendingInteraction != null
-        && isBookingOwnedInteraction(state.pendingInteraction)
-      ) {
-        bag.replyText = String(
+    } else if (
+      state.pendingInteraction != null
+      && isBookingOwnedInteraction(state.pendingInteraction)
+    ) {
+      reply = {
+        ...reply,
+        replyText: String(
           renderBookingInteractionMessage(state.pendingInteraction).content,
-        );
-        bag.replyButtons = replyButtonsForInteraction(state.pendingInteraction);
-        bag.replySource = "runtime";
+        ),
+        replyButtons: replyButtonsForInteraction(state.pendingInteraction),
+        replySource: "runtime",
+      };
+      trackEvent("reply_menu_filled", {
+        menu: state.pendingInteraction.kind,
+        reason: "outcome_risk",
+      });
+    } else {
+      const recovered = availabilityRecoveryOffer(state);
+      if (recovered != null) {
+        const notice = ctx.consumeServiceChangeNotice();
+        const body = ctx.createError != null
+          ? `${SLOT_JUST_TAKEN_PREFIX}${recovered.replyText}`
+          : recovered.replyText;
+        reply = {
+          ...reply,
+          replyText: notice != null ? `${notice}\n\n${body}` : body,
+          replyButtons: recovered.replyButtons,
+          replySource: "runtime",
+        };
+        availabilityInteraction = recovered.interaction;
+      } else if (scheduleReselectPending) {
+        reply = {
+          ...reply,
+          replyText: ctx.consumeServiceChangeNotice() ?? BOOKING_SCHEDULE_RESELECT_UK,
+          replyButtons: [],
+          replySource: "runtime",
+        };
       } else {
-        bag.replyText = MAIN_MENU_GREETING_UK;
-        bag.replyButtons = [
-          ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
-        ];
-        bag.replySource = "runtime";
-        trackEvent("reply_menu_filled", {
-          menu: "default",
-          reason: "false_success_claim",
-        });
+        reply = {
+          ...reply,
+          replyText: ctx.consumeServiceChangeNotice() ?? MAIN_MENU_GREETING_UK,
+          replyButtons: reply.replyButtons.length > 0
+            ? reply.replyButtons
+            : [...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext))],
+          replySource: "runtime",
+        };
+        trackEvent("reply_menu_filled", { menu: "default", reason: "outcome_risk" });
       }
     }
   }
+
+  return { reply, availabilityInteraction };
 };
 
-export const noteStatusForHandoffUpdate = (
+/** Replace model prose that claims a CRM outcome the tools did not commit. */
+export const applyFalseSuccessClaimOverride = (
   state: ClinicState,
-  bag: BookingAiReplyBag,
-): ClinicStateUpdate =>
-  bag.awaitingNote
-  && !bag.slotOffer
-  && state.bookingDraft != null
-  && state.bookingDraft.note.status !== "awaiting"
-  && state.pendingInteraction == null
-    ? {
-        bookingDraft: reduceBookingDraft(state.bookingDraft, {
-          type: "note_status",
-          status: "awaiting",
-        }),
-      }
-    : {};
+  agentId: string,
+  agentMessages: BaseMessage[],
+  reply: FinalizeReply,
+  mutationCommitted: boolean,
+): FinalizeReply => {
+  if (reply.replySource !== "model" || mutationCommitted) {
+    return reply;
+  }
+  const claim = claimsOutcome(reply.replyText);
+  if (claim == null) {
+    return reply;
+  }
+  trackEvent("false_success_claim", {
+    rule: claim.rule,
+    phase: state.bookingDraft?.phase ?? null,
+    agent: agentId,
+  });
+  if (
+    agentId === BOOKING_AGENT_ID
+    && state.pendingInteraction != null
+    && isBookingOwnedInteraction(state.pendingInteraction)
+  ) {
+    return {
+      ...reply,
+      replyText: String(
+        renderBookingInteractionMessage(state.pendingInteraction).content,
+      ),
+      replyButtons: replyButtonsForInteraction(state.pendingInteraction),
+      replySource: "runtime",
+    };
+  }
+  trackEvent("reply_menu_filled", {
+    menu: "default",
+    reason: "false_success_claim",
+  });
+  return {
+    ...reply,
+    replyText: MAIN_MENU_GREETING_UK,
+    replyButtons: [
+      ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+    ],
+    replySource: "runtime",
+  };
+};
+
+export const noteStatusHandoffUpdate = (
+  state: ClinicState,
+  awaitingNote: boolean,
+  slotOfferPresent: boolean,
+): ClinicStateUpdate => {
+  if (
+    awaitingNote
+    && !slotOfferPresent
+    && state.bookingDraft != null
+    && state.bookingDraft.note.status !== "awaiting"
+    && state.pendingInteraction == null
+  ) {
+    return {
+      bookingDraft: reduceBookingDraft(state.bookingDraft, {
+        type: "note_status",
+        status: "awaiting",
+      }),
+    };
+  }
+  return {};
+};
 
 export const availabilityPresentedUpdate = (
   state: ClinicState,
-  bag: BookingAiReplyBag,
+  availabilityInteraction: DateSelectInteraction | TimeSelectInteraction | null,
 ): ClinicStateUpdate => {
-  const availabilityPresented = bag.availabilityInteraction != null
-    ? reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        { type: "availability_presented", interaction: bag.availabilityInteraction },
-      )
-    : null;
-  return availabilityPresented != null
-    ? {
-        pendingInteraction: availabilityPresented.pendingInteraction,
-        ...(availabilityPresented.clearAvailability
-          ? { availabilityContext: null, availabilityCursor: null }
-          : {}),
-      }
-    : {};
+  if (availabilityInteraction == null) {
+    return {};
+  }
+  const availabilityPresented = reduceBookingSession(
+    {
+      bookingDraft: state.bookingDraft ?? null,
+      pendingInteraction: state.pendingInteraction ?? null,
+    },
+    { type: "availability_presented", interaction: availabilityInteraction },
+  );
+  return {
+    pendingInteraction: availabilityPresented.pendingInteraction,
+    ...(availabilityPresented.clearAvailability
+      ? { availabilityContext: null, availabilityCursor: null }
+      : {}),
+  };
 };
