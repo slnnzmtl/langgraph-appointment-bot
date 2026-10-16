@@ -393,14 +393,25 @@ export const createCommandFromBookingDraft = (
   if (draft.replacement?.status === "offered" || draft.replacement?.status === "cancelling") {
     return null;
   }
+  const acceptance = draft.serviceAcceptance;
+  const slot = draft.selectedSlot;
   if (
     draft.replacement?.status === "create_pending"
     && draft.replacement.originalCommand?.action === "create"
   ) {
-    return { ...draft.replacement.originalCommand };
+    const payload = draft.replacement.originalCommand.payload;
+    const frozenMatchesCanonical = acceptance?.status === "accepted"
+      && slot != null
+      && (draft.note.status === "skipped" || draft.note.status === "answered")
+      && payload.serviceId === acceptance.service.id
+      && payload.contactId === draft.contactId
+      && payload.dateStart === slot.dateStart
+      && payload.dateEnd === slot.dateEnd;
+    if (frozenMatchesCanonical) {
+      return { ...draft.replacement.originalCommand };
+    }
+    // Mismatched frozen create must not execute; fall through and derive.
   }
-  const acceptance = draft.serviceAcceptance;
-  const slot = draft.selectedSlot;
   const contactIdentity = resolveContactIdentity(state.contactContext, draft.contactId);
   if (
     acceptance?.status !== "accepted"

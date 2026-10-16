@@ -274,22 +274,27 @@ const hasPendingCommandViolation = (draft: BookingDraft): boolean => {
 };
 
 /**
- * create_pending is resumed by agent-loop via originalCommand, independent of
- * phase / pendingCommand. Missing or mismatched nested create must fail closed.
+ * Frozen replacement create is resumed by agent-loop via originalCommand.
+ * create_pending requires a matching nested create. offered / cancelling may
+ * omit originalCommand (pre-slot REPLACE); a present create must still match
+ * canonical service, contact, and slot facts.
  */
-const hasCreatePendingCommandViolation = (draft: BookingDraft): boolean => {
-  if (draft.replacement?.status !== "create_pending") {
+const hasPreservedCreateCommandViolation = (draft: BookingDraft): boolean => {
+  const command = draft.replacement?.originalCommand;
+  if (draft.replacement?.status === "create_pending") {
+    if (command == null || command.action !== "create" || !isPlainObject(command.payload)) {
+      return true;
+    }
+    return !createPayloadMatchesDraft(draft, command.payload);
+  }
+  if (command == null || command.action !== "create") {
     return false;
   }
-  const command = draft.replacement.originalCommand;
-  if (command == null || command.action !== "create" || !isPlainObject(command.payload)) {
-    return true;
-  }
-  return !createPayloadMatchesDraft(draft, command.payload);
+  return !isPlainObject(command.payload) || !createPayloadMatchesDraft(draft, command.payload);
 };
 
 const hasExecutableCommandViolation = (draft: BookingDraft): boolean =>
-  hasPendingCommandViolation(draft) || hasCreatePendingCommandViolation(draft);
+  hasPendingCommandViolation(draft) || hasPreservedCreateCommandViolation(draft);
 
 const copyContactDetails = (
   details: BookingContactDetails | null | undefined,

@@ -12,8 +12,13 @@ import {
   reduceBookingDraft,
   type BookingEvent,
 } from "../booking-draft.js";
+import { createCommandFromBookingDraft } from "../agent-loop/booking-command.js";
 import { upgradeBookingCheckpoint } from "../booking-session.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
+import {
+  clinicState,
+  ownedContactContext,
+} from "./agent-loop-fixtures.js";
 
 describe("BookingDraft reducer", () => {
   const selectedSlot = {
@@ -1036,6 +1041,137 @@ describe("BookingDraft reducer", () => {
         status: "cancelling",
         originalCommand,
       },
+    });
+  });
+
+  const mismatchedCreateCommand = {
+    action: "create" as const,
+    payload: {
+      serviceId: "svc-bad",
+      contactId: "c-bad",
+      dateStart: "2026-11-01T09:00:00",
+      dateEnd: "2026-11-01T09:30:00",
+    },
+  };
+
+  const canonicalReplaceFacts = {
+    mode: "replace" as const,
+    phase: "confirming" as const,
+    serviceAcceptance: {
+      status: "accepted" as const,
+      service: { id: "svc-good", source: "catalog" as const },
+    },
+    selectedDate: "2026-10-17",
+    selectedSlot,
+    note: { status: "skipped" as const },
+    contactId: "c-good",
+  };
+
+  it("fails closed when offered originalCommand create facts mismatch the draft", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        ...canonicalReplaceFacts,
+        pendingCommand: null,
+        replacement: {
+          meeting: { id: "m-old", name: "Старий запис" },
+          status: "offered",
+          originalCommand: mismatchedCreateCommand,
+        },
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft?.replacement?.originalCommand).toBeUndefined();
+  });
+
+  it("fails closed when cancelling originalCommand create facts mismatch the draft", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        ...canonicalReplaceFacts,
+        pendingCommand: {
+          action: "cancel",
+          payload: { meetingId: "m-old" },
+        },
+        replacement: {
+          meeting: { id: "m-old", name: "Старий запис" },
+          status: "cancelling",
+          originalCommand: mismatchedCreateCommand,
+        },
+      },
+    });
+
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+    expect(upgraded.update.bookingDraft?.replacement?.originalCommand).toBeUndefined();
+  });
+
+  it("does not execute a mismatched offered create after cancel_existing_completed", () => {
+    const offered = {
+      ...createEmptyBookingDraft(),
+      ...canonicalReplaceFacts,
+      pendingCommand: null,
+      replacement: {
+        meeting: { id: "m-old", name: "Старий запис" },
+        status: "offered" as const,
+        originalCommand: mismatchedCreateCommand,
+      },
+    };
+    const cancelling = reduceBookingDraft(offered, {
+      type: "cancel_existing_requested",
+      command: { action: "cancel", payload: { meetingId: "m-old" } },
+    });
+    const pending = reduceBookingDraft(cancelling, { type: "cancel_existing_completed" });
+    expect(pending?.replacement?.status).toBe("create_pending");
+
+    const command = createCommandFromBookingDraft(clinicState({
+      contactContext: ownedContactContext("c-good"),
+      bookingDraft: pending,
+    }));
+    expect(command?.payload).not.toMatchObject({
+      serviceId: "svc-bad",
+      contactId: "c-bad",
+    });
+    expect(command?.payload).toMatchObject({
+      serviceId: "svc-good",
+      contactId: "c-good",
+      dateStart: selectedSlot.dateStart,
+      dateEnd: selectedSlot.dateEnd,
+    });
+  });
+
+  it("does not execute a mismatched cancelling create after cancel_existing_completed", () => {
+    const cancelling = {
+      ...createEmptyBookingDraft(),
+      ...canonicalReplaceFacts,
+      pendingCommand: {
+        action: "cancel" as const,
+        payload: { meetingId: "m-old" },
+      },
+      replacement: {
+        meeting: { id: "m-old", name: "Старий запис" },
+        status: "cancelling" as const,
+        originalCommand: mismatchedCreateCommand,
+      },
+    };
+    const pending = reduceBookingDraft(cancelling, { type: "cancel_existing_completed" });
+    expect(pending?.replacement?.status).toBe("create_pending");
+
+    const command = createCommandFromBookingDraft(clinicState({
+      contactContext: ownedContactContext("c-good"),
+      bookingDraft: pending,
+    }));
+    expect(command?.payload).not.toMatchObject({
+      serviceId: "svc-bad",
+      contactId: "c-bad",
+    });
+    expect(command?.payload).toMatchObject({
+      serviceId: "svc-good",
+      contactId: "c-good",
+      dateStart: selectedSlot.dateStart,
+      dateEnd: selectedSlot.dateEnd,
     });
   });
 
