@@ -63,6 +63,10 @@ import {
 } from "./agent-loop-fixtures.js";
 
 
+/**
+ * Legacy integration scenarios. Obsolete skipped cases removed in DDD-267
+ * (planner-owned mutations, tools-protocol stamp gate, availability cache paging).
+ */
 describe("stabilize booking flow (DDD-48/49/50/51)", () => {
   const agent: ClinicAgentDefinition = {
     id: "booking",
@@ -1845,67 +1849,6 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     }
   });
 
-  it.skip("blocks a multi-day booking mutation until a validated slot exists", async () => {
-    const createTool = tool(
-      async () => JSON.stringify({ id: "must-not-run" }),
-      {
-        name: "create_meeting",
-        description: "create",
-        schema: z.object({ dateStart: z.string(), dateEnd: z.string() }),
-      },
-    );
-    const toolsNode = createAgentToolsNode([createTool], "booking");
-    const update = await toolsNode(
-      availabilityClinicState({
-        bookingDraft: canonicalBookingDraft({
-          phase: "date",
-          selectedDate: null,
-          selectedSlot: null,
-        }),
-        availabilityContext: {
-          days: [
-            {
-              date: "2026-10-08",
-              slots: [{
-                id: "a",
-                label: "13:30",
-                dateStart: "2026-10-08T13:30:00",
-                dateEnd: "2026-10-08T14:00:00",
-              }],
-            },
-            {
-              date: "2026-10-09",
-              slots: [{
-                id: "b",
-                label: "13:30",
-                dateStart: "2026-10-09T13:30:00",
-                dateEnd: "2026-10-09T14:00:00",
-              }],
-            },
-          ],
-          stepMinutes: 30,
-        },
-        agentMessages: [
-          runtimeToolAi([{
-              id: "create",
-              name: "create_meeting",
-              args: {
-                dateStart: "2026-10-08T13:30:00",
-                dateEnd: "2026-10-08T14:00:00",
-              },
-              type: "tool_call",
-            }]),
-        ],
-      }),
-      { configurable: {} },
-    );
-    // Runtime mutations require ownership + a selected slot; unstamped/incomplete
-    // creates fail closed without a synthetic slot-selection ToolMessage.
-    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content)).error).toMatch(
-      /Contact ownership required|Availability slot selection required/,
-    );
-  });
-
   it("advanceBookingNoteStep enters awaiting on time pick even with prior procedure talk", async () => {
     const update = advanceBookingNoteStep(
       availabilityClinicState({
@@ -2677,118 +2620,6 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       cancelled: true,
     });
     expect(declineUpdate.availabilityContext).toBeNull();
-    expect(declineUpdate.bookingDraft?.selectedSlot).toBeNull();
-    expect(declineUpdate.bookingDraft?.note.status).toBe("skipped");
-  });
-
-  it.skip("preserves service duration after declined booking before an other-date search", async () => {
-    const invoked: Array<Record<string, unknown>> = [];
-    const createTool = tool(
-      async () => JSON.stringify({ cancelled: true }),
-      {
-        name: "create_meeting",
-        description: "create",
-        schema: z.object({}),
-      },
-    );
-    const slotsTool = tool(
-      async (input: Record<string, unknown>) => {
-        invoked.push(input);
-        return JSON.stringify({
-          days: [],
-          stepMinutes: input.durationMinutes,
-          query: {
-            kind: "later",
-            rangeFrom: "2026-10-06",
-            rangeThrough: "2026-11-04",
-            coverageComplete: true,
-          },
-        });
-      },
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({
-          direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
-          durationMinutes: z.number().optional(),
-          afterDate: z.string().optional(),
-        }),
-      },
-    );
-    const toolsNode = createAgentToolsNode([createTool, slotsTool], "booking");
-    const draft = {
-      version: 1,
-      mode: "create" as const,
-      phase: "confirming" as const,
-      serviceAcceptance: {
-        status: "accepted" as const,
-        service: {
-          id: "svc-long",
-          name: "Long procedure",
-          durationMinutes: 60,
-          source: "catalog" as const,
-        },
-      },
-      selectedDate: "2026-09-10",
-      selectedSlot: {
-        dateStart: "2026-09-10T14:00:00",
-        dateEnd: "2026-09-10T15:00:00",
-        label: "14:00",
-      },
-      note: { status: "skipped" as const },
-      contactId: "contact-1",
-      pendingCommand: null,
-      replacement: null,
-    };
-    const declineUpdate = await toolsNode(
-      availabilityClinicState({
-        contactContext: ownedContactContext(),
-        bookingDraft: draft,
-        availabilityContext: {
-          ...snapshot,
-          stepMinutes: 60,
-          days: [{
-            ...snapshot.days[0]!,
-            slots: [{
-              ...snapshot.days[0]!.slots[0]!,
-              dateEnd: "2026-09-10T15:00:00",
-            }],
-          }],
-        },
-        agentMessages: [
-          runtimeToolAi([{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }]),
-        ],
-      }),
-      { configurable: {} },
-    );
-
-    expect(declineUpdate.bookingDraft?.serviceAcceptance?.service.durationMinutes).toBe(60);
-    expect(declineUpdate.bookingDraft?.selectedSlot).toBeNull();
-    expect(declineUpdate.bookingDraft?.note.status).toBe("skipped");
-
-    await toolsNode(
-      availabilityClinicState({
-        messages: [new HumanMessage(OTHER_DATE_LABEL)],
-        bookingDraft: declineUpdate.bookingDraft,
-        availabilityContext: null,
-        availabilityCursor: null,
-        agentMessages: [
-          runtimeToolAi([{
-              id: "slots-1",
-              name: "present_availability_slots",
-              args: { direction: "later" },
-              type: "tool_call",
-            }]),
-        ],
-      }),
-      { configurable: {} },
-    );
-
-    expect(invoked).toHaveLength(1);
-    expect(invoked[0]).toMatchObject({
-      direction: "later",
-      durationMinutes: 60,
-    });
   });
 
   it("REPLACE cancel commit nulls availability but keeps selectedSlot and note", async () => {
@@ -2858,51 +2689,6 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     expect(update.availabilityContext).toBeNull();
     expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-  });
-
-  it.skip("serves checkpointed slots on cache hit without invoking CRM tool", async () => {
-    let crmCalls = 0;
-    const slotsTool = tool(
-      async () => {
-        crmCalls += 1;
-        return JSON.stringify({ days: [], stepMinutes: 30 });
-      },
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({
-          durationMinutes: z.number().optional(),
-          date: z.string().optional(),
-          afterDate: z.string().optional(),
-        }),
-      },
-    );
-    const toolsNode = createAgentToolsNode([slotsTool], "booking");
-    const update = await toolsNode(
-      availabilityClinicState({
-        availabilityContext: snapshot,
-        agentMessages: [
-          runtimeToolAi([
-              {
-                id: "s1",
-                name: "present_availability_slots",
-                args: { durationMinutes: 30 },
-                type: "tool_call",
-              },
-            ]),
-        ],
-      }),
-      { configurable: {} },
-    );
-    expect(crmCalls).toBe(0);
-    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
-    const body = JSON.parse(String(toolMsg.content)) as {
-      days: unknown[];
-      cacheHit: boolean;
-    };
-    expect(body.cacheHit).toBe(true);
-    expect(body.days).toHaveLength(1);
-    expect(update.availabilityContext?.days).toHaveLength(1);
   });
 
   it.each([
@@ -3290,109 +3076,6 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     );
     const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
     expect(ai.tool_calls ?? []).toEqual([]);
-  });
-
-  it.skip("does not page CRM again on a second «Інша дата» slots call this turn", async () => {
-    const invoked: Array<Record<string, unknown>> = [];
-    const slotsTool = tool(
-      async (input: Record<string, unknown>) => {
-        invoked.push(input);
-        return JSON.stringify({ days: [], stepMinutes: 30 });
-      },
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({
-          durationMinutes: z.number().optional(),
-          date: z.string().optional(),
-          afterDate: z.string().optional(),
-        }),
-      },
-    );
-    const toolsNode = createAgentToolsNode([slotsTool], "booking");
-    const update = await toolsNode(
-      availabilityClinicState({
-        messages: [new HumanMessage(OTHER_DATE_LABEL)],
-        availabilityContext: snapshot,
-        agentMessages: [
-          new HumanMessage(OTHER_DATE_LABEL),
-          runtimeToolAi([
-              {
-                id: "s1",
-                name: "present_availability_slots",
-                args: { durationMinutes: 30, afterDate: "2026-09-10" },
-                type: "tool_call",
-              },
-            ]),
-          new ToolMessage({
-            content: JSON.stringify({ days: snapshot.days, stepMinutes: 30 }),
-            tool_call_id: "s1",
-            name: "present_availability_slots",
-          }),
-          runtimeToolAi([
-              {
-                id: "s2",
-                name: "present_availability_slots",
-                args: { durationMinutes: 30, afterDate: "2026-09-10" },
-                type: "tool_call",
-              },
-            ]),
-        ],
-      }),
-      { configurable: {} },
-    );
-    expect(invoked).toEqual([]);
-    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
-    const body = JSON.parse(String(toolMsg.content)) as {
-      days: Array<{ date: string }>;
-      cacheHit: boolean;
-    };
-    expect(body.cacheHit).toBe(true);
-    expect(body.days[0]?.date).toBe("2026-09-10");
-  });
-
-  it.skip("uses the durable cursor after the availability snapshot expires", async () => {
-    const invoked: Array<Record<string, unknown>> = [];
-    const slotsTool = tool(
-      async (input: Record<string, unknown>) => {
-        invoked.push(input);
-        return JSON.stringify({ days: [], stepMinutes: 30 });
-      },
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({
-          direction: z.string().optional(),
-          afterDate: z.string().optional(),
-          durationMinutes: z.number().optional(),
-        }),
-      },
-    );
-    const toolsNode = createAgentToolsNode([slotsTool], "booking");
-    await toolsNode(
-      availabilityClinicState({
-        messages: [new HumanMessage("другая")],
-        availabilityContext: null,
-        availabilityCursor: {
-          direction: "later",
-          searchedThrough: "2026-10-05",
-          firstDate: "2026-09-29",
-          lastDate: "2026-10-05",
-        },
-        agentMessages: [
-          runtimeToolAi([{
-              id: "s1",
-              name: "present_availability_slots",
-              args: { direction: "later", durationMinutes: 30 },
-              type: "tool_call",
-            }]),
-        ],
-      }),
-      { configurable: {} },
-    );
-    expect(invoked).toEqual([
-      { direction: "later", afterDate: "2026-10-05", durationMinutes: 30 },
-    ]);
   });
 
   it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", async () => {
