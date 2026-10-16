@@ -36,6 +36,8 @@ export type FinalizeFaqOptions = {
   loadServices?: () => Promise<ServicesContext | null>;
 };
 
+const REPLACEMENT_CANCELLED_CONTINUE_PREFIX = "Запис скасовано.";
+
 /** No-AI FAQ: prepare opened catalog or service_confirm without an LLM turn. */
 export const tryFaqNoAiFinalize = (
   state: ClinicState,
@@ -44,6 +46,7 @@ export const tryFaqNoAiFinalize = (
     return null;
   }
   const interaction = state.pendingInteraction;
+  const fromReplacementCancel = state.pendingCancellationPurpose === "replacement";
   if (
     interaction.kind === "service_candidate"
     && interaction.owner === "faq"
@@ -52,18 +55,26 @@ export const tryFaqNoAiFinalize = (
       interaction,
       state.servicesContext?.list ?? [],
     );
+    const replyText = fromReplacementCancel
+      ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${chips.replyText}`
+      : chips.replyText;
     return {
       ...emptyFinalizeReply("ok"),
-      ...chips,
+      replyText,
+      replyButtons: chips.replyButtons,
       replySource: "runtime",
       patch: {
         supervisorIntent: null,
         pendingInteraction: interaction,
+        ...(fromReplacementCancel ? { pendingCancellationPurpose: null } : {}),
       },
     };
   }
   if (interaction.kind === "service_confirm") {
-    const replyText = String(renderBookingInteractionMessage(interaction).content);
+    const baseText = String(renderBookingInteractionMessage(interaction).content);
+    const replyText = fromReplacementCancel
+      ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${baseText}`
+      : baseText;
     const replyButtons = replyButtonsForInteraction(interaction);
     return {
       ...emptyFinalizeReply("ok"),
@@ -74,6 +85,7 @@ export const tryFaqNoAiFinalize = (
       patch: {
         supervisorIntent: null,
         pendingInteraction: interaction,
+        ...(fromReplacementCancel ? { pendingCancellationPurpose: null } : {}),
       },
     };
   }

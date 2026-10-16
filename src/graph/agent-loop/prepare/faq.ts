@@ -2,6 +2,7 @@ import {
   isFaqCatalogBrowseShortcut,
   faqNamedProcedureEntryForTurn,
   openCatalogFromFreeText,
+  openRootFaqCatalog,
 } from "../../booking-entry-policy.js";
 import {
   interpretInteractionReply,
@@ -15,7 +16,7 @@ import {
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
-import { lastPatientText } from "../protocol.js";
+import { lastPatientText, toolRanThisTurn } from "../protocol.js";
 
 export type PrepareFaqOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -143,6 +144,43 @@ export const prepareFaqTurn = async (
       update.pendingInteraction = session.pendingInteraction;
     }
   }
+  // REPLACE cancel continue: booking tools completed cancel without opening
+  // the catalog — load services if needed and open root FAQ chips here.
+  const replacementCancelNeedsCatalog =
+    !handledCatalogChoice
+    && state.pendingCancellationPurpose === "replacement"
+    && state.bookingDraft?.mode === "create"
+    && state.bookingDraft.replacement == null
+    && state.bookingDraft.serviceAcceptance?.status !== "accepted"
+    && !(
+      interaction?.kind === "service_candidate" && interaction.owner === "faq"
+    )
+    && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting");
+  if (replacementCancelNeedsCatalog) {
+    let services = state.servicesContext?.list ?? [];
+    if (services.length === 0 && options?.loadServices != null) {
+      const loaded = await options.loadServices().catch(() => null);
+      if (loaded != null && loaded.list.length > 0) {
+        update.servicesContext = loaded;
+        services = loaded.list;
+      }
+    }
+    if (services.length > 0) {
+      const session = await openRootFaqCatalog({
+        services,
+        bookingDraft: state.bookingDraft ?? null,
+        ...(options?.partitionCandidates != null
+          ? { partitionCandidates: options.partitionCandidates }
+          : {}),
+      });
+      if (session != null) {
+        update.bookingDraft = session.bookingDraft;
+        update.pendingInteraction = session.pendingInteraction;
+        handledCatalogChoice = true;
+      }
+    }
+  }
+
   // Browse open: «Обрати іншу процедуру» / bare «Ні» (not «Послуги») — root partition.
   let browseServices = state.servicesContext?.list ?? [];
   const browseShortcut = isFaqCatalogBrowseShortcut(

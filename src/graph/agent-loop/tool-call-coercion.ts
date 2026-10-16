@@ -3,16 +3,15 @@ import { AIMessage } from "@langchain/core/messages";
 import { trackToolError } from "../../analytics/track.js";
 import {
   extractRawMessageText,
-  parseLeakedModelToolCalls,
   stripLeakedModelToolCalls,
 } from "../../shared/message-content.js";
 import type { ClinicState } from "../state.js";
 
 /**
  * Sanitize model tool calls before ToolNode: drop non-allowlisted names (stale
- * native / leaked runtime tools) and hydrate leaked Gemini XML into allowlisted
- * informational calls only. Availability and mutations are runtime-owned via
- * command_prepare — never synthesized here.
+ * native / leaked runtime tools) and strip leaked Gemini XML from content.
+ * Do not promote leaked markup into executable tool_calls — native structured
+ * calls are the only model-owned execution protocol (DDD-266).
  */
 export const coerceAvailabilityToolCalls = (
   response: AIMessage,
@@ -21,25 +20,13 @@ export const coerceAvailabilityToolCalls = (
   allowedToolNames: ReadonlySet<string>,
 ): AIMessage => {
   const raw = extractRawMessageText(response.content);
-  const leaked = parseLeakedModelToolCalls(raw).filter((call) =>
-    allowedToolNames.has(call.name),
-  );
   const existingRaw = response.tool_calls ?? [];
   for (const call of existingRaw) {
     if (!allowedToolNames.has(call.name)) {
       trackToolError("disallowed_tool_call", call.name);
     }
   }
-  const allowlisted = existingRaw.filter((call) => allowedToolNames.has(call.name));
-  let toolCalls = allowlisted;
-  if (allowlisted.length === 0 && leaked.length > 0) {
-    toolCalls = leaked.map((call, index) => ({
-      id: `leaked_${call.name}_${index}`,
-      name: call.name,
-      args: call.args,
-      type: "tool_call" as const,
-    }));
-  }
+  const toolCalls = existingRaw.filter((call) => allowedToolNames.has(call.name));
 
   const contentWasString = typeof response.content === "string";
   let nextContent: AIMessage["content"] = response.content;
@@ -79,8 +66,7 @@ export const coerceAvailabilityToolCalls = (
 
   if (
     !contentChanged
-    && toolCalls === allowlisted
-    && allowlisted.length === existingRaw.length
+    && toolCalls.length === existingRaw.length
   ) {
     return response;
   }

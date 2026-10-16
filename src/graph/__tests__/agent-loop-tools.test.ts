@@ -277,7 +277,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     expect(update.agentMessages).toBeUndefined();
   });
 
-  it("blocks a model-supplied contact id when ownership context is missing", async () => {
+  it("strips unstamped create_meeting before ToolNode (ownership is planner/CRM-owned)", async () => {
     const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
     const createTool = tool(invoke, {
       name: "create_meeting",
@@ -288,18 +288,20 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       clinicState({
         contactContext: null,
         bookingDraft: canonicalBookingDraft({ contactId: "unverified-contact" }),
-        agentMessages: [runtimeToolAi([{
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
             id: "create-1",
             name: "create_meeting",
             args: { contactId: "unverified-contact" },
             type: "tool_call",
-          }])],
+          }],
+        })],
       }),
       { configurable: {} },
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    // Fail-closed strip — no synthetic ownership ToolMessage on the tape.
     expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
@@ -344,7 +346,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
       contactId: "c-phone",
       contacts: [{ id: "c-phone", cTelegram: "tg-other" }],
     },
-  ])("does not link an unsafe phone candidate: $label", async ({ contactId, contacts }) => {
+  ])("strips unstamped link_telegram_to_contact ($label)", async ({ contactId, contacts }) => {
     const invoke = vi.fn(async () => JSON.stringify({ id: contactId }));
     const linkTool = tool(invoke, {
       name: "link_telegram_to_contact",
@@ -354,12 +356,15 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     const update = await createAgentToolsNode([linkTool], "booking")(
       clinicState({
         contactContext: { ownership: "phone", contacts },
-        agentMessages: [runtimeToolAi([{
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
             id: "unsafe-link-1",
             name: "link_telegram_to_contact",
             args: { contactId },
             type: "tool_call",
-          }])],
+          }],
+        })],
       }),
       { configurable: {} },
     );
@@ -368,7 +373,7 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
-  it("does not create_contact when phone matches a stored occupied candidate", async () => {
+  it("strips unstamped create_contact (occupied checks are contact-command-owned)", async () => {
     const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
     const createTool = tool(invoke, {
       name: "create_contact",
@@ -395,7 +400,9 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
           }],
         },
         bookingDraft: canonicalBookingDraft({ contactId: null }),
-        agentMessages: [runtimeToolAi([{
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
             id: "create-occupied-1",
             name: "create_contact",
             args: {
@@ -404,7 +411,8 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
               phoneNumber: "+380 63 212 3123",
             },
             type: "tool_call",
-          }])],
+          }],
+        })],
       }),
       { configurable: {} },
     );
@@ -605,25 +613,13 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
     )).toBe("mutation-finalize");
   });
 
-  it("does not call create_meeting for a phone candidate before linking", async () => {
+  it("strips unstamped create_meeting before linking (ownership is planner-owned)", async () => {
     const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
     const createTool = tool(invoke, {
       name: "create_meeting",
       description: "create",
       schema: z.object({}),
     });
-    const availability = {
-      days: [{
-        date: "2026-09-10",
-        slots: [{
-          id: "slot-1",
-          label: "14:00",
-          dateStart: "2026-09-10T14:00:00",
-          dateEnd: "2026-09-10T14:30:00",
-        }],
-      }],
-      stepMinutes: 30,
-    };
     const update = await createAgentToolsNode([createTool], "booking")(
       clinicState({
         contactContext: {
@@ -635,37 +631,21 @@ describe("createAgentToolsNode contact capture (DDD-86)", () => {
           phase: "confirming",
           pendingCommand: { action: "create", payload: { contactId: "c-phone" } },
         }),
-        availabilityContext: availability,
-        agentMessages: [
-          new ToolMessage({
-            content: JSON.stringify(availability),
-            name: "present_availability_slots",
-            tool_call_id: "slots-1",
-          }),
-          runtimeToolAi([{
-              id: "create-1",
-              name: "create_meeting",
-              args: { contactId: "c-phone" },
-              type: "tool_call",
-            }]),
-        ],
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "create-1",
+            name: "create_meeting",
+            args: { contactId: "c-phone" },
+            type: "tool_call",
+          }],
+        })],
       }),
       { configurable: {} },
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    // Fail-closed strip: no synthetic ownership ToolMessage; open contact_field instead.
-    expect(
-      agentMessagesOf(update).some(
-        (m) =>
-          m instanceof ToolMessage
-          && String(m.content).includes("Contact ownership required"),
-      ),
-    ).toBe(false);
-    expect(update.pendingInteraction).toMatchObject({
-      kind: "contact_field",
-      field: "phoneNumber",
-    });
+    expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
   it("does not set contactContext on empty or error find", async () => {
@@ -755,11 +735,7 @@ describe("DDD-87: phone must appear in patient messages", () => {
     "find_contact_by_phone",
     "create_contact",
     "update_contact",
-  ] as const)("blocks invented phone on %s", async (toolName) => {
-    const seen: { name: string; props: Record<string, unknown> }[] = [];
-    setTrackEventForTests((name, props) => {
-      seen.push({ name, props });
-    });
+  ] as const)("strips unstamped %s (phone grounding is planner-owned)", async (toolName) => {
     const invoked: string[] = [];
     const toolsNode = createAgentToolsNode(
       phoneTools((name) => {
@@ -777,27 +753,16 @@ describe("DDD-87: phone must appear in patient messages", () => {
       clinicState({
         messages: [new HumanMessage("Артем"), new HumanMessage("Тест")],
         agentMessages: [
-          runtimeToolAi([{ id: "p1", name: toolName, args, type: "tool_call" }]),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "p1", name: toolName, args, type: "tool_call" }],
+          }),
         ],
       }),
       { configurable: {} },
     );
     expect(invoked).toEqual([]);
-    const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
-    expect(JSON.parse(String(toolMsg.content))).toEqual({
-      error: "Phone not provided",
-      field: "phoneNumber",
-      hint: "Ask the patient for their clinic phone, then retry with the number they typed.",
-    });
-    expect(seen).toContainEqual(
-      expect.objectContaining({
-        name: "tool_error",
-        props: expect.objectContaining({
-          tool: toolName,
-          error_message: "Phone not provided",
-        }),
-      }),
-    );
+    expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
   it("allows create_contact when human typed local UA and tool passes E.164", async () => {
@@ -915,7 +880,7 @@ describe("DDD-87: phone must appear in patient messages", () => {
     expect(invoked).toEqual(["find_contact_by_phone"]);
   });
 
-  it("does not treat AI or tool text as patient-provided phone", async () => {
+  it("strips unstamped find_contact_by_phone when history has no patient phone", async () => {
     const invoked: string[] = [];
     const toolsNode = createAgentToolsNode(
       phoneTools((name) => {
@@ -935,22 +900,21 @@ describe("DDD-87: phone must appear in patient messages", () => {
           new HumanMessage("Тест"),
         ],
         agentMessages: [
-          runtimeToolAi([
-              {
-                id: "p1",
-                name: "find_contact_by_phone",
-                args: { phoneNumber: "+380501112233" },
-                type: "tool_call",
-              },
-            ]),
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "p1",
+              name: "find_contact_by_phone",
+              args: { phoneNumber: "+380501112233" },
+              type: "tool_call",
+            }],
+          }),
         ],
       }),
       { configurable: {} },
     );
     expect(invoked).toEqual([]);
-    expect(JSON.parse(String((update.agentMessages as ToolMessage[])[0]!.content)).error).toBe(
-      "Phone not provided",
-    );
+    expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
   });
 
   it("create_contact without phoneNumber still runs", async () => {
@@ -1026,12 +990,8 @@ describe("DDD-59: name must appear in patient messages", () => {
   ];
 
   it.each(["create_contact", "update_contact"] as const)(
-    "blocks invented Пацієнт on %s even when phone was typed",
+    "strips unstamped %s (name grounding is planner/CRM-owned)",
     async (toolName) => {
-      const seen: { name: string; props: Record<string, unknown> }[] = [];
-      setTrackEventForTests((name, props) => {
-        seen.push({ name, props });
-      });
       const invoked: string[] = [];
       const toolsNode = createAgentToolsNode(
         nameTools((name) => {
@@ -1056,27 +1016,16 @@ describe("DDD-59: name must appear in patient messages", () => {
         clinicState({
           messages: [new HumanMessage("0671675272")],
           agentMessages: [
-            runtimeToolAi([{ id: "n1", name: toolName, args, type: "tool_call" }]),
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: "n1", name: toolName, args, type: "tool_call" }],
+            }),
           ],
         }),
         { configurable: {} },
       );
       expect(invoked).toEqual([]);
-      const toolMsg = (update.agentMessages as ToolMessage[])[0]!;
-      expect(JSON.parse(String(toolMsg.content))).toEqual({
-        error: "Name not provided",
-        field: "firstName",
-        hint: "Ask the patient for their name, then retry with the value they typed.",
-      });
-      expect(seen).toContainEqual(
-        expect.objectContaining({
-          name: "tool_error",
-          props: expect.objectContaining({
-            tool: toolName,
-            error_message: "Name not provided",
-          }),
-        }),
-      );
+      expect(agentMessagesOf(update).some((m) => m instanceof ToolMessage)).toBe(false);
     },
   );
 

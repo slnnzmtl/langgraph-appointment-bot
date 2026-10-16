@@ -159,6 +159,7 @@ export const routeAfterAgentTools = (
   commandPrepareName?: string,
   noteOrchestratorName?: string,
   finalizeName?: string,
+  faqPrepareName?: string,
 ): string => {
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
@@ -177,10 +178,8 @@ export const routeAfterAgentTools = (
     return mutationFinalizeName;
   }
 
-  // Ownership / link-candidate / consultation strips open a pending interaction
-  // without a ToolMessage — finalize renders the card. Must outrank the planner:
-  // resolveBookingCommand would re-emit render contact_field and bounce through
-  // command_prepare otherwise.
+  // Open pending interactions (contact_field / service_confirm) finalize without
+  // bouncing through the planner.
   if (
     finalizeName
     && state.pendingInteraction != null
@@ -200,8 +199,25 @@ export const routeAfterAgentTools = (
     return commandPrepareName;
   }
 
-  // REPLACE cancel with no frozen create: finalize renders the next booking step
-  // (FAQ catalog guide, consultation offer, or date/time after accepted service).
+  // REPLACE cancel with no accepted service: FAQ prepare opens the catalog.
+  // Unit graphs without FAQ fall through to booking finalize.
+  if (
+    state.pendingCancellationPurpose === "replacement"
+    && state.bookingDraft?.mode === "create"
+    && state.bookingDraft.replacement == null
+    && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
+    && state.bookingDraft.serviceAcceptance?.status !== "accepted"
+  ) {
+    if (faqPrepareName) {
+      return faqPrepareName;
+    }
+    if (finalizeName) {
+      return finalizeName;
+    }
+  }
+
+  // REPLACE cancel with accepted service (or catalog already open): finalize
+  // renders the next booking step (date/time / chips).
   if (
     finalizeName
     && state.pendingCancellationPurpose === "replacement"

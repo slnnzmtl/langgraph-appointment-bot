@@ -1,29 +1,12 @@
-import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
-import type { StructuredToolInterface } from "@langchain/core/tools";
+import type { BaseMessage } from "@langchain/core/messages";
 import { Overwrite } from "@langchain/langgraph";
-import {
-  bookingOfferLabels,
-  inferConversationLocaleFromText,
-} from "../../../shared/conversation-locale.js";
-import {
-  consultationService,
-  reduceBookingSession,
-} from "../../booking-session.js";
-import type { PartitionServiceCandidates } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import {
-  crmWriteDirtiesPrefetch,
-  lastPatientText,
-} from "../protocol.js";
+import { crmWriteDirtiesPrefetch } from "../protocol.js";
 import { type ToolProtocolResult } from "../tools-protocol.js";
 import { projectAvailabilityEffects } from "./availability.js";
 import { projectContactEffects } from "./contact.js";
 import { projectMutationEffects } from "./mutation.js";
 import { projectServiceEffects } from "./service.js";
-
-export type CreateAgentToolsOptions = {
-  partitionCandidates?: PartitionServiceCandidates;
-};
 
 /** Next-projection state: omitted keys stay; explicit null overwrites. */
 const applyEffective = (
@@ -39,58 +22,18 @@ const applyEffective = (
   return next;
 };
 
-export const applyToolEffects = async (
+export const applyToolEffects = (
   state: ClinicState,
   protocol: ToolProtocolResult,
   toolResultMessages: BaseMessage[],
-  options?: CreateAgentToolsOptions & { listServicesTool?: StructuredToolInterface },
-): Promise<ClinicStateUpdate> => {
+): ClinicStateUpdate => {
   if (protocol.stateTapeRewrite != null) {
-    const update: ClinicStateUpdate = {
+    return {
       agentMessages: new Overwrite(protocol.stateTapeRewrite),
     };
-    if (protocol.recovery?.type === "service_confirmation_required") {
-      const labels = bookingOfferLabels(
-        inferConversationLocaleFromText(lastPatientText(state)),
-      );
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        {
-          type: "service_offered",
-          service: consultationService("catalog"),
-          acceptLabel: labels.acceptLabel,
-          chooseOtherLabel: labels.chooseOtherLabel,
-        },
-      );
-      update.bookingDraft = session.bookingDraft;
-      update.pendingInteraction = session.pendingInteraction;
-    } else if (protocol.recovery?.type === "contact_field_required") {
-      const session = reduceBookingSession(
-        {
-          bookingDraft: state.bookingDraft ?? null,
-          pendingInteraction: state.pendingInteraction ?? null,
-        },
-        {
-          type: "contact_field_required",
-          field: protocol.recovery.field,
-          ...(protocol.recovery.occupied === true ? { occupied: true } : {}),
-        },
-      );
-      update.pendingInteraction = session.pendingInteraction;
-    }
-    return update;
   }
 
-  const synthetic = protocol.syntheticMessages;
-  const resultMessages = [...synthetic, ...toolResultMessages];
-  const replacementCancellationResult =
-    state.bookingDraft?.replacement?.status === "cancelling"
-    && resultMessages.some(
-      (message) => message instanceof ToolMessage && message.name === "cancel_meeting",
-    );
+  const resultMessages = [...protocol.syntheticMessages, ...toolResultMessages];
 
   let effectiveState = state;
   // Keep resultMessages on the return update only — contact projection must
@@ -98,25 +41,10 @@ export const applyToolEffects = async (
   let update: ClinicStateUpdate = {
     agentMessages: resultMessages,
   };
-  if (replacementCancellationResult) {
-    const purposePatch: ClinicStateUpdate = {
-      pendingCancellationPurpose: "replacement",
-    };
-    update = { ...update, ...purposePatch };
-    effectiveState = applyEffective(effectiveState, purposePatch);
-  }
 
-  const mutation = await projectMutationEffects({
+  const mutation = projectMutationEffects({
     state: effectiveState,
     resultMessages,
-    options: {
-      ...(options?.partitionCandidates != null
-        ? { partitionCandidates: options.partitionCandidates }
-        : {}),
-      ...(options?.listServicesTool != null
-        ? { listServicesTool: options.listServicesTool }
-        : {}),
-    },
   });
   update = { ...update, ...mutation.patch };
   effectiveState = applyEffective(effectiveState, mutation.patch);

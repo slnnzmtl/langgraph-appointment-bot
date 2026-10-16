@@ -170,6 +170,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     const noteOrch = noteOrchestratorNodeName(agent.id);
     const interactionRender = interactionRenderNodeName(agent.id);
     const isBooking = agent.id === BOOKING_AGENT_ID;
+    const faqPrepare = isBooking && options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
+      ? prepareNodeName(FAQ_AGENT_ID)
+      : null;
     // Booking LLM binds informational reads only; ToolNode keeps the full set
     // so command_prepare can inject runtime-owned availability/contact/mutations.
     const llmTools = isBooking ? filterBookingInformationalTools(tools) : tools;
@@ -221,13 +224,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       )
       .addNode(
         toolsNode,
-        createAgentToolsNode(
-          tools,
-          agent.id,
-          isBooking && faqPartitionCandidates != null
-            ? { partitionCandidates: faqPartitionCandidates }
-            : undefined,
-        ),
+        createAgentToolsNode(tools, agent.id),
       )
       .addNode(
         finalize,
@@ -256,9 +253,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         ?? (callTool != null
           ? createResolveServiceChange(callTool, options.supervisorLlm)
           : unresolvedServiceChange);
-      const faqPrepare = options.agents.some((entry) => entry.id === FAQ_AGENT_ID)
-        ? prepareNodeName(FAQ_AGENT_ID)
-        : null;
       const orchEnds = [
         llm,
         commandPrepare,
@@ -386,6 +380,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
             isBooking ? commandPrepare : undefined,
             isBooking ? noteOrch : undefined,
             isBooking ? finalize : undefined,
+            isBooking ? (faqPrepare ?? undefined) : undefined,
           ),
         {
           [llm]: llm,
@@ -396,6 +391,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
                 [commandPrepare]: commandPrepare,
                 [noteOrch]: noteOrch,
                 [finalize]: finalize,
+                ...(faqPrepare != null ? { [faqPrepare]: faqPrepare } : {}),
               }
             : {}),
         },

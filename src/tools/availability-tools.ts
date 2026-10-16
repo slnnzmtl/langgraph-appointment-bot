@@ -616,16 +616,35 @@ export const createPresentAvailabilitySlotsTool = (options: {
   const { callTool, assignedUserId } = options;
 
   return tool(
-    async (input: {
-      direction?: "exact" | "earlier" | "later" | "nearest";
-      date?: string;
-      startDate?: string;
-      afterDate?: string;
-      beforeDate?: string;
-      durationMinutes?: number;
-      excludeMeetingIds?: string[];
-    }) => {
+    async (
+      input: {
+        direction?: "exact" | "earlier" | "later" | "nearest";
+        date?: string;
+        startDate?: string;
+        afterDate?: string;
+        beforeDate?: string;
+        durationMinutes?: number;
+        excludeMeetingIds?: string[];
+      },
+      config?: { configurable?: { availabilityContext?: AvailabilityContext | null } },
+    ) => {
       try {
+        const parsed = presentAvailabilitySlotsArgsSchema.safeParse(input);
+        if (parsed.success) {
+          const cached = tryAvailabilityCacheHit(
+            config?.configurable?.availabilityContext ?? null,
+            parsed.data,
+          );
+          if (cached != null) {
+            trackEvent("availability_cache_hit", {
+              outcome: "success",
+              kind: cached.kind,
+              ...(typeof parsed.data.date === "string" ? { date: parsed.data.date } : {}),
+            });
+            return cached.json;
+          }
+        }
+
         const stepMinutes = input.durationMinutes ?? CLINIC_SLOT_MINUTES;
         const excludeIds = input.excludeMeetingIds;
         const todayKyiv = kyivToday();

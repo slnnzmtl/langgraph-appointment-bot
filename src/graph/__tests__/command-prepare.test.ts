@@ -768,7 +768,7 @@ describe("booking LLM tool surface coercion", () => {
       .toBe(false);
   });
 
-  it("hydrates leaked informational XML only", () => {
+  it("strips leaked XML without promoting it to tool_calls", () => {
     const response = new AIMessage(
       "text <call:default_api:list_services{}></call:default_api:list_services>"
       + "<call:default_api:create_meeting{confirmationGiven: true}></call:default_api:create_meeting>",
@@ -779,9 +779,8 @@ describe("booking LLM tool surface coercion", () => {
       "booking",
       informational,
     );
-    expect(coerced.tool_calls).toEqual([
-      expect.objectContaining({ name: "list_services" }),
-    ]);
+    expect(coerced.tool_calls ?? []).toEqual([]);
+    expect(String(coerced.content)).not.toContain("<call:");
   });
 });
 

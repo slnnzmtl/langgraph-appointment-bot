@@ -306,7 +306,7 @@ describe("runtime-owned booking routing", () => {
     expect(outcome.update.agentMessages).toBeUndefined();
   });
 
-  it("strips ownership-blocked create without a synthetic ToolMessage and opens contact_field", async () => {
+  it("strips unstamped create_meeting without a synthetic ToolMessage", async () => {
     const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
     const createTool = tool(invoke, {
       name: "create_meeting",
@@ -320,12 +320,15 @@ describe("runtime-owned booking routing", () => {
         note: { status: "skipped" },
       }),
       agentMessages: [
-        stampRuntimeToolAi("create_meeting", [{
-          id: "create-1",
-          name: "create_meeting",
-          args: { contactId: "unverified" },
-          type: "tool_call" as const,
-        }]),
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "create-1",
+            name: "create_meeting",
+            args: { contactId: "unverified" },
+            type: "tool_call" as const,
+          }],
+        }),
       ],
     });
     const toolsUpdate = await createAgentToolsNode([createTool], "booking")(
@@ -340,19 +343,6 @@ describe("runtime-owned booking routing", () => {
       pendingInteraction: toolsUpdate.pendingInteraction ?? state.pendingInteraction,
     };
     expect(afterTools.agentMessages.some((m) => m instanceof ToolMessage)).toBe(false);
-    expect(afterTools.pendingInteraction).toMatchObject({
-      kind: "contact_field",
-      field: "phoneNumber",
-    });
-    expect(routeAfterAgentTools(
-      afterTools,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__finalize");
   });
 
   it("routes incomplete-contact booking errors to command_prepare, not the LLM", async () => {

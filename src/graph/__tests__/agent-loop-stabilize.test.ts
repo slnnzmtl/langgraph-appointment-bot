@@ -2161,7 +2161,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([INTENT_SKIP_LABEL]);
   });
 
-  it("blocks create_meeting with consultation id without explicit agreement", async () => {
+  it("strips unstamped create_meeting with consultation id (agreement is planner-owned)", async () => {
     const createTool = tool(
       async () => JSON.stringify({ id: "should-not-run" }),
       {
@@ -2179,18 +2179,19 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new HumanMessage("запиши на ботулінотерапію"),
         ],
         agentMessages: [
-          runtimeToolAi([
-              {
-                id: "c1",
-                name: "create_meeting",
-                args: {
-                  serviceId: CONSULTATION_SERVICE_ID,
-                  dateStart: "2026-09-10T14:00:00",
-                  dateEnd: "2026-09-10T14:30:00",
-                },
-                type: "tool_call",
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "c1",
+              name: "create_meeting",
+              args: {
+                serviceId: CONSULTATION_SERVICE_ID,
+                dateStart: "2026-09-10T14:00:00",
+                dateEnd: "2026-09-10T14:30:00",
               },
-            ]),
+              type: "tool_call",
+            }],
+          }),
         ],
       }),
       { configurable: {} },
@@ -2402,7 +2403,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     });
   });
 
-  it("blocks reschedule_meeting with consultation id without explicit agreement", async () => {
+  it("strips unstamped reschedule_meeting with consultation id (agreement is planner-owned)", async () => {
     const rescheduleTool = tool(
       async () => JSON.stringify({ id: "should-not-run" }),
       {
@@ -2420,23 +2421,23 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           new HumanMessage("запиши на ботулінотерапію"),
         ],
         agentMessages: [
-          runtimeToolAi([
-              {
-                id: "r1",
-                name: "reschedule_meeting",
-                args: {
-                  serviceId: CONSULTATION_SERVICE_ID,
-                  dateStart: "2026-09-10T14:00:00",
-                  dateEnd: "2026-09-10T14:30:00",
-                },
-                type: "tool_call",
+          new AIMessage({
+            content: "",
+            tool_calls: [{
+              id: "r1",
+              name: "reschedule_meeting",
+              args: {
+                serviceId: CONSULTATION_SERVICE_ID,
+                dateStart: "2026-09-10T14:00:00",
+                dateEnd: "2026-09-10T14:30:00",
               },
-            ]),
+              type: "tool_call",
+            }],
+          }),
         ],
       }),
       { configurable: {} },
     );
-    const toolMsg = (toolsUpdate.agentMessages as ToolMessage[])[0]!;
     expect(
       (toolsUpdate.agentMessages instanceof Overwrite
         ? toolsUpdate.agentMessages.value
@@ -2532,13 +2533,11 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
       { configurable: {} },
     );
 
-    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toEqual({
-      action: "create",
-      payload: originalPayload,
-    });
+    // command_prepare already checkpointed pendingCommand; tools must not rederive it.
+    expect(unwrapCommandUpdate(update).bookingDraft).toBeUndefined();
   });
 
-  it("fails closed when create follows an unsuccessful slot revalidation", async () => {
+  it("strips unstamped create after a failed slot revalidation ToolMessage", async () => {
     const invoke = vi.fn(async () => JSON.stringify({ id: "must-not-run" }));
     const createTool = tool(invoke, {
       name: "create_meeting",
@@ -2559,7 +2558,10 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
             name: "present_availability_slots",
             tool_call_id: "revalidate-1",
           }),
-          runtimeToolAi([{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }]),
+          new AIMessage({
+            content: "",
+            tool_calls: [{ id: "create-1", name: "create_meeting", args: {}, type: "tool_call" }],
+          }),
         ],
       }),
       { configurable: {} },
@@ -2568,7 +2570,7 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("rejects a selected interval whose end does not match the service snapshot", async () => {
+  it("strips unstamped create when selected interval mismatches snapshot (freshness is planner-owned)", async () => {
     const createTool = tool(
       async () => JSON.stringify({ awaitingConfirmation: true }),
       {
@@ -2625,7 +2627,9 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
           }],
         },
         agentMessages: [
-          runtimeToolAi([{
+          new AIMessage({
+            content: "",
+            tool_calls: [{
               id: "mismatch",
               name: "create_meeting",
               args: {
@@ -2633,7 +2637,8 @@ describe("stabilize booking flow (DDD-48/49/50/51)", () => {
                 dateEnd: "2026-11-21T13:00:00",
               },
               type: "tool_call",
-            }]),
+            }],
+          }),
         ],
       }),
       { configurable: {} },
