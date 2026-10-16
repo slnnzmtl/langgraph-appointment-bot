@@ -335,7 +335,7 @@ export const handleGraphTextTurn = async (
         }
         return {
           messages: [{
-            _getType: () => "ai",
+            _getType: (): "ai" => "ai",
             content: PATIENT_FALLBACK_MESSAGE,
           }],
           lastHandoff: {

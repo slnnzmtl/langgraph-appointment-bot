@@ -211,8 +211,8 @@ describe("compileClinicGraph prefetch once", () => {
     },
   ) =>
     compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [] },
       agentModel: {
         bindTools: () => ({
           invoke: async () => new AIMessage("ok"),
@@ -325,8 +325,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       intent: "book",
     }));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -386,8 +386,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     const modelInvoke = vi.fn(async () => new AIMessage("LLM must not author catalog chips."));
     const supervisorInvoke = vi.fn(async () => ({ next: "faq" }));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -623,8 +623,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       };
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability, createMeeting] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability, createMeeting] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -844,8 +844,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       accepted: true,
     }));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -980,8 +980,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
     ));
     const supervisorInvoke = vi.fn(async () => ({ next: "booking" }));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent, faqAgent],
-      agentTools: { booking: [], faq: [] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [] },
       agentModel: {
         bindTools: () => ({ invoke: agentInvoke }),
       } as unknown as BaseChatModel,
@@ -1056,8 +1056,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
   it("TIME free-text unresolved keeps the TIME card, not the note question", async () => {
     const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -1151,8 +1151,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
   it("does not confirm creation when DETAILS has no contact and no mutation ran", async () => {
     const modelInvoke = vi.fn(async () => new AIMessage("Готово! Запис створено."));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -1292,8 +1292,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       }),
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [linkContact, presentAvailability, createMeeting] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [linkContact, presentAvailability, createMeeting] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -1425,8 +1425,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       },
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: contactTools },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: contactTools },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -1539,8 +1539,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         }),
       });
       const { graph } = compileClinicGraph({
-        agents: [bookingAgent],
-        agentTools: { booking: [presentAvailability, createMeeting] },
+        agents: [faqAgent, bookingAgent],
+        agentTools: { faq: [], booking: [presentAvailability, createMeeting] },
         agentModel: {
           bindTools: () => ({ invoke: modelInvoke }),
         } as unknown as BaseChatModel,
@@ -1733,8 +1733,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       }),
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability, createMeeting] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability, createMeeting] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -1892,8 +1892,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
         }],
       }));
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability, createMeeting] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability, createMeeting] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -2028,8 +2028,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       }),
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability, rescheduleMeeting] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability, rescheduleMeeting] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -2207,8 +2207,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       }),
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
@@ -2376,8 +2376,8 @@ describe("compileClinicGraph runtime-owned booking transition", () => {
       };
     });
     const { graph } = compileClinicGraph({
-      agents: [bookingAgent],
-      agentTools: { booking: [presentAvailability, rescheduleMeeting] },
+      agents: [faqAgent, bookingAgent],
+      agentTools: { faq: [], booking: [presentAvailability, rescheduleMeeting] },
       agentModel: {
         bindTools: () => ({ invoke: modelInvoke }),
       } as unknown as BaseChatModel,
