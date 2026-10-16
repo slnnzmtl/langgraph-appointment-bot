@@ -9,6 +9,7 @@ import { restorePendingInteraction } from "../booking-interaction-restore.js";
 import {
   BOOKING_OWNED_INTERACTION_KINDS,
   clearBookingOwnedInteraction,
+  closedBookingSessionUpdate,
   interpretInteractionReply,
   isBookingOwnedInteraction,
   reduceBookingSession,
@@ -841,6 +842,25 @@ describe("mutation_chat_other", () => {
     expect(other.bookingDraft?.selectedSlot).toBeNull();
     expect(other.bookingDraft?.selectedDate).toBe(selectedSlot.dateStart.slice(0, 10));
     expect(other.bookingDraft?.pendingCommand).toBeNull();
+  });
+});
+
+describe("closedBookingSessionUpdate", () => {
+  it("clears draft and booking-owned interaction without legacy channel writes", () => {
+    const update = closedBookingSessionUpdate({
+      kind: "visit_note",
+      owner: "booking",
+      utterance: "note",
+      stage: "create",
+    });
+    expect(update).toEqual({
+      bookingDraft: null,
+      pendingInteraction: null,
+      serviceChangeNotice: null,
+    });
+    expect(update).not.toHaveProperty("bookingNoteStatus");
+    expect(update).not.toHaveProperty("selectedSlot");
+    expect(update).not.toHaveProperty("selectedAvailabilityDate");
   });
 });
 

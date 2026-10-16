@@ -2,7 +2,7 @@ import { FAQ_AGENT_ID } from "../types.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
 import { labelIdFor, normalizeReplyLabel } from "../../shared/message-content.js";
 import type { ClinicState } from "../state.js";
-import { matchingCatalogRows } from "../catalog-match.js";
+import { utteranceHasCatalogCrmEvidence } from "../booking-entry-policy.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
 import {
@@ -146,20 +146,23 @@ export const routeAfterAgentPrepare = (
     if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
       if (agentId === FAQ_AGENT_ID) {
         const offered = state.pendingInteraction.service;
-        const offeredName = offered.name;
+        const offeredName = offered.name ?? "";
+        const offeredServices =
+          offeredName.length > 0
+            ? [{
+                id: offered.id,
+                name: offeredName,
+                ...(offered.durationMinutes != null
+                  ? { duration: offered.durationMinutes }
+                  : {}),
+              }]
+            : [];
         const openedThisTurn =
           state.supervisorIntent === "named_procedure"
-          || (
-            offeredName != null
-            && offeredName.length > 0
-            && matchingCatalogRows(bookText, [{
-              id: offered.id,
-              name: offeredName,
-              ...(offered.durationMinutes != null
-                ? { duration: offered.durationMinutes }
-                : {}),
-            }]).length > 0
-          );
+          || utteranceHasCatalogCrmEvidence({
+            text: bookText,
+            services: offeredServices,
+          });
         if (openedThisTurn) {
           return finalizeName;
         }

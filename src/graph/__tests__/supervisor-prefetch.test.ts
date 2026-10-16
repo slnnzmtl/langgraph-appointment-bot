@@ -377,9 +377,9 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.availabilityContext).toBeNull();
     expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.selectedAvailabilityDate).toBeUndefined();
     expect(update.servicesContext).toBeUndefined();
     // Main menu starts a fresh booking session, so the durable cursor resets too.
     expect(update.availabilityCursor).toBeNull();
@@ -421,9 +421,9 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     );
 
     expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.selectedAvailabilityDate).toBeUndefined();
     expect(update.availabilityCursor).toBeNull();
   });
 
@@ -927,9 +927,9 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.next).toBe("FINISH");
     expect(update.prefetchDirty).toBe(true);
     expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.selectedAvailabilityDate).toBeUndefined();
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -964,7 +964,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyText).toBe(ABANDON_BOOKING_REPLY_UK);
     expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
+    expect(update.bookingNoteStatus).toBeUndefined();
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -1019,9 +1019,9 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(reply).not.toBe(MAIN_MENU_GREETING_UK);
     expect(reply).not.toBe(PATIENT_FALLBACK_MESSAGE);
     expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBe("unasked");
-    expect(update.selectedSlot).toBeNull();
-    expect(update.selectedAvailabilityDate).toBeNull();
+    expect(update.bookingNoteStatus).toBeUndefined();
+    expect(update.selectedSlot).toBeUndefined();
+    expect(update.selectedAvailabilityDate).toBeUndefined();
   });
 });
 
