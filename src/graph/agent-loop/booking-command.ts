@@ -387,21 +387,23 @@ export const createCommandFromBookingDraft = (
   state: ClinicState,
 ): PendingBookingCommand | null => {
   const draft = state.bookingDraft;
-  if (draft?.replacement?.status === "offered" || draft?.replacement?.status === "cancelling") {
+  if (draft == null || (draft.mode !== "create" && draft.mode !== "replace")) {
+    return null;
+  }
+  if (draft.replacement?.status === "offered" || draft.replacement?.status === "cancelling") {
     return null;
   }
   if (
-    draft?.replacement?.status === "create_pending"
+    draft.replacement?.status === "create_pending"
     && draft.replacement.originalCommand?.action === "create"
   ) {
     return { ...draft.replacement.originalCommand };
   }
-  const acceptance = draft?.serviceAcceptance;
-  const slot = draft?.selectedSlot;
-  const contactIdentity = resolveContactIdentity(state.contactContext, draft?.contactId);
+  const acceptance = draft.serviceAcceptance;
+  const slot = draft.selectedSlot;
+  const contactIdentity = resolveContactIdentity(state.contactContext, draft.contactId);
   if (
-    !draft
-    || acceptance?.status !== "accepted"
+    acceptance?.status !== "accepted"
     || slot == null
     || contactIdentity.kind !== "owned"
     || (draft.note.status !== "skipped" && draft.note.status !== "answered")

@@ -107,6 +107,52 @@ const isValidSelectedDate = (value: unknown): value is string | null => {
     && roundTrip.getUTCDate() === day;
 };
 
+const BOOKING_MODES = new Set(["create", "reschedule", "replace"]);
+const BOOKING_PHASES = new Set([
+  "service",
+  "date",
+  "time",
+  "note",
+  "details",
+  "ready",
+  "confirming",
+]);
+const NOTE_STATUSES = new Set(["unasked", "awaiting", "skipped", "answered"]);
+const SERVICE_SOURCES = new Set(["catalog", "direct", "crm"]);
+const SERVICE_ACCEPTANCE_STATUSES = new Set(["pending", "accepted"]);
+const REPLACEMENT_STATUSES = new Set(["offered", "cancelling", "create_pending"]);
+const REQUESTED_TIME_STATUSES = new Set(["pending", "unavailable"]);
+/** Runtime command actions — "replace" is a booking mode, not a command. */
+const PENDING_COMMAND_ACTIONS = new Set(["create", "reschedule", "cancel"]);
+
+const isOptionalString = (value: unknown): boolean =>
+  value === undefined || typeof value === "string";
+
+const isOptionalFiniteNumber = (value: unknown): boolean =>
+  value === undefined || (typeof value === "number" && Number.isFinite(value));
+
+const isValidMeeting = (value: unknown): boolean => {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (trimmedNonblank(value.id) == null) {
+    return false;
+  }
+  return isOptionalString(value.name)
+    && isOptionalString(value.dateStart)
+    && isOptionalString(value.dateEnd);
+};
+
+const isValidPendingCommand = (value: unknown): boolean => {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (typeof value.action !== "string" || !PENDING_COMMAND_ACTIONS.has(value.action)) {
+    return false;
+  }
+  return isPlainObject(value.payload);
+};
+
 const isValidSlot = (value: unknown): boolean => {
   if (value == null) {
     return true;
@@ -114,8 +160,14 @@ const isValidSlot = (value: unknown): boolean => {
   if (!isPlainObject(value)) {
     return false;
   }
-  const { dateStart, dateEnd } = value;
+  const { dateStart, dateEnd, label, slotId } = value;
   if (typeof dateStart !== "string" || typeof dateEnd !== "string") {
+    return false;
+  }
+  if (typeof label !== "string" || label.trim().length === 0) {
+    return false;
+  }
+  if (slotId !== undefined && (typeof slotId !== "string" || slotId.trim().length === 0)) {
     return false;
   }
   const start = Date.parse(dateStart);
@@ -307,15 +359,103 @@ const draftVersion = (draft: BookingDraft): number =>
   typeof draft.version === "number" && Number.isFinite(draft.version) ? draft.version : 0;
 
 /**
- * Readable legacy draft for migration. Missing note or non-object drafts are rejected
- * before empty-draft / phase helpers read nested fields.
+ * Readable legacy draft for migration. Unknown discriminants or incomplete nested
+ * shapes are rejected before empty-draft / phase helpers trust nested fields.
  */
 const isReadableLegacyDraft = (draft: unknown): draft is BookingDraft => {
   if (!isPlainObject(draft)) {
     return false;
   }
-  if (!isPlainObject(draft.note) || typeof draft.note.status !== "string") {
+  if (typeof draft.mode !== "string" || !BOOKING_MODES.has(draft.mode)) {
     return false;
+  }
+  if (typeof draft.phase !== "string" || !BOOKING_PHASES.has(draft.phase)) {
+    return false;
+  }
+  if (!isPlainObject(draft.note)) {
+    return false;
+  }
+  if (typeof draft.note.status !== "string" || !NOTE_STATUSES.has(draft.note.status)) {
+    return false;
+  }
+  if (draft.note.value !== undefined && typeof draft.note.value !== "string") {
+    return false;
+  }
+  if (draft.serviceAcceptance != null) {
+    if (!isPlainObject(draft.serviceAcceptance)) {
+      return false;
+    }
+    const acceptance = draft.serviceAcceptance;
+    if (
+      typeof acceptance.status !== "string"
+      || !SERVICE_ACCEPTANCE_STATUSES.has(acceptance.status)
+    ) {
+      return false;
+    }
+    if (!isPlainObject(acceptance.service)) {
+      return false;
+    }
+    const service = acceptance.service;
+    if (trimmedNonblank(service.id) == null) {
+      return false;
+    }
+    if (typeof service.source !== "string" || !SERVICE_SOURCES.has(service.source)) {
+      return false;
+    }
+    if (!isOptionalString(service.name) || !isOptionalFiniteNumber(service.durationMinutes)) {
+      return false;
+    }
+    if (!isOptionalFiniteNumber(acceptance.acceptedAtTurn)) {
+      return false;
+    }
+  }
+  if (draft.selectedSlot != null && !isValidSlot(draft.selectedSlot)) {
+    return false;
+  }
+  if (draft.requestedTime != null) {
+    if (!isPlainObject(draft.requestedTime)) {
+      return false;
+    }
+    if (trimmedNonblank(draft.requestedTime.value) == null) {
+      return false;
+    }
+    if (
+      typeof draft.requestedTime.status !== "string"
+      || !REQUESTED_TIME_STATUSES.has(draft.requestedTime.status)
+    ) {
+      return false;
+    }
+  }
+  if (draft.pendingCommand != null && !isValidPendingCommand(draft.pendingCommand)) {
+    return false;
+  }
+  if (draft.rescheduleTarget != null && !isValidMeeting(draft.rescheduleTarget)) {
+    return false;
+  }
+  if (draft.replacement != null) {
+    if (!isPlainObject(draft.replacement)) {
+      return false;
+    }
+    const replacement = draft.replacement;
+    if (
+      typeof replacement.status !== "string"
+      || !REPLACEMENT_STATUSES.has(replacement.status)
+    ) {
+      return false;
+    }
+    if (!isValidMeeting(replacement.meeting)) {
+      return false;
+    }
+    if (replacement.status === "create_pending") {
+      if (
+        replacement.originalCommand != null
+        && !isValidPendingCommand(replacement.originalCommand)
+      ) {
+        return false;
+      }
+    } else if (replacement.originalCommand != null) {
+      return false;
+    }
   }
   return true;
 };

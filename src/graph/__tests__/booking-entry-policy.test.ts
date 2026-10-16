@@ -49,6 +49,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   bookingDraft: null,
   pendingInteraction: null,
   noteOrchQueued: false,
+  faqSkipLlm: false,
   serviceChangeNotice: null,
   bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,
@@ -257,6 +258,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         ? faq.pendingInteraction.choices.map((c) => c.label)
         : [],
     ).toEqual(["Botox, Disport", "Nabota"]);
+    expect(faq.faqSkipLlm).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
@@ -265,6 +267,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
           supervisorIntent: "named_procedure",
           bookingDraft: faq.bookingDraft ?? null,
           pendingInteraction: faq.pendingInteraction ?? null,
+          faqSkipLlm: faq.faqSkipLlm === true,
         }),
         "faq__llm",
         undefined,
@@ -301,6 +304,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
       status: "pending",
       service: { id: "svc-collagen" },
     });
+    expect(faq.faqSkipLlm).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
@@ -308,6 +312,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
           supervisorIntent: "named_procedure",
           bookingDraft: faq.bookingDraft ?? null,
           pendingInteraction: faq.pendingInteraction ?? null,
+          faqSkipLlm: faq.faqSkipLlm === true,
         }),
         "faq__llm",
         undefined,
@@ -415,6 +420,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
         name: "Колагеностимуляція Полімолочна кислота",
       },
     });
+    expect(faq.faqSkipLlm).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
@@ -422,6 +428,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
           servicesContext: services,
           bookingDraft: faq.bookingDraft ?? null,
           pendingInteraction: faq.pendingInteraction ?? null,
+          faqSkipLlm: faq.faqSkipLlm === true,
         }),
         "faq__llm",
         undefined,
@@ -546,33 +553,29 @@ describe("FAQ idle named_procedure catalog entry", () => {
     ).toBe("faq__llm");
   });
 
-  it("skips FAQ LLM when this turn opened service_confirm via CRM stems", () => {
-    const collagenConfirm = {
-      kind: "service_confirm" as const,
-      service: {
-        id: "svc-collagen",
-        name: "Колагеностимуляція Полімолочна кислота",
-        source: "catalog" as const,
-        durationMinutes: 60,
+  it("skips FAQ LLM when prepare opened service_confirm this turn", async () => {
+    const faq = await createFaqPrepareNode()(clinicState({
+      messages: [new HumanMessage("запиши на колаген")],
+      servicesContext: {
+        list: [
+          {
+            id: "svc-collagen",
+            name: "Колагеностимуляція Полімолочна кислота",
+            duration: 60,
+          },
+        ],
       },
-      choices: [
-        { id: "accept", label: "Так" },
-        { id: "choose_other", label: "Обрати іншу процедуру" },
-      ],
-    };
-    const draft = {
-      ...createEmptyBookingDraft(),
-      serviceAcceptance: {
-        status: "pending" as const,
-        service: collagenConfirm.service,
-      },
-    };
+      supervisorIntent: "named_procedure",
+    }));
+    expect(faq.pendingInteraction?.kind).toBe("service_confirm");
+    expect(faq.faqSkipLlm).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
           messages: [new HumanMessage("запиши на колаген")],
-          bookingDraft: draft,
-          pendingInteraction: collagenConfirm,
+          bookingDraft: faq.bookingDraft ?? null,
+          pendingInteraction: faq.pendingInteraction ?? null,
+          faqSkipLlm: faq.faqSkipLlm === true,
         }),
         "faq__llm",
         undefined,
@@ -583,7 +586,54 @@ describe("FAQ idle named_procedure catalog entry", () => {
     ).toBe("faq__finalize");
   });
 
-  it("hits FAQ LLM when open service_confirm has no service name", () => {
+  it("hits FAQ LLM on a service-name price question over an already-open confirm", async () => {
+    const openConfirm = {
+      kind: "service_confirm" as const,
+      service: {
+        id: "svc-neotiva",
+        name: "Neotiva",
+        source: "catalog" as const,
+      },
+      choices: [
+        { id: "accept", label: "Так" },
+        { id: "choose_other", label: "Обрати іншу процедуру" },
+      ],
+    };
+    const draft = {
+      ...createEmptyBookingDraft(),
+      serviceAcceptance: {
+        status: "pending" as const,
+        service: openConfirm.service,
+      },
+    };
+    const faq = await createFaqPrepareNode()(clinicState({
+      messages: [new HumanMessage("скільки коштує Neotiva?")],
+      bookingDraft: draft,
+      pendingInteraction: openConfirm,
+      servicesContext: {
+        list: [{ id: "svc-neotiva", name: "Neotiva", duration: 60 }],
+      },
+    }));
+    expect(faq.faqSkipLlm).toBe(false);
+    expect(faq.pendingInteraction).toBeUndefined();
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("скільки коштує Neotiva?")],
+          bookingDraft: draft,
+          pendingInteraction: openConfirm,
+          faqSkipLlm: faq.faqSkipLlm === true,
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+        FAQ_AGENT_ID,
+      ),
+    ).toBe("faq__llm");
+  });
+
+  it("hits FAQ LLM when open service_confirm has no prepare skip flag", () => {
     const unnamedConfirm = {
       kind: "service_confirm" as const,
       service: {
@@ -627,6 +677,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
       supervisorIntent: "named_procedure",
     }));
     expect(faq.pendingInteraction?.kind).toBe("service_candidate");
+    expect(faq.faqSkipLlm).toBe(true);
     expect(
       faq.pendingInteraction?.kind === "service_candidate"
         ? faq.pendingInteraction.choices.map((c) => c.label)
@@ -640,6 +691,7 @@ describe("FAQ idle named_procedure catalog entry", () => {
           supervisorIntent: "named_procedure",
           bookingDraft: faq.bookingDraft ?? null,
           pendingInteraction: faq.pendingInteraction ?? null,
+          faqSkipLlm: faq.faqSkipLlm === true,
         }),
         "faq__llm",
         undefined,
@@ -648,6 +700,41 @@ describe("FAQ idle named_procedure catalog entry", () => {
         FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
+  });
+
+  it("routes FAQ detour to LLM while contact_field is open", () => {
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("скільки коштує консультація?")],
+          bookingDraft: {
+            ...createEmptyBookingDraft(),
+            serviceAcceptance: {
+              status: "accepted",
+              service: { id: "svc-1", name: "Консультація", source: "catalog" },
+            },
+            selectedDate: "2026-09-10",
+            selectedSlot: {
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+              label: "14:00",
+            },
+            note: { status: "skipped" },
+            phase: "details",
+          },
+          pendingInteraction: {
+            kind: "contact_field",
+            field: "firstName",
+            choices: [],
+          },
+        }),
+        "faq__llm",
+        undefined,
+        undefined,
+        "faq__finalize",
+        FAQ_AGENT_ID,
+      ),
+    ).toBe("faq__llm");
   });
 
   it("does not rematch open chips on a trailing-question book line without named_procedure", async () => {

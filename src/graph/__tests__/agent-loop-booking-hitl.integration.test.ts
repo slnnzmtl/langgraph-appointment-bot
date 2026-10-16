@@ -24,8 +24,6 @@ import {
   createAgentToolsNode,
   availabilityOfferFromToolTurn,
   formatAvailabilityDateOffer,
-  matchAvailabilityDay,
-  matchAvailabilitySlot,
   resolveAvailabilityOffer,
   routeAfterAgentLlm,
 } from "../agent-loop/index.js";
@@ -42,14 +40,11 @@ import {
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
-import type { ClinicState } from "../state.js";
 import {
   availabilityMatchesBooking,
   createEmptyBookingDraft,
   reduceBookingDraft,
 } from "../booking-draft.js";
-import type { BookingDraft } from "../booking-draft.js";
-import { type ClinicAgentDefinition } from "../types.js";
 
 import {
   agentMessagesOf,
@@ -61,6 +56,12 @@ import {
   runtimeToolAi,
   unwrapCommandUpdate,
 } from "./agent-loop-fixtures.js";
+import {
+  acceptedCreateDraft,
+  availabilityClinicState,
+  bookingIntegrationAgent as agent,
+  bookingIntegrationSnapshot as snapshot,
+} from "./agent-loop-booking-integration-harness.js";
 
 
 /**
@@ -68,60 +69,6 @@ import {
  * (planner-owned mutations, tools-protocol stamp gate, availability cache paging).
  */
 describe("booking HITL and command_prepare integration", () => {
-  const agent: ClinicAgentDefinition = {
-    id: "booking",
-    name: "Booking",
-    description: "Books appointments",
-    systemPrompt: "book",
-    maxSteps: 8,
-  };
-
-  const snapshot: AvailabilityContext = {
-    days: [
-      {
-        date: "2026-09-10",
-        dayLabel: "10 вересня (четвер)",
-        slots: [
-          {
-            id: "a",
-            label: "14:00",
-            dateStart: "2026-09-10T14:00:00",
-            dateEnd: "2026-09-10T14:30:00",
-          },
-          {
-            id: "b",
-            label: "15:00",
-            dateStart: "2026-09-10T15:00:00",
-            dateEnd: "2026-09-10T15:30:00",
-          },
-        ],
-      },
-    ],
-    stepMinutes: 30,
-    startIntervalMinutes: 30,
-  };
-
-  /** Availability coerce/finalize tests need an accepted create service (or reschedule target). */
-  const acceptedCreateDraft = (overrides: Partial<BookingDraft> = {}): BookingDraft =>
-    canonicalBookingDraft({
-      phase: "date",
-      selectedDate: null,
-      selectedSlot: null,
-      note: { status: "unasked" },
-      contactId: null,
-      serviceAcceptance: {
-        status: "accepted",
-        service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
-      },
-      ...overrides,
-    });
-
-  const availabilityClinicState = (overrides: Partial<ClinicState> = {}): ClinicState =>
-    clinicState({
-      bookingDraft: acceptedCreateDraft(),
-      ...overrides,
-    });
-
   it("checkpoints a normalized mutation command before the tools node", async () => {
     const commandPrepare = createAgentCommandPrepareNode();
     const draft = {
@@ -1224,5 +1171,3 @@ describe("booking HITL and command_prepare integration", () => {
   });
 
 });
-
-

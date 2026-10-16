@@ -14,6 +14,7 @@ import {
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "../../service-resolution.js";
+import type { PendingInteraction } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
 import {
@@ -28,12 +29,20 @@ export type PrepareFaqOptions = {
   loadServices?: () => Promise<ServicesContext | null>;
 };
 
+/** True when prepare opened or narrowed FAQ catalog chips / service_confirm. */
+const faqUiProduced = (pendingInteraction: PendingInteraction | null | undefined): boolean =>
+  pendingInteraction?.kind === "service_confirm"
+  || (
+    pendingInteraction?.kind === "service_candidate"
+    && pendingInteraction.owner === "faq"
+  );
+
 /** FAQ prepare: catalog chips, rematch, browse shortcut, named-procedure entry. */
 export const prepareFaqTurn = async (
   state: ClinicState,
   options?: PrepareFaqOptions,
 ): Promise<ClinicStateUpdate> => {
-  const update: ClinicStateUpdate = {};
+  const update: ClinicStateUpdate = { faqSkipLlm: false };
   const interaction = state.pendingInteraction;
   const patientText = lastPatientText(state).trim();
   let handledCatalogChoice = false;
@@ -66,6 +75,9 @@ export const prepareFaqTurn = async (
           );
           update.bookingDraft = session.bookingDraft;
           update.pendingInteraction = session.pendingInteraction;
+          if (faqUiProduced(session.pendingInteraction)) {
+            update.faqSkipLlm = true;
+          }
         }
       } else {
         const selectedLabel = choice != null
@@ -96,6 +108,9 @@ export const prepareFaqTurn = async (
           },
         );
         update.pendingInteraction = session.pendingInteraction;
+        if (faqUiProduced(session.pendingInteraction)) {
+          update.faqSkipLlm = true;
+        }
       }
     } else if (patientText.length > 0) {
       // Unmatched prose: rematch the full catalog (same helper as idle
@@ -131,6 +146,9 @@ export const prepareFaqTurn = async (
           handledCatalogChoice = true;
           update.bookingDraft = rematchSession.bookingDraft;
           update.pendingInteraction = rematchSession.pendingInteraction;
+          if (faqUiProduced(rematchSession.pendingInteraction)) {
+            update.faqSkipLlm = true;
+          }
         }
       }
     }
@@ -179,6 +197,9 @@ export const prepareFaqTurn = async (
         update.bookingDraft = session.bookingDraft;
         update.pendingInteraction = session.pendingInteraction;
         handledCatalogChoice = true;
+        if (faqUiProduced(session.pendingInteraction)) {
+          update.faqSkipLlm = true;
+        }
       }
     }
   }
@@ -228,6 +249,9 @@ export const prepareFaqTurn = async (
         },
       );
       update.pendingInteraction = session.pendingInteraction;
+      if (faqUiProduced(session.pendingInteraction)) {
+        update.faqSkipLlm = true;
+      }
     }
   }
   // Named-procedure book (supervisor intent): open catalog without the FAQ LLM.
@@ -265,6 +289,9 @@ export const prepareFaqTurn = async (
     if (namedSession?.pendingInteraction != null) {
       update.bookingDraft = namedSession.bookingDraft;
       update.pendingInteraction = namedSession.pendingInteraction;
+      if (faqUiProduced(namedSession.pendingInteraction)) {
+        update.faqSkipLlm = true;
+      }
     }
   }
   return update;

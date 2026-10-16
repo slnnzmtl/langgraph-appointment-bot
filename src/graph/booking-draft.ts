@@ -6,13 +6,6 @@ import type { SelectedBookingSlot } from "./types.js";
 
 export const BOOKING_SCHEMA_VERSION = 1;
 
-export type {
-  BookingCheckpointLegacyState,
-  BookingCheckpointMigrationTelemetry,
-  BookingCheckpointUpgradeResult,
-} from "./booking-checkpoint-upgrade.js";
-export { upgradeBookingDraftCheckpoint } from "./booking-checkpoint-upgrade.js";
-
 export type BookingContactField = "phoneNumber" | "firstName" | "lastName";
 
 /**

@@ -24,8 +24,6 @@ import {
   createAgentToolsNode,
   availabilityOfferFromToolTurn,
   formatAvailabilityDateOffer,
-  matchAvailabilityDay,
-  matchAvailabilitySlot,
   resolveAvailabilityOffer,
   routeAfterAgentLlm,
 } from "../agent-loop/index.js";
@@ -42,14 +40,11 @@ import {
   SERVICE_OR_NOTE_SWITCH_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
-import type { ClinicState } from "../state.js";
 import {
   availabilityMatchesBooking,
   createEmptyBookingDraft,
   reduceBookingDraft,
 } from "../booking-draft.js";
-import type { BookingDraft } from "../booking-draft.js";
-import { type ClinicAgentDefinition } from "../types.js";
 
 import {
   agentMessagesOf,
@@ -61,67 +56,20 @@ import {
   runtimeToolAi,
   unwrapCommandUpdate,
 } from "./agent-loop-fixtures.js";
+import {
+  acceptedCreateDraft,
+  availabilityClinicState,
+  bookingIntegrationAgent as agent,
+  bookingIntegrationSnapshot as snapshot,
+} from "./agent-loop-booking-integration-harness.js";
 
 
 /**
  * Legacy integration scenarios. Obsolete skipped cases removed in DDD-267
  * (planner-owned mutations, tools-protocol stamp gate, availability cache paging).
+ * Pure matchAvailabilitySlot/Day cases live in agent-loop-availability.test.ts.
  */
 describe("booking schedule and note step integration", () => {
-  const agent: ClinicAgentDefinition = {
-    id: "booking",
-    name: "Booking",
-    description: "Books appointments",
-    systemPrompt: "book",
-    maxSteps: 8,
-  };
-
-  const snapshot: AvailabilityContext = {
-    days: [
-      {
-        date: "2026-09-10",
-        dayLabel: "10 вересня (четвер)",
-        slots: [
-          {
-            id: "a",
-            label: "14:00",
-            dateStart: "2026-09-10T14:00:00",
-            dateEnd: "2026-09-10T14:30:00",
-          },
-          {
-            id: "b",
-            label: "15:00",
-            dateStart: "2026-09-10T15:00:00",
-            dateEnd: "2026-09-10T15:30:00",
-          },
-        ],
-      },
-    ],
-    stepMinutes: 30,
-    startIntervalMinutes: 30,
-  };
-
-  /** Availability coerce/finalize tests need an accepted create service (or reschedule target). */
-  const acceptedCreateDraft = (overrides: Partial<BookingDraft> = {}): BookingDraft =>
-    canonicalBookingDraft({
-      phase: "date",
-      selectedDate: null,
-      selectedSlot: null,
-      note: { status: "unasked" },
-      contactId: null,
-      serviceAcceptance: {
-        status: "accepted",
-        service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
-      },
-      ...overrides,
-    });
-
-  const availabilityClinicState = (overrides: Partial<ClinicState> = {}): ClinicState =>
-    clinicState({
-      bookingDraft: acceptedCreateDraft(),
-      ...overrides,
-    });
-
   const bookingLlmReturning = (content: string) => {
     const invoke = vi.fn(async () => new AIMessage(content));
     const slotsTool = tool(
@@ -139,57 +87,6 @@ describe("booking schedule and note step integration", () => {
       formatSystemMetadata: () => "DYN",
     });
   };
-
-  it("matches clock-time picks from the availability snapshot", async () => {
-    expect(matchAvailabilitySlot("14:00", snapshot)?.dateStart).toBe("2026-09-10T14:00:00");
-    expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
-    expect(matchAvailabilitySlot(OTHER_DATE_LABEL, snapshot)).toBeNull();
-    expect(matchAvailabilitySlot("Інша", snapshot)).toBeNull();
-  });
-
-  it("matches a unique bare day only inside the trusted availability snapshot", async () => {
-    const days: AvailabilityContext["days"] = [
-      { ...snapshot.days[0]!, date: "2026-10-27", dayLabel: "27 жовтня (вівторок)" },
-      { ...snapshot.days[0]!, date: "2026-10-28", dayLabel: "28 жовтня (середа)" },
-    ];
-    expect(matchAvailabilityDay("27", days)?.date).toBe("2026-10-27");
-    expect(matchAvailabilityDay("29", days)).toBeNull();
-    expect(matchAvailabilityDay("27", [
-      days[0]!,
-      { ...days[0]!, date: "2026-11-27", dayLabel: "27 листопада (п'ятниця)" },
-    ])).toBeNull();
-  });
-
-  it("never resolves a repeated clock time from the wrong day", async () => {
-    const multiDaySnapshot: AvailabilityContext = {
-      days: [
-        {
-          date: "2026-10-13",
-          dayLabel: "13 жовтня (вівторок)",
-          slots: [{
-            id: "old",
-            label: "11:30",
-            dateStart: "2026-10-13T11:30:00",
-            dateEnd: "2026-10-13T12:00:00",
-          }],
-        },
-        {
-          date: "2026-10-17",
-          dayLabel: "17 жовтня (субота)",
-          slots: [{
-            id: "chosen",
-            label: "11:30",
-            dateStart: "2026-10-17T11:30:00",
-            dateEnd: "2026-10-17T12:00:00",
-          }],
-        },
-      ],
-      stepMinutes: 30,
-    };
-    expect(matchAvailabilitySlot("11:30", multiDaySnapshot)).toBeNull();
-    expect(matchAvailabilitySlot("11:30", multiDaySnapshot, "2026-10-17")?.dateStart)
-      .toBe("2026-10-17T11:30:00");
-  });
 
   it("treats a bare hour as TIME even when another offered date has that day number", async () => {
     const availability: AvailabilityContext = {
@@ -1700,5 +1597,3 @@ describe("booking schedule and note step integration", () => {
     expect(advanced.bookingDraft?.selectedSlot?.label).toBe("14:00");
   });
 });
-
-

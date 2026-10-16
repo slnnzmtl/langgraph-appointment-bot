@@ -131,6 +131,15 @@ export const createClinicStateAnnotation = ({
       default: () => false,
     }),
     /**
+     * One-turn FAQ prepare evidence: true when this prepare produced catalog chips
+     * or a service_confirm card. Cleared next prepare. Lets the router skip the FAQ
+     * LLM without inferring a new offer from the current utterance.
+     */
+    faqSkipLlm: Annotation<boolean>({
+      reducer: (_left, right) => right,
+      default: () => false,
+    }),
+    /**
      * One-turn notice after a mid-booking service change. Prefixed onto the next
      * code-owned DATE card, then cleared. Missing on old checkpoints reads as null.
      */

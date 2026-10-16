@@ -7,6 +7,7 @@ import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import { BOOKING_RUNTIME_TOOL_NAMES } from "../../tools/index.js";
 import {
   bookingOutcomeNeedsPrepare,
+  createCommandFromBookingDraft,
   isPendingChatConfirmationReplay,
   resolveBookingCommand,
   shouldRearmCancelAfterChatOther,
@@ -52,6 +53,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   bookingDraft: null,
   pendingInteraction: null,
   noteOrchQueued: false,
+  faqSkipLlm: false,
   serviceChangeNotice: null,
   bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,
@@ -1000,6 +1002,31 @@ describe("DDD-255 deterministic booking transitions", () => {
       kind: "execute",
       toolCall: { name: "present_availability_slots" },
     });
+  });
+
+  it("refuses createCommandFromBookingDraft for a non create/replace mode", () => {
+    const garbageMode = {
+      ...readyCreateDraft(),
+      mode: "garbage",
+      replacement: {
+        meeting: { id: "m-old" },
+        status: "create_pending",
+        originalCommand: {
+          action: "create" as const,
+          payload: {
+            contactId: "c-1",
+            serviceId: CONSULTATION_SERVICE_ID,
+            dateStart: slot.dateStart,
+            dateEnd: slot.dateEnd,
+          },
+        },
+      },
+    } as BookingDraft;
+
+    expect(createCommandFromBookingDraft(clinicState({
+      contactContext: ownedContact,
+      bookingDraft: garbageMode,
+    }))).toBeNull();
   });
 });
 

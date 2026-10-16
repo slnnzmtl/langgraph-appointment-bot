@@ -1,8 +1,7 @@
 import { FAQ_AGENT_ID } from "../types.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
-import { labelIdFor, normalizeReplyLabel } from "../../shared/message-content.js";
+import { labelIdFor } from "../../shared/message-content.js";
 import type { ClinicState } from "../state.js";
-import { utteranceHasCatalogCrmEvidence } from "../booking-entry-policy.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
 import {
@@ -88,9 +87,12 @@ export const routeAfterAgentPrepare = (
   if (noteOrchestratorName && state.noteOrchQueued) {
     return noteOrchestratorName;
   }
+  const isFaqPrepare = agentId === FAQ_AGENT_ID;
   // Graph-owned REPLACE: skip the LLM and render visit_select / replacement.
+  // Booking agent only — FAQ prepare must not project booking replacement policy.
   if (
-    finalizeName
+    !isFaqPrepare
+    && finalizeName
     && state.bookingDraft?.replacement?.status === "offered"
     && !(
       state.pendingInteraction?.kind === "visit_select"
@@ -99,9 +101,8 @@ export const routeAfterAgentPrepare = (
   ) {
     return finalizeName;
   }
-  // FAQ chips opened/narrowed by a chip tap, named_procedure, or mid-catalog
-  // rematch in prepare — skip LLM. Unmatched prose that did not rematch reaches
-  // the FAQ model (price / compare / keep_catalog).
+  // FAQ chips: exact chip taps skip LLM. Newly produced chips/confirm from prepare
+  // set faqSkipLlm — do not infer from utterance equality or CRM stems.
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_candidate"
@@ -112,25 +113,12 @@ export const routeAfterAgentPrepare = (
       state.pendingInteraction,
       catalogText,
     );
-    // Catalog chips skip the FAQ LLM. Bare «ні» must not wipe drill-down.
-    if (chipMatch.kind === "choice") {
-      return finalizeName;
-    }
-    // Named-procedure entry or rematch just opened these chips from this line.
-    if (
-      state.supervisorIntent === "named_procedure"
-      || (
-        catalogText.length > 0
-        && normalizeReplyLabel(state.pendingInteraction.utterance)
-          === normalizeReplyLabel(catalogText)
-      )
-    ) {
+    if (chipMatch.kind === "choice" || state.faqSkipLlm) {
       return finalizeName;
     }
   }
   // Graph-owned service_confirm from prepare. Do not skip when accepting («Так»).
-  // FAQ: skip LLM only when this turn opened the card (named_procedure or
-  // patient line has CRM stems for the offered service). Price / compare on an
+  // FAQ: skip LLM only when prepare set faqSkipLlm. Price / compare on an
   // already-open confirm reach faq__llm. Booking: mainBook / owned-idle.
   if (
     finalizeName
@@ -144,26 +132,8 @@ export const routeAfterAgentPrepare = (
       bookText,
     );
     if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
-      if (agentId === FAQ_AGENT_ID) {
-        const offered = state.pendingInteraction.service;
-        const offeredName = offered.name ?? "";
-        const offeredServices =
-          offeredName.length > 0
-            ? [{
-                id: offered.id,
-                name: offeredName,
-                ...(offered.durationMinutes != null
-                  ? { duration: offered.durationMinutes }
-                  : {}),
-              }]
-            : [];
-        const openedThisTurn =
-          state.supervisorIntent === "named_procedure"
-          || utteranceHasCatalogCrmEvidence({
-            text: bookText,
-            services: offeredServices,
-          });
-        if (openedThisTurn) {
+      if (isFaqPrepare) {
+        if (state.faqSkipLlm) {
           return finalizeName;
         }
       } else if (
@@ -178,17 +148,10 @@ export const routeAfterAgentPrepare = (
     }
   }
 
-  const outcome = resolveBookingCommand(state);
-  // FAQ price/compare on an already-open confirm must reach the FAQ LLM —
-  // do not project pending_interaction finalize there (FAQ-owned carve-out).
-  if (
-    !(
-      agentId === FAQ_AGENT_ID
-      && outcome.kind === "finalize"
-      && outcome.reason === "pending_interaction"
-      && state.pendingInteraction?.kind === "service_confirm"
-    )
-  ) {
+  // Booking planner projection — booking agent only. FAQ prepare keeps catalog
+  // handling above and otherwise continues to faq__llm (e.g. contact_field detour).
+  if (!isFaqPrepare) {
+    const outcome = resolveBookingCommand(state);
     const projected = routeFromBookingOutcome(outcome, {
       llmName,
       ...(commandPrepareName != null ? { commandPrepareName } : {}),
@@ -197,8 +160,6 @@ export const routeAfterAgentPrepare = (
     if (projected != null) {
       return projected;
     }
-  } else if (commandPrepareName && bookingOutcomeNeedsPrepare(outcome)) {
-    return commandPrepareName;
   }
 
   return llmName;

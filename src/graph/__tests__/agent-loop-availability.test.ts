@@ -23,6 +23,7 @@ import {
   formatAvailabilityHeading,
   formatAvailabilityTimeOffer,
   matchAvailabilityDay,
+  matchAvailabilitySlot,
   meetingMutationClearsAvailability,
   resolveAvailabilityOffer,
 } from "../agent-loop/index.js";
@@ -483,6 +484,78 @@ describe("availability offer helpers", () => {
     expect(matchAvailabilityDay("Інша", days)).toBeNull();
     expect(matchAvailabilityDay(OTHER_DATE_LABEL_EN, days)).toBeNull();
     expect(matchAvailabilityDay("14:00", days)).toBeNull();
+  });
+
+  it("matches clock-time picks from the availability snapshot", () => {
+    const snapshot: AvailabilityContext = {
+      days: [{
+        date: "2026-09-10",
+        dayLabel: "10 вересня (четвер)",
+        slots: [
+          {
+            id: "a",
+            label: "14:00",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+          {
+            id: "b",
+            label: "15:00",
+            dateStart: "2026-09-10T15:00:00",
+            dateEnd: "2026-09-10T15:30:00",
+          },
+        ],
+      }],
+      stepMinutes: 30,
+    };
+    expect(matchAvailabilitySlot("14:00", snapshot)?.dateStart).toBe("2026-09-10T14:00:00");
+    expect(matchAvailabilitySlot("14", snapshot)?.label).toBe("14:00");
+    expect(matchAvailabilitySlot(OTHER_DATE_LABEL, snapshot)).toBeNull();
+    expect(matchAvailabilitySlot("Інша", snapshot)).toBeNull();
+  });
+
+  it("matches a unique bare day only inside the trusted availability snapshot", () => {
+    const bareDays: AvailabilityContext["days"] = [
+      { ...days[0]!, date: "2026-10-27", dayLabel: "27 жовтня (вівторок)" },
+      { ...days[0]!, date: "2026-10-28", dayLabel: "28 жовтня (середа)" },
+    ];
+    expect(matchAvailabilityDay("27", bareDays)?.date).toBe("2026-10-27");
+    expect(matchAvailabilityDay("29", bareDays)).toBeNull();
+    expect(matchAvailabilityDay("27", [
+      bareDays[0]!,
+      { ...bareDays[0]!, date: "2026-11-27", dayLabel: "27 листопада (п'ятниця)" },
+    ])).toBeNull();
+  });
+
+  it("never resolves a repeated clock time from the wrong day", () => {
+    const multiDaySnapshot: AvailabilityContext = {
+      days: [
+        {
+          date: "2026-10-13",
+          dayLabel: "13 жовтня (вівторок)",
+          slots: [{
+            id: "old",
+            label: "11:30",
+            dateStart: "2026-10-13T11:30:00",
+            dateEnd: "2026-10-13T12:00:00",
+          }],
+        },
+        {
+          date: "2026-10-17",
+          dayLabel: "17 жовтня (субота)",
+          slots: [{
+            id: "chosen",
+            label: "11:30",
+            dateStart: "2026-10-17T11:30:00",
+            dateEnd: "2026-10-17T12:00:00",
+          }],
+        },
+      ],
+      stepMinutes: 30,
+    };
+    expect(matchAvailabilitySlot("11:30", multiDaySnapshot)).toBeNull();
+    expect(matchAvailabilitySlot("11:30", multiDaySnapshot, "2026-10-17")?.dateStart)
+      .toBe("2026-10-17T11:30:00");
   });
 
   it("resolveAvailabilityOffer prefers day pick TIME over this-turn multi-day DATE", async () => {

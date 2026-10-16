@@ -56,6 +56,7 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   bookingSchemaVersion: 1,
   pendingInteraction: null,
   noteOrchQueued: false,
+  faqSkipLlm: false,
   serviceChangeNotice: null,
   pendingCancellationPurpose: null,
   ...overrides,

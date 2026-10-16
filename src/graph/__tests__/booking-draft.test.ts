@@ -706,7 +706,7 @@ describe("BookingDraft reducer", () => {
     expect(upgraded.telemetry?.outcome).toBe("fail_closed");
   });
 
-  it("keeps a trimmed service only when the slot interval is inverted", () => {
+  it("fails closed when the slot interval is inverted", () => {
     const upgraded = upgradeBookingCheckpoint({
       bookingSchemaVersion: 0,
       bookingDraft: {
@@ -727,14 +727,7 @@ describe("BookingDraft reducer", () => {
       },
     });
 
-    expect(upgraded.update.bookingDraft).toMatchObject({
-      serviceAcceptance: { status: "accepted", service: { id: "svc-1" } },
-      phase: "service",
-      selectedDate: null,
-      selectedSlot: null,
-      note: { status: "unasked" },
-      pendingCommand: null,
-    });
+    expect(upgraded.update.bookingDraft).toBeNull();
     expect(upgraded.telemetry?.outcome).toBe("fail_closed");
   });
 
@@ -845,7 +838,7 @@ describe("BookingDraft reducer", () => {
     });
 
     expect(upgraded.telemetry?.outcome).toBe("fail_closed");
-    expect(upgraded.update.bookingDraft?.pendingCommand).toBeNull();
+    expect(upgraded.update.bookingDraft).toBeNull();
   });
 
   it("fails closed on a blank reschedule target id", () => {
@@ -857,6 +850,93 @@ describe("BookingDraft reducer", () => {
         phase: "date",
         rescheduleTarget: { id: "  ", name: "Консультація" },
       },
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed on unknown booking mode", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "garbage",
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+      } as never,
+    });
+
+    expect(upgraded.update.bookingSchemaVersion).toBe(BOOKING_SCHEMA_VERSION);
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed on unknown service source", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "bogus" },
+        },
+      } as never,
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed on unknown note status", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        note: { status: "weird" },
+      } as never,
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed on unknown replacement status", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        replacement: {
+          meeting: { id: "m-1" },
+          status: "bogus",
+        },
+      } as never,
+    });
+
+    expect(upgraded.update.bookingDraft).toBeNull();
+    expect(upgraded.telemetry?.outcome).toBe("fail_closed");
+  });
+
+  it("fails closed on a slot missing label", () => {
+    const upgraded = upgradeBookingCheckpoint({
+      bookingSchemaVersion: 0,
+      bookingDraft: {
+        ...createEmptyBookingDraft(),
+        serviceAcceptance: {
+          status: "accepted",
+          service: { id: "svc-1", source: "catalog" },
+        },
+        selectedDate: "2026-10-17",
+        selectedSlot: {
+          dateStart: "2026-10-17T11:00:00",
+          dateEnd: "2026-10-17T11:30:00",
+        },
+        note: { status: "skipped" },
+        contactId: "c-1",
+      } as never,
     });
 
     expect(upgraded.update.bookingDraft).toBeNull();
