@@ -224,6 +224,7 @@ describe("command_prepare runtime authority", () => {
       },
     });
     expect(createUpdate.bookingDraft?.pendingCommand?.action).toBe("create");
+    expect(createUpdate.bookingDraft?.pendingCommand).not.toHaveProperty("idempotencyKey");
     expect(createUpdate.pendingInteraction).toMatchObject({
       kind: "mutation_confirm",
       action: "create",
@@ -389,6 +390,43 @@ describe("command_prepare runtime authority", () => {
         direction: "nearest",
         forceRefresh: true,
         durationMinutes: 30,
+      },
+    });
+  });
+
+  it("forces nearest availability for direct reschedule instead of a day prompt", async () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "m-1",
+        name: "Консультація",
+        dateStart: "2026-08-17 11:00:00",
+        dateEnd: "2026-08-17 11:30:00",
+      },
+    });
+    const state = clinicState({
+      bookingDraft: draft,
+      bookingContext: {
+        meetings: [{
+          id: "m-1",
+          name: "Консультація",
+          dateStart: "2026-08-17 11:00:00",
+          dateEnd: "2026-08-17 11:30:00",
+        }],
+        dateFrom: "2026-08-11",
+      },
+      availabilityContext: null,
+      agentMessages: [],
+    });
+    expect(bookingOutcomeNeedsPrepare(resolveBookingCommand(state))).toBe(true);
+    const update = await commandPrepare(state);
+    expect(lastToolCall(update)).toMatchObject({
+      name: "present_availability_slots",
+      args: {
+        direction: "nearest",
+        durationMinutes: 30,
+        excludeMeetingIds: ["m-1"],
+        forceRefresh: true,
       },
     });
   });

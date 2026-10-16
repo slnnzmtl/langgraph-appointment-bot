@@ -228,6 +228,13 @@ const hasPendingCommandViolation = (draft: BookingDraft): boolean => {
   if (draft.pendingCommand == null && draft.phase !== "confirming") {
     return false;
   }
+  // Offered REPLACE waits on visit_select, not a mutation pendingCommand.
+  if (
+    draft.pendingCommand == null
+    && draft.replacement?.status === "offered"
+  ) {
+    return false;
+  }
   const command = draft.pendingCommand;
   if (command == null || !isPlainObject(command.payload)) {
     return true;
@@ -311,15 +318,15 @@ const constructBookingDraft = (fields: {
   version: fields.version,
   mode: fields.mode,
   phase: fields.phase,
-  serviceAcceptance: fields.serviceAcceptance,
-  selectedDate: fields.selectedDate,
-  selectedSlot: fields.selectedSlot,
-  requestedTime: fields.requestedTime,
+  serviceAcceptance: fields.serviceAcceptance ?? null,
+  selectedDate: fields.selectedDate ?? null,
+  selectedSlot: fields.selectedSlot ?? null,
+  requestedTime: fields.requestedTime ?? null,
   note: fields.note,
-  contactId: fields.contactId,
+  contactId: fields.contactId ?? null,
   contactDetails: copyContactDetails(fields.contactDetails),
   phoneLookupEvidence: fields.phoneLookupEvidence ?? null,
-  pendingCommand: fields.pendingCommand,
+  pendingCommand: fields.pendingCommand ?? null,
   rescheduleTarget: fields.rescheduleTarget ?? null,
   replacement: fields.replacement ?? null,
 });
@@ -409,7 +416,10 @@ const isReadableLegacyDraft = (draft: unknown): draft is BookingDraft => {
       return false;
     }
   }
-  if (draft.selectedSlot != null && !isValidSlot(draft.selectedSlot)) {
+  if (draft.selectedDate !== undefined && !isValidSelectedDate(draft.selectedDate)) {
+    return false;
+  }
+  if (draft.selectedSlot !== undefined && !isValidSlot(draft.selectedSlot)) {
     return false;
   }
   if (draft.requestedTime != null) {
@@ -446,14 +456,10 @@ const isReadableLegacyDraft = (draft: unknown): draft is BookingDraft => {
     if (!isValidMeeting(replacement.meeting)) {
       return false;
     }
-    if (replacement.status === "create_pending") {
-      if (
-        replacement.originalCommand != null
-        && !isValidPendingCommand(replacement.originalCommand)
-      ) {
-        return false;
-      }
-    } else if (replacement.originalCommand != null) {
+    if (
+      replacement.originalCommand != null
+      && !isValidPendingCommand(replacement.originalCommand)
+    ) {
       return false;
     }
   }
@@ -646,8 +652,8 @@ export const upgradeBookingDraftCheckpoint = (
         mode: draft.mode,
         phase: "service",
         serviceAcceptance: null,
-        selectedDate: isValidSelectedDate(draft.selectedDate) ? draft.selectedDate : null,
-        selectedSlot: isValidSlot(draft.selectedSlot) ? draft.selectedSlot : null,
+        selectedDate: isValidSelectedDate(draft.selectedDate) ? draft.selectedDate ?? null : null,
+        selectedSlot: isValidSlot(draft.selectedSlot) ? draft.selectedSlot ?? null : null,
         requestedTime: draft.requestedTime ?? null,
         note: draft.note,
         contactId: trimmedNonblank(draft.contactId),
@@ -691,7 +697,7 @@ export const upgradeBookingDraftCheckpoint = (
       meeting: copyMeeting(draft.replacement.meeting),
       status,
       ...(
-        status === "create_pending" && draft.replacement.originalCommand != null
+        draft.replacement.originalCommand != null
           ? { originalCommand: copyPendingCommand(draft.replacement.originalCommand) }
           : {}
       ),
@@ -708,8 +714,8 @@ export const upgradeBookingDraftCheckpoint = (
     serviceAcceptance: draft.serviceAcceptance != null && serviceId != null
       ? copyServiceAcceptance(draft.serviceAcceptance, serviceId)
       : null,
-    selectedDate: draft.selectedDate,
-    selectedSlot: draft.selectedSlot,
+    selectedDate: draft.selectedDate ?? null,
+    selectedSlot: draft.selectedSlot ?? null,
     requestedTime: draft.requestedTime ?? null,
     note: draft.note,
     contactId: trimmedNonblank(draft.contactId),

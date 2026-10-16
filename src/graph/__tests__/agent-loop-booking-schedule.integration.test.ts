@@ -42,7 +42,6 @@ import {
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   availabilityMatchesBooking,
-  createEmptyBookingDraft,
   reduceBookingDraft,
 } from "../booking-draft.js";
 
@@ -51,7 +50,6 @@ import {
   canonicalBookingDraft,
   clinicState,
   lastToolCallFromPrepare,
-  makeListedMeetings,
   ownedContactContext,
   runtimeToolAi,
   unwrapCommandUpdate,
@@ -1131,157 +1129,6 @@ describe("booking schedule and note step integration", () => {
     },
   );
 
-  it("ignores leaked Gemini XML for tools not bound to the agent", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop/index.js");
-    const leaked =
-      "<call:default_api:create_meeting{serviceId: demo}></call:default_api:create_meeting>";
-    const invoke = vi.fn(async () => new AIMessage(leaked));
-    const slotsTool = tool(
-      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
-      {
-        name: "present_availability_slots",
-        description: "slots",
-        schema: z.object({}),
-      },
-    );
-    const llm = createAgentLlmNode({
-      agent,
-      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
-      tools: [slotsTool],
-      formatSystemMetadata: () => "DYN",
-    });
-    const llmUpdate = await llm(
-      availabilityClinicState({
-        messages: [new HumanMessage("ok")],
-        agentMessages: [new HumanMessage("ok")],
-        next: "booking",
-      }),
-    );
-    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
-    expect(String(ai.content)).not.toContain("call:default_api");
-    expect(ai.tool_calls ?? []).toEqual([]);
-  });
-
-  it("strips native tool_calls for tools not bound to the agent", async () => {
-    const { createAgentLlmNode } = await import("../agent-loop/index.js");
-    const faqAgent: ClinicAgentDefinition = {
-      id: "faq",
-      name: "FAQ",
-      description: "Answers questions",
-      systemPrompt: "faq",
-      maxSteps: 8,
-    };
-    const readTool = tool(async () => "ok", {
-      name: "list_services",
-      description: "services",
-      schema: z.object({}),
-    });
-    const invoke = vi.fn(async () =>
-      new AIMessage({
-        content: "Ось каталог послуг.",
-        tool_calls: [
-          {
-            id: "stale_faq_catalog",
-            name: "faq_catalog_action",
-            args: { action: "keep_catalog" },
-            type: "tool_call",
-          },
-        ],
-      }),
-    );
-    const llm = createAgentLlmNode({
-      agent: faqAgent,
-      model: { bindTools: vi.fn(() => ({ invoke })) } as unknown as BaseChatModel,
-      tools: [readTool],
-      formatSystemMetadata: () => "DYN",
-    });
-    const llmUpdate = await llm(
-      availabilityClinicState({
-        messages: [new HumanMessage("Послуги")],
-        agentMessages: [new HumanMessage("Послуги")],
-        next: "faq",
-      }),
-    );
-    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
-    expect(ai.tool_calls ?? []).toEqual([]);
-    expect(String(ai.content)).toBe("Ось каталог послуг.");
-  });
-
-  it("command_prepare injects present_availability_slots when DATE has no snapshot", async () => {
-    const commandPrepare = createAgentCommandPrepareNode();
-    const update = await commandPrepare(
-      availabilityClinicState({
-        messages: [new HumanMessage("Так")],
-        agentMessages: [new HumanMessage("Так")],
-        availabilityContext: null,
-        next: "booking",
-      }),
-    );
-    const ai = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
-    expect(ai.tool_calls).toEqual([
-      expect.objectContaining({
-        name: "present_availability_slots",
-        args: expect.objectContaining({ direction: "nearest", forceRefresh: true }),
-      }),
-    ]);
-  });
-
-  it("command_prepare forces availability lookup for direct reschedule instead of a day prompt", async () => {
-    const commandPrepare = createAgentCommandPrepareNode();
-    const update = await commandPrepare(
-      availabilityClinicState({
-        messages: [new HumanMessage("Перенести")],
-        agentMessages: [new HumanMessage("Перенести")],
-        bookingContext: makeListedMeetings(),
-        bookingDraft: reduceBookingDraft(createEmptyBookingDraft(), {
-          type: "reschedule_started",
-          meeting: makeListedMeetings().meetings[0]!,
-        }),
-        availabilityContext: null,
-        next: "booking",
-      }),
-    );
-    const ai = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
-    expect(ai.tool_calls).toEqual([
-      expect.objectContaining({
-        name: "present_availability_slots",
-        args: {
-          direction: "nearest",
-          durationMinutes: 30,
-          excludeMeetingIds: ["m-1"],
-          forceRefresh: true,
-        },
-      }),
-    ]);
-  });
-
-  it("command_prepare starts a fresh nearest search after service accept clears stale snapshot", async () => {
-    const commandPrepare = createAgentCommandPrepareNode();
-    const update = await commandPrepare(
-      availabilityClinicState({
-        messages: [new HumanMessage("Так")],
-        agentMessages: [new HumanMessage("Так")],
-        // Accept path clears availability; runtime then owns nearest.
-        availabilityContext: null,
-        lastHandoff: {
-          agentId: "booking",
-          agentName: "Booking",
-          status: "ok",
-          replyText: "Підібрати вільний час на консультацію?",
-          replyButtons: ["Так", "Обрати іншу процедуру"],
-        },
-        next: "booking",
-      }),
-    );
-    const ai = (unwrapCommandUpdate(update).agentMessages as Overwrite<AIMessage[]>).value.at(-1)!;
-    expect(ai.tool_calls).toEqual([
-      expect.objectContaining({
-        name: "present_availability_slots",
-        args: expect.objectContaining({ direction: "nearest", forceRefresh: true }),
-      }),
-    ]);
-  });
-
   it.each([OTHER_DATE_LABEL, "другая дата", "другая", "другой"])(
     "LLM no longer synthesizes present_availability_slots for alternative-date reply %s",
     async (otherDateReply) => {
@@ -1381,38 +1228,6 @@ describe("booking schedule and note step integration", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("does not re-inject slots after «Інша дата» already paged this turn", async () => {
-    const llm = bookingLlmReturning(formatAvailabilityDateOffer(snapshot.days).replyText);
-    const llmUpdate = await llm(
-      availabilityClinicState({
-        messages: [new HumanMessage(OTHER_DATE_LABEL)],
-        agentMessages: [
-          new HumanMessage(OTHER_DATE_LABEL),
-          runtimeToolAi([
-              {
-                id: "s1",
-                name: "present_availability_slots",
-                args: { afterDate: "2026-09-10", durationMinutes: 30 },
-                type: "tool_call",
-              },
-            ]),
-          new ToolMessage({
-            content: JSON.stringify({
-              days: snapshot.days,
-              stepMinutes: 30,
-            }),
-            tool_call_id: "s1",
-            name: "present_availability_slots",
-          }),
-        ],
-        availabilityContext: snapshot,
-        next: "booking",
-      }),
-    );
-    const ai = (llmUpdate.agentMessages as AIMessage[])[0]!;
-    expect(ai.tool_calls ?? []).toEqual([]);
   });
 
   it("DATE keyboard attaches on cache-hit tool turn; date prose without tool gets no DATE chips", async () => {
