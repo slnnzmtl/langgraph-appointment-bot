@@ -8,7 +8,7 @@ import {
 } from "../booking-session.js";
 
 import { resolveContactIdentity } from "../contact-command.js";
-import { lastPatientText } from "./protocol.js";
+import { lastPatientText } from "./protocol/index.js";
 
 export type BookingEntryTransition =
   | {

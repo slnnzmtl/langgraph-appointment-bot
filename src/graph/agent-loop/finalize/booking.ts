@@ -50,7 +50,7 @@ import {
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
   mutationCommittedThisTurn,
-} from "../protocol.js";
+} from "../protocol/index.js";
 import { defaultMenuHasVisit } from "../mutation-finalize.js";
 import {
   bookingDetailsInteraction,

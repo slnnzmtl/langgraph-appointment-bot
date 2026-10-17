@@ -660,15 +660,10 @@ describe("availability offer helpers", () => {
 
 describe("availability draft invariant", () => {
   it("does not coerce present_availability_slots without an accepted service", async () => {
-    const { coerceAvailabilityToolCalls } = await import("../agent-loop/tool-call-coercion.js");
+    const { sanitizeBoundModelToolCalls } = await import("../agent-loop/tool-call-coercion.js");
     const response = new AIMessage("Підберу найближчі дати.");
-    const coerced = coerceAvailabilityToolCalls(
+    const coerced = sanitizeBoundModelToolCalls(
       response,
-      clinicState({
-        messages: [new HumanMessage("Так")],
-        bookingDraft: null,
-      }),
-      "booking",
       new Set(["present_availability_slots"]),
     );
     expect(coerced.tool_calls ?? []).toEqual([]);

@@ -25,7 +25,7 @@ import {
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   phoneLookupFailedThisTurn,
   terminalContactWriteOutcome,
-} from "../protocol.js";
+} from "../protocol/index.js";
 import {
   emptyFinalizeReply,
   type FinalizeReply,

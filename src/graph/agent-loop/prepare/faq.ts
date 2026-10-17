@@ -21,7 +21,7 @@ import {
   ensureServicesContext,
   lastPatientText,
   toolRanThisTurn,
-} from "../protocol.js";
+} from "../protocol/index.js";
 
 export type PrepareFaqOptions = {
   partitionCandidates?: PartitionServiceCandidates;

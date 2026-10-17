@@ -17,7 +17,7 @@ import {
   bookingDateAnchors,
   lastPatientText,
   toolRanThisTurn,
-} from "./protocol.js";
+} from "./protocol/index.js";
 
 export type RuntimeAvailabilityPurpose =
   | "reschedule_nearest"

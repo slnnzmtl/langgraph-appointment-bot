@@ -14,7 +14,7 @@ import {
   meetingMutationClearsAvailability,
   MEETING_MUTATION_TOOLS,
   type MeetingMutationOutcome,
-} from "../protocol.js";
+} from "../protocol/index.js";
 
 export type MutationProjectionResult = {
   patch: ClinicStateUpdate;

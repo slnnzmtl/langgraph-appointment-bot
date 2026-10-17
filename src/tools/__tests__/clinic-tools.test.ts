@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { assertBoundAgentToolNames } from "../../graph/bound-tools.js";
 import {
   BOOKING_RUNTIME_TOOL_NAMES,
   createBookingTools,
@@ -46,5 +47,19 @@ describe("clinic-tools composition", () => {
       { name: "get_working_time" },
     ] as never).map((tool) => tool.name);
     expect(informational).toEqual(["list_services", "get_working_time"]);
+  });
+
+  it("assertBoundAgentToolNames accepts informational binds and rejects runtime leaks", () => {
+    const readTools = createReadTools({ callTool, assignedUserId: "user-1" });
+    expect(() => assertBoundAgentToolNames("booking", readTools)).not.toThrow();
+    expect(() => assertBoundAgentToolNames("faq", readTools)).not.toThrow();
+
+    const bookingTools = createBookingTools({ callTool, assignedUserId: "user-1" });
+    expect(() => assertBoundAgentToolNames("booking", bookingTools)).toThrow(
+      /non-informational tools/,
+    );
+    expect(() => assertBoundAgentToolNames("faq", bookingTools)).toThrow(
+      /runtime-owned tools/,
+    );
   });
 });

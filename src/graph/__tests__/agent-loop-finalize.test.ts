@@ -52,7 +52,7 @@ import type { BookingDraft } from "../booking-draft.js";
 import {
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   terminalContactWriteOutcome,
-} from "../agent-loop/protocol.js";
+} from "../agent-loop/protocol/index.js";
 import { type ClinicAgentDefinition } from "../types.js";
 
 import {
@@ -482,13 +482,14 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-        "booking__note_orchestrator",
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          noteOrchestratorName: "booking__note_orchestrator",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
 
     const finalize = createBookingFinalizeNode(agent);
@@ -528,13 +529,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
     const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
@@ -562,13 +561,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
     const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
@@ -701,13 +698,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
     const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_OCCUPIED_UK);
@@ -784,13 +779,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__llm");
   });
 

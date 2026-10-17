@@ -12,7 +12,7 @@ export {
   phoneLookupFailedThisTurn,
   crmWriteDirtiesPrefetch,
   meetingMutationClearsAvailability,
-} from "./protocol.js";
+} from "./protocol/index.js";
 
 export {
   bookingOutcomeRiskState,
@@ -68,10 +68,14 @@ export {
 } from "./tools.js";
 
 export {
+  type RouteAfterAgentToolsOptions,
   routeAfterAgentLlm,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
 } from "./routing.js";
+
+export { rewriteAiMessage } from "./rewrite-ai-message.js";
+export { sanitizeBoundModelToolCalls } from "./tool-call-coercion.js";
 
 export {
   commandPrepareNodeName,

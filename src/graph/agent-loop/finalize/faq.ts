@@ -23,7 +23,7 @@ import type {
   SelectServiceCandidates,
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { ensureServicesContext } from "../protocol.js";
+import { ensureServicesContext } from "../protocol/index.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,

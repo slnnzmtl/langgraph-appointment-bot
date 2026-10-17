@@ -7,7 +7,7 @@ import {
 import { reconcileRequestedTime } from "../../booking-schedule.js";
 import { reduceBookingSession } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { captureAvailabilityFromMessages } from "../protocol.js";
+import { captureAvailabilityFromMessages } from "../protocol/index.js";
 
 /** Capture / reconcile availability when mutation did not clear it. */
 export const projectAvailabilityEffects = (input: {

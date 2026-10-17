@@ -717,10 +717,11 @@ describe("runtime-owned cancellation outcomes", () => {
         bookingContext: makeListedMeetings(),
         agentMessages: cancellationMessages({ cancelled: true }),
       }),
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-    )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+        })).toBe("booking__mutation_finalize");
   });
 
   it("routes a declined replacement cancellation to runtime finalization", async () => {
@@ -730,10 +731,11 @@ describe("runtime-owned cancellation outcomes", () => {
         pendingCancellationPurpose: "replacement",
         agentMessages: cancellationMessages({ cancelled: true }),
       }),
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-    )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+        })).toBe("booking__mutation_finalize");
   });
 
   it("routes a typed reschedule decline directly to deterministic finalization", async () => {
@@ -768,11 +770,12 @@ describe("runtime-owned cancellation outcomes", () => {
 
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-    )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        })).toBe("booking__mutation_finalize");
 
     const declined = createAgentMutationFinalizeNode(agent)(state);
     expect(declined).not.toBeInstanceOf(Command);
@@ -854,11 +857,12 @@ describe("runtime-owned cancellation outcomes", () => {
 
       expect(routeAfterAgentTools(
         state,
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-      )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        })).toBe("booking__mutation_finalize");
 
       const finalized = createAgentMutationFinalizeNode(agent)(state);
       expect(finalized).toBeInstanceOf(Command);
@@ -908,10 +912,11 @@ describe("runtime-owned cancellation outcomes", () => {
 
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-    )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+        })).toBe("booking__mutation_finalize");
 
     const finalized = createAgentMutationFinalizeNode(agent)(state);
     expect(finalized).toBeInstanceOf(Command);
@@ -949,12 +954,13 @@ describe("runtime-owned cancellation outcomes", () => {
 
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      "booking__note_orch",
-    )).toBe("booking__llm");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          noteOrchestratorName: "booking__note_orch",
+        })).toBe("booking__llm");
   });
 
   it("still routes HITL other-reply to note orch while keep/switch is open", async () => {
@@ -992,12 +998,13 @@ describe("runtime-owned cancellation outcomes", () => {
 
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      "booking__note_orch",
-    )).toBe("booking__note_orch");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          noteOrchestratorName: "booking__note_orch",
+        })).toBe("booking__note_orch");
   });
 
   it("still sends declined HITL chat to mutation finalize, not the note orch", async () => {
@@ -1024,12 +1031,13 @@ describe("runtime-owned cancellation outcomes", () => {
 
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      "booking__note_orch",
-    )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          noteOrchestratorName: "booking__note_orch",
+        })).toBe("booking__mutation_finalize");
   });
 });
 

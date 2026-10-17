@@ -25,7 +25,7 @@ import {
   classifyMeetingMutationToolMessage,
   terminalMeetingMutationOutcome,
   type MeetingMutationOutcome,
-} from "./protocol.js";
+} from "./protocol/index.js";
 
 /** Meeting id from a committed cancel_meeting result or its tool_call args. */
 const cancelledMeetingIdFromTurn = (

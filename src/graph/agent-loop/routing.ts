@@ -15,7 +15,7 @@ import {
   phoneLookupFailedThisTurn,
   terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
-} from "./protocol.js";
+} from "./protocol/index.js";
 import { resolveContactIdentity } from "../contact-command.js";
 
 const routeNeedsCommandPrepare = (state: ClinicState): boolean =>
@@ -165,16 +165,30 @@ export const routeAfterAgentPrepare = (
   return llmName;
 };
 
+export type RouteAfterAgentToolsOptions = {
+  llmName: string;
+  toolsName: string;
+  mutationFinalizeName?: string;
+  commandPrepareName?: string;
+  noteOrchestratorName?: string;
+  finalizeName?: string;
+  faqPrepareName?: string;
+};
+
 export const routeAfterAgentTools = (
   state: ClinicState,
-  llmName: string,
-  toolsName: string,
-  mutationFinalizeName?: string,
-  commandPrepareName?: string,
-  noteOrchestratorName?: string,
-  finalizeName?: string,
-  faqPrepareName?: string,
+  options: RouteAfterAgentToolsOptions,
 ): string => {
+  const {
+    llmName,
+    toolsName,
+    mutationFinalizeName,
+    commandPrepareName,
+    noteOrchestratorName,
+    finalizeName,
+    faqPrepareName,
+  } = options;
+
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
   }

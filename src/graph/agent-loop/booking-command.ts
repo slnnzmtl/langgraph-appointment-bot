@@ -71,7 +71,7 @@ import {
   latestMeetingMutationError,
   latestContactIncompleteMissingFields,
   type ContactIncompleteField,
-} from "./protocol.js";
+} from "./protocol/index.js";
 import {
   authoritativeNoteStatus,
   noteStepBlocksCreate,

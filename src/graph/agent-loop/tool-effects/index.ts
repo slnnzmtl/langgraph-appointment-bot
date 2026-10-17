@@ -1,7 +1,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { Overwrite } from "@langchain/langgraph";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { crmWriteDirtiesPrefetch } from "../protocol.js";
+import { crmWriteDirtiesPrefetch } from "../protocol/index.js";
 import { type ToolProtocolResult } from "../tools-protocol.js";
 import { projectAvailabilityEffects } from "./availability.js";
 import { projectContactEffects } from "./contact.js";

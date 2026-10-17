@@ -27,7 +27,7 @@ import { advanceBookingNoteStep } from "../booking-note-step.js";
 import {
   rescheduleTargetFromBookingContext,
 } from "../booking-command.js";
-import { lastPatientText } from "../protocol.js";
+import { lastPatientText } from "../protocol/index.js";
 import { bookingEntryTransitionForTurn } from "../replacement-flow.js";
 
 export type PrepareBookingOptions = {

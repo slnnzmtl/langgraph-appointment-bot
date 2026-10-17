@@ -2,6 +2,7 @@ import { AIMessage, type BaseMessage } from "@langchain/core/messages";
 
 import { trackEvent } from "../../analytics/track.js";
 import { hasPendingToolCalls } from "../tool-routing.js";
+import { rewriteAiMessage } from "./rewrite-ai-message.js";
 
 export const RUNTIME_TOOL_ORIGIN = "command_prepare" as const;
 
@@ -67,13 +68,7 @@ export const rewriteAiToolCalls = (
   }
   return [
     ...agentMessages.slice(0, lastAiIndex),
-    new AIMessage({
-      content: lastAi.content,
-      tool_calls: remainingCalls,
-      additional_kwargs: lastAi.additional_kwargs,
-      response_metadata: lastAi.response_metadata,
-      id: lastAi.id,
-    } as ConstructorParameters<typeof AIMessage>[0]),
+    rewriteAiMessage(lastAi, { tool_calls: remainingCalls }),
     ...agentMessages.slice(lastAiIndex + 1),
   ];
 };
