@@ -28,6 +28,7 @@ import {
   resolveAvailabilityOffer,
 } from "../agent-loop/index.js";
 import { resolveBookingCommand } from "../agent-loop/booking-command.js";
+import { projectAvailabilityEffects } from "../agent-loop/tool-effects/availability.js";
 import { committedMeetingEntityId } from "../../shared/json-record.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
@@ -41,6 +42,7 @@ import {
 } from "../context-blocks.js";
 
 import {
+  canonicalBookingDraft,
   clinicState,
   runtimeToolAi,
   unwrapCommandUpdate,
@@ -300,6 +302,66 @@ describe("availability context helpers", () => {
       days: sampleAvailability.days,
       stepMinutes: 30,
       excludeMeetingIds: ["m-1"],
+    });
+  });
+
+  it("clears selectedDate when the refreshed snapshot omits that day", () => {
+    const patch = projectAvailabilityEffects({
+      state: clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "time",
+          selectedDate: "2026-08-26",
+          selectedSlot: null,
+        }),
+      }),
+      resultMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            days: sampleAvailability.days,
+            stepMinutes: 30,
+            serviceId: "svc-1",
+          }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+      ],
+    });
+    expect(patch.bookingDraft).toMatchObject({
+      phase: "date",
+      selectedDate: null,
+      selectedSlot: null,
+    });
+  });
+
+  it("keeps selectedDate when the refreshed day still has slots", () => {
+    const patch = projectAvailabilityEffects({
+      state: clinicState({
+        bookingDraft: canonicalBookingDraft({
+          phase: "time",
+          selectedDate: "2026-08-25",
+          selectedSlot: {
+            dateStart: "2026-08-25T12:00:00",
+            dateEnd: "2026-08-25T12:30:00",
+            label: "12:00",
+          },
+        }),
+      }),
+      resultMessages: [
+        new ToolMessage({
+          content: JSON.stringify({
+            days: sampleAvailability.days,
+            stepMinutes: 30,
+            serviceId: "svc-1",
+          }),
+          tool_call_id: "1",
+          name: "present_availability_slots",
+        }),
+      ],
+    });
+    expect(patch.bookingDraft).toMatchObject({
+      phase: "time",
+      selectedDate: "2026-08-25",
+      selectedSlot: null,
     });
   });
 

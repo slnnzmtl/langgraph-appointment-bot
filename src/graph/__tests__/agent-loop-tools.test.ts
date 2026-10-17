@@ -1178,22 +1178,50 @@ describe("DDD-59: name must appear in patient messages", () => {
   });
 });
 
-describe("DDD-263 ToolNode.invoke result boundary", () => {
-  it("recognizes a message-update shape", () => {
-    const messages = [new AIMessage("ok")];
+describe("DDD-263/268 ToolNode.invoke result boundary", () => {
+  it("recognizes a ToolMessage-only message-update shape", () => {
+    const messages = [
+      new ToolMessage({ content: "ok", tool_call_id: "1", name: "list_services" }),
+    ];
     expect(isToolNodeMessageUpdate({ messages })).toBe(true);
     expect(toolMessagesFromToolNodeInvoke({ messages })).toEqual(messages);
   });
 
-  it("returns an empty list when messages are missing", () => {
+  it("accepts an empty ToolMessage update", () => {
+    expect(isToolNodeMessageUpdate({ messages: [] })).toBe(true);
+    expect(toolMessagesFromToolNodeInvoke({ messages: [] })).toEqual([]);
+  });
+
+  it("rejects missing messages", () => {
     expect(isToolNodeMessageUpdate({})).toBe(false);
-    expect(toolMessagesFromToolNodeInvoke({})).toEqual([]);
+    expect(() => toolMessagesFromToolNodeInvoke({})).toThrow(/unsupported result shape/);
   });
 
   it("rejects LangGraph Command at the boundary", () => {
     const command = new Command({ update: { messages: [] } });
     expect(isToolNodeMessageUpdate(command)).toBe(false);
     expect(() => toolMessagesFromToolNodeInvoke(command)).toThrow(/Command/);
+  });
+
+  it("rejects Command arrays", () => {
+    const command = new Command({ update: { messages: [] } });
+    expect(isToolNodeMessageUpdate([command])).toBe(false);
+    expect(() => toolMessagesFromToolNodeInvoke([command])).toThrow(/array result/);
+  });
+
+  it("rejects mixed Command / update arrays", () => {
+    const mixed = [
+      new Command({ update: { messages: [] } }),
+      { messages: [] },
+    ];
+    expect(isToolNodeMessageUpdate(mixed)).toBe(false);
+    expect(() => toolMessagesFromToolNodeInvoke(mixed)).toThrow(/array result/);
+  });
+
+  it("rejects non-ToolMessage entries in messages", () => {
+    const messages = [new AIMessage("ok")];
+    expect(isToolNodeMessageUpdate({ messages })).toBe(false);
+    expect(() => toolMessagesFromToolNodeInvoke({ messages })).toThrow(/unsupported result shape/);
   });
 });
 
@@ -1351,6 +1379,28 @@ describe("createAgentToolsNode persists filtered tool_calls", () => {
               { id: "web-1", name: "search_web", args: {}, type: "tool_call" },
             ],
           }),
+        ],
+      }),
+      { configurable: {} },
+    );
+
+    const { lastAi, retained, toolMessages } = expectMatchedToolTape(update);
+    expect(lastAi.tool_calls ?? []).toEqual([]);
+    expect(retained).toEqual([]);
+    expect(toolMessages).toEqual([]);
+  });
+
+  it("rejects stamped runtime calls absent from the bound-tool allowlist", async () => {
+    // Bound set is informational only; stamped create_meeting must not run.
+    const update = await createAgentToolsNode([listServices()], "booking")(
+      clinicState({
+        agentMessages: [
+          runtimeToolAi([{
+            id: "create-1",
+            name: "create_meeting",
+            args: { contactId: "c-1" },
+            type: "tool_call",
+          }]),
         ],
       }),
       { configurable: {} },

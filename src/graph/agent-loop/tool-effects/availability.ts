@@ -53,6 +53,8 @@ export const projectAvailabilityEffects = (input: {
   const selectedDay = selectedDate == null
     ? undefined
     : bookingAvailability?.days.find((day) => day.date === selectedDate);
+  // Absent day is treated like an empty day: leave date selection.
+  const keepDate = selectedDay != null && selectedDay.slots.length > 0;
   const selectedSlotStillAvailable = availabilityMatchesBooking(
     bookingAvailability,
     bookingDraft,
@@ -65,7 +67,7 @@ export const projectAvailabilityEffects = (input: {
     selectedDate != null
     && (
       bookingAvailability == null
-      || selectedDay?.slots.length === 0
+      || !keepDate
       || !selectedSlotStillAvailable
     )
   ) {
@@ -79,7 +81,7 @@ export const projectAvailabilityEffects = (input: {
           type: "draft_event",
           event: {
             type: "slot_invalidated",
-            keepDate: selectedDay?.slots.length !== 0,
+            keepDate,
           },
         },
       );

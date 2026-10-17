@@ -20,9 +20,9 @@ export type ToolProtocolResult = {
 };
 
 /**
- * Stamp + allowlist gate before ToolNode.
- * Drop unstamped booking runtime calls; keep stamped runtime and tools bound
- * on this agent. Planner / CRM tools own readiness and authorization.
+ * Allowlist + stamp gate before ToolNode.
+ * Require every call in the node's bound-tool set first; then drop unstamped
+ * booking runtime calls. Planner / CRM tools own readiness and authorization.
  */
 export const filterToolTape = (
   state: ClinicState,
@@ -52,22 +52,23 @@ export const filterToolTape = (
     : true;
 
   for (const call of originalCalls) {
-    if (isBookingRuntimeToolName(call.name)) {
-      if (agentId === BOOKING_AGENT_ID && !runtimeOriginOk) {
-        trackToolError(call.name, "unstamped_runtime_tool");
-        continue;
-      }
-      remainingCalls.push(call);
-      continue;
-    }
-
+    // Bound allowlist first; runtime-origin stamp is a second gate only.
     const allowlisted = allowedToolNames != null
       ? allowedToolNames.has(call.name)
       : agentId === BOOKING_AGENT_ID
         ? BOOKING_INFORMATIONAL_TOOL_NAMES.has(call.name)
+          || isBookingRuntimeToolName(call.name)
         : true;
     if (!allowlisted) {
       trackToolError(call.name, "disallowed_tool_call");
+      continue;
+    }
+    if (
+      isBookingRuntimeToolName(call.name)
+      && agentId === BOOKING_AGENT_ID
+      && !runtimeOriginOk
+    ) {
+      trackToolError(call.name, "unstamped_runtime_tool");
       continue;
     }
     remainingCalls.push(call);

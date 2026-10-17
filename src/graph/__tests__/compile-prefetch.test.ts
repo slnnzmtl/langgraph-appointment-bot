@@ -204,6 +204,21 @@ const faqAgent: ClinicAgentDefinition = {
 };
 
 describe("compileClinicGraph prefetch once", () => {
+  // Bound ToolNode must include runtime tools the planner can stamp; an empty
+  // allowlist strips them and re-injects forever (DDD-268 allowlist-first).
+  const bookingRuntimeStubs = [
+    tool(
+      async () => JSON.stringify({ days: [], stepMinutes: 30 }),
+      {
+        name: "present_availability_slots",
+        description: "availability",
+        schema: z.object({
+          direction: z.enum(["exact", "earlier", "later", "nearest"]).optional(),
+        }),
+      },
+    ),
+  ];
+
   const compileWithCallTool = (
     callTool: (name: string) => Promise<unknown>,
     extra?: {
@@ -212,7 +227,7 @@ describe("compileClinicGraph prefetch once", () => {
   ) =>
     compileClinicGraph({
       specialists: { faq: faqAgent, booking: bookingAgent },
-      agentTools: { faq: [], booking: [] },
+      agentTools: { faq: [], booking: bookingRuntimeStubs },
       agentModel: {
         bindTools: () => ({
           invoke: async () => new AIMessage("ok"),
