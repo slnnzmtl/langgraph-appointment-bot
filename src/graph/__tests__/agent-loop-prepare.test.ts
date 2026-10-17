@@ -193,12 +193,15 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       status: "pending",
       service: { id: CONSULTATION_SERVICE_ID },
     });
+    const prepared = unwrapCommandUpdate(update);
+    expect(prepared.bookingSkipLlm).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
           messages: [new HumanMessage("Записатись")],
-          bookingDraft: unwrapCommandUpdate(update).bookingDraft,
-          pendingInteraction: unwrapCommandUpdate(update).pendingInteraction,
+          bookingDraft: prepared.bookingDraft,
+          pendingInteraction: prepared.pendingInteraction,
+          bookingSkipLlm: prepared.bookingSkipLlm === true,
         }),
         "booking__llm",
         "booking__command_prepare",

@@ -1396,7 +1396,7 @@ describe("DDD-261 unified booking transition planner", () => {
         })).toBe("booking__finalize");
   });
 
-  it("planner finalizes open pending service_confirm; tools router projects finalize", () => {
+  it("open service_confirm without bookingSkipLlm continues to LLM (not reprint)", () => {
     const state = clinicState({
       bookingDraft: readyCreateDraft({
         phase: "service",
@@ -1425,6 +1425,58 @@ describe("DDD-261 unified booking transition planner", () => {
           { id: "decline", label: "Обрати іншу процедуру" },
         ],
       },
+      bookingSkipLlm: false,
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ list: [] }),
+          name: "list_services",
+          tool_call_id: "svc-1",
+        }),
+      ],
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("continue_llm");
+    expect(routeAfterAgentTools(
+      state,
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__llm");
+  });
+
+  it("planner finalizes prepare-produced service_confirm when bookingSkipLlm is set", () => {
+    const state = clinicState({
+      bookingDraft: readyCreateDraft({
+        phase: "service",
+        serviceAcceptance: {
+          status: "pending",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+        },
+        selectedDate: null,
+        selectedSlot: null,
+        note: { status: "unasked" },
+        contactId: null,
+      }),
+      pendingInteraction: {
+        kind: "service_confirm",
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: "Консультація",
+          source: "catalog",
+        },
+        choices: [
+          { id: "accept", label: "Так" },
+          { id: "decline", label: "Обрати іншу процедуру" },
+        ],
+      },
+      bookingSkipLlm: true,
       agentMessages: [
         new ToolMessage({
           content: JSON.stringify({ list: [] }),

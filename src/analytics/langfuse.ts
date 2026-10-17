@@ -32,8 +32,54 @@ let enabledForTests: boolean | null = null;
 /**
  * One CallbackHandler per chat thread so HITL resume `*End` callbacks still
  * find the interrupted spans in runMap (new handler per invoke caused WARNs).
+ * Bounded: LRU + idle TTL; explicit release on thread delete.
  */
-const handlersBySessionId = new Map<string, CallbackHandler>();
+type CachedHandler = { handler: CallbackHandler; lastUsedAt: number };
+/** Keep idle handlers long enough for Telegram HITL confirm (hours). */
+const DEFAULT_HANDLER_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
+const DEFAULT_HANDLER_MAX_SESSIONS = 500;
+let handlerIdleTtlMs = DEFAULT_HANDLER_IDLE_TTL_MS;
+let handlerMaxSessions = DEFAULT_HANDLER_MAX_SESSIONS;
+const handlersBySessionId = new Map<string, CachedHandler>();
+
+const pruneHandlerCache = (now = Date.now()): void => {
+  for (const [sessionId, entry] of handlersBySessionId) {
+    if (now - entry.lastUsedAt > handlerIdleTtlMs) {
+      handlersBySessionId.delete(sessionId);
+    }
+  }
+  while (handlersBySessionId.size > handlerMaxSessions) {
+    const oldest = handlersBySessionId.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    handlersBySessionId.delete(oldest);
+  }
+};
+
+/** Drop the cached handler for a thread (e.g. checkpoint delete / reset). */
+export const releaseClinicTurnCallbackHandler = (sessionId: string): void => {
+  handlersBySessionId.delete(sessionId);
+};
+
+/** Test helpers — do not use in production. */
+export const clinicTurnCallbackHandlerCacheSizeForTests = (): number => {
+  pruneHandlerCache();
+  return handlersBySessionId.size;
+};
+
+export const setClinicTurnCallbackHandlerCacheLimitsForTests = (limits: {
+  maxSessions?: number;
+  idleTtlMs?: number;
+}): void => {
+  if (limits.maxSessions != null) {
+    handlerMaxSessions = limits.maxSessions;
+  }
+  if (limits.idleTtlMs != null) {
+    handlerIdleTtlMs = limits.idleTtlMs;
+  }
+  pruneHandlerCache();
+};
 
 const readTimeoutSeconds = (): number => {
   const raw = process.env.LANGFUSE_TIMEOUT;
@@ -152,9 +198,17 @@ const handlerForSession = (options: {
   tags: string[];
   metadata: Record<string, unknown>;
 }): CallbackHandler | undefined => {
+  const now = Date.now();
+  pruneHandlerCache(now);
   const cached = handlersBySessionId.get(options.sessionId);
   if (cached != null) {
-    return cached;
+    // Refresh LRU order (Map insertion order).
+    handlersBySessionId.delete(options.sessionId);
+    handlersBySessionId.set(options.sessionId, {
+      handler: cached.handler,
+      lastUsedAt: now,
+    });
+    return cached.handler;
   }
   try {
     const handler = new CallbackHandler({
@@ -163,7 +217,8 @@ const handlerForSession = (options: {
       tags: options.tags,
       traceMetadata: options.metadata,
     });
-    handlersBySessionId.set(options.sessionId, handler);
+    handlersBySessionId.set(options.sessionId, { handler, lastUsedAt: now });
+    pruneHandlerCache(now);
     return handler;
   } catch (error: unknown) {
     console.warn(`CallbackHandler create failed: ${errorMessage(error)}`);
@@ -331,5 +386,7 @@ export const resetLangfuseTracingForTests = async (): Promise<void> => {
     started = false;
     enabledForTests = null;
     handlersBySessionId.clear();
+    handlerIdleTtlMs = DEFAULT_HANDLER_IDLE_TTL_MS;
+    handlerMaxSessions = DEFAULT_HANDLER_MAX_SESSIONS;
   }
 };

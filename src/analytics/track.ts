@@ -137,5 +137,6 @@ export {
   startLangfuseTracing,
   isLangfuseTracingEnabled,
   createClinicTurnCallbackHandler,
+  releaseClinicTurnCallbackHandler,
   type ClinicTurnCallbacks,
 } from "./langfuse.js";
