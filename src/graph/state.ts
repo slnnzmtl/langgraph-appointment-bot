@@ -140,6 +140,16 @@ export const createClinicStateAnnotation = ({
       default: () => false,
     }),
     /**
+     * One-turn booking prepare evidence: true when this prepare created or restored
+     * UI that must render immediately (consultation / procedure confirm). Cleared
+     * next prepare. Unmatched prose on an already-open confirm must not skip the
+     * booking LLM — do not infer from contact ownership.
+     */
+    bookingSkipLlm: Annotation<boolean>({
+      reducer: (_left, right) => right,
+      default: () => false,
+    }),
+    /**
      * One-turn notice after a mid-booking service change. Prefixed onto the next
      * code-owned DATE card, then cleared. Missing on old checkpoints reads as null.
      */

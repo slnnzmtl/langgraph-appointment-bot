@@ -42,7 +42,8 @@ export const prepareBookingTurn = async (
   state: ClinicState,
   options?: PrepareBookingOptions,
 ): Promise<ClinicStateUpdate> => {
-  const update: ClinicStateUpdate = {};
+  const update: ClinicStateUpdate = { bookingSkipLlm: false };
+  let bookingSkipLlm = false;
   const scheduleRepair = repairInvalidScheduleInteraction(
     state.bookingDraft,
     state.pendingInteraction,
@@ -86,6 +87,7 @@ export const prepareBookingTurn = async (
     && pendingForRestore == null
   ) {
     update.pendingInteraction = restoredInteraction;
+    bookingSkipLlm = true;
   }
   const contactIdentity = resolveContactIdentity(state.contactContext);
   const contactId = contactIdentity.kind === "owned" ? contactIdentity.contactId : null;
@@ -309,9 +311,12 @@ export const prepareBookingTurn = async (
     bookingDraft = session.bookingDraft;
     pendingInteraction = session.pendingInteraction;
     update.pendingInteraction = pendingInteraction;
+    bookingSkipLlm = true;
   }
-  if (bookingDraft) {
+  // Include intentional null (e.g. choose_other wipe) — do not use truthiness.
+  if (bookingDraft !== undefined) {
     update.bookingDraft = bookingDraft;
   }
+  update.bookingSkipLlm = bookingSkipLlm;
   return update;
 };

@@ -11,6 +11,7 @@ import {
 } from "../../booking-interaction-render.js";
 import {
   faqCatalogIntroFromModel,
+  faqCatalogPreserveModelAnswer,
   renderFaqCatalogReply,
 } from "../../faq-catalog.js";
 import {
@@ -305,18 +306,30 @@ export const applyFaqCatalogAiFinalize = async (
         reason: "faq_catalog_close",
       });
     } else {
-      const modelIntro = faqCatalogAction === "keep_catalog"
-        ? faqCatalogIntroFromModel(next.replyText)
-        : "";
-      next = {
-        ...next,
-        replyText: renderFaqCatalogReply(
-          catalog.choices,
-          state.servicesContext?.list ?? [],
-          modelIntro,
-        ),
-        replyButtons: replyButtonsForInteraction(catalog),
-      };
+      const preserved = faqCatalogAction === "keep_catalog"
+        ? faqCatalogPreserveModelAnswer(next.replyText)
+        : null;
+      if (preserved != null) {
+        // Price / product FAQ over open chips: keep model prose, attach chips.
+        next = {
+          ...next,
+          replyText: preserved,
+          replyButtons: replyButtonsForInteraction(catalog),
+        };
+      } else {
+        const modelIntro = faqCatalogAction === "keep_catalog"
+          ? faqCatalogIntroFromModel(next.replyText)
+          : "";
+        next = {
+          ...next,
+          replyText: renderFaqCatalogReply(
+            catalog.choices,
+            state.servicesContext?.list ?? [],
+            modelIntro,
+          ),
+          replyButtons: replyButtonsForInteraction(catalog),
+        };
+      }
       trackEvent("reply_menu_filled", {
         menu: "service_candidate",
         reason: "pending_interaction",

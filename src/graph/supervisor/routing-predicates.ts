@@ -115,6 +115,17 @@ export const shouldContinueInSpecialist = (
     return false;
   }
 
+  // Valid phone on open phoneNumber field only — not name-field free text
+  // (FAQ asides must still reach the supervisor).
+  if (
+    agentId === BOOKING_AGENT_ID
+    && state.pendingInteraction?.kind === "contact_field"
+    && state.pendingInteraction.field === "phoneNumber"
+    && normalizeClinicPhone(humanText) != null
+  ) {
+    return true;
+  }
+
   if (agentId === BOOKING_AGENT_ID && (state.availabilityContext != null || state.availabilityCursor != null)) {
     const availabilityRequest = resolveAvailabilityRequest(humanText, kyivToday());
     if (

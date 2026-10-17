@@ -17,9 +17,60 @@ const FAQ_CATALOG_NAME_MIN_LEN = 3;
 /** Stem tokens shorter than this are too ambiguous for prefix matching. */
 const FAQ_CATALOG_STEM_MIN_LEN = 5;
 
+/**
+ * Catalog-only lookalike fold: Cyrillic brand spellings («набота») align with
+ * Latin CRM titles («Nabota»). Not used by Telegram chip / reply-label matching.
+ */
+const CATALOG_SCRIPT_FOLD: Readonly<Record<string, string>> = {
+  а: "a",
+  б: "b",
+  в: "v",
+  г: "g",
+  д: "d",
+  е: "e",
+  ё: "e",
+  ж: "zh",
+  з: "z",
+  и: "i",
+  й: "i",
+  к: "k",
+  л: "l",
+  м: "m",
+  н: "n",
+  о: "o",
+  п: "p",
+  р: "r",
+  с: "s",
+  т: "t",
+  у: "u",
+  ф: "f",
+  х: "h",
+  ц: "ts",
+  ч: "ch",
+  ш: "sh",
+  щ: "sh",
+  ъ: "",
+  ы: "y",
+  ь: "",
+  э: "e",
+  ю: "iu",
+  я: "ia",
+  і: "i",
+  ї: "i",
+  є: "e",
+  ґ: "g",
+};
+
+/** Fold Cyrillic lookalikes into Latin for catalog stem comparison only. */
+export const foldCatalogScript = (token: string): string =>
+  [...token].map((ch) => CATALOG_SCRIPT_FOLD[ch] ?? ch).join("");
+
 /** Collapse doubled letters so «коллаген» aligns with «колаген…». */
 const collapseDoubledLetters = (token: string): string =>
   token.replace(/(.)\1+/gu, "$1");
+
+const catalogStemToken = (token: string): string =>
+  collapseDoubledLetters(foldCatalogScript(token));
 
 const catalogNameTokens = (name: string): string[] =>
   name.split(/[\s,/()]+/u).filter((token) => token.length > 0);
@@ -38,20 +89,22 @@ const utteranceMatchesCatalogName = (
   normalizedUtterance: string,
   name: string,
 ): boolean => {
+  const foldedUtterance = foldCatalogScript(normalizedUtterance);
+  const foldedName = foldCatalogScript(name);
   if (
-    normalizedUtterance === name
-    || name.includes(normalizedUtterance)
-    || normalizedUtterance.includes(name)
+    foldedUtterance === foldedName
+    || foldedName.includes(foldedUtterance)
+    || foldedUtterance.includes(foldedName)
   ) {
     return true;
   }
   const utteranceTokens = catalogNameTokens(normalizedUtterance)
-    .map(collapseDoubledLetters)
+    .map(catalogStemToken)
     .filter((token) => token.length >= FAQ_CATALOG_STEM_MIN_LEN);
   if (utteranceTokens.length === 0) {
     return false;
   }
-  const nameTokens = catalogNameTokens(name).map(collapseDoubledLetters);
+  const nameTokens = catalogNameTokens(name).map(catalogStemToken);
   return utteranceTokens.some((token) =>
     nameTokens.some(
       (nameToken) =>

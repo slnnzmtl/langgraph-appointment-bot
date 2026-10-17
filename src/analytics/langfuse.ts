@@ -29,6 +29,12 @@ let started = false;
 /** Test-only override for enablement without env. */
 let enabledForTests: boolean | null = null;
 
+/**
+ * One CallbackHandler per chat thread so HITL resume `*End` callbacks still
+ * find the interrupted spans in runMap (new handler per invoke caused WARNs).
+ */
+const handlersBySessionId = new Map<string, CallbackHandler>();
+
 const readTimeoutSeconds = (): number => {
   const raw = process.env.LANGFUSE_TIMEOUT;
   if (raw === undefined || raw.trim() === "") {
@@ -140,6 +146,31 @@ export type WithClinicTurnOptions = {
   input: string;
 };
 
+const handlerForSession = (options: {
+  userId: string;
+  sessionId: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+}): CallbackHandler | undefined => {
+  const cached = handlersBySessionId.get(options.sessionId);
+  if (cached != null) {
+    return cached;
+  }
+  try {
+    const handler = new CallbackHandler({
+      userId: options.userId,
+      sessionId: options.sessionId,
+      tags: options.tags,
+      traceMetadata: options.metadata,
+    });
+    handlersBySessionId.set(options.sessionId, handler);
+    return handler;
+  } catch (error: unknown) {
+    console.warn(`CallbackHandler create failed: ${errorMessage(error)}`);
+    return undefined;
+  }
+};
+
 /**
  * One Langfuse clinic-turn: propagateAttributes wraps startActiveObservation;
  * setActiveTraceIO sets conversation I/O at trace level after the turn.
@@ -165,18 +196,12 @@ export const withClinicTurn = async <T>(
     ...options.metadata,
   });
 
-  let handler: ClinicTurnCallbacks | undefined;
-  try {
-    handler = new CallbackHandler({
-      userId: options.userId,
-      sessionId: options.sessionId,
-      tags,
-      traceMetadata: metadata,
-    });
-  } catch (error: unknown) {
-    console.warn(`CallbackHandler create failed: ${errorMessage(error)}`);
-    handler = undefined;
-  }
+  const handler = handlerForSession({
+    userId: options.userId,
+    sessionId: options.sessionId,
+    tags,
+    metadata,
+  });
 
   let fnStarted = false;
   try {
@@ -223,22 +248,17 @@ export const createClinicTurnCallbackHandler = (options: {
   if (!isLangfuseTracingEnabled()) {
     return undefined;
   }
-  try {
-    const tags = options.tags ?? ["telegram"];
-    return new CallbackHandler({
-      userId: options.userId,
-      sessionId: options.sessionId,
-      tags,
-      traceMetadata: toPropagateMetadata({
-        telegram_user_id: options.userId,
-        chat_id: options.sessionId,
-        ...options.metadata,
-      }),
-    });
-  } catch (error: unknown) {
-    console.warn(`CallbackHandler create failed: ${errorMessage(error)}`);
-    return undefined;
-  }
+  const tags = options.tags ?? ["telegram"];
+  return handlerForSession({
+    userId: options.userId,
+    sessionId: options.sessionId,
+    tags,
+    metadata: toPropagateMetadata({
+      telegram_user_id: options.userId,
+      chat_id: options.sessionId,
+      ...options.metadata,
+    }),
+  });
 };
 
 /**
@@ -310,5 +330,6 @@ export const resetLangfuseTracingForTests = async (): Promise<void> => {
     tracerProvider = undefined;
     started = false;
     enabledForTests = null;
+    handlersBySessionId.clear();
   }
 };

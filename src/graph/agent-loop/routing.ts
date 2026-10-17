@@ -1,6 +1,5 @@
 import { FAQ_AGENT_ID } from "../types.js";
 import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
-import { labelIdFor } from "../../shared/message-content.js";
 import type { ClinicState } from "../state.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
@@ -16,7 +15,6 @@ import {
   terminalContactWriteOutcome,
   terminalMeetingMutationOutcome,
 } from "./protocol/index.js";
-import { resolveContactIdentity } from "../contact-command.js";
 
 const routeNeedsCommandPrepare = (state: ClinicState): boolean =>
   bookingOutcomeNeedsPrepare(resolveBookingCommand(state));
@@ -119,7 +117,8 @@ export const routeAfterAgentPrepare = (
   }
   // Graph-owned service_confirm from prepare. Do not skip when accepting («Так»).
   // FAQ: skip LLM only when prepare set faqSkipLlm. Price / compare on an
-  // already-open confirm reach faq__llm. Booking: mainBook / owned-idle.
+  // already-open confirm reach faq__llm. Booking: only when prepare set
+  // bookingSkipLlm (new/restored card) — never from contact ownership.
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_confirm"
@@ -136,13 +135,7 @@ export const routeAfterAgentPrepare = (
         if (state.faqSkipLlm) {
           return finalizeName;
         }
-      } else if (
-        labelIdFor(bookText) === "mainBook"
-        || (
-          (state.bookingContext?.meetings.length ?? 0) === 0
-          && resolveContactIdentity(state.contactContext).kind === "owned"
-        )
-      ) {
+      } else if (state.bookingSkipLlm) {
         return finalizeName;
       }
     }

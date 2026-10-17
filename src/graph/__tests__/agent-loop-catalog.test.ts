@@ -2102,13 +2102,14 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         messages: [new HumanMessage("що таке Disport?")],
         pendingInteraction: pending,
         agentMessages: [
-          faqCatalogAi("Disport — препарат для ботулінотерапії; дозування підбирає лікар.", "offer_consultation"),
+          faqCatalogAi("Disport — препарат для ботулінотерапії; дозування підбирає лікар.", "keep_catalog"),
         ],
       }),
     );
     expect(product.lastHandoff?.replyText).toContain("Disport — препарат");
     expect(product.lastHandoff?.replyText).not.toMatch(/^Доступні такі варіанти:/);
-    expect(product.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(product.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota"]);
+    expect(product.lastHandoff?.replyText).not.toContain("Підібрати вільний час на консультацію?");
 
     const price = await finalize(
       clinicState({
@@ -2116,12 +2117,14 @@ describe("agent-loop catalog (prepare+finalize)", () => {
         messages: [new HumanMessage("скільки це коштує?")],
         pendingInteraction: pending,
         agentMessages: [
-          faqCatalogAi("Вартість залежить від препарату:\n• Disport — 4500 грн\n• Nabota — 4200 грн", "offer_consultation"),
+          faqCatalogAi("Вартість залежить від препарату:\n• Disport — 4500 грн\n• Nabota — 4200 грн", "keep_catalog"),
         ],
       }),
     );
     expect(price.lastHandoff?.replyText).toContain("4500 грн");
     expect(price.lastHandoff?.replyText).not.toMatch(/^Доступні такі варіанти:/);
+    expect(price.lastHandoff?.replyButtons).toEqual(["Disport", "Nabota"]);
+    expect(price.lastHandoff?.replyText).not.toContain("Підібрати вільний час на консультацію?");
 
     const comparison = await finalize(
       clinicState({

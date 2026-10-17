@@ -814,6 +814,14 @@ const consultationAgreementRequired = (state: ClinicState): boolean => {
   if (draft == null) {
     return false;
   }
+  // Card already open: prepare-produced turns finalize via bookingSkipLlm;
+  // unmatched prose must reach the booking LLM, not reprint the same question.
+  if (
+    state.pendingInteraction?.kind === "service_confirm"
+    && state.pendingInteraction.service.id === CONSULTATION_SERVICE_ID
+  ) {
+    return false;
+  }
   const acceptance = draft.serviceAcceptance;
   const pendingServiceId =
     typeof draft.pendingCommand?.payload?.serviceId === "string"
@@ -833,16 +841,6 @@ const consultationAgreementRequired = (state: ClinicState): boolean => {
 
 const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome => {
   const draft = state.bookingDraft;
-  if (
-    state.pendingInteraction?.kind === "service_confirm"
-    && state.pendingInteraction.service.id === CONSULTATION_SERVICE_ID
-  ) {
-    return {
-      kind: "render",
-      reason: "consultation_agreement",
-      update: {},
-    };
-  }
   const labels = bookingOfferLabels(
     inferConversationLocaleFromText(lastPatientText(state)),
   );
@@ -869,8 +867,10 @@ const consultationAgreementRender = (state: ClinicState): BookingCommandOutcome 
 };
 
 /**
- * Already-open contact_field / pending service_confirm ship via finalize —
+ * Already-open contact_field / prepare-produced service_confirm ship via finalize —
  * do not bounce through command_prepare to re-render the same card.
+ * Unmatched prose on an existing confirm must reach the booking LLM
+ * (`bookingSkipLlm` false) — never reprint from contact ownership alone.
  */
 const openPendingInteractionFinalize = (
   state: ClinicState,
@@ -879,7 +879,8 @@ const openPendingInteractionFinalize = (
     return { kind: "finalize", reason: "pending_interaction" };
   }
   if (
-    state.pendingInteraction?.kind === "service_confirm"
+    state.bookingSkipLlm
+    && state.pendingInteraction?.kind === "service_confirm"
     && state.bookingDraft?.serviceAcceptance?.status === "pending"
   ) {
     return { kind: "finalize", reason: "pending_interaction" };

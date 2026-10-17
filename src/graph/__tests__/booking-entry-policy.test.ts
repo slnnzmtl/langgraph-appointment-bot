@@ -2,6 +2,7 @@ import { HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  BOOKING_OFFER_MENU,
   BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
   CONSULTATION_SERVICE_ID,
@@ -21,13 +22,27 @@ import {
 } from "../booking-entry-policy.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
 import { resolveCatalogLexicalEvidence } from "../catalog-match.js";
+import {
+  consultationService,
+  reduceBookingSession,
+} from "../booking-session.js";
 import type { ClinicState } from "../state.js";
 import { FAQ_AGENT_ID, type ClinicAgentDefinition, type ILLMConnector } from "../types.js";
+import { faqCatalogAi } from "./agent-loop-fixtures.js";
 import {
   specialists,
   createClinicSupervisorNode,
   supervisorState,
 } from "./supervisor-fixtures.js";
+
+const openConsultationSession = () =>
+  reduceBookingSession(
+    { bookingDraft: null, pendingInteraction: null },
+    {
+      type: "service_offered",
+      service: consultationService("catalog"),
+    },
+  );
 
 const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   messages: [],
@@ -50,6 +65,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   pendingInteraction: null,
   noteOrchQueued: false,
   faqSkipLlm: false,
+  bookingSkipLlm: false,
   serviceChangeNotice: null,
   bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,
@@ -146,10 +162,12 @@ describe("booking prepare entry (state)", () => {
       status: "pending",
       service: { id: CONSULTATION_SERVICE_ID },
     });
+    expect(update.bookingSkipLlm).toBe(true);
     const merged = clinicState({
       messages: [new HumanMessage("Записатись")],
       bookingDraft: update.bookingDraft,
       pendingInteraction: update.pendingInteraction,
+      bookingSkipLlm: update.bookingSkipLlm === true,
     });
     expect(
       routeAfterAgentPrepare(
@@ -160,6 +178,82 @@ describe("booking prepare entry (state)", () => {
         "booking__finalize",
       ),
     ).toBe("booking__finalize");
+  });
+
+  it("does not reprint an open consultation card on unmatched free text", async () => {
+    const consultation = openConsultationSession();
+    const prepare = createBookingPrepareNode();
+    const update = await prepare(
+      clinicState({
+        messages: [new HumanMessage("що входить у консультацію?")],
+        bookingDraft: consultation.bookingDraft,
+        pendingInteraction: consultation.pendingInteraction,
+        contactContext: ownedContact,
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      }),
+    );
+    expect(update.bookingSkipLlm).toBe(false);
+    // Prepare leaves the open confirm in place (no wipe / no new card).
+    expect(update.pendingInteraction ?? consultation.pendingInteraction)
+      .toMatchObject({ kind: "service_confirm" });
+    expect(
+      routeAfterAgentPrepare(
+        clinicState({
+          messages: [new HumanMessage("що входить у консультацію?")],
+          bookingDraft: consultation.bookingDraft,
+          pendingInteraction: consultation.pendingInteraction,
+          bookingSkipLlm: false,
+          contactContext: ownedContact,
+          bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+        }),
+        "booking__llm",
+        "booking__command_prepare",
+        undefined,
+        "booking__finalize",
+      ),
+    ).toBe("booking__llm");
+  });
+
+  it("keeps Так / choose_other / exact dates graph-owned on open consultation", async () => {
+    const consultation = openConsultationSession();
+    const prepare = createBookingPrepareNode();
+    const accepted = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Так")],
+        bookingDraft: consultation.bookingDraft,
+        pendingInteraction: consultation.pendingInteraction,
+        contactContext: ownedContact,
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      }),
+    );
+    expect(accepted.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "accepted",
+      service: { id: CONSULTATION_SERVICE_ID },
+    });
+    expect(accepted.pendingInteraction).toBeNull();
+    expect(accepted.bookingSkipLlm).toBe(false);
+
+    const declined = await prepare(
+      clinicState({
+        messages: [new HumanMessage("Обрати іншу процедуру")],
+        bookingDraft: consultation.bookingDraft,
+        pendingInteraction: consultation.pendingInteraction,
+      }),
+    );
+    expect(declined.bookingDraft).toBeNull();
+    expect(declined.pendingInteraction).toBeNull();
+
+    const dated = await prepare(
+      clinicState({
+        messages: [new HumanMessage("20.10.2026")],
+        bookingDraft: consultation.bookingDraft,
+        pendingInteraction: consultation.pendingInteraction,
+        contactContext: ownedContact,
+        bookingContext: { meetings: [], dateFrom: "2026-10-11" },
+      }),
+    );
+    expect(dated.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+    expect(dated.bookingDraft?.selectedDate).toBe("2026-10-20");
   });
 
   it("opens consultation for idle booking when contact is owned and there is no visit", async () => {
@@ -321,6 +415,60 @@ describe("FAQ idle named_procedure catalog entry", () => {
         FAQ_AGENT_ID,
       ),
     ).toBe("faq__finalize");
+  });
+
+  it("closes open consultation then opens singleton procedure confirm", async () => {
+    const consultation = openConsultationSession();
+    expect(consultation.bookingDraft?.serviceAcceptance?.service.id).toBe(
+      CONSULTATION_SERVICE_ID,
+    );
+    const faq = await createFaqPrepareNode()(clinicState({
+      messages: [new HumanMessage("набота 3 зони")],
+      servicesContext: {
+        list: [
+          { id: "n3", name: "Ботулінотерапія Nabota 3 зони", duration: 45 },
+          { id: "d1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+        ],
+      },
+      supervisorIntent: "named_procedure",
+      bookingDraft: consultation.bookingDraft,
+      pendingInteraction: consultation.pendingInteraction,
+    }));
+    expect(faq.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: { id: "n3", name: "Ботулінотерапія Nabota 3 зони" },
+    });
+    expect(faq.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "pending",
+      service: { id: "n3" },
+    });
+    expect(faq.bookingDraft?.serviceAcceptance?.service.id).not.toBe(
+      CONSULTATION_SERVICE_ID,
+    );
+  });
+
+  it("closes open consultation then opens family chips without leftover consultation", async () => {
+    const consultation = openConsultationSession();
+    const faq = await createFaqPrepareNode({
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("набота")],
+      servicesContext: botoxServices,
+      supervisorIntent: "named_procedure",
+      bookingDraft: consultation.bookingDraft,
+      pendingInteraction: consultation.pendingInteraction,
+    }));
+    expect(faq.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      consultationDeclined: true,
+    });
+    expect(faq.bookingDraft?.serviceAcceptance ?? null).toBeNull();
+    expect(
+      faq.pendingInteraction?.kind === "service_candidate"
+        ? faq.pendingInteraction.choices.map((c) => c.label)
+        : [],
+    ).toEqual(expect.arrayContaining(["Nabota"]));
   });
 
   it("does not open catalog on idle FAQ without named_procedure (price/info)", async () => {
@@ -831,6 +979,97 @@ describe("FAQ idle named_procedure catalog entry", () => {
       CONSULTATION_SERVICE_ID,
     );
   });
+
+  it("Botox chips → prices keep chips → набота 3 зони confirms Nabota, not consultation", async () => {
+    const faqAgent: ClinicAgentDefinition = {
+      id: "faq",
+      name: "FAQ",
+      description: "FAQ",
+      systemPrompt: "faq",
+      maxSteps: 4,
+    };
+    const chips = await createFaqPrepareNode({
+      selectCandidates: familySelector,
+    })(clinicState({
+      messages: [new HumanMessage("запиши на ботокс")],
+      servicesContext: botoxServices,
+      supervisorIntent: "named_procedure",
+    }));
+    expect(chips.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+    });
+
+    const priced = await createFaqFinalizeNode(faqAgent)(
+      clinicState({
+        messages: [new HumanMessage("які ціни")],
+        servicesContext: botoxServices,
+        pendingInteraction: chips.pendingInteraction ?? null,
+        agentMessages: [
+          faqCatalogAi(
+            "Вартість залежить від препарату:\n• Nabota 2 зони — 4 000 грн\n• Nabota 1 зона — 2 200 грн",
+            "keep_catalog",
+          ),
+        ],
+      }),
+    );
+    expect(priced.lastHandoff?.replyText).toContain("4 000 грн");
+    expect(priced.lastHandoff?.replyText).not.toContain(
+      "Підібрати вільний час на консультацію?",
+    );
+    expect(priced.lastHandoff?.replyButtons).toEqual(
+      expect.arrayContaining(["Nabota"]),
+    );
+    expect(priced.lastHandoff?.replyButtons).not.toEqual([...BOOKING_OFFER_MENU]);
+
+    // Recovery path: consultation card already open (pre-fix loop) + Cyrillic brand.
+    const nabotaThree = {
+      list: [
+        { id: "n3", name: "Ботулінотерапія Nabota 3 зони", duration: 45 },
+        { id: "d1", name: "Ботулінотерапія Botox, Disport 1 зона" },
+      ],
+    };
+    const consultation = openConsultationSession();
+    const refined = await refineSupervisorNamedBooking({
+      decision: { next: "booking", intent: "book" },
+      patientText: "набота 3 зони",
+      hasVisit: false,
+      services: nabotaThree.list,
+    });
+    expect(refined.decision).toEqual({ next: "faq", intent: "named_procedure" });
+
+    const switched = await createFaqPrepareNode()(clinicState({
+      messages: [new HumanMessage("набота 3 зони")],
+      servicesContext: nabotaThree,
+      supervisorIntent: "named_procedure",
+      bookingDraft: consultation.bookingDraft,
+      pendingInteraction: consultation.pendingInteraction,
+    }));
+    expect(switched.pendingInteraction).toMatchObject({
+      kind: "service_confirm",
+      service: { id: "n3", name: "Ботулінотерапія Nabota 3 зони" },
+    });
+    expect(switched.bookingDraft?.serviceAcceptance?.service.id).toBe("n3");
+    expect(switched.bookingDraft?.serviceAcceptance?.service.id).not.toBe(
+      CONSULTATION_SERVICE_ID,
+    );
+
+    const rendered = await createFaqFinalizeNode(faqAgent)(
+      clinicState({
+        messages: [new HumanMessage("набота 3 зони")],
+        bookingDraft: switched.bookingDraft ?? null,
+        pendingInteraction: switched.pendingInteraction ?? null,
+        supervisorIntent: "named_procedure",
+        faqSkipLlm: true,
+        agentMessages: [new HumanMessage("набота 3 зони")],
+      }),
+    );
+    expect(rendered.lastHandoff?.replyText).toContain("Nabota 3 зони");
+    expect(rendered.lastHandoff?.replyText).not.toContain(
+      "Підібрати вільний час на консультацію?",
+    );
+    expect(rendered.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+  });
 });
 
 describe("refineSupervisorNamedBooking (post-LLM policy)", () => {
@@ -849,6 +1088,16 @@ describe("refineSupervisorNamedBooking (post-LLM policy)", () => {
     });
     expect(refined.decision).toEqual({ next: "faq", intent: "named_procedure" });
     expect(refined.catalogUnavailable).toBeUndefined();
+  });
+
+  it("book + Cyrillic набота over open consultation → faq / named_procedure", async () => {
+    const refined = await refineSupervisorNamedBooking({
+      decision: { next: "booking", intent: "book" },
+      patientText: "набота 3 зони",
+      hasVisit: false,
+      services: botoxServices.list,
+    });
+    expect(refined.decision).toEqual({ next: "faq", intent: "named_procedure" });
   });
 
   it("book + CRM stem, existing visit → booking (REPLACE, no guessed service)", async () => {

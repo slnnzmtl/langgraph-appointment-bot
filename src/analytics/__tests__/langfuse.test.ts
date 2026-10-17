@@ -176,4 +176,63 @@ describe("emitLangfuseEvent / flushLangfuseTracing / withClinicTurn", () => {
     expect(fn).toHaveBeenCalledTimes(1);
     expect(fn).toHaveBeenCalledWith(undefined);
   });
+
+  it("reuses the same CallbackHandler for the same sessionId across turns", async () => {
+    enableLangfuseEnv();
+    const {
+      withClinicTurn,
+      setLangfuseEnabledForTests,
+      resetLangfuseTracingForTests,
+    } = await import("../langfuse.js");
+    setLangfuseEnabledForTests(true);
+
+    const seen: unknown[] = [];
+    const capture = async (callbacks: unknown) => {
+      seen.push(callbacks);
+      return { result: "ok", output: "done" };
+    };
+
+    await withClinicTurn({ userId: "u1", sessionId: "thread-a", input: "one" }, capture);
+    await withClinicTurn({ userId: "u1", sessionId: "thread-a", input: "two" }, capture);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toBeDefined();
+    expect(seen[0]).toBe(seen[1]);
+
+    await withClinicTurn({ userId: "u2", sessionId: "thread-b", input: "other" }, capture);
+    expect(seen).toHaveLength(3);
+    expect(seen[2]).toBeDefined();
+    expect(seen[2]).not.toBe(seen[0]);
+
+    await resetLangfuseTracingForTests();
+    await withClinicTurn({ userId: "u1", sessionId: "thread-a", input: "again" }, capture);
+    expect(seen).toHaveLength(4);
+    expect(seen[3]).toBeDefined();
+    expect(seen[3]).not.toBe(seen[0]);
+  });
+
+  it("createClinicTurnCallbackHandler shares the session cache with withClinicTurn", async () => {
+    enableLangfuseEnv();
+    const {
+      withClinicTurn,
+      createClinicTurnCallbackHandler,
+      setLangfuseEnabledForTests,
+      resetLangfuseTracingForTests,
+    } = await import("../langfuse.js");
+    setLangfuseEnabledForTests(true);
+
+    let fromTurn: unknown;
+    await withClinicTurn(
+      { userId: "u1", sessionId: "shared", input: "hi" },
+      async (callbacks) => {
+        fromTurn = callbacks;
+        return { result: "ok", output: "done" };
+      },
+    );
+    const fromCreate = createClinicTurnCallbackHandler({
+      userId: "u1",
+      sessionId: "shared",
+    });
+    expect(fromCreate).toBe(fromTurn);
+    await resetLangfuseTracingForTests();
+  });
 });
