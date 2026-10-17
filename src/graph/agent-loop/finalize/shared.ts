@@ -39,7 +39,7 @@ import {
   type ClinicHandoff,
   type ClinicHandoffStatus,
 } from "../../types.js";
-import { lastPatientText, toolRanThisTurn } from "../protocol.js";
+import { lastPatientText, toolRanThisTurn } from "../protocol/index.js";
 
 export type FinalizeReply = {
   status: ClinicHandoffStatus;

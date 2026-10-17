@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  foldCatalogScript,
   matchingCatalogRows,
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
@@ -25,6 +26,29 @@ const catalog = [
   {
     id: "svc-consult",
     name: "Консультація первинна",
+    duration: 30,
+  },
+];
+
+const nabotaCatalog = [
+  {
+    id: "n1",
+    name: "Ботулінотерапія Nabota 1 зона",
+    duration: 30,
+  },
+  {
+    id: "n2",
+    name: "Ботулінотерапія Nabota 2 зони",
+    duration: 30,
+  },
+  {
+    id: "n3",
+    name: "Ботулінотерапія Nabota 3 зони",
+    duration: 45,
+  },
+  {
+    id: "d1",
+    name: "Ботулінотерапія Botox, Disport 1 зона",
     duration: 30,
   },
 ];
@@ -63,6 +87,40 @@ describe("matchingCatalogRows", () => {
       { id: "svc-zapis", name: "Запис консультації", duration: 30 },
     ]);
     expect(rows.map((row) => row.id)).toEqual(["svc-zapis"]);
+  });
+
+  it("folds Cyrillic brand spellings onto Latin CRM titles", () => {
+    expect(foldCatalogScript("набота")).toBe("nabota");
+    expect(foldCatalogScript("Nabota".toLocaleLowerCase())).toBe("nabota");
+    expect(matchingCatalogRows("набота", nabotaCatalog).map((row) => row.id))
+      .toEqual(["n1", "n2", "n3"]);
+    expect(matchingCatalogRows("NABOTA", nabotaCatalog).map((row) => row.id))
+      .toEqual(["n1", "n2", "n3"]);
+    expect(
+      matchingCatalogRows("набота 3 зони", nabotaCatalog).map((row) => row.id),
+    ).toContain("n3");
+  });
+
+  it("does not invent matches for unrelated folded tokens", () => {
+    expect(matchingCatalogRows("мезотерапія", nabotaCatalog)).toEqual([]);
+    expect(matchingCatalogRows("ліполітики", nabotaCatalog)).toEqual([]);
+  });
+
+  it("keeps exact CRM-title equality for a unique row without folding siblings away", async () => {
+    const alone = [
+      {
+        id: "n3",
+        name: "Ботулінотерапія Nabota 3 зони",
+        duration: 45,
+      },
+    ];
+    const rows = matchingCatalogRows("Ботулінотерапія Nabota 3 зони", alone);
+    expect(rows.map((row) => row.id)).toEqual(["n3"]);
+    const resolved = await resolveCatalogFreeText({
+      text: "Ботулінотерапія Nabota 3 зони",
+      rows: alone,
+    });
+    expect(resolved).toEqual({ kind: "one", row: alone[0] });
   });
 });
 

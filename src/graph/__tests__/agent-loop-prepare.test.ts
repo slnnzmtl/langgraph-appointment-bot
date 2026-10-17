@@ -193,12 +193,15 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       status: "pending",
       service: { id: CONSULTATION_SERVICE_ID },
     });
+    const prepared = unwrapCommandUpdate(update);
+    expect(prepared.bookingSkipLlm).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
           messages: [new HumanMessage("Записатись")],
-          bookingDraft: unwrapCommandUpdate(update).bookingDraft,
-          pendingInteraction: unwrapCommandUpdate(update).pendingInteraction,
+          bookingDraft: prepared.bookingDraft,
+          pendingInteraction: prepared.pendingInteraction,
+          bookingSkipLlm: prepared.bookingSkipLlm === true,
         }),
         "booking__llm",
         "booking__command_prepare",
@@ -648,14 +651,14 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
           pendingCancellationPurpose: "replacement",
           agentMessages: update.agentMessages as never,
         }),
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-        undefined,
-        "booking__finalize",
-        "faq__prepare",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+          faqPrepareName: "faq__prepare",
+        }),
     ).toBe("faq__prepare");
     // Without FAQ compiled, fall back to booking finalize.
     expect(
@@ -666,13 +669,13 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
           pendingCancellationPurpose: "replacement",
           agentMessages: update.agentMessages as never,
         }),
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
 
     const faqPrepare = createFaqPrepareNode();
@@ -831,13 +834,13 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
           pendingCancellationPurpose: "replacement",
           agentMessages,
         }),
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
   });
 

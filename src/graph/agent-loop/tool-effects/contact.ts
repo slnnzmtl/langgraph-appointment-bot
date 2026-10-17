@@ -13,7 +13,7 @@ import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import {
   captureLatestToolContext,
   meetingMutationUnauthorizedThisTurn,
-} from "../protocol.js";
+} from "../protocol/index.js";
 
 /** Phone lookup evidence + create/link/update CRM row projection. */
 export const projectContactEffects = (input: {

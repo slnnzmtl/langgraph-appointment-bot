@@ -19,6 +19,7 @@ import {
 import { kyivToday } from "../tools/availability-slots.js";
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
+import { assertBoundAgentToolNames } from "./bound-tools.js";
 import { resolveBookingScheduleRequest } from "./booking-schedule.js";
 import {
   createBookingFinalizeNode,
@@ -194,6 +195,8 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const faqToolList = options.agentTools[FAQ_AGENT_ID] ?? [];
   const bookingToolList = options.agentTools[BOOKING_AGENT_ID] ?? [];
   const bookingLlmTools = filterBookingInformationalTools(bookingToolList);
+  assertBoundAgentToolNames(FAQ_AGENT_ID, faqToolList);
+  assertBoundAgentToolNames(BOOKING_AGENT_ID, bookingLlmTools);
 
   const classifyContactName = options.classifyContactName
     ?? createContactNameClassifier(options.supervisorLlm);
@@ -276,7 +279,10 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addConditionalEdges(
       faqTools,
       (state: ClinicState) =>
-        routeAfterAgentTools(state, faqLlm, faqTools),
+        routeAfterAgentTools(state, {
+          llmName: faqLlm,
+          toolsName: faqTools,
+        }),
       {
         [faqLlm]: faqLlm,
         [faqTools]: faqTools,
@@ -407,16 +413,15 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addConditionalEdges(
       bookingTools,
       (state: ClinicState) =>
-        routeAfterAgentTools(
-          state,
-          bookingLlm,
-          bookingTools,
-          bookingMutationFinalize,
-          bookingCommandPrepare,
-          bookingNoteOrch,
-          bookingFinalize,
-          faqPrepare,
-        ),
+        routeAfterAgentTools(state, {
+          llmName: bookingLlm,
+          toolsName: bookingTools,
+          mutationFinalizeName: bookingMutationFinalize,
+          commandPrepareName: bookingCommandPrepare,
+          noteOrchestratorName: bookingNoteOrch,
+          finalizeName: bookingFinalize,
+          faqPrepareName: faqPrepare,
+        }),
       {
         [bookingLlm]: bookingLlm,
         [bookingTools]: bookingTools,

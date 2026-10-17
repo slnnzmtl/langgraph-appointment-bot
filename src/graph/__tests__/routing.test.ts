@@ -94,6 +94,10 @@ describe("agent loop routing", () => {
         new ToolMessage({ content: "{}", tool_call_id: "1" }),
       ],
     };
-    expect(routeAfterAgentTools(state as never, "faq__llm", "faq__tools")).toBe("faq__llm");
+    expect(routeAfterAgentTools(state as never,
+        {
+          llmName: "faq__llm",
+          toolsName: "faq__tools",
+        })).toBe("faq__llm");
   });
 });

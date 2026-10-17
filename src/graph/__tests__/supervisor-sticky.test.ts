@@ -364,6 +364,75 @@ describe("shouldContinueInBooking", () => {
       ),
     ).toBe(false);
   });
+
+  it("is true for a valid phone on open phoneNumber contact_field", () => {
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          pendingInteraction: {
+            kind: "contact_field",
+            field: "phoneNumber",
+            choices: [],
+          },
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Для завершення запису надішліть, будь ласка, ваш номер телефону.",
+          },
+          messages: [
+            new AIMessage("Для завершення запису надішліть, будь ласка, ваш номер телефону."),
+            new HumanMessage("0939199223"),
+          ],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("is false for free text on open firstName/lastName contact_field", () => {
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          pendingInteraction: {
+            kind: "contact_field",
+            field: "firstName",
+            choices: [],
+          },
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підкажіть, будь ласка, ваше ім’я.",
+          },
+          messages: [
+            new AIMessage("Підкажіть, будь ласка, ваше ім’я."),
+            new HumanMessage("скільки коштує?"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      shouldContinueInBooking(
+        supervisorState({
+          pendingInteraction: {
+            kind: "contact_field",
+            field: "lastName",
+            choices: [],
+          },
+          lastHandoff: {
+            agentId: "booking",
+            agentName: "Booking",
+            status: "ok",
+            replyText: "Підкажіть, будь ласка, ваше прізвище.",
+          },
+          messages: [
+            new AIMessage("Підкажіть, будь ласка, ваше прізвище."),
+            new HumanMessage("а яка адреса?"),
+          ],
+        }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("shouldContinueInFaq", () => {

@@ -33,7 +33,7 @@ import { stampRuntimeToolAi } from "../agent-loop/runtime-tool-stamp.js";
 import {
   latestContactIncompleteMissingFields,
   latestMeetingMutationError,
-} from "../agent-loop/protocol.js";
+} from "../agent-loop/protocol/index.js";
 import { createBookingInteractionRenderNode } from "../booking-note-orchestrator.js";
 import {
   createEmptyBookingDraft,
@@ -234,11 +234,12 @@ describe("runtime-owned booking routing", () => {
             }),
           ],
         }),
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        }),
     ).toBe("booking__command_prepare");
   });
 
@@ -268,11 +269,12 @@ describe("runtime-owned booking routing", () => {
     expect(
       routeAfterAgentTools(
         state,
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        }),
     ).toBe("booking__command_prepare");
   });
 
@@ -373,11 +375,12 @@ describe("runtime-owned booking routing", () => {
 
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-    )).toBe("booking__command_prepare");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        })).toBe("booking__command_prepare");
 
     const prepared = await createAgentCommandPrepareNode()(state);
     const update = unwrapCommandUpdate(prepared);
@@ -426,11 +429,12 @@ describe("runtime-owned booking routing", () => {
     });
     expect(routeAfterAgentTools(
       afterFailure,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-    )).toBe("booking__mutation_finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        })).toBe("booking__mutation_finalize");
     expect(routeAfterAgentPrepare(afterFailure, "booking__llm", "booking__command_prepare"))
       .toBe("booking__llm");
   });
@@ -917,13 +921,13 @@ describe("DDD-261 router projections from booking planner", () => {
     expect(resolveBookingCommand(contactField).kind).toBe("finalize");
     expect(routeAfterAgentTools(
       contactField,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__finalize");
   });
 
   it("projects execute / render needing prepare to command_prepare after tools", () => {
@@ -956,13 +960,13 @@ describe("DDD-261 router projections from booking planner", () => {
     expect(bookingOutcomeNeedsPrepare(outcome)).toBe(true);
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__command_prepare");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__command_prepare");
   });
 
   it("projects continue_llm without prepare to the LLM after tools", () => {
@@ -982,13 +986,13 @@ describe("DDD-261 router projections from booking planner", () => {
     expect(bookingOutcomeNeedsPrepare(outcome)).toBe(false);
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__llm");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__llm");
   });
 });
 

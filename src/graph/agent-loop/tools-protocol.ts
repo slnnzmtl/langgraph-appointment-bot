@@ -8,7 +8,7 @@ import {
   isBookingRuntimeToolName,
 } from "../../tools/index.js";
 import type { ClinicState } from "../state.js";
-import { BOOKING_AGENT_ID } from "../types.js";
+import { BOOKING_AGENT_ID, type ClinicAgentId } from "../types.js";
 import {
   isRuntimeOriginatedToolAi,
   rewriteAiToolCalls,
@@ -26,7 +26,7 @@ export type ToolProtocolResult = {
  */
 export const filterToolTape = (
   state: ClinicState,
-  agentId?: string,
+  agentId: ClinicAgentId,
   allowedToolNames?: ReadonlySet<string>,
 ): ToolProtocolResult => {
   const agentMessages = state.agentMessages ?? [];

@@ -21,6 +21,7 @@ import {
   formatAvailabilityTimeOffer,
   routeAfterAgentTools,
 } from "../agent-loop/index.js";
+import { tryBookingNoAiFinalize } from "../agent-loop/finalize/booking.js";
 import { setTrackEventForTests } from "../../analytics/track.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
@@ -52,7 +53,7 @@ import type { BookingDraft } from "../booking-draft.js";
 import {
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,
   terminalContactWriteOutcome,
-} from "../agent-loop/protocol.js";
+} from "../agent-loop/protocol/index.js";
 import { type ClinicAgentDefinition } from "../types.js";
 
 import {
@@ -482,13 +483,14 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        "booking__mutation_finalize",
-        "booking__command_prepare",
-        "booking__note_orchestrator",
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          noteOrchestratorName: "booking__note_orchestrator",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
 
     const finalize = createBookingFinalizeNode(agent);
@@ -528,13 +530,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
     const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
@@ -562,13 +562,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
     const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_CONTACT_SAVE_FAILED_UK);
@@ -701,13 +699,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__finalize");
     const update = await createBookingFinalizeNode(agent)(state);
     expect(update.lastHandoff?.replyText).toBe(BOOKING_PHONE_OCCUPIED_UK);
@@ -784,13 +780,11 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(
       routeAfterAgentTools(
         state as never,
-        "booking__llm",
-        "booking__tools",
-        undefined,
-        undefined,
-        undefined,
-        "booking__finalize",
-      ),
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          finalizeName: "booking__finalize",
+        }),
     ).toBe("booking__llm");
   });
 
@@ -893,6 +887,57 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
       field: "firstName",
     });
     expect(update.lastHandoff?.replyText).toBe("Підкажіть, будь ласка, ваше ім’я.");
+  });
+
+  it("no-AI finalize asks for firstName after a valid phone (Human-only agentMessages)", async () => {
+    const prepare = createBookingPrepareNode();
+    const prepared = await prepare(
+      clinicState({
+        messages: [new HumanMessage("0939199223")],
+        bookingDraft: canonicalBookingDraft({
+          phase: "details",
+          contactId: null,
+        }),
+        pendingInteraction: {
+          kind: "contact_field",
+          field: "phoneNumber",
+          choices: [],
+        },
+      }),
+    );
+    expect(unwrapCommandUpdate(prepared).pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+
+    const phoneHuman = new HumanMessage("0939199223");
+    const preparedDraft = unwrapCommandUpdate(prepared).bookingDraft as BookingDraft;
+    const preparedPending = unwrapCommandUpdate(prepared).pendingInteraction;
+    const noAiState = clinicState({
+      messages: [phoneHuman],
+      bookingDraft: preparedDraft,
+      pendingInteraction: preparedPending,
+      agentMessages: [phoneHuman],
+    });
+    const noAi = tryBookingNoAiFinalize(noAiState, [phoneHuman]);
+    expect(noAi?.replySource).toBe("runtime");
+    expect(noAi?.replyText).toBe("Підкажіть, будь ласка, ваше ім’я.");
+
+    const finalize = createBookingFinalizeNode(agent);
+    const update = await finalize(noAiState);
+
+    const replyText = update.lastHandoff?.replyText ?? "";
+    expect(replyText).toBe("Підкажіть, будь ласка, ваше ім’я.");
+    expect(replyText.length).toBeGreaterThan(0);
+    expect(replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(replyText).not.toBe("…");
+    expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+    // No-AI path persists a runtime AIMessage; empty handoff would leave none.
+    const outbound = (update.messages ?? []) as Array<{ content?: unknown }>;
+    expect(outbound.some((m) => extractMessageTextContent(m.content as never) === replyText)).toBe(true);
   });
 
   it("stays on firstName when collected has no firstName (aside)", async () => {

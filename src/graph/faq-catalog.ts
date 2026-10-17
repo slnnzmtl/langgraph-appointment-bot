@@ -242,6 +242,33 @@ export const faqCatalogIntroFromModel = (text: string): string => {
 };
 
 /**
+ * Mid-catalog FAQ answer (price / product info) while chips stay open.
+ * Returns the model body to show as-is when it is not a choice-only / trailing
+ * choice-question turn. Null → rebuild deterministic catalog bullets.
+ */
+export const faqCatalogPreserveModelAnswer = (text: string): string | null => {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const paragraphs = trimmed
+    .split(/\n{2,}/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+  const last = paragraphs.at(-1) ?? "";
+  const lastIsChoiceQuestion =
+    last.includes("?")
+    && stripTrailingQuestionSentence(last).length === 0;
+  if (lastIsChoiceQuestion) {
+    return null;
+  }
+  if (faqCatalogIntroFromModel(trimmed).length === 0) {
+    return null;
+  }
+  return trimmed;
+};
+
+/**
  * Deterministic FAQ catalog body from structured choices. Optional model intro
  * is kept; empty intro falls back to a short graph-owned line. Singleton CRM
  * rows may include their description under the bullet.

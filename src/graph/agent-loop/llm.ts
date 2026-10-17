@@ -27,8 +27,8 @@ import {
 import { buildCachedMessages, buildUncachedMessages } from "../gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { tagModelFailureMessage } from "../sub-agent-messages.js";
-import { toolRanThisTurn } from "./protocol.js";
-import { coerceAvailabilityToolCalls } from "./tool-call-coercion.js";
+import { toolRanThisTurn } from "./protocol/index.js";
+import { sanitizeBoundModelToolCalls } from "./tool-call-coercion.js";
 
 
 export type CreateAgentLlmOptions = {
@@ -151,7 +151,7 @@ export const createAgentLlmNode = (options: CreateAgentLlmOptions) => {
       }
 
       return {
-        agentMessages: [coerceAvailabilityToolCalls(response, state, agent.id, allowedToolNames)],
+        agentMessages: [sanitizeBoundModelToolCalls(response, allowedToolNames)],
         stepCount,
       };
     } catch (error) {

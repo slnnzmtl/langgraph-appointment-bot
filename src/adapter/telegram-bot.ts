@@ -9,6 +9,7 @@ import type { Context } from "telegraf";
 
 import {
   trackEvent,
+  releaseClinicTurnCallbackHandler,
   withClinicTurn,
   type ClinicTurnCallbacks,
 } from "../analytics/track.js";
@@ -205,6 +206,7 @@ export const withCheckpointThreadRetry = async <T>(
     }
     console.error(`Corrupt checkpoint for thread ${threadId}; resetting:`, error);
     await checkpointer.deleteThread(threadId);
+    releaseClinicTurnCallbackHandler(threadId);
     return run();
   }
 };

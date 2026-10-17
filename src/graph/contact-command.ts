@@ -12,7 +12,7 @@ import {
 import {
   phoneLookupFailedThisTurn,
   toolRanThisTurn,
-} from "./agent-loop/protocol.js";
+} from "./agent-loop/protocol/index.js";
 
 export type ContactIdentityResolution =
   | { kind: "owned"; contactId: string; contact: Record<string, unknown> }

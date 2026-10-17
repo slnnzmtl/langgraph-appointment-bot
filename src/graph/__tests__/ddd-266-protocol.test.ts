@@ -1,19 +1,16 @@
 import { AIMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 
-import { coerceAvailabilityToolCalls } from "../agent-loop/tool-call-coercion.js";
+import { sanitizeBoundModelToolCalls } from "../agent-loop/tool-call-coercion.js";
 import { resolveCatalogFreeText } from "../catalog-match.js";
-import { clinicState } from "./agent-loop-fixtures.js";
 
 describe("DDD-266 model control protocols", () => {
   it("strips leaked tool markup without adding tool_calls", () => {
     const informational = new Set(["list_services"]);
-    const coerced = coerceAvailabilityToolCalls(
+    const coerced = sanitizeBoundModelToolCalls(
       new AIMessage(
         "Hi <call:default_api:create_meeting{confirmationGiven: true}></call:default_api:create_meeting>",
       ),
-      clinicState(),
-      "booking",
       informational,
     );
     expect(coerced.tool_calls ?? []).toEqual([]);

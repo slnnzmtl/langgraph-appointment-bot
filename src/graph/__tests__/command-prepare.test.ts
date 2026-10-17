@@ -24,7 +24,7 @@ import {
 } from "../agent-loop/routing.js";
 import { BOOKING_REPLACE_MENU } from "../../shared/clinic-constants.js";
 import { openVisitReplacementInteraction } from "../booking-session.js";
-import { coerceAvailabilityToolCalls } from "../agent-loop/tool-call-coercion.js";
+import { sanitizeBoundModelToolCalls } from "../agent-loop/tool-call-coercion.js";
 import type { BookingDraft } from "../booking-draft.js";
 import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
 import {
@@ -54,6 +54,7 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   pendingInteraction: null,
   noteOrchQueued: false,
   faqSkipLlm: false,
+  bookingSkipLlm: false,
   serviceChangeNotice: null,
   bookingSchemaVersion: 1,
   pendingCancellationPurpose: null,
@@ -772,10 +773,8 @@ describe("booking LLM tool surface coercion", () => {
           type: "tool_call",
         }],
       });
-      const coerced = coerceAvailabilityToolCalls(
+      const coerced = sanitizeBoundModelToolCalls(
         native,
-        clinicState(),
-        "booking",
         informational,
       );
       expect(coerced.tool_calls ?? []).toEqual([]);
@@ -792,13 +791,8 @@ describe("booking LLM tool surface coercion", () => {
         type: "tool_call",
       }],
     });
-    const coerced = coerceAvailabilityToolCalls(
+    const coerced = sanitizeBoundModelToolCalls(
       response,
-      clinicState({
-        bookingDraft: readyCreateDraft(),
-        messages: [new HumanMessage("Так")],
-      }),
-      "booking",
       informational,
     );
     expect(coerced.tool_calls).toEqual([
@@ -813,10 +807,8 @@ describe("booking LLM tool surface coercion", () => {
       "text <call:default_api:list_services{}></call:default_api:list_services>"
       + "<call:default_api:create_meeting{confirmationGiven: true}></call:default_api:create_meeting>",
     );
-    const coerced = coerceAvailabilityToolCalls(
+    const coerced = sanitizeBoundModelToolCalls(
       response,
-      clinicState(),
-      "booking",
       informational,
     );
     expect(coerced.tool_calls ?? []).toEqual([]);
@@ -1353,11 +1345,12 @@ describe("DDD-261 unified booking transition planner", () => {
     });
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-    )).toBe("booking__command_prepare");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+        })).toBe("booking__command_prepare");
 
     const update = await commandPrepare(state);
     expect(lastToolCall(update)).toMatchObject({
@@ -1394,16 +1387,16 @@ describe("DDD-261 unified booking transition planner", () => {
     expect(bookingOutcomeNeedsPrepare(outcome)).toBe(false);
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__finalize");
   });
 
-  it("planner finalizes open pending service_confirm; tools router projects finalize", () => {
+  it("open service_confirm without bookingSkipLlm continues to LLM (not reprint)", () => {
     const state = clinicState({
       bookingDraft: readyCreateDraft({
         phase: "service",
@@ -1432,6 +1425,58 @@ describe("DDD-261 unified booking transition planner", () => {
           { id: "decline", label: "Обрати іншу процедуру" },
         ],
       },
+      bookingSkipLlm: false,
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ list: [] }),
+          name: "list_services",
+          tool_call_id: "svc-1",
+        }),
+      ],
+    });
+    const outcome = resolveBookingCommand(state);
+    expect(outcome.kind).toBe("continue_llm");
+    expect(routeAfterAgentTools(
+      state,
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__llm");
+  });
+
+  it("planner finalizes prepare-produced service_confirm when bookingSkipLlm is set", () => {
+    const state = clinicState({
+      bookingDraft: readyCreateDraft({
+        phase: "service",
+        serviceAcceptance: {
+          status: "pending",
+          service: {
+            id: CONSULTATION_SERVICE_ID,
+            name: "Консультація",
+            source: "catalog",
+          },
+        },
+        selectedDate: null,
+        selectedSlot: null,
+        note: { status: "unasked" },
+        contactId: null,
+      }),
+      pendingInteraction: {
+        kind: "service_confirm",
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: "Консультація",
+          source: "catalog",
+        },
+        choices: [
+          { id: "accept", label: "Так" },
+          { id: "decline", label: "Обрати іншу процедуру" },
+        ],
+      },
+      bookingSkipLlm: true,
       agentMessages: [
         new ToolMessage({
           content: JSON.stringify({ list: [] }),
@@ -1445,13 +1490,13 @@ describe("DDD-261 unified booking transition planner", () => {
     expect(bookingOutcomeNeedsPrepare(outcome)).toBe(false);
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__finalize");
   });
 
   it("planner finalizes REPLACE cancel without accepted service (FAQ prepare projection)", () => {
@@ -1491,23 +1536,23 @@ describe("DDD-261 unified booking transition planner", () => {
     expect(bookingOutcomeNeedsPrepare(outcome)).toBe(false);
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-      "faq__prepare",
-    )).toBe("faq__prepare");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+          faqPrepareName: "faq__prepare",
+        })).toBe("faq__prepare");
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__finalize");
   });
 
   it("planner finalizes REPLACE cancel after slots; tools router projects finalize", () => {
@@ -1562,12 +1607,12 @@ describe("DDD-261 unified booking transition planner", () => {
     expect(bookingOutcomeNeedsPrepare(outcome)).toBe(false);
     expect(routeAfterAgentTools(
       state,
-      "booking__llm",
-      "booking__tools",
-      "booking__mutation_finalize",
-      "booking__command_prepare",
-      undefined,
-      "booking__finalize",
-    )).toBe("booking__finalize");
+        {
+          llmName: "booking__llm",
+          toolsName: "booking__tools",
+          mutationFinalizeName: "booking__mutation_finalize",
+          commandPrepareName: "booking__command_prepare",
+          finalizeName: "booking__finalize",
+        })).toBe("booking__finalize");
   });
 });

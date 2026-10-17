@@ -5,7 +5,7 @@ import {
   extractRawMessageText,
   stripLeakedModelToolCalls,
 } from "../../shared/message-content.js";
-import type { ClinicState } from "../state.js";
+import { rewriteAiMessage } from "./rewrite-ai-message.js";
 
 /**
  * Sanitize model tool calls before ToolNode: drop non-allowlisted names (stale
@@ -13,17 +13,15 @@ import type { ClinicState } from "../state.js";
  * Do not promote leaked markup into executable tool_calls — native structured
  * calls are the only model-owned execution protocol (DDD-266).
  */
-export const coerceAvailabilityToolCalls = (
+export const sanitizeBoundModelToolCalls = (
   response: AIMessage,
-  _state: ClinicState,
-  _agentId: string,
   allowedToolNames: ReadonlySet<string>,
 ): AIMessage => {
   const raw = extractRawMessageText(response.content);
   const existingRaw = response.tool_calls ?? [];
   for (const call of existingRaw) {
     if (!allowedToolNames.has(call.name)) {
-      trackToolError("disallowed_tool_call", call.name);
+      trackToolError(call.name, "disallowed_tool_call");
     }
   }
   const toolCalls = existingRaw.filter((call) => allowedToolNames.has(call.name));
@@ -71,10 +69,8 @@ export const coerceAvailabilityToolCalls = (
     return response;
   }
 
-  return new AIMessage({
+  return rewriteAiMessage(response, {
     content: nextContent,
     tool_calls: toolCalls,
-    additional_kwargs: response.additional_kwargs,
-    response_metadata: response.response_metadata,
   });
 };

@@ -32,7 +32,7 @@ import {
 import {
   mutationCommittedThisTurn,
   terminalMeetingMutationOutcome,
-} from "../protocol.js";
+} from "../protocol/index.js";
 import {
   applyBookingOutcomeRiskOverride,
   applyBookingPrimaryReply,

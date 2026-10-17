@@ -24,7 +24,7 @@ import { availabilityMatchesBooking } from "./booking-draft.js";
 import {
   availabilitySlotsRanThisTurn,
   captureAvailabilityFromMessages,
-} from "./agent-loop/protocol.js";
+} from "./agent-loop/protocol/index.js";
 import {
   availabilityQueryFromContext,
   type AvailabilityContext,

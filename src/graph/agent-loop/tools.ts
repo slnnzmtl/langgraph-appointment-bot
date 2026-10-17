@@ -4,6 +4,7 @@ import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
+import type { ClinicAgentId } from "../types.js";
 import { findLastAIMessage } from "../tool-routing.js";
 import { applyToolEffects } from "./tool-effects/index.js";
 import { toolMessagesFromToolNodeInvoke } from "./tool-node-result.js";
@@ -11,9 +12,11 @@ import { filterToolTape } from "./tools-protocol.js";
 
 export const createAgentToolsNode = (
   tools: StructuredToolInterface[],
-  agentId?: string,
+  agentId: ClinicAgentId,
 ) => {
-  const toolNode = new ToolNode(tools);
+  // Expected CRM/domain failures return structured `{ error }` JSON from the
+  // tool implementations. Unexpected throws must not become ToolMessages.
+  const toolNode = new ToolNode(tools, { handleToolErrors: false });
   const allowedToolNames = new Set(tools.map((entry) => entry.name));
 
   return async (state: ClinicState, config?: RunnableConfig): Promise<ClinicStateUpdate> => {

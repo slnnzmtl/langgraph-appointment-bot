@@ -50,7 +50,7 @@ import {
   latestCreateMeetingError,
   meetingMutationIsHitlDecline,
   mutationCommittedThisTurn,
-} from "../protocol.js";
+} from "../protocol/index.js";
 import { defaultMenuHasVisit } from "../mutation-finalize.js";
 import {
   bookingDetailsInteraction,
@@ -77,6 +77,19 @@ export const tryBookingNoAiFinalize = (
   const contact = tryBookingContactNoAiFinalize(state);
   if (contact != null) {
     return contact;
+  }
+
+  // Identity ladder after prepare (Human-only agentMessages): phone → name
+  // without an LLM turn. Owns transitions via bookingDetailsInteraction.
+  const detailsStep = bookingDetailsInteraction(state);
+  if (detailsStep != null) {
+    return {
+      ...emptyFinalizeReply("ok"),
+      replyText: detailsStep.replyText,
+      replyButtons: replyButtonsForInteraction(detailsStep.interaction),
+      replySource: "runtime",
+      patch: { pendingInteraction: detailsStep.interaction },
+    };
   }
 
   // Graph-owned REPLACE after prepare (no LLM turn): still open the menu.

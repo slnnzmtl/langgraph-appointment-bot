@@ -1,24 +1,37 @@
+import { CONSULTATION_SERVICE_ID } from "../shared/clinic-constants.js";
+import { labelIdFor } from "../shared/message-content.js";
+import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingDraft, BookingService } from "./booking-draft.js";
 import {
   interpretInteractionReply,
   reduceBookingSession,
   type PendingInteraction,
 } from "./booking-session.js";
-import { resolveFaqCatalogChoices } from "./faq-catalog.js";
 import {
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
   type CatalogFreeTextResult,
 } from "./catalog-match.js";
+import { resolveFaqCatalogChoices } from "./faq-catalog.js";
+import type { ClinicRoutingDecision, SupervisorIntent } from "./routing.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "./service-resolution.js";
-import { labelIdFor } from "../shared/message-content.js";
-import type { ClinicRoutingDecision, SupervisorIntent } from "./routing.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "./types.js";
-import type { ServicesContext } from "../tools/service-tools.js";
+
+type BookingSessionSnapshot = {
+  bookingDraft: BookingDraft | null;
+  pendingInteraction: PendingInteraction | null;
+};
+
+/** Open consultation yes/no card — CRM named-procedure must wipe it first. */
+const isOpenConsultationOffer = (
+  session: BookingSessionSnapshot,
+): boolean =>
+  session.pendingInteraction?.kind === "service_confirm"
+  && session.pendingInteraction.service.id === CONSULTATION_SERVICE_ID;
 
 const catalogRowToBookingService = (
   row: ServicesContext["list"][number],
@@ -28,11 +41,6 @@ const catalogRowToBookingService = (
   ...(row.duration != null ? { durationMinutes: row.duration } : {}),
   source: "catalog",
 });
-
-type BookingSessionSnapshot = {
-  bookingDraft: BookingDraft | null;
-  pendingInteraction: PendingInteraction | null;
-};
 
 /**
  * Choose-other catalog browse: exact «Обрати іншу процедуру» chip always, or
@@ -144,6 +152,8 @@ export const openCatalogFromFreeText = async (input: {
 /**
  * Idle FAQ named-procedure book: supervisor intent gates catalog open — no
  * book-prefix regex. Singleton → service_confirm; family → FAQ chips.
+ * Open consultation yes/no is closed first (same wipe as «Обрати іншу процедуру»)
+ * so a multi-match picker does not leave pending consultation in bookingDraft.
  */
 export const faqNamedProcedureEntryForTurn = async (input: {
   supervisorIntent: SupervisorIntent | null | undefined;
@@ -163,12 +173,17 @@ export const faqNamedProcedureEntryForTurn = async (input: {
   ) {
     return null;
   }
+  const switchingFromConsultation = isOpenConsultationOffer(input.session);
+  const session = switchingFromConsultation
+    ? { bookingDraft: null, pendingInteraction: null }
+    : input.session;
   return openCatalogFromFreeText({
     text: input.patientText,
     services: input.services,
-    session: input.session,
+    session,
     utterance: input.patientText,
     allowTerminalQuestion: true,
+    ...(switchingFromConsultation ? { consultationDeclined: true } : {}),
     ...(input.partitionCandidates != null
       ? { partitionCandidates: input.partitionCandidates }
       : {}),

@@ -1,6 +1,6 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import type { ClinicStateUpdate } from "../../state.js";
-import { captureServicesFromMessages } from "../protocol.js";
+import { captureServicesFromMessages } from "../protocol/index.js";
 
 export const projectServiceEffects = (input: {
   resultMessages: BaseMessage[];
