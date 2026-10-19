@@ -26,7 +26,7 @@ const acceptedReady = (): BookingSessionV2 => ({
   revision: 5,
   serviceAcceptance: {
     status: "accepted",
-    service: { id: "svc-1", name: "Botox", source: "catalog" },
+    service: { id: "svc-1", name: "Botox", source: "catalog", durationMinutes: 30 },
   },
   selectedDate: "2026-09-10",
   selectedSlot: {
@@ -34,6 +34,11 @@ const acceptedReady = (): BookingSessionV2 => ({
     dateEnd: "2026-09-10T14:30:00",
     label: "14:00",
     provenance: "availability_tool",
+    evidence: {
+      snapshotId: "snap-1",
+      serviceId: "svc-1",
+      durationMinutes: 30,
+    },
   },
   note: { status: "skipped" },
   contact: {
@@ -80,7 +85,7 @@ describe("decideBooking kernel", () => {
       status: "unknown",
     };
     const decision = decideBooking(
-      acceptedReady(),
+      { ...acceptedReady(), pendingEffect: pending },
       {
         source: "effect_result",
         result: {
@@ -91,7 +96,6 @@ describe("decideBooking kernel", () => {
         },
       },
       cleanReads,
-      pending,
     );
     expect(decision.tag).toBe("effect");
     if (decision.tag === "effect") {
@@ -101,7 +105,7 @@ describe("decideBooking kernel", () => {
     }
   });
 
-  it("rejects mismatched effect ids", () => {
+  it("rejects mismatched effect ids from session.pendingEffect", () => {
     const pending: PendingEffect = {
       id: "eff_1",
       expectedRevision: 5,
@@ -109,7 +113,7 @@ describe("decideBooking kernel", () => {
       status: "executing",
     };
     const decision = decideBooking(
-      acceptedReady(),
+      { ...acceptedReady(), pendingEffect: pending },
       {
         source: "effect_result",
         result: {
@@ -120,7 +124,6 @@ describe("decideBooking kernel", () => {
         },
       },
       cleanReads,
-      pending,
     );
     expect(decision.tag).toBe("ask");
     if (decision.tag === "ask") {
@@ -128,6 +131,109 @@ describe("decideBooking kernel", () => {
         kind: "clarification",
         reason: "effect_id_mismatch",
       });
+    }
+  });
+
+  it("persists pendingEffect on the session when emitting", () => {
+    const session = {
+      ...baseSession(),
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: "svc-1", source: "catalog" as const },
+      },
+    };
+    const decision = decideBooking(
+      session,
+      { source: "patient_turn", rawText: "" },
+      cleanReads,
+    );
+    expect(decision.tag).toBe("effect");
+    if (decision.tag === "effect") {
+      expect(decision.session.pendingEffect).toEqual(decision.pendingEffect);
+      expect(decision.pendingEffect.status).toBe("prepared");
+      expect(decision.pendingEffect.id).toMatch(/^eff_/);
+    }
+  });
+
+  it("reuses the same effect id when re-entering a pending mutation", () => {
+    const first = decideBooking(
+      acceptedReady(),
+      { source: "patient_turn", rawText: "" },
+      cleanReads,
+    );
+    expect(first.tag).toBe("mutation_confirm");
+    if (first.tag !== "mutation_confirm") {
+      return;
+    }
+    const second = decideBooking(
+      first.session,
+      { source: "patient_turn", rawText: "" },
+      cleanReads,
+    );
+    expect(second.tag).toBe("mutation_confirm");
+    if (second.tag === "mutation_confirm") {
+      expect(second.pendingEffect.id).toBe(first.pendingEffect.id);
+      expect(second.session.pendingEffect?.id).toBe(first.pendingEffect.id);
+    }
+  });
+
+  it("looks up contact by phone when names are present but contactId is missing", () => {
+    const session: BookingSessionV2 = {
+      ...acceptedReady(),
+      contact: {
+        contactId: null,
+        phoneNumber: "+380501112233",
+        firstName: "Ada",
+        lastName: "Lovelace",
+      },
+    };
+    const decision = decideBooking(
+      session,
+      { source: "patient_turn", rawText: "" },
+      cleanReads,
+    );
+    expect(decision.tag).toBe("effect");
+    if (decision.tag === "effect") {
+      expect(decision.pendingEffect.effect).toEqual({
+        kind: "lookup_contact_by_phone",
+        phoneNumber: "+380501112233",
+      });
+      expect(decision.session.pendingEffect?.id).toBe(decision.pendingEffect.id);
+    }
+  });
+
+  it("does not loop on lastName when phone + names are already present", () => {
+    const session: BookingSessionV2 = {
+      ...acceptedReady(),
+      contact: {
+        contactId: null,
+        phoneNumber: "+380501112233",
+        firstName: "Ada",
+        lastName: "Lovelace",
+      },
+    };
+    const first = decideBooking(session, { source: "patient_turn", rawText: "" }, cleanReads);
+    expect(first.tag).toBe("effect");
+    // Simulate lookup returning none → create_contact, not another lastName ask.
+    if (first.tag !== "effect") {
+      return;
+    }
+    const afterLookup = decideBooking(
+      first.session,
+      {
+        source: "effect_result",
+        result: {
+          effectId: first.pendingEffect.id,
+          kind: "contact_lookup",
+          outcome: "none",
+          contactIds: [],
+        },
+      },
+      cleanReads,
+    );
+    expect(afterLookup.tag).toBe("effect");
+    if (afterLookup.tag === "effect") {
+      expect(afterLookup.pendingEffect.effect.kind).toBe("create_contact");
     }
   });
 
@@ -175,6 +281,28 @@ describe("decideBooking kernel", () => {
     }
   });
 
+  it("accepts confirm_pending_service for a pending consultation", () => {
+    const decision = decideBooking(
+      {
+        ...baseSession(),
+        serviceAcceptance: {
+          status: "pending",
+          service: { id: "consultation", name: "Консультація", source: "catalog" },
+        },
+      },
+      {
+        source: "semantic_patch",
+        patch: { serviceIntent: { kind: "confirm_pending_service" } },
+      },
+      cleanReads,
+    );
+    expect(decision.tag).toBe("effect");
+    if (decision.tag === "effect") {
+      expect(decision.session.serviceAcceptance?.status).toBe("accepted");
+      expect(decision.pendingEffect.effect.kind).toBe("present_availability");
+    }
+  });
+
   it("keeps accepted facts when asking an informational side question", () => {
     const session = acceptedReady();
     const decision = decideBooking(
@@ -202,7 +330,6 @@ describe("decideBooking kernel", () => {
           service: { id: "svc-1", source: "catalog" },
         },
         selectedDate: "2026-09-10",
-        // unverified slot must not mutate
         selectedSlot: {
           dateStart: "2026-09-10T14:00:00",
           dateEnd: "2026-09-10T14:30:00",
@@ -218,6 +345,50 @@ describe("decideBooking kernel", () => {
     expect(decision.tag).toBe("effect");
     if (decision.tag === "effect") {
       expect(decision.pendingEffect.effect.kind).toBe("present_availability");
+    }
+  });
+
+  it("continues replacement cancel into create_pending on committed cancel", () => {
+    const session: BookingSessionV2 = {
+      ...acceptedReady(),
+      mode: "replace",
+      replacement: {
+        meeting: { id: "existing-1", name: "Old" },
+        status: "cancelling",
+        originalCommand: {
+          action: "create",
+          payload: {
+            serviceId: "svc-1",
+            contactId: "c-1",
+            dateStart: "2026-09-10T14:00:00",
+            dateEnd: "2026-09-10T14:30:00",
+          },
+        },
+      },
+      pendingEffect: {
+        id: "eff_cancel",
+        expectedRevision: 5,
+        effect: { kind: "cancel_meeting", payload: { meetingId: "existing-1" } },
+        status: "executing",
+      },
+    };
+    const decision = decideBooking(
+      session,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_cancel",
+          kind: "mutation",
+          action: "cancel",
+          outcome: "committed",
+        },
+      },
+      cleanReads,
+    );
+    expect(decision.tag).toBe("mutation_confirm");
+    if (decision.tag === "mutation_confirm") {
+      expect(decision.session.replacement?.status).toBe("create_pending");
+      expect(decision.pendingEffect.effect.kind).toBe("create_meeting");
     }
   });
 });

@@ -186,7 +186,7 @@ export const bookingDraftToSession = (
       : null,
     pendingDecision,
     pendingCommand: toFrozenCommand(draft.pendingCommand),
-    pendingEffect: null,
+    pendingEffect: draft.pendingEffect ?? null,
   };
 };
 
@@ -244,5 +244,6 @@ export const sessionToBookingDraft = (session: BookingSessionV2): BookingDraft =
     pendingDecision: session.pendingDecision,
     slotProvenance: session.selectedSlot?.provenance ?? "none",
     slotEvidence: session.selectedSlot?.evidence ?? null,
+    pendingEffect: session.pendingEffect,
   };
 };

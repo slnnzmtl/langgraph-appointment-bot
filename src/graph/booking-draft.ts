@@ -4,6 +4,7 @@ import { contactMissingFields } from "../tools/contact-tools.js";
 import { kyivLocalIsoToUtcMs } from "../tools/availability-slots.js";
 import type { SelectedBookingSlot } from "./types.js";
 
+import type { PendingEffect } from "./booking-domain/effects.js";
 import type {
   PendingDecision,
   SlotAvailabilityEvidence,
@@ -126,6 +127,11 @@ export type BookingDraft = {
    * Required alongside availability_tool provenance for mutation-ready slots.
    */
   slotEvidence?: SlotAvailabilityEvidence | null;
+  /**
+   * At most one pending effect (prepared→executing→completed/unknown).
+   * Persisted for crash-safe emit-once correlation.
+   */
+  pendingEffect?: PendingEffect | null;
 };
 
 export type BookingEvent =
@@ -539,6 +545,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   pendingDecision: null,
   slotProvenance: null,
   slotEvidence: null,
+  pendingEffect: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({

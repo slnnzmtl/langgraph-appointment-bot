@@ -1,7 +1,7 @@
 import type { BookingDecision, BookingInput, BookingReadModels, BookingView } from "./decision.js";
 import type { BookingEffect, EffectResult, PendingEffect } from "./effects.js";
 import { nextBookingRequirement } from "./requirement.js";
-import type { BookingSessionV2 } from "./session.js";
+import type { BookingSessionV2, SlotFacts } from "./session.js";
 import type { UnderstoodBookingTurn } from "./turn.js";
 
 const plainView = (replyText: string, card: BookingView["card"] = null): BookingView => ({
@@ -14,10 +14,69 @@ const bump = (session: BookingSessionV2): BookingSessionV2 => ({
   revision: session.revision + 1,
 });
 
+type MeetingWriteEffect = Extract<
+  BookingEffect,
+  { kind: "create_meeting" | "reschedule_meeting" | "cancel_meeting" }
+>;
+
+const asMeetingWrite = (effect: BookingEffect): MeetingWriteEffect | null =>
+  effect.kind === "create_meeting"
+  || effect.kind === "reschedule_meeting"
+  || effect.kind === "cancel_meeting"
+    ? effect
+    : null;
+
+const sameWriteEffect = (a: BookingEffect, b: BookingEffect): boolean => {
+  const left = asMeetingWrite(a);
+  const right = asMeetingWrite(b);
+  if (left == null || right == null || left.kind !== right.kind) {
+    return false;
+  }
+  return JSON.stringify(left.payload) === JSON.stringify(right.payload);
+};
+
+/**
+ * Persist PendingEffect on the session. Re-entry with the same frozen write
+ * reuses the existing effect id (emit once). Completed writes are not re-emitted.
+ */
 const withPendingEffect = (
   session: BookingSessionV2,
   effect: BookingEffect,
 ): { session: BookingSessionV2; pendingEffect: PendingEffect } => {
+  const existing = session.pendingEffect;
+  if (
+    existing != null
+    && (existing.status === "prepared" || existing.status === "executing")
+    && sameWriteEffect(existing.effect, effect)
+  ) {
+    const pendingEffect: PendingEffect = {
+      ...existing,
+      status: existing.status === "prepared" ? "executing" : existing.status,
+    };
+    return {
+      session: {
+        ...session,
+        pendingEffect,
+      },
+      pendingEffect,
+    };
+  }
+  if (
+    existing != null
+    && existing.status === "completed"
+    && sameWriteEffect(existing.effect, effect)
+  ) {
+    // Completed write must not be emitted again — force a clarification path.
+    const pendingEffect: PendingEffect = { ...existing, status: "completed" };
+    return {
+      session: {
+        ...session,
+        pendingEffect,
+      },
+      pendingEffect,
+    };
+  }
+
   const pendingEffect: PendingEffect = {
     id: `eff_${session.revision + 1}_${effect.kind}`,
     expectedRevision: session.revision + 1,
@@ -27,24 +86,38 @@ const withPendingEffect = (
   return {
     session: {
       ...bump(session),
-      pendingEffect: null, // lifecycle field reserved; correlation lives on decision
-      pendingCommand:
-        effect.kind === "create_meeting"
-        || effect.kind === "reschedule_meeting"
-        || effect.kind === "cancel_meeting"
-          ? {
-              action:
-                effect.kind === "create_meeting"
-                  ? "create"
-                  : effect.kind === "reschedule_meeting"
-                    ? "reschedule"
-                    : "cancel",
-              payload: { ...effect.payload, effectId: pendingEffect.id },
-            }
-          : session.pendingCommand,
+      pendingEffect,
+      pendingCommand: (() => {
+        const write = asMeetingWrite(effect);
+        if (write == null) {
+          return session.pendingCommand;
+        }
+        return {
+          action:
+            write.kind === "create_meeting"
+              ? "create"
+              : write.kind === "reschedule_meeting"
+                ? "reschedule"
+                : "cancel",
+          payload: { ...write.payload, effectId: pendingEffect.id },
+        };
+      })(),
     },
     pendingEffect,
   };
+};
+
+const clearPendingEffect = (session: BookingSessionV2): BookingSessionV2 => ({
+  ...session,
+  pendingEffect: null,
+});
+
+const demoteSlot = (slot: SlotFacts | null): SlotFacts | null => {
+  if (slot == null) {
+    return null;
+  }
+  const { evidence: _dropped, ...rest } = slot;
+  return { ...rest, provenance: "unverified_legacy" };
 };
 
 const applyControl = (
@@ -67,11 +140,186 @@ const applyControl = (
   };
 };
 
+const contactNamesComplete = (session: BookingSessionV2): boolean => {
+  const { phoneNumber, firstName, lastName } = session.contact;
+  return (
+    phoneNumber != null
+    && phoneNumber.trim() !== ""
+    && firstName != null
+    && firstName.trim() !== ""
+    && lastName != null
+    && lastName.trim() !== ""
+  );
+};
+
+const nextContactField = (
+  session: BookingSessionV2,
+): "phoneNumber" | "firstName" | "lastName" | null => {
+  if (session.contact.phoneNumber == null || session.contact.phoneNumber.trim() === "") {
+    return "phoneNumber";
+  }
+  if (session.contact.firstName == null || session.contact.firstName.trim() === "") {
+    return "firstName";
+  }
+  if (session.contact.lastName == null || session.contact.lastName.trim() === "") {
+    return "lastName";
+  }
+  return null;
+};
+
+const askContactField = (
+  session: BookingSessionV2,
+  field: "phoneNumber" | "firstName" | "lastName",
+): BookingDecision => ({
+  tag: "ask",
+  session,
+  pendingDecision: { kind: "clarification", reason: `need_${field}` },
+  view: plainView(
+    field === "phoneNumber"
+      ? "Вкажіть номер телефону."
+      : field === "firstName"
+        ? "Вкажіть ім'я."
+        : "Вкажіть прізвище.",
+    { kind: "contact_field", field },
+  ),
+});
+
+/** Contact identity ladder after phone is known and contactId is missing. */
+const decideContactDetails = (
+  session: BookingSessionV2,
+  readModels: BookingReadModels,
+): BookingDecision => {
+  const phone = session.contact.phoneNumber?.trim();
+  if (phone == null || phone === "") {
+    return askContactField(session, "phoneNumber");
+  }
+
+  const lookup = session.contact.phoneLookup;
+  const needsLookup =
+    lookup == null
+    || lookup.phoneNumber !== phone
+    || session.pendingEffect?.effect.kind === "lookup_contact_by_phone";
+
+  // Always look up once for the accepted phone before asking more names or creating.
+  if (lookup == null || lookup.phoneNumber !== phone) {
+    const { session: next, pendingEffect } = withPendingEffect(session, {
+      kind: "lookup_contact_by_phone",
+      phoneNumber: phone,
+    });
+    return { tag: "effect", session: next, pendingEffect };
+  }
+
+  if (lookup.result === "occupied" || lookup.result === "ambiguous") {
+    return {
+      tag: "ask",
+      session,
+      pendingDecision: {
+        kind: "clarification",
+        reason: lookup.result === "occupied" ? "phone_occupied" : "phone_ambiguous",
+      },
+      view: plainView(
+        lookup.result === "occupied"
+          ? "Цей номер уже прив'язаний до іншого акаунту. Зверніться до адміністратора."
+          : "Знайдено кілька контактів за цим номером. Зверніться до адміністратора.",
+      ),
+    };
+  }
+
+  if (lookup.result === "single_linkable" && lookup.contactIds[0] != null) {
+    const contactId = lookup.contactIds[0];
+    if (session.contact.contactId !== contactId) {
+      const { session: next, pendingEffect } = withPendingEffect(session, {
+        kind: "link_telegram_contact",
+        contactId,
+      });
+      return { tag: "effect", session: next, pendingEffect };
+    }
+  }
+
+  const missing = nextContactField(session);
+  if (missing != null) {
+    return askContactField(session, missing);
+  }
+
+  if (lookup.result === "none" && contactNamesComplete(session) && session.contact.contactId == null) {
+    const { session: next, pendingEffect } = withPendingEffect(session, {
+      kind: "create_contact",
+      payload: {
+        phoneNumber: phone,
+        firstName: session.contact.firstName!.trim(),
+        lastName: session.contact.lastName!.trim(),
+      },
+    });
+    return { tag: "effect", session: next, pendingEffect };
+  }
+
+  // Avoid unused-arg lint when ladder falls through after a pending lookup write.
+  void needsLookup;
+  void readModels;
+  return askContactField(session, "lastName");
+};
+
+const emitMutationConfirm = (
+  session: BookingSessionV2,
+  effect: Extract<
+    BookingEffect,
+    { kind: "create_meeting" | "reschedule_meeting" | "cancel_meeting" }
+  >,
+  action: "create" | "reschedule" | "cancel",
+  confirmText: string,
+): BookingDecision => {
+  // Exact-slot revalidate before freezing a create/reschedule write.
+  if (
+    (action === "create" || action === "reschedule")
+    && session.selectedSlot != null
+    && (
+      session.selectedSlot.provenance !== "availability_tool"
+      || session.selectedSlot.evidence?.snapshotId == null
+    )
+  ) {
+    const { session: next, pendingEffect } = withPendingEffect(session, {
+      kind: "present_availability",
+      queryKind: "exact",
+      date: session.selectedDate ?? session.selectedSlot.dateStart.slice(0, 10),
+      preferredTime: session.selectedSlot.dateStart.slice(11, 16),
+      revalidate: true,
+    });
+    return { tag: "effect", session: next, pendingEffect };
+  }
+
+  const { session: next, pendingEffect } = withPendingEffect(session, effect);
+  if (pendingEffect.status === "completed") {
+    return {
+      tag: "ask",
+      session: next,
+      pendingDecision: { kind: "clarification", reason: "effect_already_completed" },
+      view: plainView("Цю дію вже виконано. Уточніть, будь ласка."),
+    };
+  }
+  return {
+    tag: "mutation_confirm",
+    session: {
+      ...next,
+      pendingDecision: {
+        kind: "mutation_confirm",
+        action,
+        effectId: pendingEffect.id,
+      },
+    },
+    pendingEffect,
+    view: plainView(confirmText, {
+      kind: "mutation_confirm",
+      action,
+      effectId: pendingEffect.id,
+    }),
+  };
+};
+
 const applyEffectResult = (
   session: BookingSessionV2,
   result: EffectResult,
-  pending: PendingEffect | null,
 ): BookingDecision => {
+  const pending = session.pendingEffect;
   if (pending != null && result.effectId !== pending.id) {
     return {
       tag: "ask",
@@ -80,30 +328,52 @@ const applyEffectResult = (
       view: plainView("Не вдалося зіставити результат дії. Уточніть, будь ласка."),
     };
   }
+
   if (result.kind === "mutation") {
     if (result.outcome === "unknown") {
-      // Never blind-replay a write with unknown outcome — require fresh CRM verification.
+      const effect: BookingEffect = { kind: "get_working_time" };
       return {
         tag: "effect",
-        ...(() => {
-          const effect: BookingEffect = { kind: "get_working_time" };
-          // Use a read effect as stand-in for "verify" in the closed union; adapters
-          // map this to prefetch/ownership refresh before any mutation retry.
-          return withPendingEffect(
-            {
-              ...session,
-              pendingCommand: null,
-              pendingDecision: { kind: "clarification", reason: "mutation_outcome_unknown" },
-              selectedSlot: session.selectedSlot == null
-                ? null
-                : { ...session.selectedSlot, provenance: "unverified_legacy" },
-            },
-            effect,
-          );
-        })(),
+        ...withPendingEffect(
+          clearPendingEffect({
+            ...session,
+            pendingCommand: null,
+            pendingDecision: { kind: "clarification", reason: "mutation_outcome_unknown" },
+            selectedSlot: demoteSlot(session.selectedSlot),
+          }),
+          effect,
+        ),
       };
     }
     if (result.outcome === "committed") {
+      // Replacement cancel → create continuation.
+      if (
+        result.action === "cancel"
+        && session.mode === "replace"
+        && session.replacement?.status === "cancelling"
+        && session.replacement.originalCommand?.action === "create"
+      ) {
+        const original = session.replacement.originalCommand;
+        const continued: BookingSessionV2 = {
+          ...clearPendingEffect(session),
+          mode: "replace",
+          replacement: {
+            ...session.replacement,
+            status: "create_pending",
+          },
+          pendingCommand: null,
+          pendingDecision: null,
+        };
+        return emitMutationConfirm(
+          bump(continued),
+          {
+            kind: "create_meeting",
+            payload: { ...original.payload },
+          },
+          "create",
+          "Підтвердити новий запис?",
+        );
+      }
       return {
         tag: "terminal",
         session: null,
@@ -121,47 +391,71 @@ const applyEffectResult = (
     }
     return {
       tag: "reply",
-      session: {
+      session: clearPendingEffect({
         ...bump(session),
         pendingCommand: null,
         pendingDecision: null,
-      },
+      }),
       view: plainView("Не вдалося змінити запис. Спробуйте ще раз."),
     };
   }
+
   if (result.kind === "availability") {
+    const base = clearPendingEffect(session);
     if (result.outcome === "stale" || result.outcome === "error") {
       const next = {
-        ...session,
-        selectedSlot: session.selectedSlot == null
-          ? null
-          : { ...session.selectedSlot, provenance: "unverified_legacy" as const },
+        ...base,
+        selectedSlot: demoteSlot(base.selectedSlot),
         pendingCommand: null,
       };
-      return decideFromRequirement(bump(next), { contactContextDirty: false, bookingContextDirty: false, availabilityVerified: false });
+      return decideFromRequirement(bump(next), {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      });
     }
     if (result.outcome === "empty" || result.outcome === "closed") {
       return {
         tag: "ask",
-        session: bump(session),
+        session: bump(base),
         pendingDecision: { kind: "clarification", reason: "availability_empty" },
         view: plainView("На цей час немає вільних слотів. Оберіть іншу дату."),
       };
     }
+    const verified =
+      base.selectedSlot != null
+      && pending?.effect.kind === "present_availability"
+      && pending.effect.revalidate === true
+        ? {
+            ...base.selectedSlot,
+            provenance: "availability_tool" as const,
+            evidence: {
+              snapshotId: result.snapshotId ?? `revalidated:${base.revision}`,
+              ...(base.serviceAcceptance?.service.id != null
+                ? { serviceId: base.serviceAcceptance.service.id }
+                : {}),
+              ...(base.serviceAcceptance?.service.durationMinutes != null
+                ? { durationMinutes: base.serviceAcceptance.service.durationMinutes }
+                : {}),
+            },
+          }
+        : base.selectedSlot;
     return decideFromRequirement(
       bump({
-        ...session,
-        selectedSlot: session.selectedSlot == null
-          ? null
-          : { ...session.selectedSlot, provenance: "availability_tool" },
+        ...base,
+        selectedSlot: verified,
       }),
-      { contactContextDirty: false, bookingContextDirty: false, availabilityVerified: true },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: true,
+      },
     );
   }
+
   if (result.kind === "contact_lookup") {
     const contact = { ...session.contact };
     if (result.outcome === "single_linkable" && result.contactIds?.[0]) {
-      contact.contactId = result.contactIds[0];
       contact.phoneLookup = {
         phoneNumber: contact.phoneNumber ?? "",
         result: "single_linkable",
@@ -179,11 +473,37 @@ const applyEffectResult = (
       };
     }
     return decideFromRequirement(
-      bump({ ...session, contact }),
+      bump(clearPendingEffect({ ...session, contact })),
       { contactContextDirty: false, bookingContextDirty: false, availabilityVerified: true },
     );
   }
-  return decideFromRequirement(bump(session), {
+
+  if (result.kind === "contact_write") {
+    const base = clearPendingEffect(session);
+    if (
+      (result.outcome === "created" || result.outcome === "updated" || result.outcome === "linked")
+      && result.contactId != null
+    ) {
+      return decideFromRequirement(
+        bump({
+          ...base,
+          contact: {
+            ...base.contact,
+            contactId: result.contactId,
+          },
+        }),
+        { contactContextDirty: false, bookingContextDirty: false, availabilityVerified: true },
+      );
+    }
+    return {
+      tag: "ask",
+      session: bump(base),
+      pendingDecision: { kind: "clarification", reason: "contact_write_failed" },
+      view: plainView("Не вдалося зберегти контакт. Спробуйте ще раз."),
+    };
+  }
+
+  return decideFromRequirement(bump(clearPendingEffect(session)), {
     contactContextDirty: false,
     bookingContextDirty: false,
     availabilityVerified: true,
@@ -194,6 +514,32 @@ const decideFromRequirement = (
   session: BookingSessionV2,
   readModels: BookingReadModels,
 ): BookingDecision => {
+  // Resume a prepared/executing write without minting a new effect id.
+  if (
+    session.pendingDecision?.kind === "mutation_confirm"
+    && session.pendingCommand != null
+    && session.pendingEffect != null
+    && (session.pendingEffect.status === "prepared" || session.pendingEffect.status === "executing")
+  ) {
+    return {
+      tag: "mutation_confirm",
+      session,
+      pendingEffect: session.pendingEffect,
+      view: plainView(
+        session.pendingDecision.action === "cancel"
+          ? "Підтвердити скасування?"
+          : session.pendingDecision.action === "reschedule"
+            ? "Підтвердити перенесення?"
+            : "Підтвердити запис?",
+        {
+          kind: "mutation_confirm",
+          action: session.pendingDecision.action,
+          effectId: session.pendingEffect.id,
+        },
+      ),
+    };
+  }
+
   if (session.pendingDecision?.kind === "mutation_confirm" && session.pendingCommand != null) {
     const action = session.pendingDecision.action;
     const effectKind =
@@ -202,26 +548,45 @@ const decideFromRequirement = (
         : action === "reschedule"
           ? "reschedule_meeting" as const
           : "cancel_meeting" as const;
-    const { session: next, pendingEffect } = withPendingEffect(session, {
-      kind: effectKind,
-      payload: { ...session.pendingCommand.payload },
-    });
-    return {
-      tag: "mutation_confirm",
-      session: {
-        ...next,
-        pendingDecision: session.pendingDecision,
+    return emitMutationConfirm(
+      session,
+      {
+        kind: effectKind,
+        payload: { ...session.pendingCommand.payload },
       },
-      pendingEffect,
+      action,
+      action === "cancel"
+        ? "Підтвердити скасування?"
+        : action === "reschedule"
+          ? "Підтвердити перенесення?"
+          : "Підтвердити запис?",
+    );
+  }
+
+  // Pending service confirmation.
+  if (session.serviceAcceptance?.status === "pending") {
+    return {
+      tag: "ask",
+      session,
+      pendingDecision: { kind: "clarification", reason: "confirm_service" },
       view: plainView(
-        action === "cancel" ? "Підтвердити скасування?" : "Підтвердити запис?",
-        {
-          kind: "mutation_confirm",
-          action,
-          effectId: pendingEffect.id,
-        },
+        `Підтвердити послугу «${session.serviceAcceptance.service.name ?? session.serviceAcceptance.service.id}»?`,
+        { kind: "clarification", reason: "confirm_service" },
       ),
     };
+  }
+
+  // Replacement offered → cancel existing before create.
+  if (session.replacement?.status === "offered") {
+    return emitMutationConfirm(
+      session,
+      {
+        kind: "cancel_meeting",
+        payload: { meetingId: session.replacement.meeting.id },
+      },
+      "cancel",
+      "Скасувати існуючий запис і створити новий?",
+    );
   }
 
   const requirement = nextBookingRequirement(session, readModels);
@@ -260,94 +625,44 @@ const decideFromRequirement = (
           skipLabel: "Пропустити",
         }),
       };
-    case "details": {
-      const field =
-        session.contact.phoneNumber == null
-          ? "phoneNumber" as const
-          : session.contact.firstName == null
-            ? "firstName" as const
-            : "lastName" as const;
-      if (field === "phoneNumber" && session.contact.phoneNumber != null) {
-        const { session: next, pendingEffect } = withPendingEffect(session, {
-          kind: "lookup_contact_by_phone",
-          phoneNumber: session.contact.phoneNumber,
-        });
-        return { tag: "effect", session: next, pendingEffect };
-      }
-      return {
-        tag: "ask",
-        session,
-        pendingDecision: { kind: "clarification", reason: `need_${field}` },
-        view: plainView(
-          field === "phoneNumber"
-            ? "Вкажіть номер телефону."
-            : field === "firstName"
-              ? "Вкажіть ім'я."
-              : "Вкажіть прізвище.",
-          { kind: "contact_field", field },
-        ),
-      };
-    }
+    case "details":
+      return decideContactDetails(session, readModels);
     case "ready": {
       if (session.mode === "reschedule" && session.rescheduleTarget != null && session.selectedSlot) {
-        const { session: next, pendingEffect } = withPendingEffect(session, {
-          kind: "reschedule_meeting",
-          payload: {
-            meetingId: session.rescheduleTarget.id,
-            dateStart: session.selectedSlot.dateStart,
-            dateEnd: session.selectedSlot.dateEnd,
-          },
-        });
-        return {
-          tag: "mutation_confirm",
-          session: {
-            ...next,
-            pendingDecision: {
-              kind: "mutation_confirm",
-              action: "reschedule",
-              effectId: pendingEffect.id,
+        return emitMutationConfirm(
+          session,
+          {
+            kind: "reschedule_meeting",
+            payload: {
+              meetingId: session.rescheduleTarget.id,
+              dateStart: session.selectedSlot.dateStart,
+              dateEnd: session.selectedSlot.dateEnd,
             },
           },
-          pendingEffect,
-          view: plainView("Підтвердити перенесення?", {
-            kind: "mutation_confirm",
-            action: "reschedule",
-            effectId: pendingEffect.id,
-          }),
-        };
+          "reschedule",
+          "Підтвердити перенесення?",
+        );
       }
       if (
         session.serviceAcceptance?.status === "accepted"
         && session.selectedSlot
         && session.contact.contactId != null
       ) {
-        const { session: next, pendingEffect } = withPendingEffect(session, {
-          kind: "create_meeting",
-          payload: {
-            serviceId: session.serviceAcceptance.service.id,
-            contactId: session.contact.contactId,
-            dateStart: session.selectedSlot.dateStart,
-            dateEnd: session.selectedSlot.dateEnd,
-            ...(session.note.value ? { description: session.note.value } : {}),
-          },
-        });
-        return {
-          tag: "mutation_confirm",
-          session: {
-            ...next,
-            pendingDecision: {
-              kind: "mutation_confirm",
-              action: "create",
-              effectId: pendingEffect.id,
+        return emitMutationConfirm(
+          session,
+          {
+            kind: "create_meeting",
+            payload: {
+              serviceId: session.serviceAcceptance.service.id,
+              contactId: session.contact.contactId,
+              dateStart: session.selectedSlot.dateStart,
+              dateEnd: session.selectedSlot.dateEnd,
+              ...(session.note.value ? { description: session.note.value } : {}),
             },
           },
-          pendingEffect,
-          view: plainView("Підтвердити запис?", {
-            kind: "mutation_confirm",
-            action: "create",
-            effectId: pendingEffect.id,
-          }),
-        };
+          "create",
+          "Підтвердити запис?",
+        );
       }
       return {
         tag: "ask",
@@ -363,7 +678,7 @@ const decideFromRequirement = (
         pendingDecision: session.pendingDecision ?? {
           kind: "mutation_confirm",
           action: "create",
-          effectId: "pending",
+          effectId: session.pendingEffect?.id ?? "pending",
         },
         view: plainView("Очікую підтвердження."),
       };
@@ -407,7 +722,6 @@ const applySemanticPatch = (
             reason: "abandon",
           };
         }
-        // Affirm: emit the frozen mutation effect once.
         return decideFromRequirement(session, readModels);
       }
       case "visit_status":
@@ -427,7 +741,25 @@ const applySemanticPatch = (
   }
 
   let next = session;
-  if (patch.serviceIntent?.kind === "named_procedure" && patch.serviceIntent.serviceId) {
+
+  if (patch.serviceIntent?.kind === "confirm_pending_service") {
+    if (next.serviceAcceptance?.status === "pending") {
+      next = {
+        ...next,
+        serviceAcceptance: {
+          ...next.serviceAcceptance,
+          status: "accepted",
+        },
+        pendingDecision: null,
+      };
+    }
+  } else if (patch.serviceIntent?.kind === "decline_pending_service") {
+    next = {
+      ...next,
+      serviceAcceptance: null,
+      pendingDecision: null,
+    };
+  } else if (patch.serviceIntent?.kind === "named_procedure" && patch.serviceIntent.serviceId) {
     next = {
       ...next,
       serviceAcceptance: {
@@ -480,11 +812,16 @@ const applySemanticPatch = (
   }
 
   if (patch.contactFacts != null) {
+    const phoneChanged =
+      patch.contactFacts.phoneNumber != null
+      && patch.contactFacts.phoneNumber !== next.contact.phoneNumber;
     next = {
       ...next,
       contact: {
         ...next.contact,
         ...patch.contactFacts,
+        // New phone invalidates prior lookup evidence.
+        ...(phoneChanged ? { phoneLookup: null, contactId: null } : {}),
       },
     };
   }
@@ -507,23 +844,21 @@ const applySemanticPatch = (
 /**
  * Pure booking decision kernel (DDD-274).
  * No BaseMessage / Command / node names / prompts / lastHandoff.
+ * PendingEffect correlation uses session.pendingEffect (not an external arg).
  */
 export const decideBooking = (
   session: BookingSessionV2,
   input: BookingInput,
   readModels: BookingReadModels,
-  pendingEffect: PendingEffect | null = null,
 ): BookingDecision => {
   switch (input.source) {
     case "control":
       return applyControl(session, input.intent);
     case "effect_result":
-      return applyEffectResult(session, input.result, pendingEffect);
+      return applyEffectResult(session, input.result);
     case "semantic_patch":
       return applySemanticPatch(session, input.patch, readModels);
     case "patient_turn":
-      // Phase 4 owns structured interpretation; Phase 2 fails closed to clarification
-      // unless the turn is empty (progress from requirement alone).
       if (input.rawText.trim().length === 0) {
         return decideFromRequirement(session, readModels);
       }
