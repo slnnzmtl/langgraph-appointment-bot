@@ -9,19 +9,48 @@
 
 ### Scanner
 
-Use `classifyUpgradeForScan` / `emptyBookingCheckpointScanCounts` for non-PII outcome tallies:
+Run a non-PII dry-run against the checkpoint sqlite file:
 
-- `already_current`, `upgrade`, `prefetch_required`, `slot_revalidation`, `expired_hitl`, `recovered_partial`, `rejected`
+```bash
+pnpm scan:booking-checkpoints
+# or
+pnpm scan:booking-checkpoints -- --db /path/to/checkpoints.sqlite
+```
+
+The CLI opens `SqliteSaver`, iterates distinct `thread_id`s, and prints JSON tallies:
+
+- `threads` — distinct thread ids inspected
+- `pausedHitl` — threads with `mutation_confirm` / frozen `pendingCommand` / pending writes
+- `counts`:
+  - `already_current`
+  - `upgrade`
+  - `prefetch_required`
+  - `slot_revalidation`
+  - `expired_hitl`
+  - `recovered_partial`
+  - `rejected`
+
+Programmatic helpers: `scanBookingCheckpoints`, `classifyUpgradeForScan`, `emptyBookingCheckpointScanCounts` in [`src/graph/booking-checkpoint-scanner.ts`](../src/graph/booking-checkpoint-scanner.ts).
+
+Never log patient text, phone numbers, or names from the scanner.
 
 ### Resume policy
 
-Legacy `confirm_booking` interrupts resume via expired-confirmation recovery (`recoverExpiredConfirmBookingHitl`): preserve facts, clear frozen command, mark slot unverified, ask the patient to confirm again on a new v2 interrupt. Never silent-approve.
+Legacy `confirm_booking` interrupts resume via expired-confirmation recovery (`recoverExpiredConfirmBookingHitl` / composition `resumeConfirmBookingHitl`): preserve facts, clear frozen command, mark slot unverified, ask the patient to confirm again on a new v2 interrupt. Never silent-approve.
+
+Replay checklist before cutover:
+
+1. Load a paused HITL checkpoint on the Phase 5 graph (`booking__tools` still present).
+2. Assert recovery path — no CRM write, no missing-node error.
+3. Confirm schema 0/1 rows upgrade to 2 on the next patient turn.
 
 ## Post-window cleanup (6B) — gated
 
 **Do not merge** while production can present schema 0/1 rows or paused pre-v2 interrupts.
 
-When old-checkpoint volume is zero (or offline migration completed):
+Gate: scanner reports `pausedHitl === 0` and no `upgrade` / `expired_hitl` volume for a sustained window (or an offline migration has completed).
+
+When the gate is met:
 
 1. Remove deprecated booking state channel readers and interrupt aliases.
 2. Optional rename `bookingDraft` → `bookingSession`.
