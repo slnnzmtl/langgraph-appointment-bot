@@ -235,6 +235,17 @@ module.exports = {
       }
     },
     {
+      name: 'booking-domain-no-langchain',
+      comment:
+        'booking-domain contracts must stay pure: no @langchain/* or langgraph imports '
+        + '(DDD-272 Phase 0 boundary for the canonical decision loop).',
+      severity: 'error',
+      from: { path: '^src/graph/booking-domain/' },
+      to: {
+        path: '@langchain/'
+      }
+    },
+    {
       name: 'langfuse-sdk-only-in-analytics-langfuse',
       comment:
         'Only src/analytics/langfuse.ts may import @langfuse/* or @opentelemetry/*. '
