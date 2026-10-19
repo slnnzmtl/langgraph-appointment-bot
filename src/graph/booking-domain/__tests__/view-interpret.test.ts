@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { projectBookingView } from "../view.js";
 import {
+  interpretBookingTurn,
   interpretBookingTurnDeterministic,
   scheduleIntentFromChoice,
 } from "../interpret.js";
@@ -116,5 +117,87 @@ describe("interpretBookingTurnDeterministic", () => {
         rawText: "Який у вас графік роботи?",
       }).informationalQuestion,
     ).toBeTruthy();
+  });
+
+  it("resolves service choices and confirm/decline pending service", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Botox",
+        choices: [
+          { id: "svc-botox", label: "Botox" },
+          { id: "svc-peel", label: "Peel" },
+        ],
+      }).serviceIntent,
+    ).toEqual({
+      kind: "named_procedure",
+      query: "Botox",
+      serviceId: "svc-botox",
+    });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "так",
+        awaitingServiceConfirm: true,
+      }).serviceIntent,
+    ).toEqual({ kind: "confirm_pending_service" });
+  });
+
+  it("extracts note answers and contact names when awaiting", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "allergy to lidocaine",
+        awaitingNote: true,
+      }).note,
+    ).toEqual({ kind: "answer", value: "allergy to lidocaine" });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Пропустити",
+        awaitingNote: true,
+      }).note,
+    ).toEqual({ kind: "skip" });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Олена",
+        awaitingContactField: "firstName",
+      }).contactFacts,
+    ).toEqual({ firstName: "Олена" });
+  });
+
+  it("fail-closes dual times without inventing a schedule intent", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "2026-09-10 13:00 or 15:00",
+      }).scheduleIntent,
+    ).toBeUndefined();
+  });
+
+  it("layers structured LLM fallback only when deterministic is incomplete", async () => {
+    const merged = await interpretBookingTurn(
+      { rawText: "something vague about botox" },
+      async () => ({
+        serviceIntent: { kind: "named_procedure", query: "botox", serviceId: "svc-1" },
+      }),
+    );
+    expect(merged.serviceIntent).toEqual({
+      kind: "named_procedure",
+      query: "botox",
+      serviceId: "svc-1",
+    });
+
+    const controlWins = await interpretBookingTurn(
+      { rawText: "Головне меню" },
+      async () => ({
+        serviceIntent: { kind: "named_procedure", query: "should-not-win" },
+      }),
+    );
+    expect(controlWins.controlIntent).toEqual({ kind: "main_menu" });
+    expect(controlWins.serviceIntent).toBeUndefined();
+
+    const llmFailure = await interpretBookingTurn(
+      { rawText: "hmm" },
+      async () => {
+        throw new Error("llm down");
+      },
+    );
+    expect(llmFailure).toEqual({});
   });
 });

@@ -70,7 +70,10 @@ export {
 
 export {
   interpretBookingTurnDeterministic,
+  interpretBookingTurn,
   scheduleIntentFromChoice,
   type InterpretBookingTurnInput,
+  type InterpretChoice,
+  type StructuredBookingTurnInterpreter,
 } from "./interpret.js";
 
