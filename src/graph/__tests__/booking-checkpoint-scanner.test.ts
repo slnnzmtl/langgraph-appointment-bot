@@ -34,7 +34,7 @@ describe("classifyUpgradeForScan", () => {
     ).toBe("upgrade");
   });
 
-  it("prefers slot_revalidation over already_current on demoted slots", () => {
+  it("prefers slot_revalidation and prefetch_required over already_current", () => {
     expect(
       classifyUpgradeForScan({
         schemaVersionBefore: BOOKING_SCHEMA_VERSION,
@@ -42,6 +42,13 @@ describe("classifyUpgradeForScan", () => {
         slotRevalidation: true,
       }),
     ).toBe("slot_revalidation");
+    expect(
+      classifyUpgradeForScan({
+        schemaVersionBefore: BOOKING_SCHEMA_VERSION,
+        targetSchemaVersion: BOOKING_SCHEMA_VERSION,
+        prefetchRequired: true,
+      }),
+    ).toBe("prefetch_required");
   });
 
   it("maps fail_closed upgrader outcomes to recovered_partial", () => {
@@ -68,7 +75,7 @@ describe("classifyUpgradeForScan", () => {
 });
 
 describe("hasPausedHitl", () => {
-  it("counts mutation_confirm and frozen writes, not bare pendingEffect", () => {
+  it("counts mutation_confirm and confirm_booking writes, not bare pendingEffect", () => {
     expect(
       hasPausedHitl({
         pendingInteraction: { kind: "mutation_confirm" },
@@ -147,38 +154,40 @@ describe("scanBookingCheckpoints Sqlite fixtures", () => {
     }),
   });
 
-  it("classifies paused HITL, versionless draft, and current-clean rows", async () => {
-    const dbPath = tempDb();
-    const saver = SqliteSaver.fromConnString(dbPath);
+  const withService = () => {
+    const draft = createEmptyBookingDraft();
+    return {
+      ...draft,
+      serviceAcceptance: {
+        status: "accepted" as const,
+        service: { id: "svc-1", name: "Консультація", source: "catalog" as const },
+      },
+    };
+  };
 
-    const graph = new StateGraph(ScanState)
+  const seedGraph = (dbPath: string) => {
+    const saver = SqliteSaver.fromConnString(dbPath);
+    return new StateGraph(ScanState)
       .addNode("seed", async (state) => ({ result: state.result }))
       .addEdge(START, "seed")
       .addEdge("seed", END)
       .compile({ checkpointer: saver });
+  };
 
-    const withService = () => {
-      const draft = createEmptyBookingDraft();
-      return {
-        ...draft,
-        serviceAcceptance: {
-          status: "accepted" as const,
-          service: { id: "svc-1", name: "Консультація", source: "catalog" as const },
-        },
-      };
-    };
+  it("classifies representative rows via the real upgrader", async () => {
+    const dbPath = tempDb();
+    const graph = seedGraph(dbPath);
 
-    // Explicit schema 0 (versionless-era) → not already_current.
     await graph.invoke(
       {
         result: "versionless",
         bookingSchemaVersion: 0,
         bookingDraft: withService(),
+        availabilityContext: { days: [] },
       },
       { configurable: { thread_id: "t-versionless" } },
     );
 
-    // Current-clean accepted consultation with no slot → already_current.
     await graph.invoke(
       {
         result: "clean",
@@ -189,7 +198,33 @@ describe("scanBookingCheckpoints Sqlite fixtures", () => {
       { configurable: { thread_id: "t-clean" } },
     );
 
-    // Paused HITL with mutation_confirm card + frozen create command.
+    await graph.invoke(
+      {
+        result: "slot",
+        bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
+        bookingDraft: {
+          ...withService(),
+          selectedDate: "2026-10-21",
+          selectedSlot: {
+            start: "2026-10-21T09:00:00+03:00",
+            end: "2026-10-21T09:30:00+03:00",
+          },
+          slotProvenance: "unverified_legacy",
+        },
+        availabilityContext: { days: [] },
+      },
+      { configurable: { thread_id: "t-slot" } },
+    );
+
+    await graph.invoke(
+      {
+        result: "prefetch",
+        bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
+        bookingDraft: withService(),
+      },
+      { configurable: { thread_id: "t-prefetch" } },
+    );
+
     const confirming = {
       ...withService(),
       phase: "confirming" as const,
@@ -213,19 +248,56 @@ describe("scanBookingCheckpoints Sqlite fixtures", () => {
           action: "create",
           choices: [{ id: "confirm", label: "✅" }],
         },
+        availabilityContext: { days: [] },
       },
       { configurable: { thread_id: "t-hitl" } },
     );
 
+    await graph.invoke(
+      {
+        result: "effect",
+        bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
+        bookingDraft: {
+          ...withService(),
+          pendingEffect: {
+            id: "eff-avail",
+            expectedRevision: 1,
+            effect: { kind: "get_working_time" },
+            status: "prepared",
+          },
+        },
+        availabilityContext: { days: [] },
+      },
+      { configurable: { thread_id: "t-effect" } },
+    );
+
+    // Corrupt accepted service id → real upgrader fail_closed → recovered_partial.
+    await graph.invoke(
+      {
+        result: "fail-closed",
+        bookingSchemaVersion: 0,
+        bookingDraft: {
+          ...createEmptyBookingDraft(),
+          serviceAcceptance: {
+            status: "accepted" as const,
+            service: { id: "   ", name: "Broken", source: "catalog" as const },
+          },
+        },
+      },
+      { configurable: { thread_id: "t-fail-closed" } },
+    );
+
     const report = await scanBookingCheckpoints(dbPath);
-    expect(report.extras.threads).toBe(3);
-    expect(report.extras.pausedHitl).toBeGreaterThanOrEqual(1);
-    expect(report.counts.already_current).toBeGreaterThanOrEqual(1);
-    expect(report.counts.already_current).toBeLessThan(3);
-    expect(
-      report.counts.upgrade
-      + report.counts.recovered_partial
-      + report.counts.prefetch_required,
-    ).toBeGreaterThanOrEqual(1);
+    expect(report.extras.threads).toBe(7);
+    expect(report.extras.pausedHitl).toBe(1);
+    expect(report.counts).toEqual({
+      already_current: 3, // clean + hitl + bare pendingEffect
+      upgrade: 1,
+      prefetch_required: 1,
+      slot_revalidation: 1,
+      expired_hitl: 0,
+      recovered_partial: 1,
+      rejected: 0,
+    });
   });
 });

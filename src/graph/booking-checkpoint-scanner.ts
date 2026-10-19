@@ -81,15 +81,15 @@ export const classifyUpgradeForScan = (input: {
   if (input.expiredHitl) {
     return "expired_hitl";
   }
-  // Demoted / unverified slots still need revalidation even on current schema.
+  // Invalid slot / missing prefetch beat already_current even on current schema.
   if (input.slotRevalidation) {
     return "slot_revalidation";
   }
-  if (input.schemaVersionBefore === input.targetSchemaVersion) {
-    return "already_current";
-  }
   if (input.prefetchRequired) {
     return "prefetch_required";
+  }
+  if (input.schemaVersionBefore === input.targetSchemaVersion) {
+    return "already_current";
   }
   return "upgrade";
 };
@@ -234,7 +234,6 @@ export const scanBookingCheckpoints = async (
       slotRevalidation: slotRevalidation && !failClosed && !unsupported && !expiredHitl,
       prefetchRequired:
         prefetchRequired
-        && schemaBefore < BOOKING_SCHEMA_VERSION
         && !expiredHitl
         && !failClosed
         && !unsupported

@@ -20,8 +20,8 @@ pnpm scan:booking-checkpoints -- --db /path/to/checkpoints.sqlite
 The CLI opens `SqliteSaver`, iterates distinct `thread_id`s, and prints JSON tallies:
 
 - `threads` — distinct thread ids inspected
-- `pausedHitl` — threads with `mutation_confirm` / frozen `pendingCommand` / pending writes
-- `counts`:
+- `pausedHitl` — `mutation_confirm` card/decision, frozen create/reschedule/cancel command, or pending writes that encode `confirm_booking` (not bare `pendingEffect`)
+- `counts` (priority: rejected → recovered_partial → expired_hitl → slot_revalidation → prefetch_required → already_current → upgrade):
   - `already_current`
   - `upgrade`
   - `prefetch_required`
@@ -30,9 +30,9 @@ The CLI opens `SqliteSaver`, iterates distinct `thread_id`s, and prints JSON tal
   - `recovered_partial`
   - `rejected`
 
-Programmatic helpers: `scanBookingCheckpoints`, `classifyUpgradeForScan`, `emptyBookingCheckpointScanCounts` in [`src/graph/booking-checkpoint-scanner.ts`](../src/graph/booking-checkpoint-scanner.ts).
+Programmatic helpers: `scanBookingCheckpoints`, `classifyUpgradeForScan`, `emptyBookingCheckpointScanCounts` in [`src/graph/booking-checkpoint-scanner.ts`](../src/graph/booking-checkpoint-scanner.ts). Classification calls the real `upgradeBookingDraftCheckpoint` so `recovered_partial` / `rejected` match production.
 
-**Schema rule:** a missing `bookingSchemaVersion` channel is schema **0** (the state default), never the current `BOOKING_SCHEMA_VERSION`. Versionless drafts therefore count as `upgrade`, not `already_current`.
+**Schema rule:** a missing `bookingSchemaVersion` channel is schema **0** (the state default), never the current `BOOKING_SCHEMA_VERSION`. Versionless drafts therefore count as `upgrade`, not `already_current`. Current-schema rows with demoted slots or missing availability still count as `slot_revalidation` / `prefetch_required` before `already_current`.
 
 Never log patient text, phone numbers, or names from the scanner.
 
