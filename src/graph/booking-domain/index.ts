@@ -58,3 +58,10 @@ export {
 } from "./requirement.js";
 
 export { decideBooking } from "./decide.js";
+
+export {
+  projectBookingView,
+  assertExclusivePendingDecision,
+  type BookingViewInputs,
+} from "./view.js";
+
