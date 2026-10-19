@@ -4,6 +4,8 @@
  *
  * Critical: a missing bookingSchemaVersion is schema 0 (state default), never
  * BOOKING_SCHEMA_VERSION — versionless drafts count as `upgrade`.
+ * Classification calls the real upgrader so recovered_partial / rejected match
+ * production upgrade outcomes.
  */
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 
@@ -11,6 +13,7 @@ import {
   BOOKING_SCHEMA_VERSION,
   type BookingDraft,
 } from "./booking-draft.js";
+import { upgradeBookingDraftCheckpoint } from "./booking-checkpoint-upgrade.js";
 
 export type BookingCheckpointScanOutcome =
   | "already_current"
@@ -69,20 +72,21 @@ export const classifyUpgradeForScan = (input: {
   failClosed?: boolean;
   prefetchRequired?: boolean;
 }): BookingCheckpointScanOutcome => {
-  if (input.unsupported || input.failClosed) {
-    return input.failClosed && !input.unsupported ? "recovered_partial" : "rejected";
+  if (input.unsupported) {
+    return "rejected";
   }
-  if (input.schemaVersionBefore === input.targetSchemaVersion) {
-    return "already_current";
+  if (input.failClosed || input.recoveredPartial) {
+    return "recovered_partial";
   }
   if (input.expiredHitl) {
     return "expired_hitl";
   }
+  // Demoted / unverified slots still need revalidation even on current schema.
   if (input.slotRevalidation) {
     return "slot_revalidation";
   }
-  if (input.recoveredPartial) {
-    return "recovered_partial";
+  if (input.schemaVersionBefore === input.targetSchemaVersion) {
+    return "already_current";
   }
   if (input.prefetchRequired) {
     return "prefetch_required";
@@ -114,7 +118,25 @@ const channelValuesFromTuple = (tuple: {
   return result;
 };
 
-const hasPausedHitl = (input: {
+/** True when pendingWrites encode a confirm_booking interrupt (not arbitrary writes). */
+export const pendingWritesHaveConfirmBooking = (pendingWrites: unknown): boolean => {
+  if (!Array.isArray(pendingWrites)) {
+    return false;
+  }
+  for (const entry of pendingWrites) {
+    const serialized = JSON.stringify(entry);
+    if (serialized.includes("confirm_booking")) {
+      return true;
+    }
+  }
+  return false;
+};
+
+/**
+ * Confirm / frozen-write HITL only — not every pendingEffect and not any
+ * non-empty pendingWrites bag.
+ */
+export const hasPausedHitl = (input: {
   pendingInteraction: { kind?: string } | null | undefined;
   draft: BookingDraft | null | undefined;
   pendingWrites?: unknown;
@@ -122,17 +144,29 @@ const hasPausedHitl = (input: {
   if (input.pendingInteraction?.kind === "mutation_confirm") {
     return true;
   }
+  if (input.draft?.pendingDecision?.kind === "mutation_confirm") {
+    return true;
+  }
+  const command = input.draft?.pendingCommand;
   if (
-    input.draft?.pendingCommand != null
-    || input.draft?.pendingDecision?.kind === "mutation_confirm"
-    || input.draft?.pendingEffect != null
+    command != null
+    && (command.action === "create"
+      || command.action === "reschedule"
+      || command.action === "cancel")
   ) {
     return true;
   }
-  if (Array.isArray(input.pendingWrites) && input.pendingWrites.length > 0) {
-    return true;
+  return pendingWritesHaveConfirmBooking(input.pendingWrites);
+};
+
+const needsSlotRevalidation = (draft: BookingDraft | null): boolean => {
+  if (draft?.selectedSlot == null) {
+    return false;
   }
-  return false;
+  return draft.slotProvenance == null
+    || draft.slotProvenance === "unverified_legacy"
+    || draft.slotEvidence == null
+    || draft.slotEvidence.snapshotId.trim().length === 0;
 };
 
 /** Dry-run scan of a checkpoint sqlite file. Does not write upgrades. */
@@ -169,29 +203,42 @@ export const scanBookingCheckpoints = async (
       extras.pausedHitl += 1;
     }
 
+    // Real upgrader — recovered_partial / rejected match production outcomes.
+    const upgrade = upgradeBookingDraftCheckpoint({
+      ...(channels.bookingSchemaVersion !== undefined
+        ? { bookingSchemaVersion: channels.bookingSchemaVersion }
+        : {}),
+      bookingDraft: draft,
+    });
+    const failClosed = upgrade.telemetry?.outcome === "fail_closed";
+    const unsupported = upgrade.unsupported === true;
+
     const expiredHitl =
       paused
+      && schemaBefore < BOOKING_SCHEMA_VERSION
       && (
-        draft?.pendingCommand == null
-        || draft.pendingDecision?.kind !== "mutation_confirm"
-      )
-      && schemaBefore < BOOKING_SCHEMA_VERSION;
-    const slotRevalidation =
-      draft?.selectedSlot != null
-      && (
-        draft.slotProvenance == null
-        || draft.slotProvenance === "unverified_legacy"
-        || draft.slotEvidence == null
+        draft?.pendingDecision?.kind !== "mutation_confirm"
+        && draft?.pendingCommand == null
       );
+
+    const slotRevalidation = needsSlotRevalidation(draft);
     const prefetchRequired =
       draft != null && channels.availabilityContext == null;
 
     const outcome = classifyUpgradeForScan({
       schemaVersionBefore: schemaBefore,
       targetSchemaVersion: BOOKING_SCHEMA_VERSION,
-      expiredHitl,
-      slotRevalidation: slotRevalidation && !expiredHitl,
-      prefetchRequired: prefetchRequired && schemaBefore < BOOKING_SCHEMA_VERSION && !expiredHitl,
+      unsupported,
+      failClosed,
+      expiredHitl: expiredHitl && !failClosed && !unsupported,
+      slotRevalidation: slotRevalidation && !failClosed && !unsupported && !expiredHitl,
+      prefetchRequired:
+        prefetchRequired
+        && schemaBefore < BOOKING_SCHEMA_VERSION
+        && !expiredHitl
+        && !failClosed
+        && !unsupported
+        && !slotRevalidation,
     });
     counts[outcome] += 1;
   }
