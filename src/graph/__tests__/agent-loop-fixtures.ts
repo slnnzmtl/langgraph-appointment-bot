@@ -57,7 +57,7 @@ export const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState =
   faqSkipLlm: false,
   bookingSkipLlm: false,
   serviceChangeNotice: null,
-  bookingSchemaVersion: 1,
+  bookingSchemaVersion: 2,
   pendingCancellationPurpose: null,
   ...overrides,
 });

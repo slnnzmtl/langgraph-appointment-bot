@@ -58,10 +58,10 @@ describe("resumeConfirmBookingHitl", () => {
       text: "❌",
       bookingDraft: confirmingDraft,
       pendingInteraction: mutationConfirm,
-      bookingUpdate: { bookingSchemaVersion: 1 },
+      bookingUpdate: { bookingSchemaVersion: 2 },
     });
     expect(declined.resume).toEqual({ confirmed: false });
-    expect(declined.update).toEqual({ bookingSchemaVersion: 1 });
+    expect(declined.update).toEqual({ bookingSchemaVersion: 2 });
   });
 
   it("maps Головне меню and typed variants to left with a HumanMessage", () => {
@@ -70,10 +70,10 @@ describe("resumeConfirmBookingHitl", () => {
         text,
         bookingDraft: confirmingDraft,
         pendingInteraction: mutationConfirm,
-        bookingUpdate: { bookingSchemaVersion: 1 },
+        bookingUpdate: { bookingSchemaVersion: 2 },
       });
       expect(result.resume).toEqual({ left: true });
-      expect(result.update.bookingSchemaVersion).toBe(1);
+      expect(result.update.bookingSchemaVersion).toBe(2);
       expect(result.update.bookingDraft).toBeUndefined();
       expect(result.update.pendingInteraction).toBeUndefined();
       expect(result.update.messages).toEqual([new HumanMessage(text)]);
@@ -85,10 +85,10 @@ describe("resumeConfirmBookingHitl", () => {
       text: "Яка адреса?",
       bookingDraft: confirmingDraft,
       pendingInteraction: mutationConfirm,
-      bookingUpdate: { bookingSchemaVersion: 1 },
+      bookingUpdate: { bookingSchemaVersion: 2 },
     });
     expect(result.resume).toEqual({ userReply: "Яка адреса?" });
-    expect(result.update.bookingSchemaVersion).toBe(1);
+    expect(result.update.bookingSchemaVersion).toBe(2);
     expect(result.update.bookingDraft).toBeUndefined();
     expect(result.update.pendingInteraction).toBeUndefined();
     expect(result.update.messages).toEqual([new HumanMessage("Яка адреса?")]);
@@ -128,11 +128,11 @@ describe("resumeConfirmBookingHitl", () => {
         text: "❌",
         bookingDraft: confirmingDraft,
         pendingInteraction: null,
-        bookingUpdate: { bookingSchemaVersion: 1 },
+        bookingUpdate: { bookingSchemaVersion: 2 },
       }),
     ).toEqual({
       resume: { confirmed: false },
-      update: { bookingSchemaVersion: 1 },
+      update: { bookingSchemaVersion: 2 },
     });
   });
 

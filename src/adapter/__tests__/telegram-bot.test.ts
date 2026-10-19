@@ -227,7 +227,7 @@ describe("text while HITL pending", () => {
       {
         result: "",
         messages: [],
-        bookingSchemaVersion: 1,
+        bookingSchemaVersion: 2,
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "create",
@@ -314,7 +314,7 @@ describe("text while HITL pending", () => {
       {
         result: "",
         messages: [],
-        bookingSchemaVersion: 1,
+        bookingSchemaVersion: 2,
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "create",
@@ -419,7 +419,7 @@ describe("text while HITL pending", () => {
       {
         result: "",
         messages: [],
-        bookingSchemaVersion: 1,
+        bookingSchemaVersion: 2,
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "create",
@@ -579,7 +579,7 @@ describe("booking schema upgrade on text turn", () => {
 
       await handleGraphTextTurn(graph, threadId, "tg-1", "Привіт");
       const first = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(first.values.bookingSchemaVersion).toBe(1);
+      expect(first.values.bookingSchemaVersion).toBe(2);
       expect(first.values.bookingNoteStatus).toBe("unasked");
       expect(first.values.selectedAvailabilityDate).toBeNull();
       expect(first.values.bookingDraft).toMatchObject({
@@ -590,7 +590,7 @@ describe("booking schema upgrade on text turn", () => {
       events.length = 0;
       await handleGraphTextTurn(graph, threadId, "tg-1", "Ще раз");
       const second = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(second.values.bookingSchemaVersion).toBe(1);
+      expect(second.values.bookingSchemaVersion).toBe(2);
       expect(second.values.bookingDraft).toEqual(first.values.bookingDraft);
       expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
     } finally {
@@ -610,13 +610,13 @@ describe("booking schema upgrade on text turn", () => {
 
       await handleGraphTextTurn(graph, threadId, "tg-1", "Привіт");
       const first = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(first.values.bookingSchemaVersion).toBe(1);
+      expect(first.values.bookingSchemaVersion).toBe(2);
       expect(first.values.bookingDraft).toBeNull();
       expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
 
       await handleGraphTextTurn(graph, threadId, "tg-1", "Ще раз");
       const second = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(second.values.bookingSchemaVersion).toBe(1);
+      expect(second.values.bookingSchemaVersion).toBe(2);
       expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
     } finally {
       setTrackEventForTests(null);
@@ -674,7 +674,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingNoteStatus).toBe("unasked");
     expect(snap.values.selectedSlot).toBeNull();
     expect(snap.next).toEqual([]);
@@ -731,7 +731,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingDraft).toMatchObject({
       serviceAcceptance: { service: { id: "svc-1" } },
       phase: "service",
@@ -784,7 +784,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingDraft).toBeNull();
     expect(snap.next).toEqual([]);
   });
@@ -839,7 +839,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingDraft).toMatchObject({
       serviceAcceptance: { service: { id: "svc-1" } },
       phase: "service",

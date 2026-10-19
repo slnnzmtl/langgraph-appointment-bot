@@ -763,7 +763,14 @@ export const reduceBookingSession = (
       }
       const service = draft.serviceAcceptance.service;
       return noEffect({
-        bookingDraft: draft,
+        bookingDraft: {
+          ...draft,
+          pendingDecision: {
+            kind: "service_or_note",
+            noteCandidate: event.noteCandidate,
+            currentServiceId: service.id,
+          },
+        },
         pendingInteraction: {
           kind: "service_or_note",
           currentService: {
@@ -1053,8 +1060,15 @@ export const reduceBookingSession = (
       };
     }
     case "service_candidates_opened": {
+      const pendingDecision = {
+        kind: "service_candidate" as const,
+        utterance: event.utterance,
+        ...(event.query != null ? { query: event.query } : {}),
+      };
       return noEffect({
-        bookingDraft: draft,
+        bookingDraft: draft == null
+          ? draft
+          : { ...draft, pendingDecision },
         pendingInteraction: {
           kind: "service_candidate",
           utterance: event.utterance,
@@ -1185,8 +1199,21 @@ export const reduceBookingSession = (
       });
     }
     case "mutation_confirm_opened": {
+      const effectId =
+        typeof draft?.pendingCommand?.payload?.effectId === "string"
+          ? draft.pendingCommand.payload.effectId
+          : `mutation_${draft?.version ?? 0}`;
       return noEffect({
-        bookingDraft: draft,
+        bookingDraft: draft == null
+          ? draft
+          : {
+              ...draft,
+              pendingDecision: {
+                kind: "mutation_confirm",
+                action: event.action,
+                effectId,
+              },
+            },
         pendingInteraction: openMutationConfirmInteraction(event.action),
       });
     }
@@ -1195,7 +1222,9 @@ export const reduceBookingSession = (
         return noEffect(current);
       }
       return noEffect({
-        bookingDraft: draft,
+        bookingDraft: draft == null
+          ? draft
+          : { ...draft, pendingDecision: null },
         pendingInteraction: null,
       });
     }

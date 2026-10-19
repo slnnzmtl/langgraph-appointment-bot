@@ -43,6 +43,7 @@ export const sketchSessionAfterServiceAccepted = (): BookingSessionV2 => ({
   rescheduleTarget: null,
   replacement: null,
   pendingDecision: null,
+  pendingCommand: null,
   pendingEffect: null,
 });
 

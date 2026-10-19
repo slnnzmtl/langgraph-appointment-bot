@@ -1,6 +1,6 @@
 /**
- * Compile-only sketch of the Phase 1+ canonical booking aggregate.
- * Unused by production routing until DDD-273 wires writers through it.
+ * Canonical booking aggregate (DDD-273 / Phase 1).
+ * Checkpointed in the existing `bookingDraft` channel (schema version 2).
  */
 
 export const BOOKING_SESSION_SCHEMA_VERSION = 2 as const;
@@ -57,15 +57,26 @@ export type MeetingRef = {
 export type ReplacementFacts = {
   meeting: MeetingRef;
   status: "offered" | "cancelling" | "create_pending";
+  originalCommand?: FrozenMutationCommand | null;
+};
+
+/** Frozen mutation awaiting HITL / ToolNode — command idempotency, not event sourcing. */
+export type FrozenMutationCommand = {
+  action: BookingModeV2 | "cancel";
+  payload: Readonly<Record<string, unknown>>;
 };
 
 /**
  * Irreducible waits owned by the session. Ordinary DATE/TIME/contact cards
- * are projections (Phase 1+) — not independently authoritative.
+ * are projections — not independently authoritative.
  */
 export type PendingDecision =
   | { kind: "service_candidate"; utterance?: string; query?: string }
-  | { kind: "visit_select"; stage: "action" | "meeting" | "replacement"; action?: "reschedule" | "cancel" }
+  | {
+      kind: "visit_select";
+      stage: "action" | "meeting" | "replacement";
+      action?: "reschedule" | "cancel";
+    }
   | { kind: "service_or_note"; noteCandidate: string; currentServiceId: string }
   | {
       kind: "mutation_confirm";
@@ -87,6 +98,10 @@ export type BookingSessionV2 = {
   rescheduleTarget: MeetingRef | null;
   replacement: ReplacementFacts | null;
   pendingDecision: PendingDecision | null;
+  /** Frozen CRM mutation command (maps from legacy pendingCommand). */
+  pendingCommand: FrozenMutationCommand | null;
   /** Placeholder until Phase 2 enforces PendingEffect lifecycle. */
   pendingEffect: null;
 };
+
+export type SlotProvenance = SlotFacts["provenance"];

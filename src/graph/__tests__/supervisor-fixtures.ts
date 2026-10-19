@@ -53,7 +53,7 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   selectedSlot: null,
   selectedAvailabilityDate: null,
   bookingDraft: null,
-  bookingSchemaVersion: 1,
+  bookingSchemaVersion: 2,
   pendingInteraction: null,
   noteOrchQueued: false,
   faqSkipLlm: false,

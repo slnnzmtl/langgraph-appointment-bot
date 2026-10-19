@@ -15,15 +15,26 @@ import {
   type RequestedBookingTime,
   type ServiceAcceptance,
 } from "./booking-draft.js";
+import { withSchema2SessionFields } from "./booking-domain/upgrade-session.js";
 import type { SelectedBookingSlot } from "./types.js";
 
-/** Structured fields read from a version-0 booking checkpoint. */
+/** Structured fields read from a version-0/1 booking checkpoint. */
 export type BookingCheckpointLegacyState = {
   bookingSchemaVersion?: number | null;
   bookingDraft?: BookingDraft | null;
   bookingNoteStatus?: BookingNote["status"];
   selectedSlot?: SelectedBookingSlot | null;
   selectedAvailabilityDate?: string | null;
+  /** Used only to derive PendingDecision for irreducible waits. */
+  pendingInteraction?: {
+    kind: string;
+    utterance?: string;
+    query?: string;
+    noteCandidate?: string;
+    currentService?: { id: string };
+    stage?: "action" | "meeting" | "replacement";
+    action?: "create" | "reschedule" | "cancel";
+  } | null;
 };
 
 export type BookingCheckpointMigrationTelemetry = {
@@ -39,11 +50,35 @@ export type BookingCheckpointUpgradeResult = {
     bookingNoteStatus?: "unasked";
     selectedSlot?: null;
     selectedAvailabilityDate?: null;
+    /** Force fresh CRM prefetch after schema 0/1 → 2. */
+    prefetchDirty?: true;
+    /** Drop cached availability proof; cursor intent alone is not proof. */
+    availabilityContext?: null;
     /** Set by booking-session when composing the checkpoint upgrade. */
     pendingInteraction?: unknown;
   };
   unsupported: boolean;
   telemetry: BookingCheckpointMigrationTelemetry | null;
+};
+
+const schema2StampExtras = {
+  prefetchDirty: true as const,
+  availabilityContext: null,
+};
+
+const finalizeUpgradedDraft = (
+  draft: BookingDraft,
+  interaction: BookingCheckpointLegacyState["pendingInteraction"],
+  options: { recomputePhase?: boolean } = {},
+): BookingDraft => {
+  const withSchema2 = withSchema2SessionFields(draft, interaction);
+  if (options.recomputePhase === false) {
+    return withSchema2;
+  }
+  return {
+    ...withSchema2,
+    phase: bookingDraftPhase(withSchema2),
+  };
 };
 
 const draftHasValidServiceAcceptance = (draft: BookingDraft): boolean => {
@@ -495,12 +530,19 @@ const resolveSchemaVersion = (raw: unknown): ResolvedSchemaVersion => {
   return { kind: "legacy" };
 };
 
-const failClosedNull = (stamp: {
+type UpgradeStamp = {
   bookingSchemaVersion: number;
   bookingNoteStatus: "unasked";
   selectedSlot: null;
   selectedAvailabilityDate: null;
-}, source: BookingCheckpointMigrationTelemetry["source"]): BookingCheckpointUpgradeResult => ({
+  prefetchDirty?: true;
+  availabilityContext?: null;
+};
+
+const failClosedNull = (
+  stamp: UpgradeStamp,
+  source: BookingCheckpointMigrationTelemetry["source"],
+): BookingCheckpointUpgradeResult => ({
   update: {
     ...stamp,
     bookingDraft: null,
@@ -514,30 +556,31 @@ const failClosedNull = (stamp: {
 });
 
 const failClosedServiceOnly = (
-  stamp: {
-    bookingSchemaVersion: number;
-    bookingNoteStatus: "unasked";
-    selectedSlot: null;
-    selectedAvailabilityDate: null;
-  },
+  stamp: UpgradeStamp,
   draft: BookingDraft,
   serviceId: string,
+  interaction: BookingCheckpointLegacyState["pendingInteraction"],
 ): BookingCheckpointUpgradeResult => {
-  const serviceOnly = constructBookingDraft({
-    version: draftVersion(draft),
-    mode: draft.mode,
-    phase: "service",
-    serviceAcceptance: copyServiceAcceptance(draft.serviceAcceptance!, serviceId),
-    selectedDate: null,
-    selectedSlot: null,
-    requestedTime: null,
-    note: { status: "unasked" },
-    contactId: trimmedNonblank(draft.contactId),
-    pendingCommand: null,
-    rescheduleTarget: null,
-    // Never retain a frozen replacement create — agent-loop would replay it.
-    replacement: null,
-  });
+  const serviceOnly = finalizeUpgradedDraft(
+    constructBookingDraft({
+      version: draftVersion(draft),
+      mode: draft.mode,
+      phase: "service",
+      serviceAcceptance: copyServiceAcceptance(draft.serviceAcceptance!, serviceId),
+      selectedDate: null,
+      selectedSlot: null,
+      requestedTime: null,
+      note: { status: "unasked" },
+      contactId: trimmedNonblank(draft.contactId),
+      pendingCommand: null,
+      rescheduleTarget: null,
+      // Never retain a frozen replacement create — agent-loop would replay it.
+      replacement: null,
+    }),
+    interaction,
+    // Keep constructed phase "service" — bookingDraftPhase would advance to date.
+    { recomputePhase: false },
+  );
   return {
     update: {
       ...stamp,
@@ -581,7 +624,9 @@ export const upgradeBookingDraftCheckpoint = (
   const stamp = {
     bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
     ...clearedLegacyProjections,
+    ...schema2StampExtras,
   };
+  const interaction = state.pendingInteraction;
 
   if (rawDraft == null) {
     return {
@@ -667,7 +712,7 @@ export const upgradeBookingDraftCheckpoint = (
         rescheduleTarget: keptReschedule,
         replacement: keptReplacement,
       });
-      const kept = { ...keptBase, phase: bookingDraftPhase(keptBase) };
+      const kept = finalizeUpgradedDraft(keptBase, interaction);
       return {
         update: {
           ...stamp,
@@ -682,7 +727,7 @@ export const upgradeBookingDraftCheckpoint = (
       };
     }
     if (serviceId != null && draft.serviceAcceptance != null) {
-      return failClosedServiceOnly(stamp, draft, serviceId);
+      return failClosedServiceOnly(stamp, draft, serviceId, interaction);
     }
     return failClosedNull(
       stamp,
@@ -729,7 +774,8 @@ export const upgradeBookingDraftCheckpoint = (
     rescheduleTarget,
     replacement,
   });
-  const canonical = { ...withCommands, phase: bookingDraftPhase(withCommands) };
+  // Schema 2: mark slots unverified; expire legacy frozen HITL commands.
+  const canonical = finalizeUpgradedDraft(withCommands, interaction);
   return {
     update: {
       ...stamp,

@@ -50,15 +50,15 @@ const slot = {
 };
 
 describe("DDD-272 booking-domain contracts (compile-only)", () => {
-  it("exports schema version 2 and keeps nextBookingRequirement unusable", () => {
+  it("exports schema version 2 and derives the next requirement", () => {
     expect(BOOKING_SESSION_SCHEMA_VERSION).toBe(2);
-    expect(() =>
+    expect(
       nextBookingRequirement(sketchSessionAfterServiceAccepted(), {
-        contactContextDirty: true,
-        bookingContextDirty: true,
+        contactContextDirty: false,
+        bookingContextDirty: false,
         availabilityVerified: false,
       }),
-    ).toThrow(/DDD-273/);
+    ).toBe("date");
   });
 
   it("keeps contract shapes assignable for later phases", () => {

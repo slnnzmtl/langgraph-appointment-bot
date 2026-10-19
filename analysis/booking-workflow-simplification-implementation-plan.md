@@ -367,6 +367,21 @@ Pre-existing failures: none. Do not weaken assertions if suite drifts — list n
 
 **Rollback:** revert PR 3; v2 checkpoints remain valid for Phase 1 app.
 
+### Phase 1 execution record (DDD-273)
+
+**Branch:** `cursor/ddd-273-consolidate-booking-state-into-one-canonical-session` (stacked on DDD-272).
+
+**Shipped:**
+
+- `BOOKING_SCHEMA_VERSION = 2`; upgrade reads 0/1/2, writes 2 only
+- `BookingDraft` gains `pendingDecision` + `slotProvenance`; runtime slot picks stamp `availability_tool`
+- Hydration marks legacy slots `unverified_legacy`, expires frozen HITL `pendingCommand`, sets `prefetchDirty` + clears `availabilityContext`
+- `nextBookingRequirement` implemented; `bookingDraftPhase` mirrors verified-slot rules
+- Converters in `booking-session-convert.ts`; scanner stub in `booking-checkpoint-scanner.ts`
+- Irreducible session opens (`service_candidate`, `service_or_note`, `mutation_confirm`) write `pendingDecision` on the draft
+
+**Validation:** `pnpm check` / `pnpm test` (1385) / `pnpm depcruise` (0 errors).
+
 ---
 
 ## Phase 3 — Derive views (DDD-275) — PR 4

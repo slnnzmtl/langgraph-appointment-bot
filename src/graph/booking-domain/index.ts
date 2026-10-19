@@ -1,9 +1,6 @@
 /**
- * Canonical booking decision-loop contracts (DDD-272 / Phase 0).
- *
- * Compile-only in this phase: no production routing imports these symbols for
- * control flow. Later phases implement decideBooking / projectBookingView against
- * these types. Must stay free of LangGraph / LangChain imports (depcruise).
+ * Canonical booking decision-loop contracts (DDD-272+) and Phase 1 session helpers.
+ * Must stay free of LangGraph / LangChain imports (depcruise).
  */
 
 export {
@@ -11,6 +8,7 @@ export {
   type BookingModeV2,
   type BookingSessionV2,
   type ContactFacts,
+  type FrozenMutationCommand,
   type MeetingRef,
   type NoteFacts,
   type PendingDecision,
@@ -18,7 +16,14 @@ export {
   type ServiceAcceptanceV2,
   type ServiceRef,
   type SlotFacts,
+  type SlotProvenance,
 } from "./session.js";
+
+export {
+  pendingDecisionFromLegacyInteraction,
+  schema2FieldsForUpgradedDraft,
+  withSchema2SessionFields,
+} from "./upgrade-session.js";
 
 export {
   type BookingEffect,

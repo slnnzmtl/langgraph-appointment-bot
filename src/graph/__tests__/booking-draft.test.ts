@@ -505,7 +505,9 @@ describe("BookingDraft reducer", () => {
 
     expect(upgraded.update.bookingDraft).toMatchObject({
       version: 7,
-      phase: "ready",
+      // Schema 2 marks legacy slots unverified → must re-enter time before ready.
+      phase: "time",
+      slotProvenance: "unverified_legacy",
       serviceAcceptance: {
         status: "accepted",
         service: { id: CONSULTATION_SERVICE_ID },
@@ -628,7 +630,7 @@ describe("BookingDraft reducer", () => {
     });
   });
 
-  it("stamps schema version 1 on an already-empty new chat without telemetry", () => {
+  it("stamps schema version 2 on an already-empty new chat without telemetry", () => {
     const upgraded = upgradeBookingCheckpoint({
       bookingSchemaVersion: 0,
       bookingDraft: null,
@@ -638,6 +640,8 @@ describe("BookingDraft reducer", () => {
       bookingNoteStatus: "unasked",
       selectedSlot: null,
       selectedAvailabilityDate: null,
+      prefetchDirty: true,
+      availabilityContext: null,
       bookingDraft: null,
     });
     expect(upgraded.telemetry).toBeNull();
@@ -645,7 +649,7 @@ describe("BookingDraft reducer", () => {
 
   it("refuses unsupported schema versions without rewriting", () => {
     const upgraded = upgradeBookingCheckpoint({
-      bookingSchemaVersion: 2,
+      bookingSchemaVersion: 3,
       bookingDraft: {
         ...createEmptyBookingDraft(),
         serviceAcceptance: {
@@ -658,7 +662,7 @@ describe("BookingDraft reducer", () => {
     expect(upgraded.unsupported).toBe(true);
     expect(upgraded.telemetry).toEqual({
       source: "legacy_draft",
-      schemaVersion: 2,
+      schemaVersion: 3,
       outcome: "unsupported",
     });
   });
@@ -1030,12 +1034,10 @@ describe("BookingDraft reducer", () => {
     });
 
     expect(upgraded.telemetry?.outcome).toBe("canonical");
+    // Schema 2 expires legacy frozen HITL commands; replacement create stays for recovery.
     expect(upgraded.update.bookingDraft).toMatchObject({
       mode: "replace",
-      pendingCommand: {
-        action: "cancel",
-        payload: { meetingId: "m-old" },
-      },
+      pendingCommand: null,
       replacement: {
         meeting: { id: "m-old" },
         status: "cancelling",
@@ -1942,7 +1944,7 @@ describe("BookingDraft contactDetails", () => {
   it("reads drafts without contactDetails as null and keeps schema v1", () => {
     const empty = createEmptyBookingDraft();
     expect(empty.contactDetails).toBeNull();
-    expect(BOOKING_SCHEMA_VERSION).toBe(1);
+    expect(BOOKING_SCHEMA_VERSION).toBe(2);
     const withService = reduceBookingDraft(empty, {
       type: "service_selected",
       service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
