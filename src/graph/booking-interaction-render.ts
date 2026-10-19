@@ -6,9 +6,6 @@ import {
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
   CONSULTATION_SERVICE_ID,
-  EARLIER_DATE_LABEL,
-  LATER_DATE_LABEL,
-  OTHER_DATE_LABEL,
   SERVICE_CHANGE_ACK_UK,
   SERVICE_CONFIRM_CONSULTATION_EN,
   SERVICE_CONFIRM_CONSULTATION_UK,
@@ -40,6 +37,11 @@ import type {
   PendingInteraction,
   TimeSelectInteraction,
 } from "./booking-session.js";
+import {
+  presentationSnapshotId,
+  projectAvailabilityPresentation,
+  projectEmptyAvailabilityPresentation,
+} from "./booking-domain/availability-presentation.js";
 
 const FAQ_CATALOG_CLOSE_UK = "Який варіант вам підходить?";
 
@@ -251,16 +253,30 @@ export const buildDateSelectInteraction = (
 ): DateSelectInteraction => {
   const open = context.days.filter((day) => day.slots.length > 0).slice(0, 3);
   const snapshot = snapshotFromContext(context, open);
+  const query = availabilityQueryFromContext(context);
+  const presentation = projectAvailabilityPresentation(
+    open.map((day) => ({
+      date: day.date,
+      ...(day.dayLabel != null ? { dayLabel: day.dayLabel } : {}),
+      slots: day.slots.map((slot) => ({ id: slot.id, label: slot.label })),
+    })),
+    {
+      snapshotId: snapshot.snapshotId
+        || presentationSnapshotId({
+          ...(context.serviceId != null ? { serviceId: context.serviceId } : {}),
+          ...(query?.kind != null ? { queryKind: query.kind } : {}),
+          days: open,
+          stepMinutes: context.stepMinutes,
+        }),
+    },
+  );
   return {
     kind: "date_select",
     snapshot,
-    choices: [
-      ...open.map((day) => ({
-        id: day.date,
-        label: shortDayMonthLabel(day.dayLabel ?? day.date),
-      })),
-      { id: "other_date", label: OTHER_DATE_LABEL },
-    ],
+    choices: (presentation?.choices ?? []).map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+    })),
   };
 };
 
@@ -270,17 +286,32 @@ export const buildTimeSelectInteraction = (
   day: AvailabilityContext["days"][number],
 ): TimeSelectInteraction => {
   const snapshot = snapshotFromContext(context, [day]);
+  const query = availabilityQueryFromContext(context);
+  const presentation = projectAvailabilityPresentation(
+    [{
+      date: day.date,
+      ...(day.dayLabel != null ? { dayLabel: day.dayLabel } : {}),
+      slots: day.slots.map((slot) => ({ id: slot.id, label: slot.label })),
+    }],
+    {
+      selectedDate: day.date,
+      snapshotId: snapshot.snapshotId
+        || presentationSnapshotId({
+          ...(context.serviceId != null ? { serviceId: context.serviceId } : {}),
+          ...(query?.kind != null ? { queryKind: query.kind } : {}),
+          days: [day],
+          stepMinutes: context.stepMinutes,
+        }),
+    },
+  );
   return {
     kind: "time_select",
     date: day.date,
     snapshot,
-    choices: [
-      ...day.slots.slice(0, 3).map((slot) => ({
-        id: slot.id,
-        label: slot.label,
-      })),
-      { id: "other_date", label: OTHER_DATE_LABEL },
-    ],
+    choices: (presentation?.choices ?? []).map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+    })),
   };
 };
 
@@ -296,35 +327,24 @@ export const buildEmptyAvailabilityInteraction = (
     && anchor != null
     && anchor > kyivToday();
 
-  if (direction === "earlier") {
-    const snapshot = snapshotFromContext(context, [], "earlier");
-    return {
-      kind: "date_select",
-      snapshot,
-      choices: [{ id: "later", label: LATER_DATE_LABEL }],
-    };
-  }
-
-  if (direction === "exact") {
-    const snapshot = snapshotFromContext(context, [], "exact", canSearchEarlier);
-    return {
-      kind: "date_select",
-      snapshot,
-      choices: [
-        ...(canSearchEarlier ? [{ id: "earlier", label: EARLIER_DATE_LABEL }] : []),
-        { id: "later", label: LATER_DATE_LABEL },
-      ],
-    };
-  }
-
-  const snapshot = snapshotFromContext(context, [], "other", canSearchEarlier);
+  const emptyMode =
+    direction === "earlier"
+      ? "earlier" as const
+      : direction === "exact"
+        ? "exact" as const
+        : "other" as const;
+  const snapshot = snapshotFromContext(context, [], emptyMode, canSearchEarlier);
+  const presentation = projectEmptyAvailabilityPresentation(snapshot.snapshotId, {
+    direction: direction ?? "other",
+    canSearchEarlier,
+  });
   return {
     kind: "date_select",
     snapshot,
-    choices: [
-      ...(canSearchEarlier ? [{ id: "earlier", label: EARLIER_DATE_LABEL }] : []),
-      { id: "later", label: LATER_DATE_LABEL },
-    ],
+    choices: presentation.choices.map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+    })),
   };
 };
 

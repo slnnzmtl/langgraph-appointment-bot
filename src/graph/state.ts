@@ -87,21 +87,21 @@ export const createClinicStateAnnotation = ({
       default: () => null,
     }),
     /**
-     * @deprecated Legacy checkpoint projection — read only in
-     * `upgradeBookingDraftCheckpoint` / adapter upgrade. Live graph code must use
-     * `bookingDraft`. Cleared on upgrade; remove these channels once production
-     * checkpoints no longer depend on them.
+     * @deprecated Legacy checkpoint projection — migration / upgrade boundary only.
+     * Live graph nodes must never write these; use `bookingDraft` instead.
+     * Cleared on upgrade. Keep channels until production rows are already_current
+     * (scanner) so versionless checkpoints can still be read and stamped.
      */
     bookingNoteStatus: Annotation<BookingNoteStatus>({
       reducer: (_left, right) => right,
       default: () => "unasked",
     }),
-    /** @deprecated Legacy checkpoint projection — migration boundary only (see bookingNoteStatus). */
+    /** @deprecated Migration boundary only — see bookingNoteStatus. */
     selectedSlot: Annotation<SelectedBookingSlot | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
-    /** @deprecated Legacy checkpoint projection — migration boundary only (see bookingNoteStatus). */
+    /** @deprecated Migration boundary only — see bookingNoteStatus. */
     selectedAvailabilityDate: Annotation<string | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,

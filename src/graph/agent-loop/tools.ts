@@ -40,6 +40,6 @@ export const createAgentToolsNode = (
       toolResultMessages = toolMessagesFromToolNodeInvoke(result);
     }
 
-    return applyToolEffects(state, protocol, toolResultMessages);
+    return applyToolEffects(state, protocol, toolResultMessages, agentId);
   };
 };

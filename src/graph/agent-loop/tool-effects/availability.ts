@@ -9,12 +9,22 @@ import { reduceBookingSession } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { captureAvailabilityFromMessages } from "../protocol/index.js";
 
+export type ProjectAvailabilityEffectsOptions = {
+  /**
+   * When true, only stamp availabilityContext/cursor for decide read models.
+   * Never writes bookingDraft or pendingInteraction (atomic booking path).
+   */
+  captureOnly?: boolean;
+};
+
 /** Capture / reconcile availability when mutation did not clear it. */
 export const projectAvailabilityEffects = (input: {
   state: ClinicState;
   resultMessages: BaseMessage[];
+  options?: ProjectAvailabilityEffectsOptions;
 }): ClinicStateUpdate => {
   const { state, resultMessages } = input;
+  const captureOnly = input.options?.captureOnly === true;
   const patch: ClinicStateUpdate = {};
   const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
   if (capturedAvailability === undefined) {
@@ -27,6 +37,11 @@ export const projectAvailabilityEffects = (input: {
     : capturedAvailability;
   patch.availabilityContext = bookingAvailability;
   patch.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
+
+  if (captureOnly) {
+    return patch;
+  }
+
   const reconciliation = reconcileRequestedTime(state.bookingDraft, bookingAvailability);
   let bookingDraft = state.bookingDraft;
   let pendingInteraction = state.pendingInteraction ?? null;

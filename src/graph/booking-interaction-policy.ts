@@ -1,12 +1,15 @@
 /**
  * Draft / interaction predicates for FAQ sticky and supervisor routing.
- * Replaces bookingTurnNeedsNoteOrchestrator without importing the deleted orchestrator.
+ * Ownership kinds come from booking-session — one list only.
  */
 
 import type { BookingDraft } from "./booking-draft.js";
-import type { PendingInteraction } from "./booking-session.js";
+import {
+  BOOKING_OWNED_INTERACTION_KINDS,
+  type PendingInteraction,
+} from "./booking-session.js";
 
-const BOOKING_OWNED_INTERACTION_KINDS = new Set([
+const STICKY_INTERACTION_KINDS = new Set<string>([
   "visit_note",
   "service_or_note",
   "service_candidate",
@@ -14,6 +17,13 @@ const BOOKING_OWNED_INTERACTION_KINDS = new Set([
   "date_select",
   "time_select",
 ]);
+
+// Compile-time guard: sticky kinds must stay a subset of the session ownership list.
+for (const kind of STICKY_INTERACTION_KINDS) {
+  if (!(BOOKING_OWNED_INTERACTION_KINDS as readonly string[]).includes(kind)) {
+    throw new Error(`sticky interaction kind missing from BOOKING_OWNED_INTERACTION_KINDS: ${kind}`);
+  }
+}
 
 /**
  * True when the open draft / interaction should keep the patient in booking
@@ -24,7 +34,7 @@ export const bookingTurnNeedsDraftInteraction = (state: {
   pendingInteraction?: PendingInteraction | null;
 }): boolean => {
   const interaction = state.pendingInteraction;
-  if (interaction != null && BOOKING_OWNED_INTERACTION_KINDS.has(interaction.kind)) {
+  if (interaction != null && STICKY_INTERACTION_KINDS.has(interaction.kind)) {
     // FAQ-owned catalog stays with FAQ sticky / catalog producer.
     if (interaction.kind === "service_candidate" && interaction.owner === "faq") {
       return false;

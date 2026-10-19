@@ -15,22 +15,9 @@ export {
 } from "./protocol/index.js";
 
 export {
-  advanceBookingNoteStep,
   authoritativeNoteStatus,
   authoritativeSelectedSlot,
-  noteStepBlocksCreate,
 } from "./booking-note-step.js";
-
-export {
-  availabilityOfferFromToolTurn,
-  formatAvailabilityDateOffer,
-  formatAvailabilityEmptyOffer,
-  formatAvailabilityHeading,
-  formatAvailabilityTimeOffer,
-  matchAvailabilityDay,
-  matchAvailabilitySlot,
-  resolveAvailabilityOffer,
-} from "../booking-interaction-render.js";
 
 export {
   createAgentMutationFinalizeNode,
@@ -73,7 +60,6 @@ export {
 } from "./mutation-chat-other.js";
 
 export {
-  commandPrepareNodeName,
   finalizeNodeName,
   llmNodeName,
   mutationFinalizeNodeName,

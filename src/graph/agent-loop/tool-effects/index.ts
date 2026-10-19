@@ -1,7 +1,8 @@
 import type { BaseMessage } from "@langchain/core/messages";
 import { Overwrite } from "@langchain/langgraph";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { crmWriteDirtiesPrefetch } from "../protocol/index.js";
+import { BOOKING_AGENT_ID, type ClinicAgentId } from "../../types.js";
+import { crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../protocol/index.js";
 import { type ToolProtocolResult } from "../tools-protocol.js";
 import { projectAvailabilityEffects } from "./availability.js";
 import { projectContactEffects } from "./contact.js";
@@ -22,23 +23,67 @@ const applyEffective = (
   return next;
 };
 
+/**
+ * FAQ keeps full session/draft projections.
+ * Booking only stamps read models (availability/services/contact context) —
+ * decideBooking owns draft + pendingInteraction via EffectResult.
+ */
 export const applyToolEffects = (
   state: ClinicState,
   protocol: ToolProtocolResult,
   toolResultMessages: BaseMessage[],
+  agentId: ClinicAgentId = "faq",
 ): ClinicStateUpdate => {
   const resultMessages = toolResultMessages;
+  const bookingPath = agentId === BOOKING_AGENT_ID;
 
   let effectiveState = state;
-  // Keep resultMessages on the return update only — contact projection must
-  // resolve tool-call args against the original agentMessages tape.
-  // Filtering that changes tool_calls must Overwrite the AI message; otherwise
-  // messagesStateReducer appends ToolMessages onto the unfiltered tape.
   let update: ClinicStateUpdate = {
     agentMessages: protocol.stateTapeRewrite != null
       ? new Overwrite([...protocol.stateTapeRewrite, ...resultMessages])
       : resultMessages,
   };
+
+  if (bookingPath) {
+    if (meetingMutationClearsAvailability(resultMessages)) {
+      update = {
+        ...update,
+        availabilityContext: null,
+        availabilityCursor: null,
+      };
+      effectiveState = applyEffective(effectiveState, {
+        availabilityContext: null,
+        availabilityCursor: null,
+      });
+    } else {
+      const availability = projectAvailabilityEffects({
+        state: effectiveState,
+        resultMessages,
+        options: { captureOnly: true },
+      });
+      update = { ...update, ...availability };
+      effectiveState = applyEffective(effectiveState, availability);
+    }
+
+    const services = projectServiceEffects({ resultMessages });
+    update = { ...update, ...services };
+    effectiveState = applyEffective(effectiveState, services);
+
+    // Contact CRM rows for supervisor/prefetch — not draft events (decide owns those).
+    const contact = projectContactEffects({
+      state: effectiveState,
+      resultMessages,
+    });
+    const contactWithoutDraft: ClinicStateUpdate = { ...contact };
+    delete contactWithoutDraft.bookingDraft;
+    update = { ...update, ...contactWithoutDraft };
+    effectiveState = applyEffective(effectiveState, contactWithoutDraft);
+
+    if (crmWriteDirtiesPrefetch(resultMessages)) {
+      update = { ...update, prefetchDirty: true };
+    }
+    return update;
+  }
 
   const mutation = projectMutationEffects({
     state: effectiveState,
