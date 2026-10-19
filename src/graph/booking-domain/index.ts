@@ -62,6 +62,9 @@ export { decideBooking } from "./decide.js";
 export {
   projectBookingView,
   assertExclusivePendingDecision,
+  localizeClarificationReason,
+  semanticChoicesFromView,
+  type BookingViewChoice,
   type BookingViewInputs,
 } from "./view.js";
 

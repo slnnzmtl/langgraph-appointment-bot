@@ -13,7 +13,11 @@ export type BookingViewCard =
   | { kind: "time_select"; date: string; snapshotId: string; choiceIds: string[] }
   | { kind: "visit_note"; skipLabel: string }
   | { kind: "contact_field"; field: "phoneNumber" | "firstName" | "lastName" }
-  | { kind: "visit_select"; stage: "action" | "meeting" | "replacement" }
+  | {
+      kind: "visit_select";
+      stage: "action" | "meeting" | "replacement";
+      choiceIds: string[];
+    }
   | { kind: "mutation_confirm"; action: "create" | "reschedule" | "cancel"; effectId: string }
   | { kind: "clarification"; reason: string }
   | { kind: "plain_text"; text: string };
