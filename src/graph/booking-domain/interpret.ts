@@ -113,6 +113,7 @@ export type BookingTurnClassification = {
     | "confirm_pending_service"
     | "decline_pending_service";
   serviceQuery?: string;
+  /** @deprecated Ignored — CRM ids must come from catalog evidence only. */
   serviceId?: string;
   scheduleKind?: "none" | "date" | "time" | "date_and_time" | "relative" | "choice";
   scheduleDate?: string;
@@ -168,10 +169,10 @@ export const normalizeBookingTurnClassification = (
       break;
     case "named_procedure":
       if (raw.serviceQuery != null) {
+        // Never accept model-minted CRM ids — catalog evidence resolves later.
         patch.serviceIntent = {
           kind: "named_procedure",
           query: raw.serviceQuery,
-          ...(raw.serviceId != null ? { serviceId: raw.serviceId } : {}),
         };
       }
       break;

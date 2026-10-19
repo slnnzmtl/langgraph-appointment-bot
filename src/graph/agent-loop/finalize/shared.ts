@@ -8,13 +8,17 @@ import {
 import { trackEvent } from "../../../analytics/track.js";
 import {
   CONSULTATION_SERVICE_ID,
+  MAIN_MENU_GREETING_UK,
   PATIENT_FALLBACK_MESSAGE,
+  defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
+import { claimsOutcome } from "../../../shared/outcome-claims.js";
 import {
   extractMessageTextContent,
   isFaqServicesGuideLabel,
   labelIdFor,
 } from "../../../shared/message-content.js";
+import { defaultMenuHasVisit } from "../mutation-finalize.js";
 import type { BookingService } from "../../booking-draft.js";
 import { isFaqCatalogBrowseShortcut } from "../../booking-entry-policy.js";
 import {
@@ -323,6 +327,40 @@ export const applyServiceOfferSynthesis = (
   }
 
   return { reply: next, serviceOfferUpdate };
+};
+
+/** Replace model prose that claims a CRM outcome the tools did not commit. */
+export const applyFalseSuccessClaimOverride = (
+  state: ClinicState,
+  agentId: string,
+  agentMessages: BaseMessage[],
+  reply: FinalizeReply,
+  mutationCommitted: boolean,
+): FinalizeReply => {
+  if (reply.replySource !== "model" || mutationCommitted) {
+    return reply;
+  }
+  const claim = claimsOutcome(reply.replyText);
+  if (claim == null) {
+    return reply;
+  }
+  trackEvent("false_success_claim", {
+    rule: claim.rule,
+    phase: state.bookingDraft?.phase ?? null,
+    agent: agentId,
+  });
+  trackEvent("reply_menu_filled", {
+    menu: "default",
+    reason: "false_success_claim",
+  });
+  return {
+    ...reply,
+    replyText: MAIN_MENU_GREETING_UK,
+    replyButtons: [
+      ...defaultMenuLabels(defaultMenuHasVisit(agentMessages, state.bookingContext)),
+    ],
+    replySource: "runtime",
+  };
 };
 
 /** Assemble AI-path finalize update (empty / max_steps / ok). */

@@ -5,17 +5,24 @@
 
 export type ServiceIntent =
   | { kind: "consultation" }
-  | { kind: "named_procedure"; query: string; serviceId?: string }
+  | { kind: "named_procedure"; query: string }
   | { kind: "catalog_browse"; query?: string }
   | { kind: "confirm_pending_service" }
-  | { kind: "decline_pending_service" };
+  | { kind: "decline_pending_service" }
+  /** Resolved from catalog evidence only (never model-minted CRM ids). */
+  | { kind: "catalog_service"; serviceId: string; serviceName?: string };
 
 export type ScheduleIntent =
   | { kind: "date"; date: string }
   | { kind: "time"; time: string }
   | { kind: "date_and_time"; date: string; time: string }
   | { kind: "relative"; queryKind: "nearest" | "earlier" | "later"; anchor?: string }
-  | { kind: "choice"; choiceId: string };
+  | { kind: "choice"; choiceId: string }
+  | {
+      kind: "slot";
+      slot: { dateStart: string; dateEnd: string; label: string };
+      snapshotId?: string;
+    };
 
 export type NoteInput =
   | { kind: "answer"; value: string }

@@ -1,4 +1,8 @@
-import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
+import {
+  CLINIC_ADDRESS,
+  CONSULTATION_SERVICE_ID,
+  OTHER_DATE_LABEL,
+} from "../../shared/clinic-constants.js";
 import {
   nextMissingContactField,
   reduceBookingDraft,
@@ -16,6 +20,10 @@ import type {
   BookingViewCard,
   DecideBookingResult,
 } from "./decision.js";
+import {
+  labelsFromPresentation,
+  projectAvailabilityPresentation,
+} from "./availability-presentation.js";
 import type { BookingEffect, EffectResult, PendingEffect } from "./effects.js";
 import { nextBookingRequirement } from "./requirement.js";
 import type { PendingDecision } from "./session.js";
@@ -288,6 +296,27 @@ export const decideBooking = (
       };
     }
 
+    // Fresh availability snapshot awaiting a date/time choice — do not re-fetch.
+    if (w.pendingDecision?.kind === "date_select") {
+      const pending = w.pendingDecision;
+      return ask("present_dates", {
+        kind: "date_select",
+        snapshotId: pending.snapshotId,
+        choiceIds: [...pending.choiceIds],
+        labels: { ...pending.labels },
+      });
+    }
+    if (w.pendingDecision?.kind === "time_select") {
+      const pending = w.pendingDecision;
+      return ask("present_times", {
+        kind: "time_select",
+        date: pending.date,
+        snapshotId: pending.snapshotId,
+        choiceIds: [...pending.choiceIds],
+        labels: { ...pending.labels },
+      });
+    }
+
     // Replacement offered → cancel existing before create.
     if (w.replacement?.status === "offered") {
       return emitMutationConfirm(
@@ -411,6 +440,42 @@ export const decideBooking = (
       return { tag: "reply", intent: "answer_side_question", facts, card: null };
     }
 
+    if (result.kind === "catalog") {
+      emit({ type: "effect_cleared" });
+      const services = result.services ?? [];
+      if (result.outcome === "error" || result.outcome === "empty" || services.length === 0) {
+        emitDecision({ kind: "clarification", reason: "need_service" });
+        return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
+      }
+      if (services.length === 1) {
+        const only = services[0]!;
+        emit({
+          type: "service_selected",
+          service: { id: only.id, name: only.name, source: "catalog" },
+          accepted: false,
+        });
+        return decideFromRequirement();
+      }
+      const choiceIds = services.slice(0, 5).map((s) => s.id);
+      const labels: Record<string, string> = {};
+      for (const service of services.slice(0, 5)) {
+        labels[service.id] = service.name;
+      }
+      emitDecision({
+        kind: "service_candidate",
+        ...(pending?.effect.kind === "list_services" && pending.effect.query != null
+          ? { utterance: pending.effect.query, query: pending.effect.query }
+          : {}),
+        choiceIds,
+        labels,
+      });
+      return ask("ask_service", {
+        kind: "service_candidate",
+        choiceIds,
+        labels,
+      }, "service_candidates");
+    }
+
     if (result.kind === "mutation") {
       if (result.outcome === "unknown") {
         emit({ type: "effect_cleared" });
@@ -479,8 +544,61 @@ export const decideBooking = (
           result.snapshotId,
         );
         emit({ type: "slot_provenance_set", provenance: "availability_tool", evidence });
+        return decideFromRequirement();
       }
-      return decideFromRequirement();
+
+      // Fresh snapshot → date/time choice card (do not re-emit present_availability).
+      const snapshotId =
+        result.snapshotId
+        ?? readModels.availabilitySnapshotId
+        ?? "availability";
+      const projected = readModels.availabilityDays != null
+        ? projectAvailabilityPresentation(readModels.availabilityDays, {
+          ...(ctx.working?.selectedDate != null
+            ? { selectedDate: ctx.working.selectedDate }
+            : {}),
+          snapshotId,
+        })
+        : null;
+      const mode = projected?.mode
+        ?? result.presentationMode
+        ?? "date_select";
+      const choices = projected?.choices
+        ?? result.presentationChoices
+        ?? [];
+      const choiceIds = choices.map((c) => c.id);
+      const labels = projected != null
+        ? labelsFromPresentation(projected)
+        : Object.fromEntries(choices.map((c) => [c.id, c.label]));
+      const presentationDate = projected?.date ?? result.presentationDate;
+      if (mode === "time_select" && presentationDate != null) {
+        emitDecision({
+          kind: "time_select",
+          date: presentationDate,
+          snapshotId,
+          choiceIds,
+          labels,
+        });
+        return ask("present_times", {
+          kind: "time_select",
+          date: presentationDate,
+          snapshotId,
+          choiceIds,
+          labels,
+        });
+      }
+      emitDecision({
+        kind: "date_select",
+        snapshotId,
+        choiceIds,
+        labels,
+      });
+      return ask("present_dates", {
+        kind: "date_select",
+        snapshotId,
+        choiceIds,
+        labels,
+      });
     }
 
     if (result.kind === "contact_lookup") {
@@ -562,11 +680,27 @@ export const decideBooking = (
       if (ctx.working?.serviceAcceptance?.status === "pending") {
         emit({ type: "service_accepted" });
       }
-    } else if (service?.kind === "named_procedure" && service.serviceId != null) {
+    } else if (service?.kind === "catalog_service") {
+      // Only catalog-resolved ids may write service_selected.
       emit({
         type: "service_selected",
-        service: { id: service.serviceId, name: service.query, source: "catalog" },
+        service: {
+          id: service.serviceId,
+          ...(service.serviceName != null ? { name: service.serviceName } : {}),
+          source: "catalog",
+        },
         accepted: true,
+      });
+    } else if (service?.kind === "named_procedure") {
+      // Never trust a model CRM id — resolve via list_services catalog evidence.
+      return runEffect("run_effect", {
+        kind: "list_services",
+        query: service.query,
+      });
+    } else if (service?.kind === "catalog_browse") {
+      return runEffect("run_effect", {
+        kind: "list_services",
+        ...(service.query != null ? { query: service.query } : {}),
       });
     } else if (service?.kind === "consultation") {
       emit({
@@ -574,18 +708,115 @@ export const decideBooking = (
         service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
         accepted: false,
       });
+    } else if (service?.kind === "decline_pending_service") {
+      emit({ type: "draft_abandoned" });
+      emitDecision({ kind: "clarification", reason: "need_service" });
+      return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
     }
 
     const schedule = patch.scheduleIntent;
+    if (schedule?.kind === "relative" || (schedule?.kind === "choice"
+      && (schedule.choiceId === "other_date"
+        || schedule.choiceId === "earlier"
+        || schedule.choiceId === "later")))
+    {
+      if (ctx.working?.pendingDecision?.kind === "date_select"
+        || ctx.working?.pendingDecision?.kind === "time_select")
+      {
+        emit({ type: "decision_cleared" });
+      }
+      const queryKind =
+        schedule.kind === "relative"
+          ? schedule.queryKind
+          : schedule.choiceId === "earlier"
+            ? "earlier"
+            : schedule.choiceId === "later" || schedule.choiceId === "other_date"
+              ? "later"
+              : "nearest";
+      return runEffect("present_dates", {
+        kind: "present_availability",
+        queryKind,
+        ...(schedule.kind === "relative" && schedule.anchor != null
+          ? { date: schedule.anchor }
+          : ctx.working?.selectedDate != null
+            ? { date: ctx.working.selectedDate }
+            : {}),
+      });
+    }
     if (schedule?.kind === "date") {
+      if (ctx.working?.pendingDecision?.kind === "date_select"
+        || ctx.working?.pendingDecision?.kind === "time_select")
+      {
+        emit({ type: "decision_cleared" });
+      }
       emit({ type: "schedule_requested", date: schedule.date });
+      // Prefer presenting times from the current snapshot when the day is open.
+      const day = readModels.availabilityDays?.find((d) => d.date === schedule.date);
+      if (day != null && day.slots.length > 0) {
+        const snapshotId = readModels.availabilitySnapshotId ?? "availability";
+        const choiceIds = [
+          ...day.slots.slice(0, 3).map((s) => s.id),
+          "other_date",
+        ];
+        const labels: Record<string, string> = { other_date: OTHER_DATE_LABEL };
+        for (const slot of day.slots.slice(0, 3)) {
+          labels[slot.id] = slot.label;
+        }
+        emitDecision({
+          kind: "time_select",
+          date: schedule.date,
+          snapshotId,
+          choiceIds,
+          labels,
+        });
+        return ask("present_times", {
+          kind: "time_select",
+          date: schedule.date,
+          snapshotId,
+          choiceIds,
+          labels,
+        });
+      }
     } else if (schedule?.kind === "date_and_time") {
+      if (ctx.working?.pendingDecision != null) {
+        emit({ type: "decision_cleared" });
+      }
       emit({ type: "schedule_requested", date: schedule.date, preferredTime: schedule.time });
     } else if (schedule?.kind === "time") {
       const date = ctx.working?.selectedDate;
       if (date != null) {
+        if (ctx.working?.pendingDecision?.kind === "time_select") {
+          emit({ type: "decision_cleared" });
+        }
         emit({ type: "schedule_requested", date, preferredTime: schedule.time });
       }
+    } else if (schedule?.kind === "slot") {
+      if (ctx.working?.pendingDecision?.kind === "time_select"
+        || ctx.working?.pendingDecision?.kind === "date_select")
+      {
+        emit({ type: "decision_cleared" });
+      }
+      const slotDate = schedule.slot.dateStart.slice(0, 10);
+      if (ctx.working?.selectedDate !== slotDate) {
+        emit({ type: "date_selected", date: slotDate });
+      }
+      emit({
+        type: "slot_selected",
+        slot: {
+          dateStart: schedule.slot.dateStart,
+          dateEnd: schedule.slot.dateEnd,
+          label: schedule.slot.label,
+        },
+        ...(schedule.snapshotId != null ? { snapshotId: schedule.snapshotId } : {}),
+      });
+    } else if (schedule?.kind === "choice") {
+      // Unresolved choice id (not other_date/earlier/later) — ask clarification.
+      emitDecision({ kind: "clarification", reason: "unknown_choice" });
+      return ask(
+        "clarification",
+        { kind: "clarification", reason: "unknown_choice" },
+        "unknown_choice",
+      );
     }
 
     if (patch.note?.kind === "skip") {
@@ -607,9 +838,33 @@ export const decideBooking = (
       }
     }
 
-    // Informational question is read-only (only key present): surface facts via effect.
-    if (patch.informationalQuestion != null && Object.keys(patch).length === 1) {
-      return runEffect("run_effect", { kind: "get_working_time" });
+    // Side question may coexist with booking facts — apply facts first, then read effect.
+    if (patch.informationalQuestion != null) {
+      const kind = patch.informationalQuestion.trim().toLowerCase();
+      if (kind === "hours" || kind.includes("hour") || kind.includes("годин")) {
+        return runEffect("answer_side_question", { kind: "get_working_time" });
+      }
+      if (kind === "address" || kind.includes("address") || kind.includes("адрес")) {
+        const nextReq = nextBookingRequirement(ctx.working, readModels);
+        return {
+          tag: "reply",
+          intent: "answer_side_question",
+          facts: {
+            address: CLINIC_ADDRESS,
+            ...(nextReq !== "none" ? { nextStep: nextReq } : {}),
+          },
+          card: null,
+        };
+      }
+      if (kind === "price" || kind.includes("price") || kind.includes("цін")) {
+        const serviceId = ctx.working?.serviceAcceptance?.service.id;
+        if (serviceId != null) {
+          return runEffect("answer_side_question", { kind: "get_service", serviceId });
+        }
+        // Defer price until a verified service is on the draft.
+        return decideFromRequirement();
+      }
+      return runEffect("answer_side_question", { kind: "get_working_time" });
     }
 
     return decideFromRequirement();

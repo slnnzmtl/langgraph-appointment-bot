@@ -47,9 +47,14 @@ export const replyChoicesFromCard = (
   labelById?: ReadonlyMap<string, string>,
 ): BookingReplyChoice[] => {
   const ids = choiceIdsFromCard(card);
+  const cardLabels =
+    card != null && "labels" in card && card.labels != null
+      ? card.labels
+      : undefined;
   return ids.map((id) => ({
     id,
     label: labelById?.get(id)
+      ?? cardLabels?.[id]
       ?? (id === "confirm" || id === "hitl_yes" || id === "offer_accept"
         ? CONFIRM_YES_LABEL
         : id === "decline" || id === "hitl_no" || id === "offer_choose_other"

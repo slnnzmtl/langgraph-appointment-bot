@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { assertBoundAgentToolNames } from "../../graph/bound-tools.js";
+import {
+  assertBoundAgentToolNames,
+  assertBookingRuntimeToolNames,
+} from "../../graph/bound-tools.js";
 import {
   BOOKING_RUNTIME_TOOL_NAMES,
   createBookingTools,
@@ -61,5 +64,18 @@ describe("clinic-tools composition", () => {
     expect(() => assertBoundAgentToolNames("faq", bookingTools)).toThrow(
       /runtime-owned tools/,
     );
+  });
+
+  it("assertBookingRuntimeToolNames accepts ToolNode runtime+informational set", () => {
+    const readTools = createReadTools({ callTool, assignedUserId: "user-1" });
+    const bookingTools = createBookingTools({ callTool, assignedUserId: "user-1" });
+    expect(() => assertBookingRuntimeToolNames([...readTools, ...bookingTools])).not.toThrow();
+    expect(() =>
+      assertBookingRuntimeToolNames([
+        ...readTools,
+        ...bookingTools,
+        { name: "invented_tool" } as never,
+      ]),
+    ).toThrow(/unknown tools/);
   });
 });

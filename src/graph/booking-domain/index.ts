@@ -52,6 +52,16 @@ export {
 export { decideBooking } from "./decide.js";
 
 export {
+  labelsFromPresentation,
+  presentationSnapshotId,
+  projectAvailabilityPresentation,
+  projectEmptyAvailabilityPresentation,
+  type AvailabilityPresentation,
+  type AvailabilityPresentationChoice,
+  type AvailabilityPresentationDay,
+} from "./availability-presentation.js";
+
+export {
   interpretBookingTurnDeterministic,
   normalizeBookingTurnClassification,
   BOOKING_TURN_INTERPRETER_INSTRUCTION,

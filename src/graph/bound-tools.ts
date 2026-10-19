@@ -37,3 +37,20 @@ export const assertBoundAgentToolNames = (
     }
   }
 };
+
+/** ToolNode allowlist: runtime CRM tools plus informational reads. Not an LLM bind gate. */
+export const assertBookingRuntimeToolNames = (
+  tools: readonly StructuredToolInterface[],
+): void => {
+  const names = tools.map((tool) => tool.name);
+  const allowed = new Set([
+    ...BOOKING_RUNTIME_TOOL_NAMES,
+    ...BOOKING_INFORMATIONAL_TOOL_NAMES,
+  ]);
+  const disallowed = names.filter((name) => !allowed.has(name));
+  if (disallowed.length > 0) {
+    throw new Error(
+      `Booking ToolNode includes unknown tools: ${disallowed.join(", ")}`,
+    );
+  }
+};

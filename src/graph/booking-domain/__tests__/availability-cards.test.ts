@@ -1,0 +1,236 @@
+import { describe, expect, it } from "vitest";
+
+import { CONSULTATION_SERVICE_ID } from "../../../shared/clinic-constants.js";
+import {
+  createEmptyBookingDraft,
+  reduceBookingDraft,
+  type BookingDraft,
+} from "../../booking-draft.js";
+import { decideBooking } from "../decide.js";
+import type { BookingReadModels } from "../decision.js";
+import type { EffectResult } from "../effects.js";
+
+const READ: BookingReadModels = {
+  contactContextDirty: false,
+  bookingContextDirty: false,
+  availabilityVerified: true,
+  availabilitySnapshotId: "snap-1",
+  availabilityDays: [
+    {
+      date: "2026-09-10",
+      dayLabel: "10 вер",
+      slots: [
+        {
+          id: "slot-a",
+          label: "10 вер · 14:00",
+          dateStart: "2026-09-10T14:00:00",
+          dateEnd: "2026-09-10T14:30:00",
+        },
+        {
+          id: "slot-b",
+          label: "10 вер · 15:00",
+          dateStart: "2026-09-10T15:00:00",
+          dateEnd: "2026-09-10T15:30:00",
+        },
+      ],
+    },
+    {
+      date: "2026-09-11",
+      dayLabel: "11 вер",
+      slots: [
+        {
+          id: "slot-c",
+          label: "11 вер · 10:00",
+          dateStart: "2026-09-11T10:00:00",
+          dateEnd: "2026-09-11T10:30:00",
+        },
+      ],
+    },
+  ],
+};
+
+const draftWithAcceptedService = (): BookingDraft => {
+  const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+    type: "service_selected",
+    service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+    accepted: true,
+  });
+  if (draft == null) {
+    throw new Error("expected draft");
+  }
+  return draft;
+};
+
+describe("availability cards from effect results", () => {
+  it("emits a date_select ask and does not re-mint present_availability", () => {
+    const draft = reduceBookingDraft(draftWithAcceptedService(), {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_1_present_availability",
+        expectedRevision: 1,
+        effect: { kind: "present_availability", queryKind: "nearest" },
+        status: "executing",
+      },
+    });
+    const result: EffectResult = {
+      effectId: "eff_1_present_availability",
+      kind: "availability",
+      outcome: "slots",
+      snapshotId: "snap-1",
+      presentationMode: "date_select",
+      presentationChoices: [
+        { id: "2026-09-10", label: "10 вер", date: "2026-09-10" },
+        { id: "2026-09-11", label: "11 вер", date: "2026-09-11" },
+        { id: "other_date", label: "Інша дата" },
+      ],
+    };
+    const decision = decideBooking(
+      draft,
+      { source: "effect_result", result },
+      READ,
+    );
+    expect(decision.decision.tag).toBe("ask");
+    expect(decision.decision.intent).toBe("present_dates");
+    expect(decision.decision.card?.kind).toBe("date_select");
+    expect(decision.decision.pendingEffect).toBeUndefined();
+    expect(decision.events.some((e) => e.type === "effect_prepared")).toBe(false);
+
+    // Re-entry while awaiting choice must not mint another availability effect.
+    let next = draft;
+    for (const event of decision.events) {
+      next = reduceBookingDraft(next, event);
+    }
+    const again = decideBooking(next, { source: "patient_turn", rawText: "" }, READ);
+    expect(again.decision.tag).toBe("ask");
+    expect(again.decision.intent).toBe("present_dates");
+    expect(again.decision.pendingEffect).toBeUndefined();
+  });
+
+  it("selects an offered slot without a second availability effect", () => {
+    let draft = draftWithAcceptedService();
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" })!;
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "time_select",
+        date: "2026-09-10",
+        snapshotId: "snap-1",
+        choiceIds: ["slot-a", "slot-b", "other_date"],
+        labels: {
+          "slot-a": "10 вер · 14:00",
+          "slot-b": "10 вер · 15:00",
+          other_date: "Інша дата",
+        },
+      },
+    })!;
+    draft = reduceBookingDraft(draft, {
+      type: "choices_offered",
+      choiceIds: ["slot-a", "slot-b", "other_date"],
+    })!;
+
+    const decision = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: {
+          scheduleIntent: {
+            kind: "slot",
+            slot: {
+              dateStart: "2026-09-10T14:00:00",
+              dateEnd: "2026-09-10T14:30:00",
+              label: "10 вер · 14:00",
+            },
+            snapshotId: "snap-1",
+          },
+        },
+      },
+      READ,
+    );
+    expect(decision.events.some((e) => e.type === "slot_selected")).toBe(true);
+    expect(decision.decision.pendingEffect?.effect.kind).not.toBe("present_availability");
+  });
+});
+
+describe("multi-fact side questions and catalog resolve", () => {
+  it("applies consultation + price and emits get_service after service is on the draft", () => {
+    const decision = decideBooking(
+      null,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: { kind: "consultation" },
+          informationalQuestion: "price",
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      },
+    );
+    expect(decision.events.some((e) => e.type === "service_selected")).toBe(true);
+    // Price defers until service is accepted on draft — consultation starts pending.
+    // After accept path would get_service; with pending confirm, decide asks confirm first.
+    expect(
+      decision.decision.intent === "confirm_service"
+      || decision.decision.pendingEffect?.effect.kind === "get_service",
+    ).toBe(true);
+  });
+
+  it("named_procedure emits list_services and never writes model CRM ids", () => {
+    const decision = decideBooking(
+      null,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: { kind: "named_procedure", query: "ботокс" },
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      },
+    );
+    expect(decision.decision.tag).toBe("effect");
+    expect(decision.decision.pendingEffect?.effect).toEqual({
+      kind: "list_services",
+      query: "ботокс",
+    });
+    expect(decision.events.some((e) => e.type === "service_selected")).toBe(false);
+  });
+
+  it("catalog effect with one row selects that service", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_1_list_services",
+        expectedRevision: 1,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    });
+    const decision = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_1_list_services",
+          kind: "catalog",
+          outcome: "ok",
+          services: [{ id: "svc-botox", name: "Botox" }],
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      },
+    );
+    const selected = decision.events.find((e) => e.type === "service_selected");
+    expect(selected).toMatchObject({
+      type: "service_selected",
+      service: { id: "svc-botox", name: "Botox", source: "catalog" },
+    });
+  });
+});

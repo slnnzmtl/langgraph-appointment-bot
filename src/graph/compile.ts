@@ -17,7 +17,10 @@ import {
 } from "../tools/index.js";
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
-import { assertBoundAgentToolNames } from "./bound-tools.js";
+import {
+  assertBoundAgentToolNames,
+  assertBookingRuntimeToolNames,
+} from "./bound-tools.js";
 import {
   createFaqFinalizeNode,
   createAgentLlmNode,
@@ -175,8 +178,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
 
   const faqToolList = options.agentTools[FAQ_AGENT_ID] ?? [];
   const bookingToolList = options.agentTools[BOOKING_AGENT_ID] ?? [];
+  // FAQ still has an LLM bind; booking ToolNode is runtime-only (no booking LLM).
   assertBoundAgentToolNames(FAQ_AGENT_ID, faqToolList);
-  assertBoundAgentToolNames(BOOKING_AGENT_ID, bookingToolList);
+  assertBookingRuntimeToolNames(bookingToolList);
 
   const llmContextCache = options.contextCache && options.agentModelName
     ? {

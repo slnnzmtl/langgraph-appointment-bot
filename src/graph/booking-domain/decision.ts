@@ -61,10 +61,21 @@ export type BookingVerifiedFacts = {
  * choice ids / clarification reason codes to localized copy.
  */
 export type BookingViewCard =
-  | { kind: "service_confirm"; serviceId: string; choiceIds: string[] }
-  | { kind: "service_candidate"; choiceIds: string[] }
-  | { kind: "date_select"; snapshotId: string; choiceIds: string[] }
-  | { kind: "time_select"; date: string; snapshotId: string; choiceIds: string[] }
+  | { kind: "service_confirm"; serviceId: string; choiceIds: string[]; labels?: Record<string, string> }
+  | { kind: "service_candidate"; choiceIds: string[]; labels?: Record<string, string> }
+  | {
+      kind: "date_select";
+      snapshotId: string;
+      choiceIds: string[];
+      labels?: Record<string, string>;
+    }
+  | {
+      kind: "time_select";
+      date: string;
+      snapshotId: string;
+      choiceIds: string[];
+      labels?: Record<string, string>;
+    }
   | { kind: "visit_note"; skipChoiceId: string }
   | { kind: "contact_field"; field: "phoneNumber" | "firstName" | "lastName" }
   | { kind: "visit_select"; stage: "action" | "meeting" | "replacement" }
@@ -109,11 +120,26 @@ export type DecideBookingResult = {
   decision: BookingDecision;
 };
 
+/** Allowlisted open-day slots the adapter may pass for choice → slot resolution. */
+export type AvailabilitySlotReadModel = {
+  id: string;
+  label: string;
+  dateStart: string;
+  dateEnd: string;
+};
+
 /** CRM / availability read models passed into decideBooking (not a second aggregate). */
 export type BookingReadModels = {
   contactContextDirty: boolean;
   bookingContextDirty: boolean;
   availabilityVerified: boolean;
+  /** Open days from the latest availability snapshot (allowlisted fields only). */
+  availabilityDays?: Array<{
+    date: string;
+    dayLabel?: string;
+    slots: AvailabilitySlotReadModel[];
+  }>;
+  availabilitySnapshotId?: string;
 };
 
 /**

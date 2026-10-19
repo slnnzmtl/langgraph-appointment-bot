@@ -5,12 +5,28 @@ import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js"
 import type { McpCallTool } from "../shared/mcp.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import type { BookingService } from "./booking-draft.js";
-import type {
-  ResolveServiceChange,
-  ServiceResolutionResult,
-} from "./booking-note-orchestrator.js";
 import type { InteractionChoice, ResolveServiceEffect } from "./booking-session.js";
 import type { ILLMConnector } from "./types.js";
+
+export type ServiceResolutionResult =
+  | {
+      type: "service_changed";
+      service: BookingService;
+      accepted: boolean;
+      noteCandidate?: string;
+    }
+  | {
+      type: "service_candidates_opened";
+      utterance: string;
+      query?: string;
+      noteCandidate?: string;
+      choices: Array<{ id: string; label: string; serviceIds?: string[] }>;
+    }
+  | { type: "service_unresolved" };
+
+export type ResolveServiceChange = (
+  effect: ResolveServiceEffect,
+) => Promise<ServiceResolutionResult>;
 
 export type ServiceCatalogRow = {
   id: string;

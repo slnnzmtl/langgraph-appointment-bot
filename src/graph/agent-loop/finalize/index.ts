@@ -5,13 +5,11 @@ import {
 import type { RunnableConfig } from "@langchain/core/runnables";
 import { Command, Overwrite } from "@langchain/langgraph";
 import {
-  BOOKING_AGENT_ID,
   FAQ_AGENT_ID,
   type ClinicAgentDefinition,
 } from "../../types.js";
 import {
   PATIENT_FALLBACK_MESSAGE,
-  defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
 import {
   extractFaqCatalogAction,
@@ -25,7 +23,7 @@ import {
   applyMutationChatOtherCleanup,
   hasMutationCallDuringUnresolvedConfirmation,
   hasPendingConfirmationChatOther,
-} from "../booking-command.js";
+} from "../mutation-chat-other.js";
 import {
   createAgentMutationFinalizeNode,
 } from "../mutation-finalize.js";
@@ -34,19 +32,12 @@ import {
   terminalMeetingMutationOutcome,
 } from "../protocol/index.js";
 import {
-  applyBookingOutcomeRiskOverride,
-  applyBookingPrimaryReply,
-  applyFalseSuccessClaimOverride,
-  availabilityPresentedUpdate,
-  noteStatusHandoffUpdate,
-  tryBookingNoAiFinalize,
-} from "./booking.js";
-import {
   applyFaqCatalogAiFinalize,
   tryFaqNoAiFinalize,
   type FinalizeFaqOptions,
 } from "./faq.js";
 import {
+  applyFalseSuccessClaimOverride,
   applyServiceOfferSynthesis,
   emptyFinalizeReply,
   finalizeAiUpdate,
@@ -58,100 +49,6 @@ import {
 
 /** Re-export for existing tests that import from finalize.js. */
 export { offeredServiceForTurn };
-
-export type FinalizeBookingAiInput = {
-  state: ClinicState;
-  agentMessages: BaseMessage[];
-  reply: FinalizeReply;
-  chatOther: boolean;
-  consumeServiceChangeNotice: () => string | null;
-  confirmationCleanup: ClinicStateUpdate;
-};
-
-/**
- * Booking AI finalize: pure helpers → immutable FinalizeReply.
- * Extras land on reply.patch; no shared mutable bag.
- */
-export const finalizeBookingAi = (
-  input: FinalizeBookingAiInput,
-): FinalizeReply => {
-  const {
-    state,
-    agentMessages,
-    chatOther,
-    confirmationCleanup,
-  } = input;
-  let reply = input.reply;
-  const consumeServiceChangeNotice = (): string | null =>
-    input.consumeServiceChangeNotice();
-
-  const primary = applyBookingPrimaryReply({
-    state,
-    agentMessages,
-    reply,
-    chatOther,
-    consumeServiceChangeNotice,
-  });
-  reply = primary.reply;
-  const { facts } = primary;
-
-  const risk = applyBookingOutcomeRiskOverride({
-    state,
-    agentMessages,
-    reply,
-    chatOther,
-    consumeServiceChangeNotice,
-    ...facts,
-  });
-  reply = risk.reply;
-  const availabilityInteraction = risk.availabilityInteraction;
-
-  reply = applyFalseSuccessClaimOverride(
-    state,
-    BOOKING_AGENT_ID,
-    agentMessages,
-    reply,
-    facts.mutationCommitted,
-  );
-
-  const noteStatusForHandoff = noteStatusHandoffUpdate(
-    state,
-    facts.awaitingNote,
-    facts.slotOfferPresent,
-  );
-
-  const synthesis = applyServiceOfferSynthesis(
-    state,
-    BOOKING_AGENT_ID,
-    agentMessages,
-    reply,
-    {
-      alreadyBooked: facts.alreadyBooked,
-      slotOfferPresent: facts.slotOfferPresent,
-      availabilityInteractionPresent: availabilityInteraction != null,
-      detailsStepActive: facts.detailsStep != null,
-    },
-  );
-  reply = synthesis.reply;
-
-  const availabilityInteractionUpdate = availabilityPresentedUpdate(
-    state,
-    availabilityInteraction,
-  );
-
-  return {
-    ...reply,
-    patch: {
-      ...noteStatusForHandoff,
-      ...primary.patch,
-      ...synthesis.serviceOfferUpdate,
-      ...availabilityInteractionUpdate,
-      ...confirmationCleanup,
-      supervisorIntent: null,
-      ...reply.patch,
-    },
-  };
-};
 
 export type FinalizeFaqAiInput = {
   state: ClinicState;
@@ -367,25 +264,6 @@ const createSpecialistFinalizeNode = (
       replyMessage,
     });
   };
-
-export const createBookingFinalizeNode = (
-  agent: ClinicAgentDefinition,
-) =>
-  createSpecialistFinalizeNode(agent, {
-    tryNoAi: tryBookingNoAiFinalize,
-    finalizeAi: (input) => finalizeBookingAi({
-      state: input.state,
-      agentMessages: input.agentMessages,
-      reply: input.reply,
-      chatOther: input.chatOther,
-      consumeServiceChangeNotice: input.consumeServiceChangeNotice,
-      confirmationCleanup: input.confirmationCleanup,
-    }),
-    modelFailureButtons: (state) => {
-      const hasVisit = (state.bookingContext?.meetings.length ?? 0) > 0;
-      return [...defaultMenuLabels(hasVisit)];
-    },
-  });
 
 export const createFaqFinalizeNode = (
   agent: ClinicAgentDefinition,

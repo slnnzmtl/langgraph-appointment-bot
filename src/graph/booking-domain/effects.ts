@@ -65,6 +65,13 @@ export type InformationalFacts = {
   serviceName?: string;
 };
 
+/** Allowlisted slot/date choice for patient cards (no raw tool body). */
+export type AvailabilityPresentationChoice = {
+  id: string;
+  label: string;
+  date?: string;
+};
+
 export type EffectResult =
   | {
       effectId: string;
@@ -74,6 +81,12 @@ export type EffectResult =
       /** Present when a presented slot was confirmed still free. */
       verifiedSlotId?: string;
       snapshotId?: string;
+      /** date_select vs time_select derived from open days + draft selectedDate. */
+      presentationMode?: "date_select" | "time_select";
+      /** Allowlisted ids+labels only. */
+      presentationChoices?: AvailabilityPresentationChoice[];
+      /** Day scoped when presentationMode is time_select. */
+      presentationDate?: string;
     }
   | {
       effectId: string;
@@ -105,4 +118,11 @@ export type EffectResult =
       outcome: "ok" | "error";
       /** Allowlisted facts only — never raw tool text. */
       facts?: InformationalFacts;
+    }
+  | {
+      effectId: string;
+      kind: "catalog";
+      outcome: "ok" | "error" | "empty";
+      /** Allowlisted catalog rows only (id + display name). */
+      services?: Array<{ id: string; name: string }>;
     };

@@ -26,7 +26,13 @@ export type SlotAvailabilityEvidence = {
  * are projections — not independently authoritative.
  */
 export type PendingDecision =
-  | { kind: "service_candidate"; utterance?: string; query?: string }
+  | {
+      kind: "service_candidate";
+      utterance?: string;
+      query?: string;
+      choiceIds?: string[];
+      labels?: Record<string, string>;
+    }
   | {
       kind: "visit_select";
       stage: "action" | "meeting" | "replacement";
@@ -37,6 +43,19 @@ export type PendingDecision =
       kind: "mutation_confirm";
       action: "create" | "reschedule" | "cancel";
       effectId: string;
+    }
+  | {
+      kind: "date_select";
+      snapshotId: string;
+      choiceIds: string[];
+      labels: Record<string, string>;
+    }
+  | {
+      kind: "time_select";
+      date: string;
+      snapshotId: string;
+      choiceIds: string[];
+      labels: Record<string, string>;
     }
   | { kind: "clarification"; reason: string };
 

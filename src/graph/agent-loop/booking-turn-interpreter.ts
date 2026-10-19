@@ -26,6 +26,7 @@ const bookingTurnClassificationSchema = z.object({
     ])
     .optional(),
   serviceQuery: z.string().min(1).max(120).optional(),
+  // Intentionally omitted from authoritative path: CRM ids resolve via list_services.
   serviceId: z.string().min(1).max(64).optional(),
   scheduleKind: z
     .enum(["none", "date", "time", "date_and_time", "relative", "choice"])

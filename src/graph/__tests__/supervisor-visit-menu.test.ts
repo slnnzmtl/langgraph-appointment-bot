@@ -19,7 +19,6 @@ import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
-import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
   specialists,
@@ -473,30 +472,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       action: "cancel",
       payload: { meetingId: "m-2" },
     });
-
-    const commandPrepare = createAgentCommandPrepareNode();
-    const prepared = await commandPrepare(
-      supervisorState({
-        messages: [new HumanMessage(label)],
-        bookingDraft: afterPick.bookingDraft ?? null,
-        bookingContext: twoMeetings,
-        pendingInteraction: null,
-        agentMessages: [new HumanMessage(label)],
-      }),
-    );
-
-    expect(unwrapCommandUpdate(prepared).agentMessages).toBeInstanceOf(Overwrite);
-    const preparedMessages = (unwrapCommandUpdate(prepared).agentMessages as Overwrite<AIMessage[]>).value;
-    const ai = [...preparedMessages].reverse().find((m) => (m.tool_calls?.length ?? 0) > 0);
-    expect(ai).toMatchObject({
-      tool_calls: [
-        expect.objectContaining({
-          name: "cancel_meeting",
-          args: expect.objectContaining({ meetingId: "m-2" }),
-        }),
-      ],
-    });
-    expect(unwrapCommandUpdate(prepared).pendingInteraction?.kind).toBe("mutation_confirm");
   });
 
   it("clears a seeded cancel pendingCommand on a later free-text turn", async () => {

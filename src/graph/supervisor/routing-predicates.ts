@@ -12,7 +12,7 @@ import { parseScheduleIntent } from "../../shared/booking-schedule.js";
 import { isOtherDateChip } from "../../shared/other-date-chip.js";
 import { resolveAvailabilityRequest } from "../../tools/availability-request.js";
 import { kyivToday } from "../../tools/availability-slots.js";
-import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
+import { bookingTurnNeedsDraftInteraction } from "../booking-interaction-policy.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import type { ClinicState } from "../state.js";
 import { authoritativeSelectedSlot } from "../agent-loop/booking-note-step.js";
@@ -241,7 +241,7 @@ export const stickyContinueAgentId = (
     return FAQ_AGENT_ID;
   }
   if (
-    bookingTurnNeedsNoteOrchestrator(state)
+    bookingTurnNeedsDraftInteraction(state)
     && human.length > 0
     && !isSupervisorOwnedLabel(human)
     && !isSupervisorOwnedLabel(humanLine)
