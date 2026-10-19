@@ -56,3 +56,5 @@ export {
   type BookingRequirement,
   type NextBookingRequirement,
 } from "./requirement.js";
+
+export { decideBooking } from "./decide.js";
