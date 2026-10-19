@@ -1,7 +1,14 @@
 import { FAQ_AGENT_ID } from "../types.js";
-import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
+import {
+  findToolMessageByCallId,
+  hasPendingToolCalls,
+  lastMessageRequestsTools,
+} from "../tool-routing.js";
 import type { ClinicState } from "../state.js";
-import { interpretInteractionReply } from "../booking-session.js";
+import {
+  interpretInteractionReply,
+  interactionChoiceEquals,
+} from "../booking-session.js";
 import {
   lastPatientText,
   phoneLookupFailedThisTurn,
@@ -76,7 +83,7 @@ export const routeAfterAgentPrepare = (
       state.pendingInteraction,
       bookText,
     );
-    if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
+    if (!(offerMatch.kind === "choice" && interactionChoiceEquals(offerMatch.choiceId, "accept"))) {
       if (state.faqSkipLlm) {
         return finalizeName;
       }
@@ -125,4 +132,28 @@ export const routeAfterAgentTools = (
   }
 
   return llmName;
+};
+
+export type RouteAfterBookingToolsOptions = {
+  decideName: string;
+  toolsName: string;
+  respondName: string;
+};
+
+/**
+ * Booking tools → decide only after a ToolMessage whose tool_call_id matches
+ * pendingEffect.id. No matching result (HITL interrupt, leftover stamp) → respond.
+ */
+export const routeAfterBookingTools = (
+  state: ClinicState,
+  options: RouteAfterBookingToolsOptions,
+): string => {
+  if (hasPendingToolCalls(state.agentMessages)) {
+    return options.toolsName;
+  }
+  const pendingId = state.bookingDraft?.pendingEffect?.id;
+  if (findToolMessageByCallId(state.agentMessages, pendingId) != null) {
+    return options.decideName;
+  }
+  return options.respondName;
 };

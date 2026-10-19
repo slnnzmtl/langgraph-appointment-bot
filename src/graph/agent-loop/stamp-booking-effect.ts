@@ -14,7 +14,7 @@ export type StampedBookingToolCall = {
 };
 
 export const stampBookingEffect = (pending: PendingEffect): StampedBookingToolCall => {
-  const name = toolNameForEffect(pending);
+  const name = toolNameForBookingEffect(pending);
   if (
     !isBookingRuntimeToolName(name)
     && !BOOKING_INFORMATIONAL_TOOL_NAMES.has(name)
@@ -40,7 +40,8 @@ export const assertStampedBookingToolCall = (
   }
 };
 
-const toolNameForEffect = (pending: PendingEffect): string => {
+/** Tool name expected for a pending booking effect (for result validation). */
+export const toolNameForBookingEffect = (pending: PendingEffect): string => {
   switch (pending.effect.kind) {
     case "present_availability":
       return "present_availability_slots";

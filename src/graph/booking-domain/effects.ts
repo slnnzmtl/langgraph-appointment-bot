@@ -93,6 +93,8 @@ export type EffectResult =
       kind: "contact_lookup";
       outcome: "none" | "single_linkable" | "occupied" | "ambiguous" | "error";
       contactIds?: string[];
+      /** Authoritative phone from the pending effect (not draft / tool args). */
+      phoneNumber?: string;
     }
   | {
       effectId: string;

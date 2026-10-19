@@ -4,7 +4,10 @@ import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { BOOKING_AGENT_ID, type ClinicAgentId } from "../../types.js";
 import { crmWriteDirtiesPrefetch, meetingMutationClearsAvailability } from "../protocol/index.js";
 import { type ToolProtocolResult } from "../tools-protocol.js";
-import { projectAvailabilityEffects } from "./availability.js";
+import {
+  captureAvailabilityReadModel,
+  projectAvailabilityEffects,
+} from "./availability.js";
 import { projectContactEffects } from "./contact.js";
 import { projectMutationEffects } from "./mutation.js";
 import { projectServiceEffects } from "./service.js";
@@ -56,10 +59,9 @@ export const applyToolEffects = (
         availabilityCursor: null,
       });
     } else {
-      const availability = projectAvailabilityEffects({
+      const availability = captureAvailabilityReadModel({
         state: effectiveState,
         resultMessages,
-        options: { captureOnly: true },
       });
       update = { ...update, ...availability };
       effectiveState = applyEffective(effectiveState, availability);

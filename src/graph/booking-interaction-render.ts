@@ -224,7 +224,7 @@ const renderDayFromContext = (
   };
 };
 
-const snapshotFromContext = (
+export const availabilityRenderSnapshotFromContext = (
   context: AvailabilityContext,
   days: AvailabilityContext["days"],
   empty?: AvailabilityRenderSnapshot["emptyMode"],
@@ -252,7 +252,7 @@ export const buildDateSelectInteraction = (
   context: AvailabilityContext,
 ): DateSelectInteraction => {
   const open = context.days.filter((day) => day.slots.length > 0).slice(0, 3);
-  const snapshot = snapshotFromContext(context, open);
+  const snapshot = availabilityRenderSnapshotFromContext(context, open);
   const query = availabilityQueryFromContext(context);
   const presentation = projectAvailabilityPresentation(
     open.map((day) => ({
@@ -285,7 +285,7 @@ export const buildTimeSelectInteraction = (
   context: AvailabilityContext,
   day: AvailabilityContext["days"][number],
 ): TimeSelectInteraction => {
-  const snapshot = snapshotFromContext(context, [day]);
+  const snapshot = availabilityRenderSnapshotFromContext(context, [day]);
   const query = availabilityQueryFromContext(context);
   const presentation = projectAvailabilityPresentation(
     [{
@@ -333,7 +333,7 @@ export const buildEmptyAvailabilityInteraction = (
       : direction === "exact"
         ? "exact" as const
         : "other" as const;
-  const snapshot = snapshotFromContext(context, [], emptyMode, canSearchEarlier);
+  const snapshot = availabilityRenderSnapshotFromContext(context, [], emptyMode, canSearchEarlier);
   const presentation = projectEmptyAvailabilityPresentation(snapshot.snapshotId, {
     direction: direction ?? "other",
     canSearchEarlier,

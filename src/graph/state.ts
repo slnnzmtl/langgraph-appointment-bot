@@ -113,8 +113,9 @@ export const createClinicStateAnnotation = ({
     }),
     /**
      * Explicit patient response the workflow is waiting for. Booking-owned kinds
-     * (visit_note, service_or_note, service_candidate) are opened only via
-     * reduceBookingSession. Missing on old checkpoints reads as null.
+     * are projected from BookingDecision.card via projectPendingInteraction in
+     * booking__decide (not reduceBookingSession). FAQ may still open
+     * service_candidate with owner=faq. Missing on old checkpoints reads as null.
      */
     pendingInteraction: Annotation<PendingInteraction | null>({
       reducer: (left, right) => (right === undefined ? left : right),

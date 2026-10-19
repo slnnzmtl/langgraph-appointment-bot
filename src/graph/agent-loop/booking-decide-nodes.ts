@@ -6,7 +6,6 @@
  * reduceBookingDraft. Informational tool results are allowlisted facts only.
  */
 import type { BaseMessage } from "@langchain/core/messages";
-import { ToolMessage } from "@langchain/core/messages";
 
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { asJsonRecord } from "../../shared/json-record.js";
@@ -17,19 +16,30 @@ import {
   presentationSnapshotId,
   projectAvailabilityPresentation,
 } from "../booking-domain/availability-presentation.js";
-import type { EffectResult, InformationalFacts } from "../booking-domain/effects.js";
+import type {
+  EffectResult,
+  InformationalFacts,
+  PendingEffect,
+} from "../booking-domain/effects.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { hasPendingToolCalls } from "../tool-routing.js";
+import { findToolMessageByCallId, hasPendingToolCalls } from "../tool-routing.js";
 import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
+import { normalizeContactLookupResult } from "../../tools/contact-tools.js";
+import { classifyPhoneLookupResult } from "../contact-command.js";
+import { labelIdFor } from "../../shared/message-content.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
 import type { InterpretBookingTurn } from "./booking-turn-interpreter.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
+import { projectPendingInteraction } from "./project-pending-interaction.js";
 import {
   appendOrReplacePendingToolCall,
   stampRuntimeToolAi,
 } from "./runtime-tool-stamp.js";
-import { stampBookingEffect } from "./stamp-booking-effect.js";
+import {
+  stampBookingEffect,
+  toolNameForBookingEffect,
+} from "./stamp-booking-effect.js";
 
 export const BOOKING_DECIDE_NODE = "booking__decide" as const;
 /** Keep legacy name as the ToolNode / HITL resume target. */
@@ -211,226 +221,267 @@ export const enrichPatchWithReadModels = (
   return patch;
 };
 
+/** Fail-closed EffectResult when a matching ToolMessage cannot be trusted. */
+const failClosedForPending = (pending: PendingEffect): EffectResult => {
+  const effectId = pending.id;
+  switch (pending.effect.kind) {
+    case "lookup_contact_by_phone":
+      return {
+        effectId,
+        kind: "contact_lookup",
+        outcome: "error",
+        phoneNumber: pending.effect.phoneNumber,
+      };
+    case "present_availability":
+      return { effectId, kind: "availability", outcome: "error" };
+    case "list_services":
+      return { effectId, kind: "catalog", outcome: "error" };
+    case "get_working_time":
+    case "get_service":
+      return { effectId, kind: "informational", outcome: "error" };
+    case "create_contact":
+    case "update_contact":
+    case "link_telegram_contact":
+      return { effectId, kind: "contact_write", outcome: "error" };
+    case "create_meeting":
+      return { effectId, kind: "mutation", action: "create", outcome: "malformed" };
+    case "reschedule_meeting":
+      return { effectId, kind: "mutation", action: "reschedule", outcome: "malformed" };
+    case "cancel_meeting":
+      return { effectId, kind: "mutation", action: "cancel", outcome: "malformed" };
+    default: {
+      const _exhaustive: never = pending.effect;
+      return _exhaustive;
+    }
+  }
+};
+
 /**
- * Translate the latest ToolMessage into a typed EffectResult for the kernel.
- * Never lets decideBooking inspect the message tape. Informational results keep
- * only allowlisted facts — never raw tool bodies.
+ * Translate the ToolMessage for {@link pendingEffect} into a typed EffectResult.
+ * Passes the trusted pending effect (id + kind + phoneNumber) — never reconstructs
+ * the queried phone from draft or AI tool-call args.
+ * When a matching ToolMessage exists but cannot be translated, returns fail-closed.
  */
 export const effectResultFromToolMessages = (
   messages: BaseMessage[] | undefined,
-  expectedEffectId: string | null,
+  pendingEffect: PendingEffect | null,
 ): EffectResult | null => {
-  if (messages == null || expectedEffectId == null) {
+  if (messages == null || pendingEffect == null) {
     return null;
   }
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (!(message instanceof ToolMessage)) {
-      continue;
-    }
-    if (message.tool_call_id !== expectedEffectId) {
-      continue;
-    }
-    const name = message.name ?? "";
-    const body = extractMessageTextContent(message.content).trim();
-    const record = asJsonRecord(body);
+  const expectedEffectId = pendingEffect.id;
+  const expectedToolName = toolNameForBookingEffect(pendingEffect);
 
-    if (name === "present_availability_slots") {
-      if (record?.error != null || body.startsWith("Error:")) {
-        return { effectId: expectedEffectId, kind: "availability", outcome: "error" };
-      }
-      const rawDays = Array.isArray(record?.days) ? record.days : [];
-      const days = rawDays.flatMap((day) => {
-        if (day == null || typeof day !== "object") {
-          return [];
-        }
-        const row = day as {
-          date?: unknown;
-          dayLabel?: unknown;
-          slots?: unknown;
-        };
-        if (typeof row.date !== "string") {
-          return [];
-        }
-        const slots = Array.isArray(row.slots)
-          ? row.slots.flatMap((slot) => {
-            if (slot == null || typeof slot !== "object") {
-              return [];
-            }
-            const s = slot as { id?: unknown; label?: unknown };
-            if (typeof s.id !== "string" || typeof s.label !== "string") {
-              return [];
-            }
-            return [{ id: s.id, label: s.label }];
-          })
-          : [];
-        return [{
-          date: row.date,
-          ...(typeof row.dayLabel === "string" ? { dayLabel: row.dayLabel } : {}),
-          slots,
-        }];
-      });
-      const slotCount = days.reduce((sum, day) => sum + day.slots.length, 0);
-      if (slotCount === 0) {
-        return { effectId: expectedEffectId, kind: "availability", outcome: "empty" };
-      }
-      const query = record?.query != null && typeof record.query === "object"
-        ? record.query as { kind?: string; anchor?: string; date?: string; rangeFrom?: string }
-        : null;
-      const snapshotId = typeof record?.snapshotId === "string"
-        ? record.snapshotId
-        : presentationSnapshotId({
-          ...(typeof record?.serviceId === "string" ? { serviceId: record.serviceId } : {}),
-          ...(typeof query?.kind === "string" ? { queryKind: query.kind } : {}),
-          ...(typeof (query?.anchor ?? query?.date ?? query?.rangeFrom) === "string"
-            ? { queryAnchor: String(query?.anchor ?? query?.date ?? query?.rangeFrom) }
-            : {}),
-          days,
-          ...(typeof record?.stepMinutes === "number" ? { stepMinutes: record.stepMinutes } : {}),
-        });
-      // selectedDate is not known here; decideBooking re-projects with draft context.
-      // Prefer time_select when exactly one open day (exact-date searches).
-      const open = days.filter((day) => day.slots.length > 0);
-      const selectedDateHint = open.length === 1 ? open[0]?.date : null;
-      const presentation = projectAvailabilityPresentation(days, {
-        ...(selectedDateHint != null ? { selectedDate: selectedDateHint } : {}),
-        snapshotId,
-      });
-      return {
-        effectId: expectedEffectId,
-        kind: "availability",
-        outcome: "slots",
-        snapshotId,
-        ...(presentation != null
-          ? {
-            presentationMode: presentation.mode,
-            presentationChoices: presentation.choices,
-            ...(presentation.date != null ? { presentationDate: presentation.date } : {}),
-          }
-          : {}),
-      };
-    }
-
-    if (name === "find_contact_by_phone") {
-      const outcome = record?.result;
-      if (
-        outcome === "none"
-        || outcome === "single_linkable"
-        || outcome === "occupied"
-        || outcome === "ambiguous"
-      ) {
-        const contactIds = Array.isArray(record?.contactIds)
-          ? record.contactIds.filter((id): id is string => typeof id === "string")
-          : undefined;
-        return {
-          effectId: expectedEffectId,
-          kind: "contact_lookup",
-          outcome,
-          ...(contactIds != null ? { contactIds } : {}),
-        };
-      }
-      return { effectId: expectedEffectId, kind: "contact_lookup", outcome: "error" };
-    }
-
-    if (
-      name === "create_contact"
-      || name === "update_contact"
-      || name === "link_telegram_to_contact"
-    ) {
-      const contactId =
-        typeof record?.id === "string"
-          ? record.id
-          : typeof record?.contactId === "string"
-            ? record.contactId
-            : undefined;
-      if (contactId != null) {
-        return {
-          effectId: expectedEffectId,
-          kind: "contact_write",
-          outcome: name === "create_contact"
-            ? "created"
-            : name === "update_contact"
-              ? "updated"
-              : "linked",
-          contactId,
-        };
-      }
-      return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
-    }
-
-    if (
-      name === "create_meeting"
-      || name === "reschedule_meeting"
-      || name === "cancel_meeting"
-    ) {
-      const action =
-        name === "create_meeting"
-          ? "create" as const
-          : name === "reschedule_meeting"
-            ? "reschedule" as const
-            : "cancel" as const;
-      if (record?.awaitingConfirmation === true) {
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "pending" };
-      }
-      if (record?.declined === true || record?.error === "declined") {
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "declined" };
-      }
-      if (record?.error != null || body.startsWith("Error:")) {
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "failed" };
-      }
-      if (typeof record?.id === "string" || record?.ok === true) {
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "committed" };
-      }
-      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "unknown" };
-    }
-
-    if (name === "list_services") {
-      if (record?.error != null || body.startsWith("Error:")) {
-        return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
-      }
-      const rawList = Array.isArray(record?.services)
-        ? record.services
-        : Array.isArray(record?.list)
-          ? record.list
-          : Array.isArray(record)
-            ? record
-            : [];
-      const services = rawList.flatMap((row) => {
-        if (row == null || typeof row !== "object") {
-          return [];
-        }
-        const item = row as { id?: unknown; name?: unknown; cName?: unknown };
-        const id = typeof item.id === "string" ? item.id.trim() : "";
-        const name = typeof item.name === "string"
-          ? item.name.trim()
-          : typeof item.cName === "string"
-            ? item.cName.trim()
-            : "";
-        if (id.length === 0 || name.length === 0) {
-          return [];
-        }
-        return [{ id, name }];
-      });
-      if (services.length === 0) {
-        return { effectId: expectedEffectId, kind: "catalog", outcome: "empty" };
-      }
-      return { effectId: expectedEffectId, kind: "catalog", outcome: "ok", services };
-    }
-
-    if (name === "get_working_time" || name === "get_service") {
-      if (record?.error != null || body.startsWith("Error:")) {
-        return { effectId: expectedEffectId, kind: "informational", outcome: "error" };
-      }
-      const facts = allowlistedInformationalFacts(record);
-      return {
-        effectId: expectedEffectId,
-        kind: "informational",
-        outcome: "ok",
-        ...(facts != null ? { facts } : {}),
-      };
-    }
+  const matching = findToolMessageByCallId(messages, expectedEffectId);
+  if (matching == null) {
+    return null;
   }
-  return null;
+
+  const name = matching.name ?? "";
+  if (name !== expectedToolName) {
+    return failClosedForPending(pendingEffect);
+  }
+
+  const body = extractMessageTextContent(matching.content).trim();
+  const record = asJsonRecord(body);
+
+  if (name === "present_availability_slots") {
+    if (record?.error != null || body.startsWith("Error:")) {
+      return { effectId: expectedEffectId, kind: "availability", outcome: "error" };
+    }
+    const rawDays = Array.isArray(record?.days) ? record.days : [];
+    const days = rawDays.flatMap((day) => {
+      if (day == null || typeof day !== "object") {
+        return [];
+      }
+      const row = day as {
+        date?: unknown;
+        dayLabel?: unknown;
+        slots?: unknown;
+      };
+      if (typeof row.date !== "string") {
+        return [];
+      }
+      const slots = Array.isArray(row.slots)
+        ? row.slots.flatMap((slot) => {
+          if (slot == null || typeof slot !== "object") {
+            return [];
+          }
+          const s = slot as { id?: unknown; label?: unknown };
+          if (typeof s.id !== "string" || typeof s.label !== "string") {
+            return [];
+          }
+          return [{ id: s.id, label: s.label }];
+        })
+        : [];
+      return [{
+        date: row.date,
+        ...(typeof row.dayLabel === "string" ? { dayLabel: row.dayLabel } : {}),
+        slots,
+      }];
+    });
+    const slotCount = days.reduce((sum, day) => sum + day.slots.length, 0);
+    if (slotCount === 0) {
+      return { effectId: expectedEffectId, kind: "availability", outcome: "empty" };
+    }
+    const query = record?.query != null && typeof record.query === "object"
+      ? record.query as { kind?: string; anchor?: string; date?: string; rangeFrom?: string }
+      : null;
+    const snapshotId = typeof record?.snapshotId === "string"
+      ? record.snapshotId
+      : presentationSnapshotId({
+        ...(typeof record?.serviceId === "string" ? { serviceId: record.serviceId } : {}),
+        ...(typeof query?.kind === "string" ? { queryKind: query.kind } : {}),
+        ...(typeof (query?.anchor ?? query?.date ?? query?.rangeFrom) === "string"
+          ? { queryAnchor: String(query?.anchor ?? query?.date ?? query?.rangeFrom) }
+          : {}),
+        days,
+        ...(typeof record?.stepMinutes === "number" ? { stepMinutes: record.stepMinutes } : {}),
+      });
+    const open = days.filter((day) => day.slots.length > 0);
+    const selectedDateHint = open.length === 1 ? open[0]?.date : null;
+    const presentation = projectAvailabilityPresentation(days, {
+      ...(selectedDateHint != null ? { selectedDate: selectedDateHint } : {}),
+      snapshotId,
+    });
+    return {
+      effectId: expectedEffectId,
+      kind: "availability",
+      outcome: "slots",
+      snapshotId,
+      ...(presentation != null
+        ? {
+          presentationMode: presentation.mode,
+          presentationChoices: presentation.choices,
+          ...(presentation.date != null ? { presentationDate: presentation.date } : {}),
+        }
+        : {}),
+    };
+  }
+
+  if (name === "find_contact_by_phone") {
+    if (pendingEffect.effect.kind !== "lookup_contact_by_phone") {
+      return failClosedForPending(pendingEffect);
+    }
+    const phoneNumber = pendingEffect.effect.phoneNumber;
+    const normalized = normalizeContactLookupResult(body.length > 0 ? body : "{}");
+    if (normalized.error != null) {
+      return {
+        effectId: expectedEffectId,
+        kind: "contact_lookup",
+        outcome: "error",
+        phoneNumber,
+      };
+    }
+    const evidence = classifyPhoneLookupResult(normalized.contacts, phoneNumber);
+    return {
+      effectId: expectedEffectId,
+      kind: "contact_lookup",
+      outcome: evidence.result,
+      contactIds: evidence.contactIds,
+      phoneNumber,
+    };
+  }
+
+  if (
+    name === "create_contact"
+    || name === "update_contact"
+    || name === "link_telegram_to_contact"
+  ) {
+    const contactId =
+      typeof record?.id === "string"
+        ? record.id
+        : typeof record?.contactId === "string"
+          ? record.contactId
+          : undefined;
+    if (contactId != null) {
+      return {
+        effectId: expectedEffectId,
+        kind: "contact_write",
+        outcome: name === "create_contact"
+          ? "created"
+          : name === "update_contact"
+            ? "updated"
+            : "linked",
+        contactId,
+      };
+    }
+    return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+  }
+
+  if (
+    name === "create_meeting"
+    || name === "reschedule_meeting"
+    || name === "cancel_meeting"
+  ) {
+    const action =
+      name === "create_meeting"
+        ? "create" as const
+        : name === "reschedule_meeting"
+          ? "reschedule" as const
+          : "cancel" as const;
+    if (record?.awaitingConfirmation === true) {
+      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "pending" };
+    }
+    if (record?.declined === true || record?.error === "declined") {
+      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "declined" };
+    }
+    if (record?.error != null || body.startsWith("Error:")) {
+      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "failed" };
+    }
+    if (typeof record?.id === "string" || record?.ok === true) {
+      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "committed" };
+    }
+    return { effectId: expectedEffectId, kind: "mutation", action, outcome: "unknown" };
+  }
+
+  if (name === "list_services") {
+    if (record?.error != null || body.startsWith("Error:")) {
+      return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
+    }
+    const rawList = Array.isArray(record?.services)
+      ? record.services
+      : Array.isArray(record?.list)
+        ? record.list
+        : Array.isArray(record)
+          ? record
+          : [];
+    const services = rawList.flatMap((row) => {
+      if (row == null || typeof row !== "object") {
+        return [];
+      }
+      const item = row as { id?: unknown; name?: unknown; cName?: unknown };
+      const id = typeof item.id === "string" ? item.id.trim() : "";
+      const serviceName = typeof item.name === "string"
+        ? item.name.trim()
+        : typeof item.cName === "string"
+          ? item.cName.trim()
+          : "";
+      if (id.length === 0 || serviceName.length === 0) {
+        return [];
+      }
+      return [{ id, name: serviceName }];
+    });
+    if (services.length === 0) {
+      return { effectId: expectedEffectId, kind: "catalog", outcome: "empty" };
+    }
+    return { effectId: expectedEffectId, kind: "catalog", outcome: "ok", services };
+  }
+
+  if (name === "get_working_time" || name === "get_service") {
+    if (record?.error != null || body.startsWith("Error:")) {
+      return { effectId: expectedEffectId, kind: "informational", outcome: "error" };
+    }
+    const facts = allowlistedInformationalFacts(record);
+    return {
+      effectId: expectedEffectId,
+      kind: "informational",
+      outcome: "ok",
+      ...(facts != null ? { facts } : {}),
+    };
+  }
+
+  return failClosedForPending(pendingEffect);
 };
 
 const applyEvents = (
@@ -473,10 +524,16 @@ export const createBookingDecideNode = (
 
   return async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const readModels = readModelsFromClinicState(state);
-    const pendingEffectId = state.bookingDraft?.pendingEffect?.id ?? null;
-    const effectResult = hasPendingToolCalls(state.agentMessages)
-      ? null
-      : effectResultFromToolMessages(state.agentMessages, pendingEffectId);
+    const pendingEffect = state.bookingDraft?.pendingEffect ?? null;
+    const toolsStillPending = hasPendingToolCalls(state.agentMessages);
+
+    let effectResult: EffectResult | null = null;
+    if (!toolsStillPending && pendingEffect != null) {
+      // Consume only a matching ToolMessage. Missing match is a patient turn
+      // (stale pendingEffect, HITL interrupt before a result). Fail-closed
+      // only when a matching message exists but cannot be translated.
+      effectResult = effectResultFromToolMessages(state.agentMessages, pendingEffect);
+    }
 
     let result;
     if (effectResult != null) {
@@ -486,60 +543,81 @@ export const createBookingDecideNode = (
         readModels,
       );
     } else {
-      const awaitingContactField =
-        state.bookingDraft?.pendingDecision?.kind === "clarification"
-        && typeof state.bookingDraft.pendingDecision.reason === "string"
-        && state.bookingDraft.pendingDecision.reason.startsWith("need_")
-          ? (state.bookingDraft.pendingDecision.reason.replace("need_", "") as
-            | "phoneNumber"
-            | "firstName"
-            | "lastName")
-          : state.bookingDraft?.phase === "details"
-            ? ("phoneNumber" as const)
-            : undefined;
-      const interpretInput = {
-        rawText: lastHumanText(state.messages),
-        ...(state.inboundChoiceId != null
-          ? { callbackChoiceId: state.inboundChoiceId }
-          : {}),
-        ...(state.bookingDraft?.offeredChoiceIds != null
-          ? { offeredChoiceIds: state.bookingDraft.offeredChoiceIds }
-          : {}),
-        awaitingNote: state.bookingDraft?.note.status === "awaiting"
-          || state.bookingDraft?.phase === "note",
-        ...(awaitingContactField === "phoneNumber"
-          || awaitingContactField === "firstName"
-          || awaitingContactField === "lastName"
-          ? { awaitingContactField }
-          : {}),
-        awaitingServiceConfirm: state.bookingDraft?.serviceAcceptance?.status === "pending",
-      };
-      const rawPatch = interpretTurn != null
-        ? await interpretTurn(interpretInput)
-        : interpretBookingTurnDeterministic(interpretInput);
-      const patch = enrichPatchWithReadModels(rawPatch, state, readModels);
-      result = Object.keys(patch).length > 0
-        ? decideBooking(
+      const rawText = lastHumanText(state.messages);
+      // Exact main-menu «Записатись» bypasses the structured interpreter.
+      if (labelIdFor(rawText) === "mainBook") {
+        result = decideBooking(
           state.bookingDraft ?? null,
-          { source: "semantic_patch", patch },
-          readModels,
-        )
-        : decideBooking(
-          state.bookingDraft ?? null,
-          { source: "patient_turn", rawText: interpretInput.rawText },
+          {
+            source: "semantic_patch",
+            patch: { serviceIntent: { kind: "consultation" } },
+          },
           readModels,
         );
+      } else {
+        const awaitingContactField =
+          state.bookingDraft?.pendingDecision?.kind === "clarification"
+          && typeof state.bookingDraft.pendingDecision.reason === "string"
+          && state.bookingDraft.pendingDecision.reason.startsWith("need_")
+            ? (state.bookingDraft.pendingDecision.reason.replace("need_", "") as
+              | "phoneNumber"
+              | "firstName"
+              | "lastName")
+            : state.bookingDraft?.phase === "details"
+              ? ("phoneNumber" as const)
+              : undefined;
+        const interpretInput = {
+          rawText,
+          ...(state.inboundChoiceId != null
+            ? { callbackChoiceId: state.inboundChoiceId }
+            : {}),
+          ...(state.bookingDraft?.offeredChoiceIds != null
+            ? { offeredChoiceIds: state.bookingDraft.offeredChoiceIds }
+            : {}),
+          awaitingNote: state.bookingDraft?.note.status === "awaiting"
+            || state.bookingDraft?.phase === "note",
+          ...(awaitingContactField === "phoneNumber"
+            || awaitingContactField === "firstName"
+            || awaitingContactField === "lastName"
+            ? { awaitingContactField }
+            : {}),
+          awaitingServiceConfirm: state.bookingDraft?.serviceAcceptance?.status === "pending",
+        };
+        const rawPatch = interpretTurn != null
+          ? await interpretTurn(interpretInput)
+          : interpretBookingTurnDeterministic(interpretInput);
+        const patch = enrichPatchWithReadModels(rawPatch, state, readModels);
+        result = Object.keys(patch).length > 0
+          ? decideBooking(
+            state.bookingDraft ?? null,
+            { source: "semantic_patch", patch },
+            readModels,
+          )
+          : decideBooking(
+            state.bookingDraft ?? null,
+            { source: "patient_turn", rawText: interpretInput.rawText },
+            readModels,
+          );
+      }
     }
 
     let draft = applyEvents(state.bookingDraft ?? null, result.events);
     const choicePatch = withOfferedChoices(draft, result.decision);
     draft = choicePatch.draft;
 
+    const pendingInteraction = projectPendingInteraction({
+      decision: result.decision,
+      draft,
+      availabilityContext: state.availabilityContext ?? null,
+      previousInteraction: state.pendingInteraction ?? null,
+    });
+
     const update: ClinicStateUpdate = {
       bookingDraft: draft,
       bookingSchemaVersion: 2,
       inboundChoiceId: null,
       bookingDecision: result.decision,
+      pendingInteraction,
       agentMessages: [],
     };
 

@@ -45,9 +45,11 @@ export {
 
 export {
   type RouteAfterAgentToolsOptions,
+  type RouteAfterBookingToolsOptions,
   routeAfterAgentLlm,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
+  routeAfterBookingTools,
 } from "./routing.js";
 
 export { rewriteAiMessage } from "./rewrite-ai-message.js";

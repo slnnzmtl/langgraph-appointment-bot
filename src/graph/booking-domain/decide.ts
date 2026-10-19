@@ -1,4 +1,5 @@
 import {
+  BOOKING_OFFER_MENU,
   CLINIC_ADDRESS,
   CONSULTATION_SERVICE_ID,
   OTHER_DATE_LABEL,
@@ -292,6 +293,10 @@ export const decideBooking = (
           kind: "service_confirm",
           serviceId: service.id,
           choiceIds: ["offer_accept", "offer_choose_other"],
+          labels: {
+            offer_accept: BOOKING_OFFER_MENU[0],
+            offer_choose_other: BOOKING_OFFER_MENU[1],
+          },
         },
       };
     }
@@ -603,13 +608,29 @@ export const decideBooking = (
 
     if (result.kind === "contact_lookup") {
       emit({ type: "effect_cleared" });
-      if (result.outcome !== "error") {
-        const phone = ctx.working?.contactDetails?.phoneNumber ?? "";
-        emit({
-          type: "phone_lookup_recorded",
-          evidence: { phoneNumber: phone, result: result.outcome, contactIds: result.contactIds ?? [] },
-        });
+      if (result.outcome === "error") {
+        // Fail closed: do not decideFromRequirement (that would re-mint the lookup).
+        emitDecision({ kind: "clarification", reason: "contact_lookup_failed" });
+        return ask(
+          "ask_phone",
+          { kind: "contact_field", field: "phoneNumber" },
+          "contact_lookup_failed",
+        );
       }
+      const phone =
+        (typeof result.phoneNumber === "string" && result.phoneNumber.trim().length > 0
+          ? result.phoneNumber.trim()
+          : null)
+        ?? ctx.working?.contactDetails?.phoneNumber
+        ?? "";
+      emit({
+        type: "phone_lookup_recorded",
+        evidence: {
+          phoneNumber: phone,
+          result: result.outcome,
+          contactIds: result.contactIds ?? [],
+        },
+      });
       return decideFromRequirement();
     }
 

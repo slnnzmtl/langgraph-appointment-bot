@@ -73,6 +73,38 @@ describe("cancel-and-rebook routing", () => {
 
     expect(stickyContinueAgentId(state)).toBe("booking");
   });
+
+  it("routes Так on a kernel offer_accept card to booking", () => {
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+    };
+    const state = supervisorState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "service_confirm",
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: "Консультація",
+          source: "catalog",
+        },
+        choices: [
+          { id: "offer_accept", label: "Так" },
+          { id: "offer_choose_other", label: "Обрати іншу процедуру" },
+        ],
+      },
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "offer",
+      },
+    });
+
+    expect(stickyContinueAgentId(state)).toBe("booking");
+  });
 });
 
 describe("stickyContinueAgentId open note reply", () => {

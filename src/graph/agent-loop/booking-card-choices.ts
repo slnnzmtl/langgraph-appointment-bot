@@ -4,8 +4,10 @@
  */
 
 import {
+  BOOKING_OFFER_MENU,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
+  INTENT_SKIP_LABEL,
   MAIN_MENU_LABEL,
 } from "../../shared/clinic-constants.js";
 import type { BookingViewCard } from "../booking-domain/decision.js";
@@ -55,14 +57,18 @@ export const replyChoicesFromCard = (
     id,
     label: labelById?.get(id)
       ?? cardLabels?.[id]
-      ?? (id === "confirm" || id === "hitl_yes" || id === "offer_accept"
+      ?? (id === "confirm" || id === "hitl_yes"
         ? CONFIRM_YES_LABEL
-        : id === "decline" || id === "hitl_no" || id === "offer_choose_other"
+        : id === "decline" || id === "hitl_no"
           ? CONFIRM_NO_LABEL
-          : id === "menu" || id === "main_menu"
-            ? MAIN_MENU_LABEL
-            : id === "note_skip"
-              ? "Пропустити"
-              : id),
+          : id === "offer_accept"
+            ? BOOKING_OFFER_MENU[0]
+            : id === "offer_choose_other"
+              ? BOOKING_OFFER_MENU[1]
+              : id === "menu" || id === "main_menu"
+                ? MAIN_MENU_LABEL
+                : id === "note_skip"
+                  ? INTENT_SKIP_LABEL
+                  : id),
   }));
 };

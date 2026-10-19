@@ -81,6 +81,15 @@ describe("decideBooking atomic contract", () => {
       expect(event.service.id).toBe(CONSULTATION_SERVICE_ID);
       expect(event.service.id).not.toBe("consultation");
     }
+    expect(result.decision.card).toMatchObject({
+      kind: "service_confirm",
+      serviceId: CONSULTATION_SERVICE_ID,
+      choiceIds: ["offer_accept", "offer_choose_other"],
+      labels: {
+        offer_accept: "Так",
+        offer_choose_other: "Обрати іншу процедуру",
+      },
+    });
   });
 
   it("looks up the contact by phone before asking for names", () => {

@@ -11,6 +11,7 @@ import {
   clearBookingOwnedInteraction,
   closedBookingSessionUpdate,
   interpretInteractionReply,
+  interactionChoiceEquals,
   isBookingOwnedInteraction,
   reduceBookingSession,
   repairInvalidScheduleInteraction,
@@ -491,6 +492,59 @@ describe("reduceBookingSession", () => {
     expect(other.pendingInteraction).toBeNull();
     expect(other.clearAvailability).toBe(true);
     expect(other.effect).toEqual({ type: "open_faq_catalog" });
+  });
+
+  it("treats kernel offer_accept / offer_choose_other / note_skip as session aliases", () => {
+    const offered = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+        acceptLabel: "Так",
+        chooseOtherLabel: "Обрати іншу процедуру",
+      },
+    );
+    const kernelOffer = {
+      ...offered,
+      pendingInteraction: offered.pendingInteraction == null
+        ? null
+        : {
+          ...offered.pendingInteraction,
+          choices: [
+            { id: "offer_accept", label: "Так" },
+            { id: "offer_choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+    };
+    const accepted = reduceBookingSession(kernelOffer, {
+      type: "interaction_choice",
+      choiceId: "offer_accept",
+    });
+    expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+
+    const other = reduceBookingSession(kernelOffer, {
+      type: "interaction_choice",
+      choiceId: "offer_choose_other",
+    });
+    expect(other.bookingDraft).toBeNull();
+    expect(other.effect).toEqual({ type: "open_faq_catalog" });
+
+    const awaitingNote = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const kernelNote = {
+      ...awaitingNote,
+      pendingInteraction: {
+        kind: "visit_note" as const,
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+    };
+    const skipped = reduceBookingSession(kernelNote, {
+      type: "interaction_choice",
+      choiceId: "note_skip",
+    });
+    expect(skipped.bookingDraft?.note.status).toBe("skipped");
   });
 
   it("service_confirm_schedule accepts the service and applies the date atomically", () => {
@@ -988,6 +1042,17 @@ describe("availability and schedule fail-closed", () => {
     expect(repair?.bookingDraft).toBeNull();
     expect(repair?.pendingInteraction?.kind).toBe("visit_select");
     expect(repair?.clearAvailability).toBe(true);
+  });
+});
+
+describe("interactionChoiceEquals", () => {
+  it("equates kernel and session builder ids", () => {
+    expect(interactionChoiceEquals("offer_accept", "accept")).toBe(true);
+    expect(interactionChoiceEquals("accept", "offer_accept")).toBe(true);
+    expect(interactionChoiceEquals("offer_choose_other", "choose_other")).toBe(true);
+    expect(interactionChoiceEquals("note_skip", "skip")).toBe(true);
+    expect(interactionChoiceEquals("accept", "choose_other")).toBe(false);
+    expect(interactionChoiceEquals(null, "accept")).toBe(false);
   });
 });
 

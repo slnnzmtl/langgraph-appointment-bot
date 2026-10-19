@@ -2,6 +2,7 @@ import { isSupervisorOwnedLabel } from "../../shared/message-content.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
+  interactionChoiceEquals,
   openVisitMeetingInteraction,
 } from "../booking-session.js";
 import {
@@ -159,7 +160,7 @@ const intentOverride: PostLlmRule = (ctx, decision, enabledIds) => {
         ctx.state.pendingInteraction,
         ctx.lastHumanText,
       );
-      return match.kind === "choice" && match.choiceId === "choose_other";
+      return match.kind === "choice" && interactionChoiceEquals(match.choiceId, "choose_other");
     })();
   const abandonDraft = chooseOtherOnOpenOffer;
 

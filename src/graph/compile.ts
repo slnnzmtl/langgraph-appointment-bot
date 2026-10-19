@@ -29,6 +29,7 @@ import {
   routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
+  routeAfterBookingTools,
 } from "./agent-loop/index.js";
 import {
   BOOKING_DECIDE_NODE,
@@ -293,16 +294,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     )
     .addConditionalEdges(
       bookingTools,
-      (state: ClinicState) => {
-        // Typed effect results always return to decide (not a planner / LLM).
-        if (state.bookingDraft?.pendingEffect != null) {
-          return bookingDecide;
-        }
-        if (hasPendingToolCalls(state.agentMessages)) {
-          return bookingTools;
-        }
-        return bookingRespond;
-      },
+      (state: ClinicState) =>
+        routeAfterBookingTools(state, {
+          decideName: bookingDecide,
+          toolsName: bookingTools,
+          respondName: bookingRespond,
+        }),
       {
         [bookingDecide]: bookingDecide,
         [bookingTools]: bookingTools,

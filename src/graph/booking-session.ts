@@ -480,6 +480,31 @@ export type InteractionReplyMatch =
   | { kind: "unmatched" };
 
 /**
+ * Kernel cards use offer_accept / offer_choose_other / note_skip.
+ * Session builders still emit accept / choose_other / skip.
+ * Sticky routing and session reducers must treat each pair as one choice.
+ */
+const INTERACTION_CHOICE_EQUIVALENTS: Readonly<Record<string, readonly string[]>> = {
+  accept: ["accept", "offer_accept"],
+  offer_accept: ["accept", "offer_accept"],
+  choose_other: ["choose_other", "offer_choose_other"],
+  offer_choose_other: ["choose_other", "offer_choose_other"],
+  skip: ["skip", "note_skip"],
+  note_skip: ["skip", "note_skip"],
+};
+
+export const interactionChoiceEquals = (
+  actual: string | null | undefined,
+  expected: string,
+): boolean => {
+  if (actual == null) {
+    return false;
+  }
+  const aliases = INTERACTION_CHOICE_EQUIVALENTS[expected] ?? [expected];
+  return aliases.includes(actual);
+};
+
+/**
  * Match patient text against the current interaction only.
  * Exact label → stable choice.id. Labels absent from the current interaction are unmatched
  * (Telegram cannot attribute reused labels to an older keyboard).
@@ -805,11 +830,11 @@ export const reduceBookingSession = (
           pendingInteraction: withoutReturnChoice(interaction),
         });
       }
-      if (interaction.kind === "visit_note" && event.choiceId === "skip") {
+      if (interaction.kind === "visit_note" && interactionChoiceEquals(event.choiceId, "skip")) {
         return reduceBookingSession(current, { type: "note_skipped" });
       }
       if (interaction.kind === "service_confirm") {
-        if (event.choiceId === "accept") {
+        if (interactionChoiceEquals(event.choiceId, "accept")) {
           if (draft == null) {
             return noEffect(current);
           }
@@ -824,7 +849,7 @@ export const reduceBookingSession = (
             effect: null,
           };
         }
-        if (event.choiceId === "choose_other") {
+        if (interactionChoiceEquals(event.choiceId, "choose_other")) {
           // Same policy as supervisor faqPredicates: wipe the offer and browse FAQ.
           // catalog_detour is reserved for service_unresolved (preserve draft).
           return {

@@ -37,7 +37,12 @@ describe("allowlisted informational facts", () => {
           name: "get_working_time",
         }),
       ],
-      "eff_1_get_working_time",
+      {
+        id: "eff_1_get_working_time",
+        expectedRevision: 1,
+        effect: { kind: "get_working_time" },
+        status: "prepared",
+      },
     );
     expect(result).toMatchObject({
       kind: "informational",
