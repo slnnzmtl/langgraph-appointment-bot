@@ -68,3 +68,9 @@ export {
   type BookingViewInputs,
 } from "./view.js";
 
+export {
+  interpretBookingTurnDeterministic,
+  scheduleIntentFromChoice,
+  type InterpretBookingTurnInput,
+} from "./interpret.js";
+
