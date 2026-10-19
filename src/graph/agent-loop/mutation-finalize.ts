@@ -196,14 +196,13 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
         update: {
           agentMessages: new Overwrite([] as BaseMessage[]),
           stepCount: 0,
-          pendingCancellationPurpose: null,
           lastHandoff: null,
           ...closedBookingSessionUpdate(),
         },
       });
     }
 
-    const replacementCancellation = state.pendingCancellationPurpose === "replacement";
+    const replacementCancellation = null === "replacement";
     const committedVisitLabel =
       outcome === "committed" ? visitLabelFromToolResult(result) : undefined;
     const replyText = meetingMutationReplyText({
@@ -243,7 +242,6 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
               ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
               : null,
           }),
-      pendingCancellationPurpose: null,
       messages: [message],
       lastHandoff: {
         agentId: agent.id,

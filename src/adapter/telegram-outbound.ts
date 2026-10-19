@@ -6,16 +6,17 @@ import {
 import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
 import {
   buildConfirmKeyboard,
+  buildInlineChoiceKeyboard,
   buildReplyKeyboard,
   withMainMenu,
-  type ReplyKeyboardMarkup,
+  type TelegramReplyMarkup,
 } from "./telegram-ui.js";
 
 const CONFIRM_BOOKING_INTERRUPT = "confirm_booking";
 
 export type OutboundReply = {
   text: string;
-  reply_markup?: ReplyKeyboardMarkup;
+  reply_markup?: TelegramReplyMarkup;
   /**
    * Optional first Telegram message before `text` (e.g. FAQ/price answer before
    * a re-armed cancel HITL card). Confirm interrupt alone would drop this.
@@ -221,11 +222,30 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
 export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const record = (result && typeof result === "object" ? result : {}) as Record<string, unknown>;
   const handoff = record.lastHandoff as
-    | { replyButtons?: unknown; replyText?: unknown }
+    | {
+        replyButtons?: unknown;
+        replyText?: unknown;
+        replyChoices?: Array<{ id?: unknown; label?: unknown }>;
+      }
     | undefined;
   const confirmDraft = getConfirmBookingDraft(record);
   const handoffText =
     typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
+
+  const inlineChoices = Array.isArray(handoff?.replyChoices)
+    ? handoff.replyChoices.flatMap((choice) => {
+        if (
+          choice != null
+          && typeof choice.id === "string"
+          && choice.id.trim().length > 0
+          && typeof choice.label === "string"
+          && choice.label.trim().length > 0
+        ) {
+          return [{ id: choice.id.trim(), label: choice.label.trim() }];
+        }
+        return [];
+      })
+    : [];
 
   if (confirmDraft) {
     const confirmText = formatConfirmBookingCaption(confirmDraft);
@@ -234,13 +254,21 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
       : "";
     return {
       text: confirmText,
-      reply_markup: buildConfirmKeyboard(),
+      reply_markup: inlineChoices.length > 0
+        ? buildInlineChoiceKeyboard(inlineChoices)
+        : buildConfirmKeyboard(),
       ...(prefix.length > 0 && prefix !== confirmText ? { prefixText: prefix } : {}),
     };
   }
 
   const visible = handoffText || lastVisibleAiText(record.messages) || "…";
   const stripped = extractReplyButtons(visible);
+  if (inlineChoices.length > 0) {
+    return {
+      text: stripped.text || "…",
+      reply_markup: buildInlineChoiceKeyboard(inlineChoices),
+    };
+  }
   const buttons = replyButtonLabels(handoff?.replyButtons);
   return {
     text: stripped.text || "…",

@@ -131,7 +131,7 @@ export const runConsultationSwitchSmoke = async (): Promise<void> => {
   if (switched.bookingDraft?.selectedDate != null) {
     throw new Error("Expected date cleared after service change");
   }
-  const notice = switched.serviceChangeNotice;
+  const notice = null;
   const expectedNotice = serviceChangedNoticeUk("Консультація");
   if (notice !== expectedNotice) {
     throw new Error(`Expected service change notice "${expectedNotice}", got "${notice ?? ""}"`);

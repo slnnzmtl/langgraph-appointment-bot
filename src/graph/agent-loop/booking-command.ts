@@ -231,8 +231,7 @@ export const shouldRearmCancelAfterChatOther = (state: ClinicState): boolean => 
     return false;
   }
   if (
-    state.pendingCancellationPurpose === "replacement"
-    || state.bookingDraft?.replacement?.status === "cancelling"
+    state.bookingDraft?.replacement?.status === "cancelling"
     || state.bookingDraft?.replacement?.status === "offered"
     || state.bookingDraft?.replacement?.status === "create_pending"
   ) {
@@ -288,9 +287,6 @@ export const applyMutationChatOtherCleanup = (state: ClinicState): ClinicStateUp
     return {
       bookingDraft: cleared.bookingDraft,
       pendingInteraction: cleared.pendingInteraction,
-      ...(state.pendingCancellationPurpose != null
-        ? { pendingCancellationPurpose: null }
-        : {}),
       ...(session.clearAvailability
         ? { availabilityContext: null, availabilityCursor: null }
         : {}),
@@ -316,18 +312,13 @@ export const applyMutationChatOtherCleanup = (state: ClinicState): ClinicStateUp
       pendingInteraction: session.pendingInteraction,
     };
   }
-  if (
-    state.pendingCancellationPurpose === "replacement"
-    || state.bookingDraft.replacement?.status === "cancelling"
-  ) {
+  if (state.bookingDraft.replacement?.status === "cancelling") {
     return {
       ...closedBookingSessionUpdate(),
-      pendingCancellationPurpose: null,
     };
   }
   return {
     bookingDraft: reduceBookingDraft(state.bookingDraft, { type: "command_cleared" }),
-    ...(action === "cancel" ? { pendingCancellationPurpose: null } : {}),
   };
 };
 
@@ -879,7 +870,7 @@ const openPendingInteractionFinalize = (
     return { kind: "finalize", reason: "pending_interaction" };
   }
   if (
-    state.bookingSkipLlm
+    false
     && state.pendingInteraction?.kind === "service_confirm"
     && state.bookingDraft?.serviceAcceptance?.status === "pending"
   ) {
@@ -896,7 +887,7 @@ const replacementCancelFinalize = (
   state: ClinicState,
 ): BookingCommandOutcome | null => {
   if (
-    state.pendingCancellationPurpose !== "replacement"
+    null !== "replacement"
     || state.bookingDraft?.mode !== "create"
     || state.bookingDraft.replacement != null
     || !toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting")
@@ -963,7 +954,6 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
         type: "command_prepared",
         command: rearmCancel,
       }),
-      pendingCancellationPurpose: "direct",
       ...(answerText.length > 0
         ? {
             lastHandoff: {
@@ -993,7 +983,6 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
           type: "command_prepared",
           command: directCancelCommand,
         }),
-        pendingCancellationPurpose: "direct",
       }),
     );
   }
@@ -1021,7 +1010,6 @@ export const resolveBookingCommand = (state: ClinicState): BookingCommandOutcome
             type: "cancel_existing_requested",
             command: cancelCommand,
           }),
-          pendingCancellationPurpose: "replacement",
         }),
       );
     }

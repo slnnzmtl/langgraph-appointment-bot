@@ -1942,7 +1942,6 @@ describe("agent-loop catalog (prepare+finalize)", () => {
       clinicState({
         messages: [new HumanMessage("✅")],
         bookingDraft: draft,
-        pendingCancellationPurpose: "replacement",
         pendingInteraction: {
           kind: "service_confirm",
           service: {

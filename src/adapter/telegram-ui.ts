@@ -33,6 +33,22 @@ export type ReplyKeyboardMarkup = {
   one_time_keyboard?: boolean;
 };
 
+export type InlineKeyboardButton = {
+  text: string;
+  callback_data: string;
+};
+
+export type InlineKeyboardMarkup = {
+  inline_keyboard: InlineKeyboardButton[][];
+};
+
+export type TelegramReplyMarkup = ReplyKeyboardMarkup | InlineKeyboardMarkup;
+
+export type BookingChoiceButton = {
+  id: string;
+  label: string;
+};
+
 /** Append «Головне меню» last when missing (adapter-owned; the model need not emit it). */
 export const withMainMenu = (labels: string[]): string[] => {
   const next = labels.filter((label) => label !== MAIN_MENU_LABEL);
@@ -59,6 +75,24 @@ export const buildReplyKeyboard = (labels: string[]): ReplyKeyboardMarkup => {
 
 export const buildDefaultMenuKeyboard = (hasVisit: boolean): ReplyKeyboardMarkup =>
   buildReplyKeyboard(withMainMenu([...defaultMenuLabels(hasVisit)]));
+
+/**
+ * Booking choice cards: Telegram inline buttons.
+ * `callback_data` is the exact choice id (≤64 bytes). Labels are display-only.
+ */
+export const buildInlineChoiceKeyboard = (
+  choices: readonly BookingChoiceButton[],
+): InlineKeyboardMarkup => {
+  const buttons = choices.map((choice) => ({
+    text: choice.label,
+    callback_data: choice.id.slice(0, 64),
+  }));
+  const inline_keyboard: InlineKeyboardButton[][] = [];
+  for (let i = 0; i < buttons.length; i += 2) {
+    inline_keyboard.push(buttons.slice(i, i + 2));
+  }
+  return { inline_keyboard };
+};
 
 /** Convert common Markdown (bold, links, bullets) to Telegram HTML; escape first. */
 export const formatForTelegram = (text: string): string =>

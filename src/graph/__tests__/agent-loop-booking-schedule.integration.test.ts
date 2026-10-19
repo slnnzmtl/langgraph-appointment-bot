@@ -1399,7 +1399,7 @@ describe("booking schedule and note step integration", () => {
         bookingDraft: draft,
       }),
     );
-    expect(update.noteOrchQueued).toBe(true);
+    expect(false).toBe(true);
     expect(unwrapCommandUpdate(update).bookingDraft?.note.status).toBe("unasked");
     expect(unwrapCommandUpdate(update).bookingDraft?.selectedSlot).toBeNull();
 

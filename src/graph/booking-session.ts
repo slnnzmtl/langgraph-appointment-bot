@@ -1296,9 +1296,7 @@ export const closedBookingSessionUpdate = (
 ): {
   bookingDraft: null;
   pendingInteraction: PendingInteraction | null;
-  serviceChangeNotice: null;
 } => ({
   bookingDraft: null,
   pendingInteraction: clearBookingOwnedInteraction(pendingInteraction),
-  serviceChangeNotice: null,
 });

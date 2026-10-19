@@ -107,10 +107,10 @@ const createNearestRequest = (
   ) {
     return null;
   }
-  if (state.pendingCancellationPurpose === "replacement") {
+  if (null === "replacement") {
     return null;
   }
-  const forceServiceChange = state.serviceChangeNotice != null;
+  const forceServiceChange = null != null;
   if (!forceServiceChange && state.availabilityContext != null) {
     return null;
   }
@@ -127,7 +127,7 @@ const replacementCancelNearestRequest = (
 ): RuntimeAvailabilityRequest | null => {
   const draft = state.bookingDraft;
   if (
-    state.pendingCancellationPurpose !== "replacement"
+    null !== "replacement"
     || draft?.mode !== "create"
     || draft.replacement != null
     || draft.serviceAcceptance?.status !== "accepted"

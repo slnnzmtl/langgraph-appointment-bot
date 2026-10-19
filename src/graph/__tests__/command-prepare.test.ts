@@ -52,12 +52,8 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   selectedAvailabilityDate: null,
   bookingDraft: null,
   pendingInteraction: null,
-  noteOrchQueued: false,
   faqSkipLlm: false,
-  bookingSkipLlm: false,
-  serviceChangeNotice: null,
   bookingSchemaVersion: 1,
-  pendingCancellationPurpose: null,
   ...overrides,
 });
 
@@ -1425,7 +1421,6 @@ describe("DDD-261 unified booking transition planner", () => {
           { id: "decline", label: "Обрати іншу процедуру" },
         ],
       },
-      bookingSkipLlm: false,
       agentMessages: [
         new ToolMessage({
           content: JSON.stringify({ list: [] }),
@@ -1476,7 +1471,6 @@ describe("DDD-261 unified booking transition planner", () => {
           { id: "decline", label: "Обрати іншу процедуру" },
         ],
       },
-      bookingSkipLlm: true,
       agentMessages: [
         new ToolMessage({
           content: JSON.stringify({ list: [] }),
@@ -1513,7 +1507,6 @@ describe("DDD-261 unified booking transition planner", () => {
         serviceAcceptance: null,
         replacement: null,
       },
-      pendingCancellationPurpose: "replacement",
       pendingInteraction: null,
       agentMessages: [
         new AIMessage({
@@ -1573,7 +1566,6 @@ describe("DDD-261 unified booking transition planner", () => {
           },
         },
       }),
-      pendingCancellationPurpose: "replacement",
       pendingInteraction: null,
       agentMessages: [
         new ToolMessage({

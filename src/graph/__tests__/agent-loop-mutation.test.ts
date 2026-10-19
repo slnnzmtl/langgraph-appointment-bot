@@ -152,7 +152,6 @@ describe("booking session mutation lifecycle", () => {
             payload: { meetingId: "m-1" },
           },
         },
-        pendingCancellationPurpose: "direct",
         agentMessages: mutationMessages("cancel_meeting", content),
       }));
       expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
@@ -184,7 +183,6 @@ describe("booking session mutation lifecycle", () => {
           originalCommand,
         },
       }),
-      pendingCancellationPurpose: "replacement",
       agentMessages: mutationMessages("cancel_meeting", { error: "CRM unavailable" }),
     }));
 
@@ -700,7 +698,6 @@ describe("runtime-owned cancellation outcomes", () => {
   it("renders a replacement cancellation decline with the default booking menu", async () => {
     const update = createAgentMutationFinalizeNode(agent)(clinicState({
       bookingContext: makeListedMeetings(),
-      pendingCancellationPurpose: "replacement",
       agentMessages: cancellationMessages({ cancelled: true }),
     }));
 
@@ -728,7 +725,6 @@ describe("runtime-owned cancellation outcomes", () => {
     expect(routeAfterAgentTools(
       clinicState({
         bookingContext: makeListedMeetings(),
-        pendingCancellationPurpose: "replacement",
         agentMessages: cancellationMessages({ cancelled: true }),
       }),
         {
@@ -785,7 +781,6 @@ describe("runtime-owned cancellation outcomes", () => {
         replyText: "Запис не було перенесено.",
       },
       bookingDraft: null,
-      pendingCancellationPurpose: null,
     });
     expect((declined as { lastHandoff?: { replyText?: string } }).lastHandoff?.replyText)
       .not.toContain("вільні");
@@ -841,7 +836,6 @@ describe("runtime-owned cancellation outcomes", () => {
       const state = clinicState({
         bookingContext: makeListedMeetings(),
         bookingDraft: draft,
-        pendingCancellationPurpose: purpose,
         agentMessages: [
           new ToolMessage({
             content: JSON.stringify({
@@ -871,7 +865,6 @@ describe("runtime-owned cancellation outcomes", () => {
       expect(command.update).toMatchObject({
         bookingDraft: null,
         pendingInteraction: null,
-        pendingCancellationPurpose: null,
         lastHandoff: null,
       });
     }
@@ -880,7 +873,6 @@ describe("runtime-owned cancellation outcomes", () => {
   it("routes an abandoned replacement cancellation to the supervisor", async () => {
     const state = clinicState({
       bookingContext: makeListedMeetings(),
-      pendingCancellationPurpose: "replacement",
       bookingDraft: canonicalBookingDraft({
         mode: "replace",
         phase: "confirming",

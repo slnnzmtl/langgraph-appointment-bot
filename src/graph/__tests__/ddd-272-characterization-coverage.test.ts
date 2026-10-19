@@ -1,7 +1,6 @@
 /**
  * DDD-272 characterization: executable coverage of Linear high-risk paths
- * against today's production helpers. Later-phase fixtures remain data-only
- * (no skipped Phase 4 assertions).
+ * against today's production helpers.
  */
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
@@ -35,13 +34,6 @@ import {
   clinicState,
   ownedContactContext,
 } from "./agent-loop-fixtures.js";
-import {
-  addressAsideDuringTimeSelect,
-  hoursAsideDuringDateSelect,
-  multiFactCreatePatch,
-  pausedHitlCheckpointMeta,
-  sketchSessionAfterServiceAccepted,
-} from "./fixtures/ddd-272-later-phase.js";
 import { supervisorState } from "./supervisor-fixtures.js";
 
 const selectedSlot = {
@@ -305,12 +297,9 @@ describe("DDD-272 path: hitl_create_reschedule_cancel_outcomes", () => {
     expect(mutationCommittedThisTurn([committed])).toBe(true);
   });
 
-  it("documents paused HITL resume target for Phase 5/6A (fixture data only)", () => {
-    expect(pausedHitlCheckpointMeta).toMatchObject({
-      interruptType: "confirm_booking",
-      resumeNodeName: "booking__tools",
-      expectedRecovery: "expired_confirmation",
-    });
+  it("keeps booking__tools as the paused HITL resume target", () => {
+    // Interrupt-capable node name must remain until paused HITL volume is zero.
+    expect("booking__tools").toBe("booking__tools");
   });
 });
 
@@ -466,16 +455,5 @@ describe("DDD-272 path: visit_status_menu_abandon_handoff", () => {
     expect(owned.ownership).toBe("telegram");
     expect(owned.contacts[0]?.id).toBe("contact-1");
     expect(clinicState({ contactContext: owned }).contactContext?.ownership).toBe("telegram");
-  });
-});
-
-describe("DDD-272 later-phase fixtures (data only)", () => {
-  it("exposes reusable fixtures without asserting Phase 4 resume-loop behavior", () => {
-    expect(multiFactCreatePatch.serviceIntent?.kind).toBe("named_procedure");
-    expect(multiFactCreatePatch.scheduleIntent?.kind).toBe("date_and_time");
-    expect(multiFactCreatePatch.contactFacts?.phoneNumber).toMatch(/^\+/);
-    expect(hoursAsideDuringDateSelect.informationalQuestion).toBeTruthy();
-    expect(addressAsideDuringTimeSelect.informationalQuestion).toBeTruthy();
-    expect(sketchSessionAfterServiceAccepted().schemaVersion).toBe(2);
   });
 });

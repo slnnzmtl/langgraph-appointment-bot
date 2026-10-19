@@ -316,6 +316,12 @@ const runGraphExclusive = async (
  * (with HumanMessage). Session transitions happen in the graph after the tool outcome.
  * Version-0 booking checkpoints are upgraded here once (invoke input or Command.update).
  */
+export type GraphTurnInput = {
+  text: string;
+  /** Exact Telegram inline callback_data choice id (preferred over text matching). */
+  callbackChoiceId?: string;
+};
+
 export const handleGraphTextTurn = async (
   graph: Graph,
   threadId: string,
@@ -323,6 +329,7 @@ export const handleGraphTextTurn = async (
   text: string,
   checkpointer?: ThreadCheckpointer,
   options?: GraphTextTurnOptions,
+  callbackChoiceId?: string,
 ): Promise<OutboundReply> =>
   runGraphExclusive(graph, threadId, telegramUserId, async (config) =>
     withCheckpointThreadRetry(checkpointer, threadId, async () => {
@@ -378,6 +385,7 @@ export const handleGraphTextTurn = async (
           bookingDraft: channelValues.bookingDraft,
           pendingInteraction: channelValues.pendingInteraction,
           bookingUpdate,
+          ...(callbackChoiceId != null ? { callbackChoiceId } : {}),
         });
         return graph.invoke(
           new Command({
@@ -388,7 +396,11 @@ export const handleGraphTextTurn = async (
         );
       }
       return graph.invoke(
-        { messages: [new HumanMessage(text)], ...bookingUpdate } as never,
+        {
+          messages: [new HumanMessage(text)],
+          ...bookingUpdate,
+          ...(callbackChoiceId != null ? { inboundChoiceId: callbackChoiceId } : {}),
+        } as never,
         config,
       );
     }),
@@ -536,6 +548,43 @@ export const launchClinicBot = async (options: LaunchClinicBotOptions): Promise<
         telegramUserId,
         text,
         checkpointer,
+      ),
+    );
+    await replyOutbound(ctx, outbound);
+  }));
+
+  bot.on("callback_query", detach(async (ctx) => {
+    if (await rejectNonPrivateTelegramChat(ctx)) {
+      return;
+    }
+    if (await rejectIfRateLimited(ctx, ctx.from?.id)) {
+      return;
+    }
+    const chatId = ctx.chat?.id;
+    const fromId = ctx.from?.id;
+    const callback = ctx.callbackQuery;
+    if (chatId === undefined || fromId === undefined || callback == null) {
+      return;
+    }
+    const choiceId =
+      "data" in callback && typeof callback.data === "string"
+        ? callback.data.trim()
+        : "";
+    await ctx.answerCbQuery();
+    if (!choiceId) {
+      return;
+    }
+    // Do not copy the id into patient prose — empty text + inboundChoiceId.
+    const threadId = String(chatId);
+    const outbound = await withTypingIndicator(ctx.telegram, chatId, () =>
+      handleGraphTextTurn(
+        graph,
+        threadId,
+        String(fromId),
+        "",
+        checkpointer,
+        undefined,
+        choiceId,
       ),
     );
     await replyOutbound(ctx, outbound);

@@ -6,14 +6,12 @@
 import { HumanMessage } from "@langchain/core/messages";
 
 import { classifyConfirmReply } from "../shared/confirm-reply.js";
+import type { BookingDraft } from "../graph/booking-draft.js";
+import { recoverExpiredConfirmBookingHitl } from "../graph/booking-hitl-recovery.js";
 import {
-  isConfirmationAffirmation,
-  isConfirmationDecline,
-} from "../shared/message-content.js";
-import {
-  interpretInteractionReply,
   type PendingInteraction,
 } from "../graph/booking-session.js";
+import { bookingResponseFallback } from "../graph/agent-loop/booking-response-fallback.js";
 
 export type ConfirmBookingResume =
   | { confirmed: true }
@@ -32,6 +30,8 @@ export type ResumeConfirmBookingHitlInput = {
   bookingDraft?: unknown;
   pendingInteraction?: unknown;
   bookingUpdate?: Record<string, unknown>;
+  /** Exact callback_data choice id when the patient tapped an inline button. */
+  callbackChoiceId?: string;
 };
 
 const asMutationConfirm = (
@@ -47,19 +47,64 @@ const asMutationConfirm = (
   return null;
 };
 
+const asBookingDraft = (value: unknown): BookingDraft | null => {
+  if (value == null || typeof value !== "object") {
+    return null;
+  }
+  return value as BookingDraft;
+};
+
 /**
- * Interpret patient text while a create/cancel/reschedule confirm card is pending.
- * Returns resume payload + Command.update (checkpoint upgrade; HumanMessage for chat).
+ * Live HITL requires an unexpired mutation_confirm still stored on the draft
+ * (pendingDecision.kind === mutation_confirm, or legacy pendingCommand + card).
+ * After upgrade clears the frozen confirm, ✅ must never replay the write.
+ */
+export const hasLiveMutationConfirmHitl = (input: {
+  bookingDraft?: unknown;
+  pendingInteraction?: unknown;
+}): boolean => {
+  const draft = asBookingDraft(input.bookingDraft);
+  if (draft == null) {
+    return false;
+  }
+  if (draft.pendingDecision?.kind === "mutation_confirm") {
+    return true;
+  }
+  const interaction = asMutationConfirm(input.pendingInteraction);
+  return interaction != null && draft.pendingCommand != null;
+};
+
+/**
+ * Interpret patient text / callback while a create/cancel/reschedule confirm is pending.
  */
 export const resumeConfirmBookingHitl = (
   input: ResumeConfirmBookingHitlInput,
 ): ConfirmBookingHitlResult => {
   const bookingUpdate = input.bookingUpdate ?? {};
-  const mutationInteraction = asMutationConfirm(input.pendingInteraction);
   const text = input.text;
-  const tap = classifyConfirmReply(text);
+  const callbackId = input.callbackChoiceId?.trim();
+  const live = hasLiveMutationConfirmHitl({
+    bookingDraft: input.bookingDraft,
+    pendingInteraction: input.pendingInteraction,
+  });
 
-  // Main-menu leave works even if mutation_confirm was cleared mid-interrupt.
+  const offered = asBookingDraft(input.bookingDraft)?.offeredChoiceIds ?? null;
+  const exactCallback =
+    callbackId != null
+    && callbackId.length > 0
+    && (offered == null || offered.includes(callbackId));
+
+  if (callbackId === "menu" || callbackId === "main_menu") {
+    return {
+      resume: { left: true },
+      update: {
+        ...bookingUpdate,
+        messages: [new HumanMessage(text || "menu")],
+      },
+    };
+  }
+
+  const tap = classifyConfirmReply(text);
   if (tap.kind === "leave") {
     return {
       resume: { left: true },
@@ -70,53 +115,43 @@ export const resumeConfirmBookingHitl = (
     };
   }
 
-  // Exact ✅/❌ taps are authoritative on the interrupt path even when the
-  // checkpoint lacks mutation_confirm (e.g. version-0 migration).
-  if (tap.kind === "confirmed") {
-    return {
-      resume: { confirmed: true },
-      update: bookingUpdate,
-    };
-  }
-  if (tap.kind === "declined") {
+  const confirmedViaCallback = exactCallback && (callbackId === "confirm" || callbackId === "hitl_yes");
+  const declinedViaCallback = exactCallback && (callbackId === "decline" || callbackId === "hitl_no");
+  const confirmedViaTap = tap.kind === "confirmed";
+  const declinedViaTap = tap.kind === "declined";
+
+  // Expired / migrated interrupt: never confirm a CRM write.
+  if (
+    !live
+    && (confirmedViaCallback || declinedViaCallback || confirmedViaTap || declinedViaTap)
+  ) {
+    const recovered = recoverExpiredConfirmBookingHitl({
+      bookingDraft: asBookingDraft(input.bookingDraft),
+    });
     return {
       resume: { confirmed: false },
-      update: bookingUpdate,
-    };
-  }
-
-  // NL affirm/decline still require an open mutation_confirm card.
-  if (mutationInteraction == null) {
-    return {
-      resume: { userReply: text },
       update: {
         ...bookingUpdate,
-        messages: [new HumanMessage(text)],
+        bookingDraft: recovered.bookingDraft,
+        pendingInteraction: recovered.pendingInteraction,
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "booking",
+          status: "ok",
+          replyText: bookingResponseFallback({
+            intent: recovered.fallbackIntent,
+            facts: { clarificationReason: recovered.clarificationReason },
+          }),
+        },
       },
     };
   }
 
-  const match = interpretInteractionReply(mutationInteraction, text);
-  const action = mutationInteraction.kind === "mutation_confirm"
-    ? mutationInteraction.action
-    : undefined;
-  if (
-    match.kind === "choice" && match.choiceId === "confirm"
-    || (action != null && isConfirmationAffirmation(text, action))
-  ) {
-    return {
-      resume: { confirmed: true },
-      update: bookingUpdate,
-    };
+  if (live && (confirmedViaCallback || confirmedViaTap)) {
+    return { resume: { confirmed: true }, update: bookingUpdate };
   }
-  if (
-    match.kind === "choice" && match.choiceId === "decline"
-    || isConfirmationDecline(text)
-  ) {
-    return {
-      resume: { confirmed: false },
-      update: bookingUpdate,
-    };
+  if (live && (declinedViaCallback || declinedViaTap)) {
+    return { resume: { confirmed: false }, update: bookingUpdate };
   }
 
   return {

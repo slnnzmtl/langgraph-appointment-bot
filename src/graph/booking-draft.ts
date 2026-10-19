@@ -4,7 +4,17 @@ import { contactMissingFields } from "../tools/contact-tools.js";
 import { kyivLocalIsoToUtcMs } from "../tools/availability-slots.js";
 import type { SelectedBookingSlot } from "./types.js";
 
-export const BOOKING_SCHEMA_VERSION = 1;
+import type { PendingEffect, PendingEffectStatus } from "./booking-domain/effects.js";
+import type {
+  PendingDecision,
+  SlotAvailabilityEvidence,
+  SlotProvenance,
+} from "./booking-domain/session.js";
+
+export type { SlotAvailabilityEvidence, SlotProvenance };
+
+/** Checkpoint schema stamped on ClinicState.bookingSchemaVersion (atomic cutover = 2). */
+export const BOOKING_SCHEMA_VERSION = 2;
 
 export type BookingContactField = "phoneNumber" | "firstName" | "lastName";
 
@@ -102,6 +112,31 @@ export type BookingDraft = {
   rescheduleTarget?: ReplacementMeeting | null;
   // Optional for checkpoints created before cancel-and-rebook was introduced.
   replacement?: ReplacementState | null;
+  /**
+   * Irreducible wait owned by the aggregate (schema 2). Ordinary DATE/TIME/contact
+   * cards stay projections only.
+   */
+  pendingDecision?: PendingDecision | null;
+  /**
+   * Provenance for selectedSlot. Missing on schema ≤1 rows; upgrade stamps
+   * unverified_legacy. Runtime slot selection stamps availability_tool.
+   */
+  slotProvenance?: SlotProvenance | null;
+  /**
+   * Snapshot/service/duration/exclusion proof for a verified slot.
+   * Required alongside availability_tool provenance for mutation-ready slots.
+   */
+  slotEvidence?: SlotAvailabilityEvidence | null;
+  /**
+   * At most one pending effect (prepared→executing→completed/unknown).
+   * Persisted for crash-safe emit-once correlation.
+   */
+  pendingEffect?: PendingEffect | null;
+  /**
+   * Exact Telegram callback_data choice ids currently offered on the booking card.
+   * Callbacks not in this set are rejected; reply-keyboard labels are never matched.
+   */
+  offeredChoiceIds?: string[] | null;
 };
 
 export type BookingEvent =
@@ -109,7 +144,12 @@ export type BookingEvent =
   | { type: "service_accepted"; turn?: number }
   | { type: "date_selected"; date: string }
   | { type: "schedule_requested"; date: string; preferredTime?: string }
-  | { type: "slot_selected"; slot: SelectedBookingSlot }
+  | {
+      type: "slot_selected";
+      slot: SelectedBookingSlot;
+      /** Availability snapshot id when known; otherwise a runtime marker is stamped. */
+      snapshotId?: string;
+    }
   | { type: "requested_time_unavailable" }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
   | {
@@ -130,7 +170,20 @@ export type BookingEvent =
   | { type: "cancel_existing_declined" }
   | { type: "slot_invalidated"; keepDate?: boolean }
   | { type: "draft_abandoned" }
-  | { type: "draft_resumed" };
+  | { type: "draft_resumed" }
+  // Schema-2 atomic cutover: pending effect + decision + slot provenance.
+  | { type: "effect_prepared"; effect: PendingEffect }
+  | { type: "effect_status"; status: PendingEffectStatus }
+  | { type: "effect_cleared" }
+  | { type: "decision_set"; decision: PendingDecision }
+  | { type: "decision_cleared" }
+  | {
+      type: "slot_provenance_set";
+      provenance: SlotProvenance;
+      evidence?: SlotAvailabilityEvidence | null;
+    }
+  | { type: "choices_offered"; choiceIds: string[] }
+  | { type: "choices_cleared" };
 
 const trimContactName = (value: string): string | null => {
   const trimmed = value.trim();
@@ -418,14 +471,52 @@ export const isEmptyLegacyBookingDraft = (
   && draft.rescheduleTarget == null
   && draft.replacement == null;
 
+/** True when selectedSlot may drive progression (runtime-stamped with evidence). */
+const draftHasVerifiedSlot = (draft: BookingDraft): boolean => {
+  if (draft.selectedSlot == null || draft.slotProvenance !== "availability_tool") {
+    return false;
+  }
+  const snapshotId = draft.slotEvidence?.snapshotId?.trim();
+  return snapshotId != null && snapshotId.length > 0;
+};
+
+/** Build slot evidence from the draft availability scope + optional snapshot id. */
+export const slotEvidenceForSelection = (
+  draft: BookingDraft,
+  slot: SelectedBookingSlot,
+  snapshotId?: string,
+): SlotAvailabilityEvidence => {
+  const scope = bookingAvailabilityScope(draft);
+  return {
+    snapshotId:
+      snapshotId?.trim()
+      || `runtime:${draft.version}:${slot.dateStart}`,
+    ...(scope.serviceId != null ? { serviceId: scope.serviceId } : {}),
+    ...(scope.durationMinutes != null
+      ? { durationMinutes: scope.durationMinutes }
+      : {}),
+    ...(scope.excludeMeetingIds != null
+      ? { excludeMeetingIds: [...scope.excludeMeetingIds] }
+      : {}),
+  };
+};
+
+/**
+ * Derived workflow stage for the checkpointed draft projection. Prefer
+ * {@link import("./booking-domain/requirement.js").nextBookingRequirement}.
+ */
 export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
-  if (draft.phase === "confirming" && draft.pendingCommand != null) {
+  if (
+    (draft.phase === "confirming" && draft.pendingCommand != null)
+    || draft.pendingDecision?.kind === "mutation_confirm"
+    || draft.pendingCommand != null
+  ) {
     return "confirming";
   }
   if (draft.mode === "reschedule") {
     if (draft.rescheduleTarget == null) return "service";
     if (draft.selectedDate == null) return "date";
-    if (draft.selectedSlot == null) return "time";
+    if (!draftHasVerifiedSlot(draft)) return "time";
     return "ready";
   }
   if (draft.serviceAcceptance == null || draft.serviceAcceptance.status !== "accepted") {
@@ -434,7 +525,7 @@ export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
   if (draft.selectedDate == null) {
     return "date";
   }
-  if (draft.selectedSlot == null) {
+  if (!draftHasVerifiedSlot(draft)) {
     return "time";
   }
   if (draft.note.status !== "skipped" && draft.note.status !== "answered") {
@@ -469,6 +560,11 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   pendingCommand: null,
   rescheduleTarget: null,
   replacement: null,
+  pendingDecision: null,
+  slotProvenance: null,
+  slotEvidence: null,
+  pendingEffect: null,
+  offeredChoiceIds: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
@@ -481,9 +577,12 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   phase: "service",
   selectedDate: null,
   selectedSlot: null,
+  slotProvenance: null,
+  slotEvidence: null,
   requestedTime: null,
   note: { status: "unasked" },
   pendingCommand: null,
+  pendingDecision: null,
   rescheduleTarget: draft.rescheduleTarget ?? null,
   replacement: null,
 });
@@ -613,6 +712,8 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: event.date,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         requestedTime: null,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
@@ -629,6 +730,8 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: event.date,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         requestedTime: event.preferredTime
           ? { value: event.preferredTime, status: "pending" as const }
           : null,
@@ -648,15 +751,29 @@ export const reduceBookingDraft = (
       const note = draft.mode === "reschedule" || hasCompletedNote(draft)
         ? draft.note
         : { status: "awaiting" as const };
-      const next = {
+      const slotEvidence = slotEvidenceForSelection(
+        draft,
+        event.slot,
+        event.snapshotId,
+      );
+      const next: Omit<BookingDraft, "version"> = {
         ...draft,
         selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
+        slotProvenance: "availability_tool",
+        slotEvidence,
         requestedTime: null,
         note,
         pendingCommand: null,
-      } satisfies Omit<BookingDraft, "version">;
-      return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+        pendingDecision:
+          draft.pendingDecision?.kind === "mutation_confirm"
+            ? null
+            : (draft.pendingDecision ?? null),
+      };
+      return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
+      });
     }
     case "requested_time_unavailable": {
       if (draft.requestedTime?.status !== "pending") {
@@ -667,6 +784,8 @@ export const reduceBookingDraft = (
         ...draft,
         requestedTime,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
@@ -760,6 +879,8 @@ export const reduceBookingDraft = (
         serviceAcceptance: null,
         selectedDate: null,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         requestedTime: null,
         note: { status: "unasked" },
         pendingCommand: null,
@@ -889,6 +1010,8 @@ export const reduceBookingDraft = (
         phase: event.keepDate ? "time" : "date",
         selectedDate: event.keepDate ? draft.selectedDate : null,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         // The selected time is invalid, not the patient's already supplied
         // note. Preserve the completed note/contact while asking only for a
         // replacement slot.
@@ -905,5 +1028,56 @@ export const reduceBookingDraft = (
       return withVersion(draft, { ...draft, phase: bookingDraftPhase(draft) });
     case "draft_abandoned":
       return null;
+    case "effect_prepared":
+      return withVersion(draft, { ...draft, pendingEffect: event.effect });
+    case "effect_status": {
+      if (draft.pendingEffect == null) {
+        return draft;
+      }
+      return withVersion(draft, {
+        ...draft,
+        pendingEffect: { ...draft.pendingEffect, status: event.status },
+      });
+    }
+    case "effect_cleared": {
+      if (draft.pendingEffect == null) {
+        return draft;
+      }
+      return withVersion(draft, { ...draft, pendingEffect: null });
+    }
+    case "decision_set": {
+      const next = {
+        ...draft,
+        pendingDecision: event.decision,
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
+      });
+    }
+    case "decision_cleared": {
+      const next = {
+        ...draft,
+        pendingDecision: null,
+      } satisfies Omit<BookingDraft, "version">;
+      return withVersion(draft, {
+        ...next,
+        phase: bookingDraftPhase({ ...next, version: draft.version }),
+      });
+    }
+    case "slot_provenance_set":
+      return withVersion(draft, {
+        ...draft,
+        slotProvenance: event.provenance,
+        slotEvidence:
+          event.evidence === undefined ? (draft.slotEvidence ?? null) : event.evidence,
+      });
+    case "choices_offered":
+      return withVersion(draft, {
+        ...draft,
+        offeredChoiceIds: [...event.choiceIds],
+      });
+    case "choices_cleared":
+      return withVersion(draft, { ...draft, offeredChoiceIds: null });
   }
 };

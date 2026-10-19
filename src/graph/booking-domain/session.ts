@@ -1,71 +1,37 @@
 /**
- * Compile-only sketch of the Phase 1+ canonical booking aggregate.
- * Unused by production routing until DDD-273 wires writers through it.
+ * Shared booking-aggregate value types (atomic cutover).
+ *
+ * The BookingSessionV2 bridge has been removed — booking facts live on
+ * {@link import("../booking-draft.js").BookingDraft}. This module only exports
+ * the small value types folded onto the draft (pending waits, slot provenance,
+ * frozen mutation commands). Must stay free of LangGraph / LangChain imports.
  */
 
-export const BOOKING_SESSION_SCHEMA_VERSION = 2 as const;
+/** Provenance for a selected slot; only `availability_tool` is mutation-ready. */
+export type SlotProvenance = "availability_tool" | "unverified_legacy" | "none";
 
-export type BookingModeV2 = "create" | "reschedule" | "replace";
-
-export type ServiceRef = {
-  id: string;
-  name?: string;
+/**
+ * Snapshot / service / duration / exclusion proof for a verified slot.
+ * Required alongside `availability_tool` provenance for a mutation-ready slot.
+ */
+export type SlotAvailabilityEvidence = {
+  snapshotId: string;
+  serviceId?: string;
   durationMinutes?: number;
-  source: "catalog" | "direct" | "crm";
-};
-
-export type ServiceAcceptanceV2 = {
-  status: "pending" | "accepted";
-  service: ServiceRef;
-  acceptedAtTurn?: number;
-};
-
-/** Selected slot facts without treating cursor/cache as provenance. */
-export type SlotFacts = {
-  slotId?: string;
-  dateStart: string;
-  dateEnd: string;
-  label: string;
-  /** Provenance required before the slot is selectable / mutable. */
-  provenance: "availability_tool" | "unverified_legacy" | "none";
-};
-
-export type NoteFacts = {
-  status: "unasked" | "awaiting" | "skipped" | "answered";
-  value?: string;
-};
-
-export type ContactFacts = {
-  contactId: string | null;
-  phoneNumber?: string;
-  firstName?: string;
-  lastName?: string;
-  phoneLookup?: {
-    phoneNumber: string;
-    result: "none" | "single_linkable" | "occupied" | "ambiguous";
-    contactIds: string[];
-  } | null;
-};
-
-export type MeetingRef = {
-  id: string;
-  name?: string;
-  dateStart?: string;
-  dateEnd?: string;
-};
-
-export type ReplacementFacts = {
-  meeting: MeetingRef;
-  status: "offered" | "cancelling" | "create_pending";
+  excludeMeetingIds?: string[];
 };
 
 /**
- * Irreducible waits owned by the session. Ordinary DATE/TIME/contact cards
- * are projections (Phase 1+) — not independently authoritative.
+ * Irreducible waits owned by the aggregate. Ordinary DATE/TIME/contact cards
+ * are projections — not independently authoritative.
  */
 export type PendingDecision =
   | { kind: "service_candidate"; utterance?: string; query?: string }
-  | { kind: "visit_select"; stage: "action" | "meeting" | "replacement"; action?: "reschedule" | "cancel" }
+  | {
+      kind: "visit_select";
+      stage: "action" | "meeting" | "replacement";
+      action?: "reschedule" | "cancel";
+    }
   | { kind: "service_or_note"; noteCandidate: string; currentServiceId: string }
   | {
       kind: "mutation_confirm";
@@ -74,19 +40,12 @@ export type PendingDecision =
     }
   | { kind: "clarification"; reason: string };
 
-export type BookingSessionV2 = {
-  schemaVersion: typeof BOOKING_SESSION_SCHEMA_VERSION;
-  revision: number;
-  mode: BookingModeV2;
-  serviceAcceptance: ServiceAcceptanceV2 | null;
-  selectedDate: string | null;
-  selectedSlot: SlotFacts | null;
-  requestedTime: { value: string; status: "pending" | "unavailable" } | null;
-  note: NoteFacts;
-  contact: ContactFacts;
-  rescheduleTarget: MeetingRef | null;
-  replacement: ReplacementFacts | null;
-  pendingDecision: PendingDecision | null;
-  /** Placeholder until Phase 2 enforces PendingEffect lifecycle. */
-  pendingEffect: null;
+/**
+ * A frozen create/reschedule/cancel write correlated to a prepared effect id.
+ * Re-entry with the same frozen write reuses the existing effect id (emit-once).
+ */
+export type FrozenMutationCommand = {
+  action: "create" | "reschedule" | "cancel";
+  effectId: string;
+  payload: Readonly<Record<string, unknown>>;
 };

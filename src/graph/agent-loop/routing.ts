@@ -82,9 +82,7 @@ export const routeAfterAgentPrepare = (
   finalizeName?: string,
   agentId?: string,
 ): string => {
-  if (noteOrchestratorName && state.noteOrchQueued) {
-    return noteOrchestratorName;
-  }
+  void noteOrchestratorName;
   const isFaqPrepare = agentId === FAQ_AGENT_ID;
   // Graph-owned REPLACE: skip the LLM and render visit_select / replacement.
   // Booking agent only — FAQ prepare must not project booking replacement policy.
@@ -131,11 +129,7 @@ export const routeAfterAgentPrepare = (
       bookText,
     );
     if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
-      if (isFaqPrepare) {
-        if (state.faqSkipLlm) {
-          return finalizeName;
-        }
-      } else if (state.bookingSkipLlm) {
+      if (isFaqPrepare && state.faqSkipLlm) {
         return finalizeName;
       }
     }

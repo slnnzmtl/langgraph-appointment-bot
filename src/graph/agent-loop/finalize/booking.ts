@@ -120,8 +120,7 @@ export const tryBookingNoAiFinalize = (
     state.pendingInteraction != null
     && isBookingOwnedInteraction(state.pendingInteraction)
     && (
-      state.pendingCancellationPurpose === "replacement"
-      || state.pendingInteraction.kind === "service_confirm"
+      state.pendingInteraction.kind === "service_confirm"
       || (
         state.pendingInteraction.kind === "service_candidate"
         && state.pendingInteraction.owner === "faq"
@@ -138,20 +137,13 @@ export const tryBookingNoAiFinalize = (
           replyText: String(renderBookingInteractionMessage(interaction).content),
           replyButtons: replyButtonsForInteraction(interaction),
         };
-    const replyText =
-      state.pendingCancellationPurpose === "replacement"
-        ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${chips.replyText}`
-        : chips.replyText;
     return {
       ...emptyFinalizeReply("ok"),
-      replyText,
+      replyText: chips.replyText,
       replyButtons: chips.replyButtons,
       replySource: "runtime",
       patch: {
         pendingInteraction: interaction,
-        ...(state.pendingCancellationPurpose === "replacement"
-          ? { pendingCancellationPurpose: null }
-          : {}),
       },
     };
   }
@@ -160,8 +152,7 @@ export const tryBookingNoAiFinalize = (
   // ran present_availability_slots. Last message is a ToolMessage — render
   // the date/time offer here so the turn does not fall through to empty.
   if (
-    state.pendingCancellationPurpose === "replacement"
-    && state.bookingDraft?.mode === "create"
+    state.bookingDraft?.mode === "create"
     && state.bookingDraft.replacement == null
     && state.bookingDraft.serviceAcceptance?.status === "accepted"
   ) {
@@ -175,7 +166,6 @@ export const tryBookingNoAiFinalize = (
         replyButtons: offer.replyButtons,
         replySource: "runtime",
         patch: {
-          pendingCancellationPurpose: null,
           pendingInteraction: offer.interaction,
         },
       };
@@ -188,7 +178,7 @@ export const tryBookingNoAiFinalize = (
       replyText,
       replyButtons: [OTHER_DATE_LABEL, MAIN_MENU_LABEL],
       replySource: "runtime",
-      patch: { pendingCancellationPurpose: null },
+      patch: {},
     };
   }
 

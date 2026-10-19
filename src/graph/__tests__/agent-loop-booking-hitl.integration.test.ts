@@ -813,7 +813,6 @@ describe("booking HITL and command_prepare integration", () => {
     const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
-        pendingCancellationPurpose: "direct",
         bookingDraft: {
           ...canonicalBookingDraft({
             phase: "confirming",
@@ -849,7 +848,6 @@ describe("booking HITL and command_prepare integration", () => {
     const finalize = createBookingFinalizeNode(agent);
     const update = await finalize(
       availabilityClinicState({
-        pendingCancellationPurpose: "replacement",
         bookingDraft: {
           ...canonicalBookingDraft({
             mode: "replace",

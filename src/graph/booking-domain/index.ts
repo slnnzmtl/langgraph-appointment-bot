@@ -1,38 +1,36 @@
 /**
- * Canonical booking decision-loop contracts (DDD-272 / Phase 0).
+ * Canonical booking decision-loop (atomic cutover).
  *
- * Compile-only in this phase: no production routing imports these symbols for
- * control flow. Later phases implement decideBooking / projectBookingView against
- * these types. Must stay free of LangGraph / LangChain imports (depcruise).
+ * decideBooking is pure: it returns events (applied by the decide node via
+ * reduceBookingDraft) plus a prose-free decision. Must stay free of
+ * LangGraph / LangChain imports (depcruise).
  */
 
 export {
-  BOOKING_SESSION_SCHEMA_VERSION,
-  type BookingModeV2,
-  type BookingSessionV2,
-  type ContactFacts,
-  type MeetingRef,
-  type NoteFacts,
+  type FrozenMutationCommand,
   type PendingDecision,
-  type ReplacementFacts,
-  type ServiceAcceptanceV2,
-  type ServiceRef,
-  type SlotFacts,
+  type SlotAvailabilityEvidence,
+  type SlotProvenance,
 } from "./session.js";
 
 export {
   type BookingEffect,
   type EffectResult,
+  type InformationalFacts,
   type PendingEffect,
   type PendingEffectStatus,
 } from "./effects.js";
 
 export {
   type BookingDecision,
+  type BookingDecisionTag,
   type BookingInput,
   type BookingReadModels,
-  type BookingView,
+  type BookingSemanticIntent,
+  type BookingTerminalReason,
+  type BookingVerifiedFacts,
   type BookingViewCard,
+  type DecideBookingResult,
 } from "./decision.js";
 
 export {
@@ -50,3 +48,14 @@ export {
   type BookingRequirement,
   type NextBookingRequirement,
 } from "./requirement.js";
+
+export { decideBooking } from "./decide.js";
+
+export {
+  interpretBookingTurnDeterministic,
+  normalizeBookingTurnClassification,
+  BOOKING_TURN_INTERPRETER_INSTRUCTION,
+  type InterpretBookingTurnInput,
+  type InterpretChoice,
+  type BookingTurnClassification,
+} from "./interpret.js";

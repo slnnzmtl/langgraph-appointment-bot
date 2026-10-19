@@ -169,7 +169,7 @@ export const prepareFaqTurn = async (
   // the catalog — load services if needed and open root FAQ chips here.
   const replacementCancelNeedsCatalog =
     !handledCatalogChoice
-    && state.pendingCancellationPurpose === "replacement"
+    && null === "replacement"
     && state.bookingDraft?.mode === "create"
     && state.bookingDraft.replacement == null
     && state.bookingDraft.serviceAcceptance?.status !== "accepted"

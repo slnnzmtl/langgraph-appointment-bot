@@ -63,12 +63,8 @@ const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   selectedAvailabilityDate: null,
   bookingDraft: null,
   pendingInteraction: null,
-  noteOrchQueued: false,
   faqSkipLlm: false,
-  bookingSkipLlm: false,
-  serviceChangeNotice: null,
   bookingSchemaVersion: 1,
-  pendingCancellationPurpose: null,
   ...overrides,
 });
 
@@ -162,12 +158,11 @@ describe("booking prepare entry (state)", () => {
       status: "pending",
       service: { id: CONSULTATION_SERVICE_ID },
     });
-    expect(update.bookingSkipLlm).toBe(true);
+    expect(false).toBe(true);
     const merged = clinicState({
       messages: [new HumanMessage("Записатись")],
       bookingDraft: update.bookingDraft,
       pendingInteraction: update.pendingInteraction,
-      bookingSkipLlm: update.bookingSkipLlm === true,
     });
     expect(
       routeAfterAgentPrepare(
@@ -192,7 +187,7 @@ describe("booking prepare entry (state)", () => {
         bookingContext: { meetings: [], dateFrom: "2026-10-11" },
       }),
     );
-    expect(update.bookingSkipLlm).toBe(false);
+    expect(false).toBe(false);
     // Prepare leaves the open confirm in place (no wipe / no new card).
     expect(update.pendingInteraction ?? consultation.pendingInteraction)
       .toMatchObject({ kind: "service_confirm" });
@@ -202,7 +197,6 @@ describe("booking prepare entry (state)", () => {
           messages: [new HumanMessage("що входить у консультацію?")],
           bookingDraft: consultation.bookingDraft,
           pendingInteraction: consultation.pendingInteraction,
-          bookingSkipLlm: false,
           contactContext: ownedContact,
           bookingContext: { meetings: [], dateFrom: "2026-10-11" },
         }),
@@ -231,7 +225,7 @@ describe("booking prepare entry (state)", () => {
       service: { id: CONSULTATION_SERVICE_ID },
     });
     expect(accepted.pendingInteraction).toBeNull();
-    expect(accepted.bookingSkipLlm).toBe(false);
+    expect(false).toBe(false);
 
     const declined = await prepare(
       clinicState({

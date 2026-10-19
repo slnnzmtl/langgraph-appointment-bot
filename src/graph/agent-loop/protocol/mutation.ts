@@ -116,7 +116,7 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     // patient-facing terminal outcome: the replacement create flow owns it.
     // Declined/failed/abandoned replacement cancellation outcomes are terminal,
     // but must retain their replacement origin for the correct response/menu.
-    if (state.pendingCancellationPurpose === "replacement") {
+    if (null === "replacement") {
       // Failed/blocked/abandoned replacement cancel must close the session —
       // leaving cancelling + originalCommand would replay a stale create later.
       return outcome === "declined"

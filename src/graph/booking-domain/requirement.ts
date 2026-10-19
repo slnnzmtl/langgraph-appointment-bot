@@ -1,8 +1,9 @@
+import { bookingDraftPhase, type BookingDraft } from "../booking-draft.js";
 import type { BookingReadModels } from "./decision.js";
-import type { BookingSessionV2 } from "./session.js";
 
 /**
- * Replaces stored BookingDraft.phase (Phase 1). Signature only in Phase 0.
+ * Workflow stage derived from the canonical {@link BookingDraft}. Replaces the
+ * stored `BookingDraft.phase` projection as the single source of requirement.
  */
 export type BookingRequirement =
   | "service"
@@ -15,16 +16,18 @@ export type BookingRequirement =
   | "none";
 
 export type NextBookingRequirement = (
-  session: BookingSessionV2,
+  draft: BookingDraft | null | undefined,
   readModels: BookingReadModels,
 ) => BookingRequirement;
 
 /**
- * Compile-only placeholder. Phase 1 replaces stored phase with this derivation.
- * Must not be called from production routing in Phase 0.
+ * Pure derivation over the draft. `null`/empty draft has no active requirement.
+ * `readModels` is accepted for signature symmetry with decideBooking but the
+ * requirement itself is a function of the draft only.
  */
-export const nextBookingRequirement: NextBookingRequirement = () => {
-  throw new Error(
-    "nextBookingRequirement is unused until DDD-273; do not call from production routing",
-  );
+export const nextBookingRequirement: NextBookingRequirement = (draft) => {
+  if (draft == null) {
+    return "none";
+  }
+  return bookingDraftPhase(draft);
 };

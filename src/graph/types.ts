@@ -26,6 +26,13 @@ export type ClinicSpecialists = {
 
 export type ClinicHandoffStatus = "ok" | "empty" | "max_steps" | "error";
 
+export type ClinicHandoffChoice = {
+  /** Telegram inline callback_data (exact choice id). */
+  id: string;
+  /** Visible button label (not used for matching). */
+  label: string;
+};
+
 export type ClinicHandoff = {
   agentId: string;
   agentName: string;
@@ -34,6 +41,11 @@ export type ClinicHandoff = {
   replyText?: string;
   /** Code-owned reply keyboard labels for this handoff (adapter markup channel). */
   replyButtons?: string[];
+  /**
+   * Booking choice cards: Telegram inline buttons with callback_data = id.
+   * When present, the adapter prefers inline markup over replyButtons.
+   */
+  replyChoices?: ClinicHandoffChoice[];
   /** When true, the next patient message must go through the supervisor. */
   yieldToSupervisor?: boolean;
 };

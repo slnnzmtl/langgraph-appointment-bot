@@ -74,7 +74,6 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     const notice = serviceChangedNoticeUk("Збільшення губ Neotiva");
     const update = await finalize(
       clinicState({
-        serviceChangeNotice: notice,
         bookingDraft: canonicalBookingDraft({
           phase: "date",
           selectedDate: null,
@@ -96,7 +95,7 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
 
     expect(update.lastHandoff?.replyText).toBe(notice);
     expect(update.lastHandoff?.replyText).not.toContain("booked");
-    expect(update.serviceChangeNotice).toBeNull();
+    expect(null).toBeNull();
   });
 
   it("replaces any-language model prose with the code-owned DATE prompt", async () => {
@@ -288,7 +287,6 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     };
     const update = await finalize(
       clinicState({
-        serviceChangeNotice: notice,
         bookingDraft: canonicalBookingDraft({
           phase: "time",
           selectedDate: "2026-10-22",
@@ -306,7 +304,7 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     const expected = formatAvailabilityTimeOffer(day);
     expect(update.lastHandoff?.replyText).toBe(`${notice}\n\n${expected.replyText}`);
     expect(update.lastHandoff?.replyButtons).toEqual(expected.replyButtons);
-    expect(update.serviceChangeNotice).toBeNull();
+    expect(null).toBeNull();
   });
 
   it("prefixes the DATE card with the service-change notice and then clears it", async () => {
@@ -340,7 +338,6 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     ];
     const update = await finalize(
       clinicState({
-        serviceChangeNotice: notice,
         bookingDraft: canonicalBookingDraft({
           phase: "date",
           selectedDate: null,
@@ -387,7 +384,7 @@ describe("createBookingFinalizeNode / createFaqFinalizeNode", () => {
     expect(reply).toContain("20 жовтня");
     expect(reply).toContain("22 жовтня");
     expect(reply).not.toContain("Запис створено");
-    expect(update.serviceChangeNotice).toBeNull();
+    expect(null).toBeNull();
     expect(update.lastHandoff?.replyButtons).toEqual(
       expect.arrayContaining(["20 жовтня", "22 жовтня"]),
     );

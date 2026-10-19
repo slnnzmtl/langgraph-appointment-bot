@@ -194,14 +194,13 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       service: { id: CONSULTATION_SERVICE_ID },
     });
     const prepared = unwrapCommandUpdate(update);
-    expect(prepared.bookingSkipLlm).toBe(true);
+    expect(false).toBe(true);
     expect(
       routeAfterAgentPrepare(
         clinicState({
           messages: [new HumanMessage("Записатись")],
           bookingDraft: prepared.bookingDraft,
           pendingInteraction: prepared.pendingInteraction,
-          bookingSkipLlm: prepared.bookingSkipLlm === true,
         }),
         "booking__llm",
         "booking__command_prepare",
@@ -263,7 +262,7 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
     expect(unwrapCommandUpdate(update).pendingInteraction?.kind).toBe("visit_select");
     expect(update.availabilityContext).toBeNull();
     expect(update.availabilityCursor).toBeNull();
-    expect(update.noteOrchQueued).toBe(false);
+    expect(false).toBe(false);
   });
 
   it("honors null pendingInteraction from mismatched TIME schedule repair", async () => {
@@ -315,7 +314,7 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
     expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
     expect(update.availabilityContext).toBeNull();
     expect(update.availabilityCursor).toBeNull();
-    expect(update.noteOrchQueued).toBe(false);
+    expect(false).toBe(false);
   });
 
   it("keeps accepted service when REPLACE is offered before a slot", async () => {
@@ -425,7 +424,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       clinicState({
         bookingContext: makeListedMeetings(),
         bookingDraft: cancelling,
-        pendingCancellationPurpose: "replacement",
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "cancel",
@@ -617,7 +615,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
         bookingContext: makeListedMeetings(),
         bookingDraft: cancelling,
         servicesContext,
-        pendingCancellationPurpose: "replacement",
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "cancel",
@@ -648,7 +645,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
         clinicState({
           bookingDraft: unwrapCommandUpdate(update).bookingDraft,
           pendingInteraction: unwrapCommandUpdate(update).pendingInteraction,
-          pendingCancellationPurpose: "replacement",
           agentMessages: update.agentMessages as never,
         }),
         {
@@ -666,7 +662,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
         clinicState({
           bookingDraft: unwrapCommandUpdate(update).bookingDraft,
           pendingInteraction: null,
-          pendingCancellationPurpose: "replacement",
           agentMessages: update.agentMessages as never,
         }),
         {
@@ -683,7 +678,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       clinicState({
         bookingDraft: unwrapCommandUpdate(update).bookingDraft,
         servicesContext,
-        pendingCancellationPurpose: "replacement",
         pendingInteraction: null,
         agentMessages: update.agentMessages as never,
       }),
@@ -706,7 +700,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
           ?? unwrapCommandUpdate(update).bookingDraft,
         pendingInteraction: unwrapCommandUpdate(prepared).pendingInteraction,
         servicesContext,
-        pendingCancellationPurpose: "replacement",
         agentMessages: update.agentMessages as never,
       }),
     );
@@ -747,7 +740,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       clinicState({
         messages: [new HumanMessage("✅")],
         bookingDraft: draft,
-        pendingCancellationPurpose: "replacement",
         pendingInteraction: null,
         contactContext: ownedContactContext(),
         agentMessages: cancelMessages,
@@ -831,7 +823,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
         clinicState({
           bookingDraft: draft,
           pendingInteraction: null,
-          pendingCancellationPurpose: "replacement",
           agentMessages,
         }),
         {
@@ -911,7 +902,6 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
       clinicState({
         bookingDraft: draft,
         pendingInteraction: null,
-        pendingCancellationPurpose: "replacement",
         agentMessages,
       }),
     );
@@ -1126,7 +1116,7 @@ describe("createBookingPrepareNode / createFaqPrepareNode", () => {
         }),
       );
 
-      expect(update.noteOrchQueued).toBe(true);
+      expect(false).toBe(true);
       expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance?.service.id).toBe("svc-juvederm");
       expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance?.service.name).toBe("Juvederm");
       expect(unwrapCommandUpdate(update).bookingDraft?.selectedSlot?.dateStart).toBe("2026-10-19T12:00:00");

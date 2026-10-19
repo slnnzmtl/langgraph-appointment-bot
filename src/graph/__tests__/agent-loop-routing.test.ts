@@ -161,7 +161,6 @@ describe("runtime-owned booking routing", () => {
     const state = clinicState({
       messages: [new HumanMessage("Neotiva")],
       agentMessages: [new HumanMessage("Neotiva")],
-      serviceChangeNotice: notice,
       bookingDraft: canonicalBookingDraft({
         phase: "date",
         selectedDate: null,

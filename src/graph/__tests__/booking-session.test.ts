@@ -856,7 +856,6 @@ describe("closedBookingSessionUpdate", () => {
     expect(update).toEqual({
       bookingDraft: null,
       pendingInteraction: null,
-      serviceChangeNotice: null,
     });
     expect(update).not.toHaveProperty("bookingNoteStatus");
     expect(update).not.toHaveProperty("selectedSlot");

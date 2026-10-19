@@ -472,8 +472,6 @@ export const createBookingNoteOrchestratorNode = (
     update: {
       bookingDraft,
       pendingInteraction: result.pendingInteraction,
-      noteOrchQueued: false,
-      serviceChangeNotice: result.serviceChangeNotice ?? null,
       ...(result.clearAvailability
         ? { availabilityContext: null, availabilityCursor: null }
         : {}),

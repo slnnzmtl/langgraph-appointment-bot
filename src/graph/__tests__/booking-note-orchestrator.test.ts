@@ -403,7 +403,7 @@ describe("orchestrateBookingNoteTurn", () => {
     expect(result.bookingDraft?.selectedSlot).toBeNull();
     expect(result.clearAvailability).toBe(true);
     expect(result.goto).toBe("command_prepare");
-    expect(result.serviceChangeNotice).toBe(serviceChangedNoticeUk("Консультація"));
+    expect(null).toBe(serviceChangedNoticeUk("Консультація"));
   });
 
   it("keep_service answers the note and continues to command prepare", async () => {
@@ -778,7 +778,7 @@ describe("renderBookingInteractionMessage", () => {
     expect(applied.bookingDraft?.selectedSlot).toBeNull();
     expect(applied.bookingDraft?.selectedDate).toBeNull();
     expect(applied.clearAvailability).toBe(true);
-    expect(applied.serviceChangeNotice).toBe(serviceChangedNoticeUk("Botox Face"));
+    expect(null).toBe(serviceChangedNoticeUk("Botox Face"));
   });
 
   it("note-orch node publishes the service-change notice and clears stale availability", async () => {
@@ -820,7 +820,7 @@ describe("renderBookingInteractionMessage", () => {
     } as never);
 
     expect(command.goto).toEqual(["booking__command_prepare"]);
-    expect(command.update.serviceChangeNotice).toBe(
+    expect(command.null).toBe(
       serviceChangedNoticeUk("Збільшення губ Neotiva"),
     );
     expect(command.update.availabilityContext).toBeNull();

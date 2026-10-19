@@ -82,14 +82,8 @@ export const finalizeBookingAi = (
     confirmationCleanup,
   } = input;
   let reply = input.reply;
-  let clearServiceChangeNotice = false;
-  const consumeServiceChangeNotice = (): string | null => {
-    const notice = input.consumeServiceChangeNotice();
-    if (notice != null) {
-      clearServiceChangeNotice = true;
-    }
-    return notice;
-  };
+  const consumeServiceChangeNotice = (): string | null =>
+    input.consumeServiceChangeNotice();
 
   const primary = applyBookingPrimaryReply({
     state,
@@ -153,7 +147,6 @@ export const finalizeBookingAi = (
       ...synthesis.serviceOfferUpdate,
       ...availabilityInteractionUpdate,
       ...confirmationCleanup,
-      ...(clearServiceChangeNotice ? { serviceChangeNotice: null } : {}),
       supervisorIntent: null,
       ...reply.patch,
     },
@@ -319,13 +312,7 @@ const createSpecialistFinalizeNode = (
       replyText: text.trim(),
     };
 
-    const consumeServiceChangeNotice = (): string | null => {
-      const notice = state.serviceChangeNotice;
-      if (notice == null || notice.length === 0) {
-        return null;
-      }
-      return notice;
-    };
+    const consumeServiceChangeNotice = (): string | null => null;
 
     if (status === "error" && isModelFailureMessage(tagged)) {
       const failureButtons = specialist.modelFailureButtons(state);
