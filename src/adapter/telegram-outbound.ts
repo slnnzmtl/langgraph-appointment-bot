@@ -252,11 +252,10 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     const prefix = handoffText.length > 0
       ? extractReplyButtons(handoffText).text.trim()
       : "";
+    // Ignore leftover replyChoices from a prior card — HITL is always ✅/❌ reply kb.
     return {
       text: confirmText,
-      reply_markup: inlineChoices.length > 0
-        ? buildInlineChoiceKeyboard(inlineChoices)
-        : buildConfirmKeyboard(),
+      reply_markup: buildConfirmKeyboard(),
       ...(prefix.length > 0 && prefix !== confirmText ? { prefixText: prefix } : {}),
     };
   }

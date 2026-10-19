@@ -6,6 +6,7 @@
  * reduceBookingDraft. Informational tool results are allowlisted facts only.
  */
 import type { BaseMessage } from "@langchain/core/messages";
+import { Overwrite } from "@langchain/langgraph";
 
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { asJsonRecord } from "../../shared/json-record.js";
@@ -28,6 +29,7 @@ import { availabilityQueryFromContext } from "../../tools/availability-tools.js"
 import { normalizeContactLookupResult } from "../../tools/contact-tools.js";
 import { classifyPhoneLookupResult } from "../contact-command.js";
 import { labelIdFor } from "../../shared/message-content.js";
+import { interpretInteractionReply } from "../booking-session.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
 import type { InterpretBookingTurn } from "./booking-turn-interpreter.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
@@ -289,7 +291,29 @@ export const effectResultFromToolMessages = (
     if (record?.error != null || body.startsWith("Error:")) {
       return { effectId: expectedEffectId, kind: "availability", outcome: "error" };
     }
-    const rawDays = Array.isArray(record?.days) ? record.days : [];
+    const parseSlots = (raw: unknown): Array<{ id: string; label: string }> =>
+      Array.isArray(raw)
+        ? raw.flatMap((slot) => {
+          if (slot == null || typeof slot !== "object") {
+            return [];
+          }
+          const s = slot as { id?: unknown; label?: unknown };
+          if (typeof s.id !== "string" || typeof s.label !== "string") {
+            return [];
+          }
+          return [{ id: s.id, label: s.label }];
+        })
+        : [];
+    // Multi-day `{ days }` and single-day `{ date, slots }` shapes (same as normalize).
+    const rawDays = Array.isArray(record?.days)
+      ? record.days
+      : typeof record?.date === "string" && Array.isArray(record?.slots)
+        ? [{
+          date: record.date,
+          ...(typeof record.dayLabel === "string" ? { dayLabel: record.dayLabel } : {}),
+          slots: record.slots,
+        }]
+        : [];
     const days = rawDays.flatMap((day) => {
       if (day == null || typeof day !== "object") {
         return [];
@@ -302,22 +326,10 @@ export const effectResultFromToolMessages = (
       if (typeof row.date !== "string") {
         return [];
       }
-      const slots = Array.isArray(row.slots)
-        ? row.slots.flatMap((slot) => {
-          if (slot == null || typeof slot !== "object") {
-            return [];
-          }
-          const s = slot as { id?: unknown; label?: unknown };
-          if (typeof s.id !== "string" || typeof s.label !== "string") {
-            return [];
-          }
-          return [{ id: s.id, label: s.label }];
-        })
-        : [];
       return [{
         date: row.date,
         ...(typeof row.dayLabel === "string" ? { dayLabel: row.dayLabel } : {}),
-        slots,
+        slots: parseSlots(row.slots),
       }];
     });
     const slotCount = days.reduce((sum, day) => sum + day.slots.length, 0);
@@ -529,10 +541,10 @@ export const createBookingDecideNode = (
 
     let effectResult: EffectResult | null = null;
     if (!toolsStillPending && pendingEffect != null) {
-      // Consume only a matching ToolMessage. Missing match is a patient turn
-      // (stale pendingEffect, HITL interrupt before a result). Fail-closed
-      // only when a matching message exists but cannot be translated.
-      effectResult = effectResultFromToolMessages(state.agentMessages, pendingEffect);
+      // Open effect: consume a matching ToolMessage, or fail closed.
+      // Do not re-interpret patient text («Так») while the fetch is still open.
+      effectResult = effectResultFromToolMessages(state.agentMessages, pendingEffect)
+        ?? failClosedForPending(pendingEffect);
     }
 
     let result;
@@ -566,11 +578,17 @@ export const createBookingDecideNode = (
             : state.bookingDraft?.phase === "details"
               ? ("phoneNumber" as const)
               : undefined;
+        // Reply-keyboard taps send labels; inline callbacks send ids.
+        // Prefer inboundChoiceId; otherwise map the open card label → choice id.
+        const fromInbound = state.inboundChoiceId;
+        const fromChip = fromInbound == null
+          ? interpretInteractionReply(state.pendingInteraction, rawText)
+          : null;
+        const callbackChoiceId = fromInbound
+          ?? (fromChip?.kind === "choice" ? fromChip.choiceId : undefined);
         const interpretInput = {
           rawText,
-          ...(state.inboundChoiceId != null
-            ? { callbackChoiceId: state.inboundChoiceId }
-            : {}),
+          ...(callbackChoiceId != null ? { callbackChoiceId } : {}),
           ...(state.bookingDraft?.offeredChoiceIds != null
             ? { offeredChoiceIds: state.bookingDraft.offeredChoiceIds }
             : {}),
@@ -612,13 +630,16 @@ export const createBookingDecideNode = (
       previousInteraction: state.pendingInteraction ?? null,
     });
 
+    // Overwrite the tool tape. `agentMessages: []` is a no-op under the messages
+    // reducer, so stale ToolMessages would keep recycled effect ids looking
+    // fulfilled and skip booking__tools (date prompt with no chips).
     const update: ClinicStateUpdate = {
       bookingDraft: draft,
       bookingSchemaVersion: 2,
       inboundChoiceId: null,
       bookingDecision: result.decision,
       pendingInteraction,
-      agentMessages: [],
+      agentMessages: new Overwrite([] as BaseMessage[]),
     };
 
     if (
@@ -631,8 +652,9 @@ export const createBookingDecideNode = (
         id: stamped.id,
         name: stamped.name,
         args: stamped.args,
+        type: "tool_call",
       }], stamped.action);
-      update.agentMessages = appendOrReplacePendingToolCall([], ai);
+      update.agentMessages = new Overwrite(appendOrReplacePendingToolCall([], ai));
     }
 
     return update;

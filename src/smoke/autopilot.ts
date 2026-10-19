@@ -7,7 +7,10 @@ import {
   OTHER_DATE_LABEL,
   SERVICE_OR_NOTE_KEEP_LABEL_UK,
 } from "../shared/clinic-constants.js";
-import type { PendingInteraction } from "../graph/booking-session.js";
+import {
+  interactionChoiceEquals,
+  type PendingInteraction,
+} from "../graph/booking-session.js";
 
 export type AutopilotDecision = "confirm" | "decline";
 
@@ -77,7 +80,8 @@ export const nextAutopilotInput = (
 
   switch (interaction.kind) {
     case "service_confirm": {
-      const accept = interaction.choices.find((choice) => choice.id === "accept");
+      const accept = interaction.choices.find((choice) =>
+        interactionChoiceEquals(choice.id, "accept"));
       return accept?.label ?? "Так";
     }
     case "date_select":
@@ -96,7 +100,8 @@ export const nextAutopilotInput = (
       if (options.noteText?.trim()) {
         return options.noteText.trim();
       }
-      const skip = interaction.choices.find((choice) => choice.id === "skip");
+      const skip = interaction.choices.find((choice) =>
+        interactionChoiceEquals(choice.id, "skip"));
       return skip?.label ?? INTENT_SKIP_LABEL;
     }
     case "mutation_confirm":

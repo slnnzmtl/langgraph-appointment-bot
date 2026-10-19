@@ -126,6 +126,30 @@ describe("decideBooking atomic contract", () => {
     expect(result.decision.facts.address).toBe("вул. Прикладна 1");
   });
 
+  it("decline_pending_service abandons and prepares list_services (not need_service)", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+      accepted: false,
+    });
+    expect(draft?.serviceAcceptance?.status).toBe("pending");
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { serviceIntent: { kind: "decline_pending_service" } },
+      },
+      READ_MODELS,
+    );
+
+    expect(result.events.some((e) => e.type === "draft_abandoned")).toBe(true);
+    expect(result.decision.tag).toBe("effect");
+    expect(result.decision.pendingEffect?.effect.kind).toBe("list_services");
+    expect(result.decision.card?.kind).not.toBe("clarification");
+    expect(result.decision.reason).not.toBe("need_service");
+  });
+
   it("reuses the prepared effect id when re-entering the same mutation confirm", () => {
     let draft: BookingDraft | null = draftAtDetailsWithPhone();
     draft = reduceBookingDraft(draft, {

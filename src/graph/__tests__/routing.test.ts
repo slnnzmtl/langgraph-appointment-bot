@@ -105,7 +105,7 @@ describe("agent loop routing", () => {
         })).toBe("faq__llm");
   });
 
-  it("routes booking tools to decide only with a matching ToolMessage", () => {
+  it("routes booking tools to decide while an effect is open", () => {
     const names = {
       decideName: "booking__decide",
       toolsName: "booking__tools",
@@ -148,6 +148,7 @@ describe("agent loop routing", () => {
       ),
     ).toBe("booking__tools");
 
+    // Missing ToolMessage still returns to decide (fail-closed), never respond.
     expect(
       routeAfterBookingTools(
         {
@@ -156,7 +157,7 @@ describe("agent loop routing", () => {
         } as never,
         names,
       ),
-    ).toBe("booking__respond");
+    ).toBe("booking__decide");
 
     expect(
       routeAfterBookingTools(
@@ -173,6 +174,23 @@ describe("agent loop routing", () => {
             }),
           ],
           bookingDraft: { pendingEffect: { id: pendingId } },
+        } as never,
+        names,
+      ),
+    ).toBe("booking__decide");
+
+    // Effect cleared → respond.
+    expect(
+      routeAfterBookingTools(
+        {
+          agentMessages: [
+            new ToolMessage({
+              content: "{}",
+              tool_call_id: pendingId,
+              name: "create_meeting",
+            }),
+          ],
+          bookingDraft: { pendingEffect: null },
         } as never,
         names,
       ),

@@ -101,6 +101,21 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
           `booking-free-text-typed-slot: expected DATE/TIME after Так, got ${afterAcceptKind ?? "null"}`,
         );
       }
+      const afterAcceptChip = accepted.state.pendingInteraction?.choices.find(
+        (choice) => choice.id !== "other_date"
+          && choice.id !== "earlier"
+          && choice.id !== "later",
+      );
+      if (afterAcceptChip == null) {
+        throw new SmokeAssertError(
+          "booking-free-text-typed-slot: no date/time chip on interaction after Так",
+        );
+      }
+      if (!accepted.buttons.includes(afterAcceptChip.label)) {
+        throw new SmokeAssertError(
+          `booking-free-text-typed-slot: chip "${afterAcceptChip.label}" missing from keyboard after Так [${accepted.buttons.join(" | ") || "none"}]`,
+        );
+      }
       // present_availability_slots is a graph tool; smoke records MCP only.
       // get_working_time proves the availability CRM path ran after Так.
       expectCalled(
@@ -117,16 +132,7 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
 
       let dated = accepted;
       if (dated.state.pendingInteraction?.kind === "date_select") {
-        const dayChoice = dated.state.pendingInteraction.choices.find(
-          (choice) => choice.id !== "other_date"
-            && choice.id !== "earlier"
-            && choice.id !== "later",
-        );
-        if (dayChoice == null) {
-          throw new SmokeAssertError(
-            "booking-free-text-typed-slot: no day choice on DATE interaction",
-          );
-        }
+        const dayChoice = afterAcceptChip;
         dated = await bundle.session.say(dayChoice.label);
         if (dated.state.bookingDraft?.selectedDate !== dayChoice.id) {
           throw new SmokeAssertError(

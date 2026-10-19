@@ -76,11 +76,12 @@ const toolArgsForEffect = (pending: PendingEffect): Record<string, unknown> => {
   const effect = pending.effect;
   switch (effect.kind) {
     case "present_availability":
+      // Tool schema uses `direction` (not domain `queryKind`).
       return {
-        queryKind: effect.queryKind,
+        direction: effect.queryKind,
         ...(effect.date != null ? { date: effect.date } : {}),
         ...(effect.preferredTime != null ? { preferredTime: effect.preferredTime } : {}),
-        ...(effect.revalidate === true ? { revalidate: true } : {}),
+        ...(effect.revalidate === true ? { forceRefresh: true } : {}),
       };
     case "lookup_contact_by_phone":
       return { phoneNumber: effect.phoneNumber };

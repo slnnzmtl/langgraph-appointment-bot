@@ -103,4 +103,45 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
     expect(patch.controlIntent).toBeUndefined();
     expect(patch.serviceIntent?.kind).toBe("catalog_browse");
   });
+
+  it("maps reply-keyboard Так / Обрати іншу процедуру while awaiting service confirm", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Так",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+      }).serviceIntent,
+    ).toEqual({ kind: "confirm_pending_service" });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Обрати іншу процедуру",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+      }).serviceIntent,
+    ).toEqual({ kind: "decline_pending_service" });
+  });
+
+  it("keeps an open offer when free text invents catalog/decline", () => {
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "catalog_browse", serviceQuery: "яку послугу" },
+        { rawText: "яку послугу", awaitingServiceConfirm: true },
+      ),
+    ).toEqual({});
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "named_procedure", serviceQuery: "ботокс" },
+        { rawText: "ботокс", awaitingServiceConfirm: true },
+      ),
+    ).toEqual({});
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "decline_pending_service" },
+        { rawText: "Обрати іншу процедуру", awaitingServiceConfirm: true },
+      ).serviceIntent,
+    ).toEqual({ kind: "decline_pending_service" });
+  });
 });

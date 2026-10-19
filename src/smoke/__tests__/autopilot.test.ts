@@ -60,6 +60,40 @@ describe("nextAutopilotInput", () => {
     ).toBe("Так");
   });
 
+  it("accepts kernel offer_accept / note_skip ids", () => {
+    expect(
+      nextAutopilotInput(
+        {
+          pendingInteraction: {
+            kind: "service_confirm",
+            service: {
+              id: CONSULTATION_SERVICE_ID,
+              name: "Консультація",
+              source: "catalog",
+            },
+            choices: [
+              { id: "offer_accept", label: "Так" },
+              { id: "offer_choose_other", label: "Обрати іншу процедуру" },
+            ],
+          },
+        },
+        base,
+      ),
+    ).toBe("Так");
+
+    expect(
+      nextAutopilotInput(
+        {
+          pendingInteraction: {
+            kind: "visit_note",
+            choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+          },
+        },
+        base,
+      ),
+    ).toBe(INTENT_SKIP_LABEL);
+  });
+
   it("picks first real date, skipping Інша дата", () => {
     expect(
       nextAutopilotInput(

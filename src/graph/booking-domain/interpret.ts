@@ -7,6 +7,7 @@
  * this module stays free of LangChain / LLM connectors.
  */
 
+import { labelIdFor } from "../../shared/message-content.js";
 import { normalizeClinicPhone } from "../../shared/phone.js";
 import type { UnderstoodBookingTurn } from "./turn.js";
 
@@ -59,6 +60,17 @@ export const interpretBookingTurnDeterministic = (
   // Strict structural: raw text equals an offered choice id (e.g. typed ISO date).
   if (offered.has(raw)) {
     return interpretExactChoiceId(raw, input);
+  }
+
+  // Reply-keyboard taps on an open offer use labels, not callback ids.
+  if (input.awaitingServiceConfirm === true) {
+    const labelId = labelIdFor(raw);
+    if (labelId === "offerAccept") {
+      return { serviceIntent: { kind: "confirm_pending_service" } };
+    }
+    if (labelId === "offerChooseOther") {
+      return { serviceIntent: { kind: "decline_pending_service" } };
+    }
   }
 
   // Free prose is not classified here — caller must use the structured LLM.
@@ -256,6 +268,33 @@ export const normalizeBookingTurnClassification = (
     patch.informationalQuestion = "price";
   } else if (raw.sideQuestionKind === "catalog") {
     patch.serviceIntent = patch.serviceIntent ?? { kind: "catalog_browse" };
+  }
+
+  // Open offer: only accept / choose-other / calendar date may advance.
+  // Free text like «яку послугу» must keep the confirm card (empty patch).
+  if (input.awaitingServiceConfirm === true) {
+    const okService =
+      patch.serviceIntent?.kind === "confirm_pending_service"
+      || patch.serviceIntent?.kind === "decline_pending_service";
+    const okSchedule =
+      patch.scheduleIntent?.kind === "date"
+      || patch.scheduleIntent?.kind === "date_and_time";
+    if (!okService) {
+      delete patch.serviceIntent;
+    }
+    if (!okSchedule) {
+      delete patch.scheduleIntent;
+    }
+    delete patch.note;
+    delete patch.informationalQuestion;
+    if (
+      patch.serviceIntent == null
+      && patch.scheduleIntent == null
+      && patch.controlIntent == null
+      && patch.contactFacts == null
+    ) {
+      return {};
+    }
   }
 
   return patch;

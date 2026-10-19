@@ -730,9 +730,12 @@ export const decideBooking = (
         accepted: false,
       });
     } else if (service?.kind === "decline_pending_service") {
+      // Same as catalog_browse: wipe the pending offer, then list services.
+      // Do not emit need_service clarification (projects to a null keyboard).
       emit({ type: "draft_abandoned" });
-      emitDecision({ kind: "clarification", reason: "need_service" });
-      return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
+      return runEffect("run_effect", {
+        kind: "list_services",
+      });
     }
 
     const schedule = patch.scheduleIntent;

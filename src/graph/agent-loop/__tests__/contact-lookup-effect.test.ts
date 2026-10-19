@@ -1,4 +1,5 @@
 import { HumanMessage, ToolMessage } from "@langchain/core/messages";
+import { Overwrite } from "@langchain/langgraph";
 import { describe, expect, it } from "vitest";
 
 import { CONSULTATION_SERVICE_ID } from "../../../shared/clinic-constants.js";
@@ -268,24 +269,23 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
     expect(update.bookingDecision?.pendingEffect).toBeUndefined();
     expect(update.bookingDecision?.card?.kind).toBe("contact_field");
     // Must not stamp another find_contact_by_phone in this hop.
-    expect(update.agentMessages ?? []).toEqual([]);
+    expect(update.agentMessages).toBeInstanceOf(Overwrite);
+    expect((update.agentMessages as Overwrite<unknown[]>).value).toEqual([]);
   });
 
-  it("does not fail-close when pendingEffect has no matching ToolMessage", async () => {
+  it("fail-closes when pendingEffect has no matching ToolMessage", async () => {
     const phone = "+380931233323";
     const pending = lookupPending(phone, "eff_8_lookup_contact_by_phone");
     const draft = {
       ...draftAwaitingLookup(phone),
       pendingEffect: pending,
     };
-    let interpreted = false;
     const node = createBookingDecideNode({
       interpretTurn: async () => {
-        interpreted = true;
-        return {};
+        throw new Error("must not re-interpret while effect is open");
       },
     });
-    await node({
+    const update = await node({
       messages: [new HumanMessage(phone)],
       agentMessages: [],
       bookingDraft: draft,
@@ -293,6 +293,8 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       availabilityContext: null,
     } as never);
 
-    expect(interpreted).toBe(true);
+    // Contact lookup error → ask for phone again, do not re-mint lookup.
+    expect(update.bookingDecision?.pendingEffect).toBeUndefined();
+    expect(update.bookingDecision?.card?.kind).toBe("contact_field");
   });
 });

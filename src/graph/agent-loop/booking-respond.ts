@@ -1,12 +1,13 @@
 /**
  * Non-authoritative booking response node.
  * Receives a closed semantic decision, binds no tools, emits patient text only.
- * Buttons stay code-owned from the decision card.
+ * Buttons stay code-owned from the decision card (reply keyboard only).
  */
 
 import { z } from "zod";
 
 import { trackEvent } from "../../analytics/track.js";
+import { PATIENT_FALLBACK_MESSAGE } from "../../shared/clinic-constants.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import type { BookingDecision } from "../booking-domain/decision.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -69,6 +70,7 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
     }
 
     const choices = replyChoicesFromCard(decision.card);
+    const replyButtons = choices.map((choice) => choice.label);
     const fallback = bookingResponseFallback({
       intent: decision.intent,
       facts: decision.facts,
@@ -84,13 +86,41 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           agentName,
           status: "ok",
           replyText: bookingSuccessText(decision.facts),
-          replyButtons: choices.map((choice) => choice.label),
-          replyChoices: choices,
+          replyButtons,
         },
       };
     }
 
-    // Non-success intents: model may help, but never ship outcome claims.
+    // Open cards: one code-owned copy path (no LLM rewrite of the chip prompt).
+    if (decision.card != null) {
+      return {
+        bookingDecision: null,
+        lastHandoff: {
+          agentId: BOOKING_AGENT_ID,
+          agentName,
+          status: "ok",
+          replyText: fallback,
+          replyButtons,
+        },
+      };
+    }
+
+    // Open effects belong in decide→tools, not here. Belt-and-suspenders if
+    // routing regresses: never ask for a date/time with an empty keyboard.
+    if (decision.tag === "effect") {
+      return {
+        bookingDecision: null,
+        lastHandoff: {
+          agentId: BOOKING_AGENT_ID,
+          agentName,
+          status: "ok",
+          replyText: PATIENT_FALLBACK_MESSAGE,
+          replyButtons: [],
+        },
+      };
+    }
+
+    // Card-less intents: model may help, but never ship outcome claims.
     let text = fallback;
     try {
       const result = await chain.invoke([
@@ -126,6 +156,7 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
     }
 
     // Intent "success" without terminal/committed path is also a false claim.
+    // Do not reuse bookingSuccessText (that is only for committed terminal success).
     if (decision.intent === "success" && !isCommittedSuccess(decision)) {
       trackEvent("false_success_claim", {
         rule: "intent_success_without_commit",
@@ -133,7 +164,7 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
         agent: BOOKING_AGENT_ID,
         intent: decision.intent,
       });
-      text = fallback;
+      text = bookingResponseFallback({ intent: "idle" });
     }
 
     return {
@@ -143,8 +174,7 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
         agentName,
         status: "ok",
         replyText: text,
-        replyButtons: choices.map((choice) => choice.label),
-        replyChoices: choices,
+        replyButtons,
       },
     };
   };

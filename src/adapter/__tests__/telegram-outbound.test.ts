@@ -247,6 +247,62 @@ describe("interpretInvokeResult reply selection", () => {
     ]);
   });
 
+  it("ignores leftover replyChoices on confirm interrupt (always ✅/❌ reply keyboard)", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "Підібрати вільний час на консультацію?",
+        replyButtons: ["Так", "Обрати іншу процедуру"],
+        replyChoices: [
+          { id: "offer_accept", label: "Так" },
+          { id: "offer_choose_other", label: "Обрати іншу процедуру" },
+        ],
+      },
+      messages: [],
+      __interrupt__: [
+        {
+          value: {
+            type: "confirm_booking",
+            draft: {
+              name: "Консультація - Daniel",
+              dateStart: "2026-10-21T10:00:00",
+              dateEnd: "2026-10-21T10:30:00",
+              confirmMessage: "Підтвердити запис?",
+            },
+          },
+        },
+      ],
+    });
+
+    expect(asReply(result.reply_markup).keyboard).toEqual([
+      [{ text: CONFIRM_YES_LABEL }, { text: CONFIRM_NO_LABEL }],
+      [{ text: MAIN_MENU_LABEL }],
+    ]);
+    expect(
+      (result.reply_markup as { inline_keyboard?: unknown }).inline_keyboard,
+    ).toBeUndefined();
+  });
+
+  it("uses replyButtons reply keyboard when replyChoices are absent", () => {
+    const result = interpretInvokeResult({
+      lastHandoff: {
+        agentId: "booking",
+        agentName: "Booking",
+        status: "ok",
+        replyText: "Підібрати вільний час на консультацію?",
+        replyButtons: ["Так", "Обрати іншу процедуру"],
+      },
+      messages: [],
+    });
+
+    expect(asReply(result.reply_markup).keyboard).toEqual([
+      [{ text: "Так" }, { text: "Обрати іншу процедуру" }],
+      [{ text: MAIN_MENU_LABEL }],
+    ]);
+  });
+
   it("strips an accidental reply_buttons trailer from visible text without using it as markup", () => {
     const result = interpretInvokeResult({
       lastHandoff: {

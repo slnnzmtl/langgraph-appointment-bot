@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { BOOKING_OFFER_MENU, CONSULTATION_SERVICE_ID } from "../../../shared/clinic-constants.js";
+import {
+  BOOKING_OFFER_MENU,
+  CONSULTATION_SERVICE_ID,
+  SERVICE_CONFIRM_CONSULTATION_UK,
+} from "../../../shared/clinic-constants.js";
 import { setTrackEventForTests } from "../../../analytics/track.js";
 import type { BookingDecision } from "../../booking-domain/decision.js";
 import type { ILLMConnector } from "../../types.js";
@@ -28,27 +32,47 @@ const llmReturning = (text: string): ILLMConnector => ({
   }),
 } as unknown as ILLMConnector);
 
-describe("booking__respond false-success gate", () => {
-  it("rejects outcome claims on confirm_service and keeps card buttons", async () => {
-    const events: Array<{ name: string; props: Record<string, unknown> }> = [];
-    setTrackEventForTests((name, props) => {
-      events.push({ name, props });
+describe("booking__respond card copy + markup", () => {
+  it("ships code-owned confirm_service copy and replyButtons only (no replyChoices)", async () => {
+    const invoke = vi.fn(async () => ({
+      text: "Ви обрали послугу. Будь ласка, оберіть зручну дату та час для запису.",
+    }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const decision = confirmServiceDecision();
+    const update = await node({
+      bookingDecision: decision,
+      bookingDraft: null,
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toBe(SERVICE_CONFIRM_CONSULTATION_UK);
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
+    expect(update.lastHandoff?.replyChoices).toBeUndefined();
+  });
+
+  it("rejects bare intent success without terminal commit", async () => {
+    const events: Array<{ name: string }> = [];
+    setTrackEventForTests((name) => {
+      events.push({ name });
     });
     try {
       const node = createBookingRespondNode({
-        llm: llmReturning("Ваш запис успішно підтверджено. Чекаємо на вас у нашій клініці!"),
+        llm: llmReturning("ok"),
       });
-      const decision = confirmServiceDecision();
       const update = await node({
-        bookingDecision: decision,
-        bookingDraft: null,
+        bookingDecision: {
+          tag: "ask",
+          intent: "success",
+          facts: {},
+          card: null,
+        },
       } as never);
 
-      expect(update.lastHandoff?.replyText).not.toMatch(/підтверджено/i);
-      expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
-      expect(update.lastHandoff?.replyChoices?.map((c) => c.id)).toEqual(
-        replyChoicesFromCard(decision.card).map((c) => c.id),
-      );
+      expect(update.lastHandoff?.replyText).not.toMatch(/підтверджено|готово/i);
       expect(events.some((e) => e.name === "false_success_claim")).toBe(true);
     } finally {
       setTrackEventForTests(null);
@@ -76,39 +100,7 @@ describe("booking__respond false-success gate", () => {
     expect(update.lastHandoff?.replyText).toContain("Готово");
     expect(update.lastHandoff?.replyText).toContain("Консультація");
     expect(update.lastHandoff?.replyText).toContain("2026-10-21");
-  });
-
-  it("does not treat bare intent success without terminal commit as success prose", async () => {
-    const events: Array<{ name: string }> = [];
-    setTrackEventForTests((name) => {
-      events.push({ name });
-    });
-    try {
-      const node = createBookingRespondNode({
-        llm: llmReturning("ok"),
-      });
-      const update = await node({
-        bookingDecision: {
-          tag: "ask",
-          intent: "success",
-          facts: {},
-          card: {
-            kind: "service_confirm",
-            serviceId: CONSULTATION_SERVICE_ID,
-            choiceIds: ["offer_accept", "offer_choose_other"],
-            labels: {
-              offer_accept: BOOKING_OFFER_MENU[0],
-              offer_choose_other: BOOKING_OFFER_MENU[1],
-            },
-          },
-        },
-      } as never);
-
-      expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_OFFER_MENU]);
-      expect(events.some((e) => e.name === "false_success_claim")).toBe(true);
-    } finally {
-      setTrackEventForTests(null);
-    }
+    expect(update.lastHandoff?.replyChoices).toBeUndefined();
   });
 });
 

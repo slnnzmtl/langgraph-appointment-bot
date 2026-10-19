@@ -1,6 +1,5 @@
 import { FAQ_AGENT_ID } from "../types.js";
 import {
-  findToolMessageByCallId,
   hasPendingToolCalls,
   lastMessageRequestsTools,
 } from "../tool-routing.js";
@@ -141,8 +140,9 @@ export type RouteAfterBookingToolsOptions = {
 };
 
 /**
- * Booking tools → decide only after a ToolMessage whose tool_call_id matches
- * pendingEffect.id. No matching result (HITL interrupt, leftover stamp) → respond.
+ * Booking tools → decide while an effect is open. Matching ToolMessage is
+ * consumed in decide; missing match fail-closes there. Never dump an open
+ * effect into respond (that shipped present_dates copy with an empty keyboard).
  */
 export const routeAfterBookingTools = (
   state: ClinicState,
@@ -151,8 +151,7 @@ export const routeAfterBookingTools = (
   if (hasPendingToolCalls(state.agentMessages)) {
     return options.toolsName;
   }
-  const pendingId = state.bookingDraft?.pendingEffect?.id;
-  if (findToolMessageByCallId(state.agentMessages, pendingId) != null) {
+  if (state.bookingDraft?.pendingEffect?.id != null) {
     return options.decideName;
   }
   return options.respondName;
