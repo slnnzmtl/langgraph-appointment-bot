@@ -33,11 +33,25 @@ export type BookingEffect =
   | { kind: "link_telegram_contact"; contactId: string } // tool: link_telegram_to_contact
   | {
       kind: "create_meeting";
-      payload: Readonly<Record<string, unknown>>;
+      payload: {
+        serviceId: string;
+        contactId: string;
+        dateStart: string;
+        dateEnd: string;
+        name: string;
+        confirmMessage: string;
+        description?: string;
+      };
     }
   | {
       kind: "reschedule_meeting";
-      payload: Readonly<Record<string, unknown>>;
+      payload: {
+        meetingId: string;
+        dateStart: string;
+        dateEnd: string;
+        confirmMessage: string;
+        name?: string;
+      };
     }
   | {
       kind: "cancel_meeting";
@@ -101,6 +115,8 @@ export type EffectResult =
       kind: "contact_write";
       outcome: "created" | "updated" | "linked" | "failed" | "error";
       contactId?: string;
+      /** True when CRM missingFields is empty after the write. */
+      crmComplete?: boolean;
     }
   | {
       effectId: string;

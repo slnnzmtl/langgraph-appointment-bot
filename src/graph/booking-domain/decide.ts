@@ -2,7 +2,10 @@ import {
   BOOKING_OFFER_MENU,
   CLINIC_ADDRESS,
   CONSULTATION_SERVICE_ID,
+  CONSULTATION_SERVICE_NAME_UK,
+  CREATE_CONFIRMATION_UK,
   OTHER_DATE_LABEL,
+  RESCHEDULE_CONFIRMATION_UK,
 } from "../../shared/clinic-constants.js";
 import {
   nextMissingContactField,
@@ -42,6 +45,29 @@ const sameEffect = (a: BookingEffect, b: BookingEffect): boolean =>
 
 const localDate = (iso: string): string => iso.slice(0, 10);
 const localTime = (iso: string): string => iso.slice(11, 16);
+
+/** Human-readable service label for CRM meeting titles — never a raw CRM id. */
+const serviceLabelForMeeting = (w: BookingDraft): string => {
+  const accepted = w.serviceAcceptance?.service;
+  const named = accepted?.name?.trim();
+  if (named != null && named.length > 0) {
+    return named;
+  }
+  if (accepted?.id === CONSULTATION_SERVICE_ID) {
+    return CONSULTATION_SERVICE_NAME_UK;
+  }
+  return "Запис";
+};
+
+/** CRM meeting title: "[service name] - [first last]" (service alone if names missing). */
+const createMeetingName = (w: BookingDraft): string => {
+  const service = serviceLabelForMeeting(w);
+  const details = w.contactDetails ?? {};
+  const first = details.firstName?.trim() ?? "";
+  const last = details.lastName?.trim() ?? "";
+  const patient = [first, last].filter((part) => part.length > 0).join(" ");
+  return patient.length > 0 ? `${service} - ${patient}` : service;
+};
 
 /**
  * Pure booking decision kernel (atomic cutover).
@@ -196,13 +222,28 @@ export const decideBooking = (
     return mutationConfirmDecision(w2, action, pending.id, pending);
   };
 
-  /** Contact identity ladder after phone is known and contactId is missing. */
+  /** Contact identity ladder. Prefetch may already set contactId (adapter seed). */
   const decideContactDetails = (): BookingDecision => {
     const w = ctx.working;
     if (w == null) {
       return { tag: "reply", intent: "idle", facts: {}, card: null };
     }
     const details: BookingContactDetails = w.contactDetails ?? {};
+
+    // Owned / linked contact: skip phone lookup; only ask for missing ladder fields.
+    if (w.contactId != null) {
+      const missingOwned = nextMissingContactField(details);
+      if (missingOwned != null) {
+        emitDecision({ kind: "clarification", reason: `need_${missingOwned}` });
+        return ask(
+          CONTACT_INTENT[missingOwned],
+          { kind: "contact_field", field: missingOwned },
+          `need_${missingOwned}`,
+        );
+      }
+      return decideFromRequirement();
+    }
+
     const phone = details.phoneNumber?.trim();
     if (phone == null || phone === "") {
       emitDecision({ kind: "clarification", reason: "need_phone" });
@@ -362,6 +403,10 @@ export const decideBooking = (
                 meetingId: w.rescheduleTarget.id,
                 dateStart: w.selectedSlot.dateStart,
                 dateEnd: w.selectedSlot.dateEnd,
+                confirmMessage: RESCHEDULE_CONFIRMATION_UK,
+                ...(w.rescheduleTarget.name != null
+                  ? { name: w.rescheduleTarget.name }
+                  : {}),
               },
             },
             "reschedule",
@@ -380,6 +425,8 @@ export const decideBooking = (
                 contactId: w.contactId,
                 dateStart: w.selectedSlot.dateStart,
                 dateEnd: w.selectedSlot.dateEnd,
+                name: createMeetingName(w),
+                confirmMessage: CREATE_CONFIRMATION_UK,
                 ...(w.note.value ? { description: w.note.value } : {}),
               },
             },
@@ -642,7 +689,11 @@ export const decideBooking = (
           || result.outcome === "linked")
         && result.contactId != null
       ) {
-        emit({ type: "contact_resolved", contactId: result.contactId });
+        emit({
+          type: "contact_resolved",
+          contactId: result.contactId,
+          ...(result.crmComplete === true ? { clearDetails: true } : {}),
+        });
         return decideFromRequirement();
       }
       emitDecision({ kind: "clarification", reason: "contact_write_failed" });
@@ -726,7 +777,11 @@ export const decideBooking = (
     } else if (service?.kind === "consultation") {
       emit({
         type: "service_selected",
-        service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: CONSULTATION_SERVICE_NAME_UK,
+          source: "catalog",
+        },
         accepted: false,
       });
     } else if (service?.kind === "decline_pending_service") {

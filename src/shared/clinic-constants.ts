@@ -27,6 +27,8 @@ export const CONSULTATION_SERVICE_ID = fromEnv(
   "CONSULTATION_SERVICE_ID",
   "demo-consultation-service-id",
 );
+/** Patient-facing / CRM meeting-title label for the consultation service. */
+export const CONSULTATION_SERVICE_NAME_UK = "Консультація";
 /** Supervisor greeting clinic identity (Ukrainian). */
 export const CLINIC_NAME_UK = fromEnv(
   "CLINIC_NAME_UK",
@@ -131,6 +133,10 @@ export const mainMenuFullGreetingUk = (firstName?: string | null): string => {
 /** Confirm copy before cancel_meeting HITL / CRM write. */
 export const CANCEL_CONFIRMATION_UK =
   "Скасувати цей візит? Після підтвердження запис буде скасовано.";
+
+/** Confirm copy before create_meeting / reschedule_meeting HITL. */
+export const CREATE_CONFIRMATION_UK = "Підтвердити запис?";
+export const RESCHEDULE_CONFIRMATION_UK = "Підтвердити перенесення?";
 
 /** Overflow chip when a service catalog level has more rows than Telegram can show. */
 export const SERVICE_CANDIDATE_OTHER_LABEL_UK = "Інші варіанти";

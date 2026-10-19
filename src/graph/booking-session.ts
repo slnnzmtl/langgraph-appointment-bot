@@ -4,6 +4,7 @@ import {
   BOOKING_REPLACE_MENU,
   BOOKING_REPLACE_MENU_EN,
   CONSULTATION_SERVICE_ID,
+  CONSULTATION_SERVICE_NAME_UK,
   INTENT_SKIP_LABEL,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
   VISIT_CHANGE_MENU,
@@ -32,7 +33,7 @@ export const consultationService = (source: "catalog" | "direct"): {
   source: "catalog" | "direct";
 } => ({
   id: CONSULTATION_SERVICE_ID,
-  name: "Консультація",
+  name: CONSULTATION_SERVICE_NAME_UK,
   source,
 });
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { CONSULTATION_SERVICE_ID } from "../../../shared/clinic-constants.js";
+import {
+  CONSULTATION_SERVICE_ID,
+  CONSULTATION_SERVICE_NAME_UK,
+  CREATE_CONFIRMATION_UK,
+} from "../../../shared/clinic-constants.js";
 import {
   createEmptyBookingDraft,
   reduceBookingDraft,
@@ -177,5 +181,101 @@ describe("decideBooking atomic contract", () => {
     expect(second.decision.pendingEffect?.id).toBe(firstId);
     // No second effect_prepared minting a fresh id on re-entry.
     expect(second.events.some((e) => e.type === "effect_prepared")).toBe(false);
+
+    const effect = first.decision.pendingEffect?.effect;
+    expect(effect?.kind).toBe("create_meeting");
+    if (effect?.kind === "create_meeting") {
+      expect(effect.payload.name).toBe("Botox - Іван Петренко");
+      expect(effect.payload.confirmMessage).toBe(CREATE_CONFIRMATION_UK);
+      expect(effect.payload.contactId).toBe("contact-1");
+      expect(effect.payload.serviceId).toBe("svc-1");
+    }
+  });
+
+  it("create_meeting name uses Консультація, never the CRM service id", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      // Name omitted — mirrors live consultation accept before the name stamp fix.
+      service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" });
+    draft = reduceBookingDraft(draft, { type: "slot_selected", slot: SLOT, snapshotId: "snap-1" });
+    draft = reduceBookingDraft(draft, { type: "note_status", status: "skipped" });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "phoneNumber",
+      value: "+380501234567",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Daniel",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "Testing",
+    });
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "contact-1" });
+    expect(draft?.phase).toBe("ready");
+
+    const result = decideBooking(draft, { source: "patient_turn", rawText: "" }, READ_MODELS);
+    const effect = result.decision.pendingEffect?.effect;
+    expect(effect?.kind).toBe("create_meeting");
+    if (effect?.kind === "create_meeting") {
+      expect(effect.payload.name).toBe(`${CONSULTATION_SERVICE_NAME_UK} - Daniel Testing`);
+      expect(effect.payload.name).not.toContain(CONSULTATION_SERVICE_ID);
+    }
+  });
+
+  it("skips phone lookup when contactId is already set and asks only missing names", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-1" });
+    // Phone remains in details; names still missing.
+    expect(draft?.contactId).toBe("owned-1");
+    expect(draft?.phase).toBe("details");
+
+    const result = decideBooking(draft, { source: "patient_turn", rawText: "" }, READ_MODELS);
+    expect(result.decision.pendingEffect?.effect.kind).not.toBe("lookup_contact_by_phone");
+    expect(result.decision.card).toMatchObject({
+      kind: "contact_field",
+      field: "firstName",
+    });
+  });
+
+  it("clears details on contact_write when crmComplete", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_1_link_telegram_contact",
+        expectedRevision: 1,
+        effect: { kind: "link_telegram_contact", contactId: "c-linked" },
+        status: "executing",
+      },
+    });
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_1_link_telegram_contact",
+          kind: "contact_write",
+          outcome: "linked",
+          contactId: "c-linked",
+          crmComplete: true,
+        },
+      },
+      READ_MODELS,
+    );
+
+    const resolved = result.events.find((e) => e.type === "contact_resolved");
+    expect(resolved).toMatchObject({
+      type: "contact_resolved",
+      contactId: "c-linked",
+      clearDetails: true,
+    });
   });
 });

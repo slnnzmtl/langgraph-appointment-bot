@@ -10,7 +10,12 @@ import { Overwrite } from "@langchain/langgraph";
 
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { reduceBookingDraft, type BookingEvent } from "../booking-draft.js";
+import {
+  reduceBookingDraft,
+  type BookingContactField,
+  type BookingDraft,
+  type BookingEvent,
+} from "../booking-draft.js";
 import { decideBooking } from "../booking-domain/decide.js";
 import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
 import {
@@ -26,8 +31,14 @@ import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { findToolMessageByCallId, hasPendingToolCalls } from "../tool-routing.js";
 import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
-import { normalizeContactLookupResult } from "../../tools/contact-tools.js";
-import { classifyPhoneLookupResult } from "../contact-command.js";
+import {
+  contactMissingFields,
+  normalizeContactLookupResult,
+} from "../../tools/contact-tools.js";
+import {
+  classifyPhoneLookupResult,
+  resolveContactIdentity,
+} from "../contact-command.js";
 import { labelIdFor } from "../../shared/message-content.js";
 import { interpretInteractionReply } from "../booking-session.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
@@ -407,6 +418,10 @@ export const effectResultFromToolMessages = (
           ? record.contactId
           : undefined;
     if (contactId != null) {
+      const missingRaw = record?.missingFields;
+      const crmComplete = Array.isArray(missingRaw)
+        ? missingRaw.filter((entry): entry is string => typeof entry === "string").length === 0
+        : contactMissingFields(record ?? {}).length === 0;
       return {
         effectId: expectedEffectId,
         kind: "contact_write",
@@ -416,6 +431,7 @@ export const effectResultFromToolMessages = (
             ? "updated"
             : "linked",
         contactId,
+        crmComplete,
       };
     }
     return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
@@ -529,6 +545,44 @@ export type CreateBookingDecideNodeOptions = {
   interpretTurn?: InterpretBookingTurn;
 };
 
+const CONTACT_LADDER_SEED_FIELDS = [
+  "phoneNumber",
+  "firstName",
+  "lastName",
+] as const satisfies readonly BookingContactField[];
+
+/**
+ * Project telegram-owned prefetch into the draft before decideBooking.
+ * Kernel stays draft-only. Always copy known CRM ladder fields into details
+ * (needed for meeting title + incomplete-name asks); then contact_resolved.
+ * clearDetails is reserved for contact_write when CRM is already complete.
+ */
+export const seedDraftFromTelegramPrefetch = (
+  draft: BookingDraft | null,
+  contactContext: ClinicState["contactContext"],
+): { draft: BookingDraft | null; events: BookingEvent[] } => {
+  if (draft == null || draft.contactId != null) {
+    return { draft, events: [] };
+  }
+  const identity = resolveContactIdentity(contactContext, draft.contactId);
+  if (identity.kind !== "owned") {
+    return { draft, events: [] };
+  }
+  const crm = identity.contact;
+  const events: BookingEvent[] = [];
+  for (const field of CONTACT_LADDER_SEED_FIELDS) {
+    const value = crm[field];
+    if (typeof value === "string" && value.trim().length > 0) {
+      events.push({ type: "contact_field_submitted", field, value: value.trim() });
+    }
+  }
+  events.push({
+    type: "contact_resolved",
+    contactId: identity.contactId,
+  });
+  return { draft: applyEvents(draft, events), events };
+};
+
 export const createBookingDecideNode = (
   options: CreateBookingDecideNodeOptions = {},
 ) => {
@@ -536,7 +590,12 @@ export const createBookingDecideNode = (
 
   return async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const readModels = readModelsFromClinicState(state);
-    const pendingEffect = state.bookingDraft?.pendingEffect ?? null;
+    const seeded = seedDraftFromTelegramPrefetch(
+      state.bookingDraft ?? null,
+      state.contactContext,
+    );
+    const workingDraft = seeded.draft;
+    const pendingEffect = workingDraft?.pendingEffect ?? null;
     const toolsStillPending = hasPendingToolCalls(state.agentMessages);
 
     let effectResult: EffectResult | null = null;
@@ -550,7 +609,7 @@ export const createBookingDecideNode = (
     let result;
     if (effectResult != null) {
       result = decideBooking(
-        state.bookingDraft ?? null,
+        workingDraft,
         { source: "effect_result", result: effectResult },
         readModels,
       );
@@ -559,7 +618,7 @@ export const createBookingDecideNode = (
       // Exact main-menu «Записатись» bypasses the structured interpreter.
       if (labelIdFor(rawText) === "mainBook") {
         result = decideBooking(
-          state.bookingDraft ?? null,
+          workingDraft,
           {
             source: "semantic_patch",
             patch: { serviceIntent: { kind: "consultation" } },
@@ -568,14 +627,14 @@ export const createBookingDecideNode = (
         );
       } else {
         const awaitingContactField =
-          state.bookingDraft?.pendingDecision?.kind === "clarification"
-          && typeof state.bookingDraft.pendingDecision.reason === "string"
-          && state.bookingDraft.pendingDecision.reason.startsWith("need_")
-            ? (state.bookingDraft.pendingDecision.reason.replace("need_", "") as
+          workingDraft?.pendingDecision?.kind === "clarification"
+          && typeof workingDraft.pendingDecision.reason === "string"
+          && workingDraft.pendingDecision.reason.startsWith("need_")
+            ? (workingDraft.pendingDecision.reason.replace("need_", "") as
               | "phoneNumber"
               | "firstName"
               | "lastName")
-            : state.bookingDraft?.phase === "details"
+            : workingDraft?.phase === "details"
               ? ("phoneNumber" as const)
               : undefined;
         // Reply-keyboard taps send labels; inline callbacks send ids.
@@ -589,37 +648,41 @@ export const createBookingDecideNode = (
         const interpretInput = {
           rawText,
           ...(callbackChoiceId != null ? { callbackChoiceId } : {}),
-          ...(state.bookingDraft?.offeredChoiceIds != null
-            ? { offeredChoiceIds: state.bookingDraft.offeredChoiceIds }
+          ...(workingDraft?.offeredChoiceIds != null
+            ? { offeredChoiceIds: workingDraft.offeredChoiceIds }
             : {}),
-          awaitingNote: state.bookingDraft?.note.status === "awaiting"
-            || state.bookingDraft?.phase === "note",
+          awaitingNote: workingDraft?.note.status === "awaiting"
+            || workingDraft?.phase === "note",
           ...(awaitingContactField === "phoneNumber"
             || awaitingContactField === "firstName"
             || awaitingContactField === "lastName"
             ? { awaitingContactField }
             : {}),
-          awaitingServiceConfirm: state.bookingDraft?.serviceAcceptance?.status === "pending",
+          awaitingServiceConfirm: workingDraft?.serviceAcceptance?.status === "pending",
         };
         const rawPatch = interpretTurn != null
           ? await interpretTurn(interpretInput)
           : interpretBookingTurnDeterministic(interpretInput);
-        const patch = enrichPatchWithReadModels(rawPatch, state, readModels);
+        const patch = enrichPatchWithReadModels(rawPatch, {
+          ...state,
+          bookingDraft: workingDraft,
+        }, readModels);
         result = Object.keys(patch).length > 0
           ? decideBooking(
-            state.bookingDraft ?? null,
+            workingDraft,
             { source: "semantic_patch", patch },
             readModels,
           )
           : decideBooking(
-            state.bookingDraft ?? null,
+            workingDraft,
             { source: "patient_turn", rawText: interpretInput.rawText },
             readModels,
           );
       }
     }
 
-    let draft = applyEvents(state.bookingDraft ?? null, result.events);
+    // workingDraft already includes prefetch seed events when applied.
+    let draft = applyEvents(workingDraft, result.events);
     const choicePatch = withOfferedChoices(draft, result.decision);
     draft = choicePatch.draft;
 
