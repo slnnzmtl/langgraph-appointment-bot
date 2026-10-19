@@ -600,12 +600,76 @@ const failClosedServiceOnly = (
  * Does not open visit_note UI — booking-session composes that after the draft
  * upgrade. Does not read conversation history or invent Consultation from prose.
  */
+/**
+ * Schema-2 rows that claim a selected slot without trusted provenance/evidence
+ * must be demoted — never mutation-ready from a no-op "already current" path.
+ * Already-demoted rows (unverified_legacy / none, no frozen HITL) are left alone.
+ */
+const repairCurrentSchema2Draft = (
+  draft: BookingDraft | null | undefined,
+): BookingDraft | null | undefined => {
+  if (draft == null || draft.selectedSlot == null) {
+    return draft;
+  }
+  const snapshotId = draft.slotEvidence?.snapshotId?.trim();
+  const trusted =
+    draft.slotProvenance === "availability_tool"
+    && snapshotId != null
+    && snapshotId.length > 0;
+  if (trusted) {
+    return draft;
+  }
+  const alreadyDemoted =
+    (draft.slotProvenance === "unverified_legacy" || draft.slotProvenance === "none")
+    && draft.slotEvidence == null
+    && draft.pendingCommand == null
+    && draft.pendingDecision?.kind !== "mutation_confirm";
+  if (alreadyDemoted) {
+    return draft;
+  }
+  return {
+    ...draft,
+    slotProvenance: "unverified_legacy",
+    slotEvidence: null,
+    // Unverified slots cannot carry a frozen mutation.
+    pendingCommand: null,
+    pendingDecision:
+      draft.pendingDecision?.kind === "mutation_confirm"
+        ? null
+        : (draft.pendingDecision ?? null),
+    phase: bookingDraftPhase({
+      ...draft,
+      slotProvenance: "unverified_legacy",
+      slotEvidence: null,
+      pendingCommand: null,
+      pendingDecision:
+        draft.pendingDecision?.kind === "mutation_confirm"
+          ? null
+          : (draft.pendingDecision ?? null),
+    }),
+  };
+};
+
 export const upgradeBookingDraftCheckpoint = (
   state: BookingCheckpointLegacyState,
 ): BookingCheckpointUpgradeResult => {
   const resolved = resolveSchemaVersion(state.bookingSchemaVersion);
   if (resolved.kind === "current") {
-    return { update: {}, unsupported: false, telemetry: null };
+    const repaired = repairCurrentSchema2Draft(state.bookingDraft);
+    if (repaired === state.bookingDraft) {
+      return { update: {}, unsupported: false, telemetry: null };
+    }
+    return {
+      update: {
+        bookingDraft: repaired ?? null,
+      },
+      unsupported: false,
+      telemetry: {
+        source: "legacy_draft",
+        schemaVersion: BOOKING_SCHEMA_VERSION,
+        outcome: "canonical",
+      },
+    };
   }
   if (resolved.kind === "unsupported") {
     return {

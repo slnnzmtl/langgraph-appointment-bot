@@ -19,9 +19,15 @@ export type NextBookingRequirement = (
   readModels?: BookingReadModels,
 ) => BookingRequirement;
 
-const hasVerifiedSlot = (session: BookingSessionV2): boolean =>
-  session.selectedSlot != null
-  && session.selectedSlot.provenance === "availability_tool";
+const hasVerifiedSlot = (session: BookingSessionV2): boolean => {
+  const slot = session.selectedSlot;
+  if (slot == null || slot.provenance !== "availability_tool") {
+    return false;
+  }
+  // availability_tool without snapshot evidence is not mutation-ready.
+  const snapshotId = slot.evidence?.snapshotId?.trim();
+  return snapshotId != null && snapshotId.length > 0;
+};
 
 const contactPatchIncomplete = (session: BookingSessionV2): boolean => {
   const { contact } = session;

@@ -66,6 +66,8 @@ export const pendingDecisionFromLegacyInteraction = (
 
 export type Schema2DraftFields = {
   slotProvenance: SlotProvenance | null;
+  /** Legacy caches are not proof — clear evidence on 0/1 → 2 upgrade. */
+  clearSlotEvidence: boolean;
   pendingDecision: PendingDecision | null;
   /** When true, clear frozen pendingCommand (expired legacy HITL). */
   clearPendingCommand: boolean;
@@ -82,6 +84,7 @@ export const schema2FieldsForUpgradedDraft = (input: {
     input.selectedSlot != null ? "unverified_legacy" : null;
   return {
     slotProvenance,
+    clearSlotEvidence: input.selectedSlot != null,
     // Do not keep mutation_confirm without a live interrupt — expire it.
     pendingDecision: hadFrozenCommand
       ? null
@@ -98,11 +101,13 @@ export const withSchema2SessionFields = <T extends {
   pendingCommand: unknown;
   pendingDecision?: PendingDecision | null;
   slotProvenance?: SlotProvenance | null;
+  slotEvidence?: unknown;
 }>(
   draft: T,
   interaction: LegacyInteractionShape | null | undefined,
 ): T & {
   slotProvenance: SlotProvenance | null;
+  slotEvidence: null;
   pendingDecision: PendingDecision | null;
   pendingCommand: T["pendingCommand"] | null;
 } => {
@@ -118,6 +123,7 @@ export const withSchema2SessionFields = <T extends {
   return {
     ...draft,
     slotProvenance: fields.slotProvenance,
+    slotEvidence: null,
     pendingDecision: fields.pendingDecision,
     pendingCommand: fields.clearPendingCommand ? null : draft.pendingCommand,
   };

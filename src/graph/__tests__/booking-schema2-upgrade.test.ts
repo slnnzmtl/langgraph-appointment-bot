@@ -34,13 +34,56 @@ const acceptedWithSlot = () => {
 };
 
 describe("DDD-273 schema 2 upgrade", () => {
-  it("is a no-op for already-current schema 2", () => {
+  it("is a no-op for already-current schema 2 with trusted slot evidence", () => {
+    const draft = acceptedWithSlot();
+    expect(draft.slotProvenance).toBe("availability_tool");
+    expect(draft.slotEvidence?.snapshotId).toBeTruthy();
     const result = upgradeBookingCheckpoint({
       bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
-      bookingDraft: acceptedWithSlot(),
+      bookingDraft: draft,
     });
     expect(result.update).toEqual({});
     expect(result.unsupported).toBe(false);
+  });
+
+  it("demotes schema-2 slots that lack provenance or evidence", () => {
+    const draft = acceptedWithSlot();
+    const malformed = {
+      ...draft,
+      slotProvenance: null,
+      slotEvidence: null,
+      note: { status: "skipped" as const },
+      contactId: "contact-1",
+      pendingCommand: {
+        action: "create" as const,
+        payload: {
+          serviceId: "svc-1",
+          contactId: "contact-1",
+          dateStart: draft.selectedSlot!.dateStart,
+          dateEnd: draft.selectedSlot!.dateEnd,
+        },
+      },
+      phase: "confirming" as const,
+    };
+    const result = upgradeBookingCheckpoint({
+      bookingSchemaVersion: BOOKING_SCHEMA_VERSION,
+      bookingDraft: malformed,
+    });
+    expect(result.update.bookingDraft?.slotProvenance).toBe("unverified_legacy");
+    expect(result.update.bookingDraft?.slotEvidence).toBeNull();
+    expect(result.update.bookingDraft?.pendingCommand).toBeNull();
+    expect(result.update.bookingDraft?.phase).toBe("time");
+  });
+
+  it("never promotes missing provenance to availability_tool on convert", () => {
+    const draft = {
+      ...acceptedWithSlot(),
+      slotProvenance: null,
+      slotEvidence: null,
+    };
+    const session = bookingDraftToSession(draft);
+    expect(session.selectedSlot?.provenance).toBe("unverified_legacy");
+    expect(nextBookingRequirement(session)).toBe("time");
   });
 
   it("upgrades schema 1: unverified slot, dirty prefetch, no dual schema write", () => {

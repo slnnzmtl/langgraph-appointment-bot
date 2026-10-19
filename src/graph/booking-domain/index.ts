@@ -15,6 +15,7 @@ export {
   type ReplacementFacts,
   type ServiceAcceptanceV2,
   type ServiceRef,
+  type SlotAvailabilityEvidence,
   type SlotFacts,
   type SlotProvenance,
 } from "./session.js";

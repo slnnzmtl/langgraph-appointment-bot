@@ -4,7 +4,13 @@ import { contactMissingFields } from "../tools/contact-tools.js";
 import { kyivLocalIsoToUtcMs } from "../tools/availability-slots.js";
 import type { SelectedBookingSlot } from "./types.js";
 
-import type { PendingDecision, SlotProvenance } from "./booking-domain/session.js";
+import type {
+  PendingDecision,
+  SlotAvailabilityEvidence,
+  SlotProvenance,
+} from "./booking-domain/session.js";
+
+export type { SlotAvailabilityEvidence };
 
 /** Checkpoint schema stamped on ClinicState.bookingSchemaVersion (Phase 1 = 2). */
 export const BOOKING_SCHEMA_VERSION = 2;
@@ -115,6 +121,11 @@ export type BookingDraft = {
    * unverified_legacy. Runtime slot selection stamps availability_tool.
    */
   slotProvenance?: SlotProvenance | null;
+  /**
+   * Snapshot/service/duration/exclusion proof for a verified slot.
+   * Required alongside availability_tool provenance for mutation-ready slots.
+   */
+  slotEvidence?: SlotAvailabilityEvidence | null;
 };
 
 export type BookingEvent =
@@ -122,7 +133,12 @@ export type BookingEvent =
   | { type: "service_accepted"; turn?: number }
   | { type: "date_selected"; date: string }
   | { type: "schedule_requested"; date: string; preferredTime?: string }
-  | { type: "slot_selected"; slot: SelectedBookingSlot }
+  | {
+      type: "slot_selected";
+      slot: SelectedBookingSlot;
+      /** Availability snapshot id when known; otherwise a runtime marker is stamped. */
+      snapshotId?: string;
+    }
   | { type: "requested_time_unavailable" }
   | { type: "note_status"; status: BookingNote["status"]; value?: string }
   | {
@@ -431,16 +447,34 @@ export const isEmptyLegacyBookingDraft = (
   && draft.rescheduleTarget == null
   && draft.replacement == null;
 
-/** True when selectedSlot may drive progression (runtime-stamped or pre-provenance rows). */
+/** True when selectedSlot may drive progression (runtime-stamped with evidence). */
 const draftHasVerifiedSlot = (draft: BookingDraft): boolean => {
-  if (draft.selectedSlot == null) {
+  if (draft.selectedSlot == null || draft.slotProvenance !== "availability_tool") {
     return false;
   }
-  // Missing provenance = schema ≤1 runtime row still treated as verified until upgrade.
-  if (draft.slotProvenance == null || draft.slotProvenance === "availability_tool") {
-    return true;
-  }
-  return false;
+  const snapshotId = draft.slotEvidence?.snapshotId?.trim();
+  return snapshotId != null && snapshotId.length > 0;
+};
+
+/** Build slot evidence from the draft availability scope + optional snapshot id. */
+export const slotEvidenceForSelection = (
+  draft: BookingDraft,
+  slot: SelectedBookingSlot,
+  snapshotId?: string,
+): SlotAvailabilityEvidence => {
+  const scope = bookingAvailabilityScope(draft);
+  return {
+    snapshotId:
+      snapshotId?.trim()
+      || `runtime:${draft.version}:${slot.dateStart}`,
+    ...(scope.serviceId != null ? { serviceId: scope.serviceId } : {}),
+    ...(scope.durationMinutes != null
+      ? { durationMinutes: scope.durationMinutes }
+      : {}),
+    ...(scope.excludeMeetingIds != null
+      ? { excludeMeetingIds: [...scope.excludeMeetingIds] }
+      : {}),
+  };
 };
 
 /**
@@ -504,6 +538,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   replacement: null,
   pendingDecision: null,
   slotProvenance: null,
+  slotEvidence: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
@@ -517,6 +552,7 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   selectedDate: null,
   selectedSlot: null,
   slotProvenance: null,
+  slotEvidence: null,
   requestedTime: null,
   note: { status: "unasked" },
   pendingCommand: null,
@@ -650,6 +686,8 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: event.date,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         requestedTime: null,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
@@ -666,6 +704,8 @@ export const reduceBookingDraft = (
         ...draft,
         selectedDate: event.date,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         requestedTime: event.preferredTime
           ? { value: event.preferredTime, status: "pending" as const }
           : null,
@@ -685,11 +725,17 @@ export const reduceBookingDraft = (
       const note = draft.mode === "reschedule" || hasCompletedNote(draft)
         ? draft.note
         : { status: "awaiting" as const };
+      const slotEvidence = slotEvidenceForSelection(
+        draft,
+        event.slot,
+        event.snapshotId,
+      );
       const next: Omit<BookingDraft, "version"> = {
         ...draft,
         selectedDate: slotDate(event.slot),
         selectedSlot: event.slot,
         slotProvenance: "availability_tool",
+        slotEvidence,
         requestedTime: null,
         note,
         pendingCommand: null,
@@ -713,6 +759,7 @@ export const reduceBookingDraft = (
         requestedTime,
         selectedSlot: null,
         slotProvenance: null,
+        slotEvidence: null,
         pendingCommand: null,
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
@@ -806,6 +853,8 @@ export const reduceBookingDraft = (
         serviceAcceptance: null,
         selectedDate: null,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         requestedTime: null,
         note: { status: "unasked" },
         pendingCommand: null,
@@ -935,6 +984,8 @@ export const reduceBookingDraft = (
         phase: event.keepDate ? "time" : "date",
         selectedDate: event.keepDate ? draft.selectedDate : null,
         selectedSlot: null,
+        slotProvenance: null,
+        slotEvidence: null,
         // The selected time is invalid, not the patient's already supplied
         // note. Preserve the completed note/contact while asking only for a
         // replacement slot.

@@ -14,6 +14,7 @@ import {
   type BookingSessionV2,
   type FrozenMutationCommand,
   type PendingDecision,
+  type SlotAvailabilityEvidence,
   type SlotFacts,
   type SlotProvenance,
 } from "./booking-domain/session.js";
@@ -45,6 +46,7 @@ const toPendingCommand = (
 export const slotFactsFromSelected = (
   slot: SelectedBookingSlot | null | undefined,
   provenance: SlotProvenance,
+  evidence?: SlotAvailabilityEvidence | null,
 ): SlotFacts | null => {
   if (slot == null) {
     return null;
@@ -55,7 +57,29 @@ export const slotFactsFromSelected = (
     dateEnd: slot.dateEnd,
     label: slot.label,
     provenance,
+    ...(evidence != null ? { evidence } : {}),
   };
+};
+
+/** Missing provenance must never become availability_tool. */
+export const resolveSlotProvenanceFromDraft = (
+  draft: Pick<BookingDraft, "selectedSlot" | "slotProvenance" | "slotEvidence">,
+): SlotProvenance => {
+  if (draft.selectedSlot == null) {
+    return "none";
+  }
+  if (draft.slotProvenance === "availability_tool") {
+    const snapshotId = draft.slotEvidence?.snapshotId?.trim();
+    // Claimed tool provenance without evidence is untrusted.
+    return snapshotId != null && snapshotId.length > 0
+      ? "availability_tool"
+      : "unverified_legacy";
+  }
+  if (draft.slotProvenance === "unverified_legacy" || draft.slotProvenance === "none") {
+    return draft.slotProvenance;
+  }
+  // Missing / unknown → fail closed.
+  return "unverified_legacy";
 };
 
 export const selectedFromSlotFacts = (
@@ -118,15 +142,16 @@ export const pendingDecisionFromInteraction = (
 
 /**
  * Build a canonical session from today's draft (+ optional interaction).
- * Runtime-written slots default to availability_tool provenance unless marked.
+ * Missing provenance fails closed to unverified_legacy — never invents
+ * availability_tool trust.
  */
 export const bookingDraftToSession = (
   draft: BookingDraft,
   interaction?: PendingInteraction | null,
 ): BookingSessionV2 => {
-  const provenance: SlotProvenance =
-    draft.slotProvenance
-    ?? (draft.selectedSlot != null ? "availability_tool" : "none");
+  const provenance = resolveSlotProvenanceFromDraft(draft);
+  const evidence =
+    provenance === "availability_tool" ? (draft.slotEvidence ?? null) : null;
   const pendingDecision =
     draft.pendingDecision
     ?? pendingDecisionFromInteraction(interaction, draft);
@@ -137,7 +162,7 @@ export const bookingDraftToSession = (
     mode: draft.mode,
     serviceAcceptance: draft.serviceAcceptance as BookingSessionV2["serviceAcceptance"],
     selectedDate: draft.selectedDate,
-    selectedSlot: slotFactsFromSelected(draft.selectedSlot, provenance),
+    selectedSlot: slotFactsFromSelected(draft.selectedSlot, provenance, evidence),
     requestedTime: draft.requestedTime,
     note: draft.note,
     contact: {
@@ -218,5 +243,6 @@ export const sessionToBookingDraft = (session: BookingSessionV2): BookingDraft =
     replacement,
     pendingDecision: session.pendingDecision,
     slotProvenance: session.selectedSlot?.provenance ?? "none",
+    slotEvidence: session.selectedSlot?.evidence ?? null,
   };
 };

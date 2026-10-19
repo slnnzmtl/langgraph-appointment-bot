@@ -3,6 +3,8 @@
  * Checkpointed in the existing `bookingDraft` channel (schema version 2).
  */
 
+import type { PendingEffect } from "./effects.js";
+
 export const BOOKING_SESSION_SCHEMA_VERSION = 2 as const;
 
 export type BookingModeV2 = "create" | "reschedule" | "replace";
@@ -20,6 +22,17 @@ export type ServiceAcceptanceV2 = {
   acceptedAtTurn?: number;
 };
 
+/**
+ * Proof that a selected slot came from a trusted availability presentation.
+ * Cache arrays stay on read models; this is what the aggregate keeps.
+ */
+export type SlotAvailabilityEvidence = {
+  snapshotId: string;
+  serviceId?: string;
+  durationMinutes?: number;
+  excludeMeetingIds?: string[];
+};
+
 /** Selected slot facts without treating cursor/cache as provenance. */
 export type SlotFacts = {
   slotId?: string;
@@ -28,6 +41,8 @@ export type SlotFacts = {
   label: string;
   /** Provenance required before the slot is selectable / mutable. */
   provenance: "availability_tool" | "unverified_legacy" | "none";
+  /** Present when provenance is availability_tool; absent means unverified. */
+  evidence?: SlotAvailabilityEvidence;
 };
 
 export type NoteFacts = {
@@ -100,8 +115,11 @@ export type BookingSessionV2 = {
   pendingDecision: PendingDecision | null;
   /** Frozen CRM mutation command (maps from legacy pendingCommand). */
   pendingCommand: FrozenMutationCommand | null;
-  /** Placeholder until Phase 2 enforces PendingEffect lifecycle. */
-  pendingEffect: null;
+  /**
+   * At most one pending effect. Phase 2 persists prepared→executing→completed;
+   * Phase 1 allows the field but writers still leave it null.
+   */
+  pendingEffect: PendingEffect | null;
 };
 
 export type SlotProvenance = SlotFacts["provenance"];
