@@ -1,73 +1,88 @@
+import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
-import { stampBookingEffect, assertStampedBookingToolCall } from "../agent-loop/stamp-booking-effect.js";
-import { recoverExpiredConfirmBookingHitl } from "../booking-hitl-recovery.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
 import {
-  classifyUpgradeForScan,
-  emptyBookingCheckpointScanCounts,
-} from "../booking-checkpoint-scanner.js";
+  createBookingDecideNode,
+  effectResultFromToolMessages,
+} from "../agent-loop/booking-decide-nodes.js";
+import { stampBookingEffect } from "../agent-loop/stamp-booking-effect.js";
+import { isRuntimeOriginatedToolAi } from "../agent-loop/runtime-tool-stamp.js";
+import { filterToolTape } from "../agent-loop/tools-protocol.js";
+import { clinicState } from "./agent-loop-fixtures.js";
+import type { PendingEffect } from "../booking-domain/effects.js";
 
-describe("DDD-277 stamp + expired HITL recovery", () => {
-  it("stamps booking effects for ToolNode", () => {
-    const stamped = stampBookingEffect({
-      id: "eff_1",
-      expectedRevision: 1,
-      status: "prepared",
+describe("DDD-277 decide/effect adapters", () => {
+  it("stamps decide-node tool AIs with runtimeToolOrigin so protocol keeps them", async () => {
+    const pending: PendingEffect = {
+      id: "eff_1_present_availability",
+      expectedRevision: 2,
       effect: { kind: "present_availability", queryKind: "nearest" },
-    });
-    expect(stamped.name).toBe("present_availability_slots");
-    expect(stamped.args.__bookingEffectStamp).toBe("bookingEffectV1");
-    expect(() => assertStampedBookingToolCall(stamped)).not.toThrow();
-    expect(() => assertStampedBookingToolCall({ name: "create_meeting", args: {} })).toThrow(
-      /Unstamped/,
-    );
-  });
-
-  it("recovers legacy confirm without keeping frozen command", () => {
-    let draft = reduceBookingDraft(createEmptyBookingDraft(), {
-      type: "service_selected",
-      service: { id: "svc-1", source: "catalog" },
-      accepted: true,
-    })!;
-    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" })!;
-    draft = reduceBookingDraft(draft, {
-      type: "slot_selected",
-      slot: {
-        dateStart: "2026-09-10T14:00:00",
-        dateEnd: "2026-09-10T14:30:00",
-        label: "14:00",
-      },
-    })!;
-    draft = {
-      ...draft,
-      pendingCommand: {
-        action: "create",
-        payload: { serviceId: "svc-1" },
-      },
-      phase: "confirming",
+      status: "prepared",
     };
-    const recovered = recoverExpiredConfirmBookingHitl({ bookingDraft: draft });
-    expect(recovered.bookingDraft?.pendingCommand).toBeNull();
-    expect(recovered.bookingDraft?.slotProvenance).toBe("unverified_legacy");
-    expect(recovered.replyText.length).toBeGreaterThan(0);
-  });
-});
+    const stamped = stampBookingEffect(pending);
+    expect(stamped.args.__bookingEffectStamp).toBe("bookingEffectV1");
 
-describe("DDD-278A scanner stub outcomes", () => {
-  it("counts migration buckets without PII", () => {
-    const counts = emptyBookingCheckpointScanCounts();
-    const outcome = classifyUpgradeForScan({
-      unsupported: false,
-      schemaVersionBefore: 1,
-      targetSchemaVersion: 2,
-      expiredHitl: false,
-      slotRevalidation: true,
-      recoveredPartial: false,
-      failClosed: false,
+    const decide = createBookingDecideNode();
+    const update = await decide(
+      clinicState({
+        bookingDraft: {
+          version: 1,
+          mode: "create",
+          phase: "date",
+          serviceAcceptance: {
+            status: "accepted",
+            service: { id: "svc-1", name: "Botox", source: "catalog" },
+          },
+          selectedDate: null,
+          selectedSlot: null,
+          requestedTime: null,
+          note: { status: "unasked" },
+          contactId: null,
+          pendingCommand: null,
+          replacement: null,
+          pendingEffect: null,
+          slotProvenance: null,
+          slotEvidence: null,
+        },
+        messages: [],
+      }),
+    );
+    const messages = update.agentMessages as AIMessage[] | undefined;
+    expect(messages?.length).toBe(1);
+    const ai = messages![0]!;
+    expect(isRuntimeOriginatedToolAi(ai)).toBe(true);
+    expect(ai.tool_calls?.[0]?.name).toBe("present_availability_slots");
+    expect(ai.tool_calls?.[0]?.args?.__bookingEffectStamp).toBe("bookingEffectV1");
+    const filtered = filterToolTape(
+      clinicState({ agentMessages: [ai] }),
+      "booking",
+    );
+    // Protocol keeps runtime-stamped booking tool calls.
+    expect(filtered.messagesForTools.some((message) => (
+      message instanceof AIMessage
+      && (message.tool_calls?.some((call) => call.name === "present_availability_slots") ?? false)
+    ))).toBe(true);
+  });
+
+  it("translates tool messages into typed effect results", () => {
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({
+            result: "none",
+            contactIds: [],
+          }),
+          tool_call_id: "eff_lookup",
+          name: "find_contact_by_phone",
+        }),
+      ],
+      "eff_lookup",
+    );
+    expect(result).toEqual({
+      effectId: "eff_lookup",
+      kind: "contact_lookup",
+      outcome: "none",
+      contactIds: [],
     });
-    counts[outcome] += 1;
-    expect(counts.slot_revalidation).toBe(1);
-    expect(counts.rejected).toBe(0);
   });
 });

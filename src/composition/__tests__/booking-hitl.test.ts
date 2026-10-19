@@ -112,28 +112,37 @@ describe("resumeConfirmBookingHitl", () => {
     ).toEqual({ confirmed: false });
   });
 
-  it("maps ✅ / ❌ without mutation_confirm (version-0 interrupt path)", () => {
-    expect(
-      resumeConfirmBookingHitl({
-        text: "✅",
-        bookingDraft: confirmingDraft,
-        pendingInteraction: null,
-      }),
-    ).toEqual({
-      resume: { confirmed: true },
-      update: {},
+  it("expires ✅ / ❌ without mutation_confirm (never replay legacy HITL)", () => {
+    const confirmed = resumeConfirmBookingHitl({
+      text: "✅",
+      bookingDraft: {
+        ...confirmingDraft,
+        pendingCommand: null,
+      },
+      pendingInteraction: null,
     });
-    expect(
-      resumeConfirmBookingHitl({
-        text: "❌",
-        bookingDraft: confirmingDraft,
-        pendingInteraction: null,
-        bookingUpdate: { bookingSchemaVersion: 2 },
-      }),
-    ).toEqual({
-      resume: { confirmed: false },
-      update: { bookingSchemaVersion: 2 },
+    expect(confirmed.resume).toEqual({ confirmed: false });
+    expect(confirmed.update.bookingDraft).toMatchObject({
+      pendingCommand: null,
+      slotProvenance: "unverified_legacy",
     });
+    expect(confirmed.update.lastHandoff).toMatchObject({
+      agentId: "booking",
+      status: "ok",
+    });
+
+    const declined = resumeConfirmBookingHitl({
+      text: "❌",
+      bookingDraft: {
+        ...confirmingDraft,
+        pendingCommand: null,
+      },
+      pendingInteraction: null,
+      bookingUpdate: { bookingSchemaVersion: 2 },
+    });
+    expect(declined.resume).toEqual({ confirmed: false });
+    expect(declined.update.bookingSchemaVersion).toBe(2);
+    expect(declined.update.bookingDraft).toMatchObject({ pendingCommand: null });
   });
 
   it("keeps NL affirm as userReply when mutation_confirm is absent", () => {

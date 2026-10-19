@@ -81,7 +81,12 @@ export const routeAfterAgentPrepare = (
   noteOrchestratorName?: string,
   finalizeName?: string,
   agentId?: string,
+  decideName?: string,
 ): string => {
+  // Schema-2 sessions with a pending effect resume in the decide/effect loop.
+  if (decideName && state.bookingDraft?.pendingEffect != null) {
+    return decideName;
+  }
   if (noteOrchestratorName && state.noteOrchQueued) {
     return noteOrchestratorName;
   }
@@ -166,6 +171,8 @@ export type RouteAfterAgentToolsOptions = {
   noteOrchestratorName?: string;
   finalizeName?: string;
   faqPrepareName?: string;
+  /** Prefer decide/effect loop when a PendingEffect awaits correlation. */
+  decideName?: string;
 };
 
 export const routeAfterAgentTools = (
@@ -180,10 +187,16 @@ export const routeAfterAgentTools = (
     noteOrchestratorName,
     finalizeName,
     faqPrepareName,
+    decideName,
   } = options;
 
   if (hasPendingToolCalls(state.agentMessages)) {
     return toolsName;
+  }
+
+  // Typed effect results return to decideBooking (not the planner).
+  if (decideName && state.bookingDraft?.pendingEffect != null) {
+    return decideName;
   }
 
   // Failed contact writes / phone lookups are terminal for this turn.

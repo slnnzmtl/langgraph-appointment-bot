@@ -21,6 +21,7 @@ import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
 import { assertBoundAgentToolNames } from "./bound-tools.js";
 import { resolveBookingScheduleRequest } from "./booking-schedule.js";
+import { hasPendingToolCalls } from "./tool-routing.js";
 import {
   createBookingFinalizeNode,
   createFaqFinalizeNode,
@@ -30,6 +31,7 @@ import {
   createBookingPrepareNode,
   createFaqPrepareNode,
   createAgentToolsNode,
+  createBookingDecideNode,
   matchAvailabilityDay,
   matchAvailabilitySlot,
   routeAfterAgentPrepare,
@@ -73,6 +75,7 @@ const FAQ_TOOLS = "faq__tools" as const;
 const FAQ_FINALIZE = "faq__finalize" as const;
 
 const BOOKING_PREPARE = "booking__prepare" as const;
+const BOOKING_DECIDE = "booking__decide" as const;
 const BOOKING_COMMAND_PREPARE = "booking__command_prepare" as const;
 const BOOKING_LLM = "booking__llm" as const;
 const BOOKING_TOOLS = "booking__tools" as const;
@@ -184,6 +187,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const faqFinalize = FAQ_FINALIZE;
 
   const bookingPrepare = BOOKING_PREPARE;
+  const bookingDecide = BOOKING_DECIDE;
   const bookingCommandPrepare = BOOKING_COMMAND_PREPARE;
   const bookingLlm = BOOKING_LLM;
   const bookingTools = BOOKING_TOOLS;
@@ -374,6 +378,11 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       bookingInteractionRender,
       createBookingInteractionRenderNode(bookingAgent),
     )
+    .addNode(
+      bookingDecide,
+      createBookingDecideNode(),
+      { ends: [bookingTools, bookingFinalize, bookingInteractionRender] },
+    )
     .addEdge(bookingInteractionRender, bookingFinalize)
     .addEdge(bookingMutationFinalize, END)
     .addConditionalEdges(
@@ -386,12 +395,31 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           bookingNoteOrch,
           bookingFinalize,
           BOOKING_AGENT_ID,
+          bookingDecide,
         ),
       {
         [bookingLlm]: bookingLlm,
         [bookingFinalize]: bookingFinalize,
         [bookingCommandPrepare]: bookingCommandPrepare,
         [bookingNoteOrch]: bookingNoteOrch,
+        [bookingDecide]: bookingDecide,
+      },
+    )
+    .addConditionalEdges(
+      bookingDecide,
+      (state: ClinicState) => {
+        if (hasPendingToolCalls(state.agentMessages)) {
+          return bookingTools;
+        }
+        if (state.pendingInteraction != null) {
+          return bookingInteractionRender;
+        }
+        return bookingFinalize;
+      },
+      {
+        [bookingTools]: bookingTools,
+        [bookingInteractionRender]: bookingInteractionRender,
+        [bookingFinalize]: bookingFinalize,
       },
     )
     .addConditionalEdges(
@@ -421,6 +449,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           noteOrchestratorName: bookingNoteOrch,
           finalizeName: bookingFinalize,
           faqPrepareName: faqPrepare,
+          decideName: bookingDecide,
         }),
       {
         [bookingLlm]: bookingLlm,
@@ -430,6 +459,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         [bookingNoteOrch]: bookingNoteOrch,
         [bookingFinalize]: bookingFinalize,
         [faqPrepare]: faqPrepare,
+        [bookingDecide]: bookingDecide,
       },
     )
     .addEdge(bookingFinalize, END)

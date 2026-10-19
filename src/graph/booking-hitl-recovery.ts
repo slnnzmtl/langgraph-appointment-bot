@@ -34,7 +34,9 @@ export const recoverExpiredConfirmBookingHitl = (input: {
     ...draft,
     pendingCommand: null,
     pendingDecision: null,
+    pendingEffect: null,
     slotProvenance: draft.selectedSlot != null ? "unverified_legacy" : null,
+    slotEvidence: null,
     phase: draft.selectedDate != null ? "time" : draft.serviceAcceptance?.status === "accepted" ? "date" : "service",
   };
   return {

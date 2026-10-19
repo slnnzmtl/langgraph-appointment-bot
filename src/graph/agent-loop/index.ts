@@ -68,6 +68,14 @@ export {
 } from "./tools.js";
 
 export {
+  BOOKING_DECIDE_NODE,
+  BOOKING_EFFECTS_NODE,
+  createBookingDecideNode,
+  createLegacyConfirmResumeRecovery,
+  effectResultFromToolMessages,
+} from "./booking-decide-nodes.js";
+
+export {
   type RouteAfterAgentToolsOptions,
   routeAfterAgentLlm,
   routeAfterAgentPrepare,

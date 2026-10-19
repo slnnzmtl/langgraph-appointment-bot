@@ -45,6 +45,12 @@ const toolNameForEffect = (pending: PendingEffect): string => {
       return "present_availability_slots";
     case "lookup_contact_by_phone":
       return "find_contact_by_phone";
+    case "create_contact":
+      return "create_contact";
+    case "update_contact":
+      return "update_contact";
+    case "link_telegram_contact":
+      return "link_telegram_to_contact";
     case "create_meeting":
       return "create_meeting";
     case "reschedule_meeting":
@@ -72,9 +78,16 @@ const toolArgsForEffect = (pending: PendingEffect): Record<string, unknown> => {
         queryKind: effect.queryKind,
         ...(effect.date != null ? { date: effect.date } : {}),
         ...(effect.preferredTime != null ? { preferredTime: effect.preferredTime } : {}),
+        ...(effect.revalidate === true ? { revalidate: true } : {}),
       };
     case "lookup_contact_by_phone":
       return { phoneNumber: effect.phoneNumber };
+    case "create_contact":
+      return { ...effect.payload };
+    case "update_contact":
+      return { ...effect.payload };
+    case "link_telegram_contact":
+      return { contactId: effect.contactId };
     case "create_meeting":
     case "reschedule_meeting":
     case "cancel_meeting":
