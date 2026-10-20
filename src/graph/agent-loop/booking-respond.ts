@@ -7,7 +7,11 @@
 import { z } from "zod";
 
 import { trackEvent } from "../../analytics/track.js";
-import { PATIENT_FALLBACK_MESSAGE } from "../../shared/clinic-constants.js";
+import {
+  MAIN_MENU_GREETING_UK,
+  PATIENT_FALLBACK_MESSAGE,
+  defaultMenuLabels,
+} from "../../shared/clinic-constants.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import type { BookingDecision } from "../booking-domain/decision.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -17,6 +21,7 @@ import {
   bookingResponseFallback,
   bookingSuccessText,
 } from "./booking-response-fallback.js";
+import { defaultMenuHasVisit } from "./mutation-finalize.js";
 
 const patientTextSchema = z.object({
   text: z.string().min(1).max(2000),
@@ -49,6 +54,10 @@ const isCommittedSuccess = (decision: BookingDecision): boolean =>
   decision.intent === "success"
   && decision.tag === "terminal"
   && decision.reason === "success";
+
+const isTerminalLeave = (decision: BookingDecision): boolean =>
+  decision.tag === "terminal"
+  && (decision.intent === "menu" || decision.intent === "abandon");
 
 export const createBookingRespondNode = (options: CreateBookingRespondOptions) => {
   const chain = options.llm.bindRoutingTools(patientTextSchema, {
@@ -87,6 +96,24 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           status: "ok",
           replyText: bookingSuccessText(decision.facts),
           replyButtons,
+        },
+      };
+    }
+
+    // HITL leave / ❌ — same main-menu exit as supervisor (no LLM).
+    if (isTerminalLeave(decision)) {
+      const hasVisit = defaultMenuHasVisit(
+        state.agentMessages ?? [],
+        state.bookingContext,
+      );
+      return {
+        bookingDecision: null,
+        lastHandoff: {
+          agentId: BOOKING_AGENT_ID,
+          agentName,
+          status: "ok",
+          replyText: MAIN_MENU_GREETING_UK,
+          replyButtons: [...defaultMenuLabels(hasVisit)],
         },
       };
     }

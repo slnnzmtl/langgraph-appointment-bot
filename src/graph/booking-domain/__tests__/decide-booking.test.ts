@@ -244,6 +244,63 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("mutation declined closes to main menu without get_working_time", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Іван",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "Петренко",
+    });
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "contact-1" });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_1_create_meeting",
+        expectedRevision: 1,
+        effect: {
+          kind: "create_meeting",
+          payload: {
+            serviceId: "svc-1",
+            contactId: "contact-1",
+            dateStart: SLOT.dateStart,
+            dateEnd: SLOT.dateEnd,
+            name: "Botox - Іван Петренко",
+            confirmMessage: CREATE_CONFIRMATION_UK,
+          },
+        },
+        status: "executing",
+      },
+    });
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_1_create_meeting",
+          kind: "mutation",
+          action: "create",
+          outcome: "declined",
+        },
+      },
+      READ_MODELS,
+    );
+
+    expect(result.events.some((e) => e.type === "draft_abandoned")).toBe(true);
+    expect(result.decision).toMatchObject({
+      tag: "terminal",
+      intent: "menu",
+      reason: "menu",
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.decision.tag).not.toBe("effect");
+  });
+
   it("clears details on contact_write when crmComplete", () => {
     let draft: BookingDraft | null = draftAtDetailsWithPhone();
     draft = reduceBookingDraft(draft, {

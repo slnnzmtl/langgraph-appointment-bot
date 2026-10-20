@@ -555,8 +555,8 @@ export const decideBooking = (
         return { tag: "terminal", intent: "success", facts, card: null, reason: "success" };
       }
       if (result.outcome === "declined") {
-        emit({ type: "draft_abandoned" });
-        return { tag: "terminal", intent: "abandon", facts: {}, card: null, reason: "abandon" };
+        // HITL leave and ❌ both close to main menu (no get_working_time recovery).
+        return applyControl("menu");
       }
       emit({ type: "effect_cleared" });
       emit({ type: "command_cleared" });

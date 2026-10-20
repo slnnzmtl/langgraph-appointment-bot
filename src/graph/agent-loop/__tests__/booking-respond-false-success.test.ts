@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   BOOKING_OFFER_MENU,
   CONSULTATION_SERVICE_ID,
+  MAIN_MENU_GREETING_UK,
   SERVICE_CONFIRM_CONSULTATION_UK,
+  defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
 import { setTrackEventForTests } from "../../../analytics/track.js";
 import type { BookingDecision } from "../../booking-domain/decision.js";
@@ -101,6 +103,56 @@ describe("booking__respond card copy + markup", () => {
     expect(update.lastHandoff?.replyText).toContain("Консультація");
     expect(update.lastHandoff?.replyText).toContain("2026-10-21");
     expect(update.lastHandoff?.replyChoices).toBeUndefined();
+  });
+
+  it("ships code-owned main menu for terminal menu without calling the LLM", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const update = await node({
+      bookingDecision: {
+        tag: "terminal",
+        intent: "menu",
+        reason: "menu",
+        facts: {},
+        card: null,
+      },
+      bookingDraft: null,
+      agentMessages: [],
+      bookingContext: null,
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
+    expect(update.lastHandoff?.replyButtons).toEqual([...defaultMenuLabels(false)]);
+  });
+
+  it("ships code-owned main menu for terminal abandon without calling the LLM", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const update = await node({
+      bookingDecision: {
+        tag: "terminal",
+        intent: "abandon",
+        reason: "abandon",
+        facts: {},
+        card: null,
+      },
+      bookingDraft: null,
+      agentMessages: [],
+      bookingContext: null,
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toBe(MAIN_MENU_GREETING_UK);
+    expect(update.lastHandoff?.replyButtons).toEqual([...defaultMenuLabels(false)]);
   });
 });
 

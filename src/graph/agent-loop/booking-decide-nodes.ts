@@ -40,10 +40,14 @@ import {
   resolveContactIdentity,
 } from "../contact-command.js";
 import { labelIdFor } from "../../shared/message-content.js";
-import { interpretInteractionReply } from "../booking-session.js";
+import {
+  closedBookingSessionUpdate,
+  interpretInteractionReply,
+} from "../booking-session.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
 import type { InterpretBookingTurn } from "./booking-turn-interpreter.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
+import { classifyMeetingMutationToolMessage } from "./protocol/mutation.js";
 import { projectPendingInteraction } from "./project-pending-interaction.js";
 import {
   appendOrReplacePendingToolCall,
@@ -448,19 +452,27 @@ export const effectResultFromToolMessages = (
         : name === "reschedule_meeting"
           ? "reschedule" as const
           : "cancel" as const;
-    if (record?.awaitingConfirmation === true) {
-      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "pending" };
+    // One classifier for HITL leave (left+cancelled), ❌ (cancelled), commit, etc.
+    const classified = classifyMeetingMutationToolMessage(matching);
+    switch (classified) {
+      case "pending_confirmation":
+        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "pending" };
+      case "committed":
+        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "committed" };
+      case "declined":
+      case "abandoned":
+        // Collapse leave and ❌ onto declined; decide maps both to main menu.
+        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "declined" };
+      case "failed":
+      case "blocked":
+        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "failed" };
+      case null:
+        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "unknown" };
+      default: {
+        const _exhaustive: never = classified;
+        return _exhaustive;
+      }
     }
-    if (record?.declined === true || record?.error === "declined") {
-      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "declined" };
-    }
-    if (record?.error != null || body.startsWith("Error:")) {
-      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "failed" };
-    }
-    if (typeof record?.id === "string" || record?.ok === true) {
-      return { effectId: expectedEffectId, kind: "mutation", action, outcome: "committed" };
-    }
-    return { effectId: expectedEffectId, kind: "mutation", action, outcome: "unknown" };
   }
 
   if (name === "list_services") {
@@ -704,6 +716,13 @@ export const createBookingDecideNode = (
       pendingInteraction,
       agentMessages: new Overwrite([] as BaseMessage[]),
     };
+
+    if (
+      result.decision.tag === "terminal"
+      && (result.decision.intent === "menu" || result.decision.intent === "abandon")
+    ) {
+      Object.assign(update, closedBookingSessionUpdate(pendingInteraction));
+    }
 
     if (
       (result.decision.tag === "effect" || result.decision.tag === "mutation_confirm")

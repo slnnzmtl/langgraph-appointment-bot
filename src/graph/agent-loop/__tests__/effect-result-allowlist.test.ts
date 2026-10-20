@@ -1,10 +1,28 @@
 import { ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
+import type { PendingEffect } from "../../booking-domain/effects.js";
 import {
   allowlistedInformationalFacts,
   effectResultFromToolMessages,
 } from "../booking-decide-nodes.js";
+
+const createMeetingPending = (id: string): PendingEffect => ({
+  id,
+  expectedRevision: 1,
+  effect: {
+    kind: "create_meeting",
+    payload: {
+      serviceId: "svc-1",
+      contactId: "c-1",
+      dateStart: "2026-10-20T11:30:00",
+      dateEnd: "2026-10-20T12:00:00",
+      name: "Botox - Test",
+      confirmMessage: "Підтвердити запис?",
+    },
+  },
+  status: "executing",
+});
 
 describe("allowlisted informational facts", () => {
   it("keeps only hours/address/servicePrice and drops raw text keys", () => {
@@ -51,5 +69,54 @@ describe("allowlisted informational facts", () => {
     });
     expect(JSON.stringify(result)).not.toContain("internalTrace");
     expect(JSON.stringify(result)).not.toContain("PII-or-prompt");
+  });
+});
+
+describe("effectResultFromToolMessages meeting mutation", () => {
+  it("stamps { cancelled, left } as declined (HITL main-menu leave)", () => {
+    const id = "eff_1_create_meeting";
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({
+            cancelled: true,
+            left: true,
+            message: "Cancelled by user.",
+          }),
+          tool_call_id: id,
+          name: "create_meeting",
+        }),
+      ],
+      createMeetingPending(id),
+    );
+    expect(result).toEqual({
+      effectId: id,
+      kind: "mutation",
+      action: "create",
+      outcome: "declined",
+    });
+  });
+
+  it("stamps { cancelled } as declined (HITL ❌)", () => {
+    const id = "eff_2_create_meeting";
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({
+            cancelled: true,
+            message: "Cancelled by user.",
+          }),
+          tool_call_id: id,
+          name: "create_meeting",
+        }),
+      ],
+      createMeetingPending(id),
+    );
+    expect(result).toEqual({
+      effectId: id,
+      kind: "mutation",
+      action: "create",
+      outcome: "declined",
+    });
   });
 });
