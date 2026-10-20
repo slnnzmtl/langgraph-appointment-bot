@@ -12,6 +12,7 @@ import { FAQ_AGENT_ID } from "../types.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import {
+  bookingAvailabilityScope,
   reduceBookingDraft,
   type BookingContactField,
   type BookingDraft,
@@ -49,6 +50,7 @@ import { choiceIdsFromCard } from "./booking-card-choices.js";
 import type { InterpretBookingTurn } from "./booking-turn-interpreter.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { classifyMeetingMutationToolMessage } from "./protocol/mutation.js";
+import { availabilitySlotsRanThisTurn, bookingDateAnchors } from "./protocol/availability.js";
 import { projectPendingInteraction } from "./project-pending-interaction.js";
 import {
   appendOrReplacePendingToolCall,
@@ -865,15 +867,23 @@ export const createBookingDecideNode = (
       (result.decision.tag === "effect" || result.decision.tag === "mutation_confirm")
       && result.decision.pendingEffect != null
     ) {
-      const stamped = stampBookingEffect(result.decision.pendingEffect);
-      assertStamped(stamped);
-      const ai = stampRuntimeToolAi(stamped.name, [{
-        id: stamped.id,
-        name: stamped.name,
-        args: stamped.args,
-        type: "tool_call",
-      }], stamped.action);
-      update.agentMessages = new Overwrite(appendOrReplacePendingToolCall([], ai));
+      const stamped = stampBookingEffect(result.decision.pendingEffect, {
+        availabilityContext: state.availabilityContext,
+        availabilityCursor: state.availabilityCursor,
+        scope: bookingAvailabilityScope(draft),
+        anchors: bookingDateAnchors(state),
+        availabilityPagedThisTurn: availabilitySlotsRanThisTurn(state.agentMessages ?? []),
+      });
+      if (stamped != null) {
+        assertStamped(stamped);
+        const ai = stampRuntimeToolAi(stamped.name, [{
+          id: stamped.id,
+          name: stamped.name,
+          args: stamped.args,
+          type: "tool_call",
+        }], stamped.action);
+        update.agentMessages = new Overwrite(appendOrReplacePendingToolCall([], ai));
+      }
     }
 
     return update;

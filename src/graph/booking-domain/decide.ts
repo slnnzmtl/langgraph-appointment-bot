@@ -30,9 +30,11 @@ import type {
   BookingViewCard,
   DecideBookingResult,
 } from "./decision.js";
+import { kyivToday } from "../../tools/availability-slots.js";
 import {
   labelsFromPresentation,
   projectAvailabilityPresentation,
+  projectEmptyAvailabilityPresentation,
 } from "./availability-presentation.js";
 import type { BookingEffect, EffectResult, PendingEffect } from "./effects.js";
 import { nextBookingRequirement } from "./requirement.js";
@@ -438,6 +440,7 @@ export const decideBooking = (
         snapshotId: pending.snapshotId,
         choiceIds: [...pending.choiceIds],
         labels: { ...pending.labels },
+        ...(pending.emptyMode != null ? { emptyMode: pending.emptyMode } : {}),
       });
     }
     if (w.pendingDecision?.kind === "time_select") {
@@ -758,12 +761,47 @@ export const decideBooking = (
         return decideFromRequirement();
       }
       if (result.outcome === "empty" || result.outcome === "closed") {
-        emitDecision({ kind: "clarification", reason: "availability_empty" });
-        return ask(
-          "clarification",
-          { kind: "clarification", reason: "availability_empty" },
-          "availability_empty",
-        );
+        const snapshotId =
+          result.snapshotId
+          ?? readModels.availabilitySnapshotId
+          ?? "availability";
+        const direction =
+          pending?.effect.kind === "present_availability"
+            ? pending.effect.queryKind
+            : "other";
+        const emptyMode =
+          direction === "earlier"
+            ? "earlier" as const
+            : direction === "exact"
+              ? "exact" as const
+              : "other" as const;
+        const anchor =
+          ctx.working?.selectedDate
+          ?? readModels.availabilityDays?.[0]?.date;
+        const canSearchEarlier =
+          direction !== "earlier"
+          && anchor != null
+          && anchor > kyivToday();
+        const projected = projectEmptyAvailabilityPresentation(snapshotId, {
+          direction,
+          canSearchEarlier,
+        });
+        const choiceIds = projected.choices.map((choice) => choice.id);
+        const labels = labelsFromPresentation(projected);
+        emitDecision({
+          kind: "date_select",
+          snapshotId,
+          choiceIds,
+          labels,
+          emptyMode,
+        });
+        return ask("present_dates", {
+          kind: "date_select",
+          snapshotId,
+          choiceIds,
+          labels,
+          emptyMode,
+        });
       }
       // Revalidation of a selected slot re-stamps availability provenance.
       if (

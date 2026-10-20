@@ -2,6 +2,12 @@
  * Single effect → tool mapper + stamp/allowlist for the decide/effect loop.
  */
 import { BOOKING_INFORMATIONAL_TOOL_NAMES, isBookingRuntimeToolName } from "../../tools/index.js";
+import { buildAvailabilitySlotsArgs } from "../../tools/availability-args.js";
+import type {
+  AvailabilityContext,
+  AvailabilityCursor,
+} from "../../tools/availability-tools.js";
+import type { BookingAvailabilityScope } from "../booking-draft.js";
 import type { PendingEffect } from "../booking-domain/effects.js";
 
 export const BOOKING_EFFECT_STAMP = "bookingEffectV1" as const;
@@ -13,7 +19,20 @@ export type StampedBookingToolCall = {
   args: Record<string, unknown> & { __bookingEffectStamp: typeof BOOKING_EFFECT_STAMP };
 };
 
-export const stampBookingEffect = (pending: PendingEffect): StampedBookingToolCall => {
+/** Runtime cursor/scope for present_availability — not stored on BookingEffect. */
+export type StampBookingEffectContext = {
+  availabilityContext?: AvailabilityContext | null;
+  availabilityCursor?: AvailabilityCursor | null;
+  scope?: BookingAvailabilityScope;
+  anchors?: readonly string[];
+  /** True when present_availability_slots already ran this turn (blocks earlier/later page). */
+  availabilityPagedThisTurn?: boolean;
+};
+
+export const stampBookingEffect = (
+  pending: PendingEffect,
+  context: StampBookingEffectContext = {},
+): StampedBookingToolCall | null => {
   const name = toolNameForBookingEffect(pending);
   if (
     !isBookingRuntimeToolName(name)
@@ -21,12 +40,16 @@ export const stampBookingEffect = (pending: PendingEffect): StampedBookingToolCa
   ) {
     throw new Error(`Refusing to stamp non-booking tool: ${name}`);
   }
+  const args = toolArgsForEffect(pending, context);
+  if (args == null) {
+    return null;
+  }
   return {
     id: pending.id,
     name,
     action: pending.effect.kind,
     args: {
-      ...toolArgsForEffect(pending),
+      ...args,
       __bookingEffectStamp: BOOKING_EFFECT_STAMP,
     },
   };
@@ -72,23 +95,40 @@ export const toolNameForBookingEffect = (pending: PendingEffect): string => {
   }
 };
 
-const toolArgsForEffect = (pending: PendingEffect): Record<string, unknown> => {
+const toolArgsForEffect = (
+  pending: PendingEffect,
+  context: StampBookingEffectContext,
+): Record<string, unknown> | null => {
   const effect = pending.effect;
   switch (effect.kind) {
-    case "present_availability":
-      // Tool schema uses `direction` (not domain `queryKind`).
-      return {
+    case "present_availability": {
+      // Tool schema uses `direction` (not domain `queryKind`). Cursor dates come
+      // from buildAvailabilitySlotsArgs (snapshot / availabilityCursor), not the effect.
+      const built = buildAvailabilitySlotsArgs({
         direction: effect.queryKind,
         ...(effect.date != null ? { date: effect.date } : {}),
-        ...(effect.preferredTime != null ? { preferredTime: effect.preferredTime } : {}),
+        availabilityContext: context.availabilityContext,
+        availabilityCursor: context.availabilityCursor,
+        scope: context.scope ?? {
+          ...(effect.durationMinutes != null
+            ? { durationMinutes: effect.durationMinutes }
+            : {}),
+          ...(effect.excludeMeetingIds != null && effect.excludeMeetingIds.length > 0
+            ? { excludeMeetingIds: [...effect.excludeMeetingIds] }
+            : {}),
+        },
+        availabilityPagedThisTurn: context.availabilityPagedThisTurn === true,
+        anchors: context.anchors ?? [],
         ...(effect.revalidate === true ? { forceRefresh: true } : {}),
-        ...(effect.durationMinutes != null
-          ? { durationMinutes: effect.durationMinutes }
-          : {}),
-        ...(effect.excludeMeetingIds != null && effect.excludeMeetingIds.length > 0
-          ? { excludeMeetingIds: [...effect.excludeMeetingIds] }
-          : {}),
+      });
+      if (built == null) {
+        return null;
+      }
+      return {
+        ...built,
+        ...(effect.preferredTime != null ? { preferredTime: effect.preferredTime } : {}),
       };
+    }
     case "lookup_contact_by_phone":
       return { phoneNumber: effect.phoneNumber };
     case "create_contact":

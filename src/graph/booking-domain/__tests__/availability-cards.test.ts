@@ -106,6 +106,48 @@ describe("availability cards from effect results", () => {
     expect(again.decision.pendingEffect).toBeUndefined();
   });
 
+  it("empty earlier outcome emits date_select with later chip, not availability_empty", () => {
+    const draft = reduceBookingDraft(draftWithAcceptedService(), {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_12_present_availability",
+        expectedRevision: 12,
+        effect: {
+          kind: "present_availability",
+          queryKind: "earlier",
+          durationMinutes: 30,
+        },
+        status: "executing",
+      },
+    });
+    const result: EffectResult = {
+      effectId: "eff_12_present_availability",
+      kind: "availability",
+      outcome: "empty",
+    };
+    const decision = decideBooking(
+      draft,
+      { source: "effect_result", result },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: true,
+        availabilitySnapshotId: "empty-earlier",
+        availabilityDays: [],
+      },
+    );
+    expect(decision.decision.tag).toBe("ask");
+    expect(decision.decision.intent).toBe("present_dates");
+    expect(decision.decision.reason).not.toBe("availability_empty");
+    expect(decision.decision.card).toMatchObject({
+      kind: "date_select",
+      emptyMode: "earlier",
+      choiceIds: ["later"],
+    });
+    expect(decision.decision.card?.kind === "date_select"
+      && decision.decision.card.labels?.later).toBeTruthy();
+  });
+
   it("selects an offered slot without a second availability effect", () => {
     let draft = draftWithAcceptedService();
     draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" })!;

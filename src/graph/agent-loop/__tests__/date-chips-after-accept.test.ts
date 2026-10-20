@@ -33,9 +33,72 @@ describe("date chips after service accept", () => {
       effect: { kind: "present_availability", queryKind: "nearest" },
       status: "prepared",
     });
-    expect(stamped.args.direction).toBe("nearest");
-    expect(stamped.args.queryKind).toBeUndefined();
-    expect(stamped.args.__bookingEffectStamp).toBe("bookingEffectV1");
+    expect(stamped).not.toBeNull();
+    expect(stamped!.args.direction).toBe("nearest");
+    expect(stamped!.args.queryKind).toBeUndefined();
+    expect(stamped!.args.__bookingEffectStamp).toBe("bookingEffectV1");
+  });
+
+  it("stamps earlier with beforeDate from the open snapshot first day", () => {
+    const stamped = stampBookingEffect(
+      {
+        id: "eff_12_present_availability",
+        expectedRevision: 12,
+        effect: {
+          kind: "present_availability",
+          queryKind: "earlier",
+          durationMinutes: 30,
+        },
+        status: "prepared",
+      },
+      {
+        availabilityContext: {
+          days: [
+            {
+              date: "2026-10-22",
+              dayLabel: "22 жовт",
+              slots: [{
+                id: "s1",
+                label: "11:00",
+                dateStart: "2026-10-22T11:00:00",
+                dateEnd: "2026-10-22T11:30:00",
+              }],
+            },
+            {
+              date: "2026-10-23",
+              dayLabel: "23 жовт",
+              slots: [{
+                id: "s2",
+                label: "12:00",
+                dateStart: "2026-10-23T12:00:00",
+                dateEnd: "2026-10-23T12:30:00",
+              }],
+            },
+            {
+              date: "2026-10-24",
+              dayLabel: "24 жовт",
+              slots: [{
+                id: "s3",
+                label: "13:00",
+                dateStart: "2026-10-24T13:00:00",
+                dateEnd: "2026-10-24T13:30:00",
+              }],
+            },
+          ],
+          stepMinutes: 30,
+        },
+        scope: { durationMinutes: 30 },
+        availabilityPagedThisTurn: false,
+      },
+    );
+    expect(stamped).not.toBeNull();
+    expect(stamped!.args).toMatchObject({
+      direction: "earlier",
+      beforeDate: "2026-10-22",
+      durationMinutes: 30,
+      __bookingEffectStamp: "bookingEffectV1",
+    });
+    expect(stamped!.args.queryKind).toBeUndefined();
   });
 
   it("Overwrite-clears stale ToolMessages so a recycled effect id stays pending", async () => {

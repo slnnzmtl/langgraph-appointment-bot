@@ -94,6 +94,15 @@ const cardSpecificFallback = (
     case "service_candidate":
       return "Оберіть, будь ласка, послугу зі списку.";
     case "date_select":
+      if (card.emptyMode === "earlier") {
+        return "Раніших вільних дат не знайшли. Пошукати пізніші дати?";
+      }
+      if (card.emptyMode === "exact") {
+        return "На цю дату вільного часу немає. Пошукати іншу дату?";
+      }
+      if (card.emptyMode === "other") {
+        return "У цьому періоді вільного часу немає. Пошукати інші дати?";
+      }
       return "Оберіть, будь ласка, зручну дату.";
     case "time_select":
       return "Оберіть, будь ласка, зручний час.";

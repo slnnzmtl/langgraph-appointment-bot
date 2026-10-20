@@ -49,6 +49,8 @@ export type PendingDecision =
       snapshotId: string;
       choiceIds: string[];
       labels: Record<string, string>;
+      /** Empty-window DATE page (no open days) — drives patient copy. */
+      emptyMode?: "earlier" | "exact" | "other";
     }
   | {
       kind: "time_select";

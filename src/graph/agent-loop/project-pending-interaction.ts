@@ -77,12 +77,16 @@ const projectCard = (
         owner: "booking",
         choices: choicesFromIds(card.choiceIds, card.labels),
       };
-    case "date_select":
+    case "date_select": {
+      const snapshot = snapshotFromAvailability(availabilityContext, card.snapshotId);
       return {
         kind: "date_select",
-        snapshot: snapshotFromAvailability(availabilityContext, card.snapshotId),
+        snapshot: card.emptyMode != null
+          ? { ...snapshot, days: [], emptyMode: card.emptyMode }
+          : snapshot,
         choices: choicesFromIds(card.choiceIds, card.labels),
       };
+    }
     case "time_select":
       return {
         kind: "time_select",
