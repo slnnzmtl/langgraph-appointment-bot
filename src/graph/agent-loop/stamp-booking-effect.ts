@@ -82,6 +82,12 @@ const toolArgsForEffect = (pending: PendingEffect): Record<string, unknown> => {
         ...(effect.date != null ? { date: effect.date } : {}),
         ...(effect.preferredTime != null ? { preferredTime: effect.preferredTime } : {}),
         ...(effect.revalidate === true ? { forceRefresh: true } : {}),
+        ...(effect.durationMinutes != null
+          ? { durationMinutes: effect.durationMinutes }
+          : {}),
+        ...(effect.excludeMeetingIds != null && effect.excludeMeetingIds.length > 0
+          ? { excludeMeetingIds: [...effect.excludeMeetingIds] }
+          : {}),
       };
     case "lookup_contact_by_phone":
       return { phoneNumber: effect.phoneNumber };

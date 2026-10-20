@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   BOOKING_OFFER_MENU,
+  BOOKING_REPLACE_MENU,
+  CONFIRM_NO_LABEL,
+  CONFIRM_YES_LABEL,
   CONSULTATION_SERVICE_ID,
+  INTENT_SKIP_LABEL,
   MAIN_MENU_GREETING_UK,
+  MAIN_MENU_LABEL,
   SERVICE_CONFIRM_CONSULTATION_UK,
   defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
@@ -164,5 +169,36 @@ describe("replyChoicesFromCard offer labels", () => {
       choiceIds: ["offer_accept", "offer_choose_other"],
     });
     expect(choices.map((c) => c.label)).toEqual([...BOOKING_OFFER_MENU]);
+  });
+
+  it("defaults REPLACE chips on visit_select/replacement", () => {
+    const choices = replyChoicesFromCard({
+      kind: "visit_select",
+      stage: "replacement",
+    });
+    expect(choices.map((c) => c.label)).toEqual([...BOOKING_REPLACE_MENU]);
+  });
+
+  it("defaults HITL confirm / decline / menu", () => {
+    const choices = replyChoicesFromCard({
+      kind: "mutation_confirm",
+      action: "create",
+    });
+    expect(choices.map((c) => c.label)).toEqual([
+      CONFIRM_YES_LABEL,
+      CONFIRM_NO_LABEL,
+      MAIN_MENU_LABEL,
+    ]);
+  });
+
+  it("defaults note_skip and menu on visit_note", () => {
+    const choices = replyChoicesFromCard({
+      kind: "visit_note",
+      skipChoiceId: "note_skip",
+    });
+    expect(choices.map((c) => c.label)).toEqual([
+      INTENT_SKIP_LABEL,
+      MAIN_MENU_LABEL,
+    ]);
   });
 });

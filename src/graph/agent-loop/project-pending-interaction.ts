@@ -15,6 +15,7 @@ import type { BookingDecision, BookingViewCard } from "../booking-domain/decisio
 import { availabilityRenderSnapshotFromContext } from "../booking-interaction-render.js";
 import {
   isBookingOwnedInteraction,
+  openVisitReplacementInteraction,
   type AvailabilityRenderSnapshot,
   type InteractionChoice,
   type PendingInteraction,
@@ -110,12 +111,16 @@ const projectCard = (
         field: card.field,
         choices: [],
       };
-    case "visit_select":
+    case "visit_select": {
+      if (card.stage === "replacement" && draft?.replacement?.meeting != null) {
+        return openVisitReplacementInteraction(draft.replacement.meeting);
+      }
       return {
         kind: "visit_select",
         stage: card.stage,
         choices: [{ id: "menu", label: MAIN_MENU_LABEL }],
       };
+    }
     case "mutation_confirm":
       return {
         kind: "mutation_confirm",

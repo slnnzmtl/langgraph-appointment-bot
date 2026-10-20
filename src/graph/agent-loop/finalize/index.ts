@@ -160,7 +160,16 @@ const createSpecialistFinalizeNode = (
     config?: RunnableConfig,
   ): Promise<ClinicStateUpdate | Command> => {
     const agentMessages = state.agentMessages ?? [];
-    if (terminalMeetingMutationOutcome(state) != null) {
+    // REPLACE cancel already opened the FAQ catalog — do not treat the cancel
+    // ToolMessage as a terminal mutation finalize that closes the session.
+    const faqCatalogOpenAfterReplaceCancel =
+      state.pendingInteraction?.kind === "service_candidate"
+      && state.pendingInteraction.owner === "faq"
+      && state.pendingInteraction.consultationDeclined === true;
+    if (
+      terminalMeetingMutationOutcome(state) != null
+      && !faqCatalogOpenAfterReplaceCancel
+    ) {
       return createAgentMutationFinalizeNode(agent)(state, config);
     }
     const stepCount = state.stepCount ?? 0;

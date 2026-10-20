@@ -1,3 +1,4 @@
+import { isFaqServicesGuideLabel } from "../../shared/message-content.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
@@ -65,6 +66,22 @@ const mainMenu: PreLlmRule = (ctx) => {
       ctx.bookingContext,
       ctx.contactContext,
     ),
+  };
+};
+
+/** «Послуги» — always FAQ catalog/guide (never booking clarification). */
+const servicesGuide: PreLlmRule = (ctx) => {
+  if (!isFaqServicesGuideLabel(ctx.lastHumanLine)) {
+    return null;
+  }
+  return {
+    path: "services_guide",
+    update: {
+      next: FAQ_AGENT_ID,
+      lastHandoff: null,
+      supervisorIntent: null,
+      ...ctx.prefetchUpdate,
+    },
   };
 };
 
@@ -160,6 +177,7 @@ export const PRE_LLM_RULES: readonly PreLlmRule[] = [
   pendingRescheduleDate,
   abandonBareCancel,
   mainMenu,
+  servicesGuide,
   visitStatusSignal,
   openVisitMenu,
   sticky,

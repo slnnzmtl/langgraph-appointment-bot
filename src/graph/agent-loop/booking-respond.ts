@@ -88,6 +88,22 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
 
     // Committed mutation only — code-owned success text, no model prose.
     if (isCommittedSuccess(decision)) {
+      let hasVisit: boolean;
+      switch (decision.facts.action) {
+        case "cancel":
+          hasVisit = false;
+          break;
+        case "create":
+        case "reschedule":
+          hasVisit = true;
+          break;
+        default:
+          hasVisit = defaultMenuHasVisit(
+            state.agentMessages ?? [],
+            state.bookingContext,
+          );
+          break;
+      }
       return {
         bookingDecision: null,
         lastHandoff: {
@@ -95,7 +111,7 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           agentName,
           status: "ok",
           replyText: bookingSuccessText(decision.facts),
-          replyButtons,
+          replyButtons: [...defaultMenuLabels(hasVisit)],
         },
       };
     }

@@ -244,6 +244,88 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("book-with-visit offers REPLACE visit_select instead of consultation", () => {
+    const meeting = {
+      id: "meeting-1",
+      name: "Консультація",
+      dateStart: "2026-10-21T10:00:00",
+      dateEnd: "2026-10-21T10:30:00",
+    };
+    const result = decideBooking(
+      null,
+      { source: "semantic_patch", patch: { serviceIntent: { kind: "consultation" } } },
+      { ...READ_MODELS, plannedMeetings: [meeting] },
+    );
+    expect(result.events.some((e) => e.type === "existing_booking_detected")).toBe(true);
+    expect(result.decision.card).toMatchObject({
+      kind: "visit_select",
+      stage: "replacement",
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+  });
+
+  it("present_availability includes excludeMeetingIds while rescheduling", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-rs",
+        name: "Консультація",
+        dateStart: "2026-10-21T10:00:00",
+        dateEnd: "2026-10-21T10:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox", source: "catalog", durationMinutes: 30 },
+      accepted: true,
+    });
+    expect(draft?.mode).toBe("reschedule");
+
+    const result = decideBooking(
+      draft,
+      { source: "semantic_patch", patch: {} },
+      READ_MODELS,
+    );
+    expect(result.decision.tag).toBe("effect");
+    const effect = result.decision.pendingEffect?.effect;
+    expect(effect?.kind).toBe("present_availability");
+    if (effect?.kind === "present_availability") {
+      expect(effect.excludeMeetingIds).toEqual(["meeting-rs"]);
+      expect(effect.durationMinutes).toBe(30);
+    }
+  });
+
+  it("confirming with pendingCommand cancel emits cancel_meeting mutation_confirm", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "command_prepared",
+      command: {
+        action: "cancel",
+        payload: {
+          meetingId: "meeting-1",
+          confirmMessage: "Підтвердити скасування?",
+        },
+      },
+    });
+    expect(draft?.phase).toBe("confirming");
+    expect(draft?.pendingCommand?.action).toBe("cancel");
+    expect(draft?.pendingDecision).toBeNull();
+
+    const result = decideBooking(
+      draft,
+      { source: "semantic_patch", patch: {} },
+      READ_MODELS,
+    );
+
+    expect(result.decision.tag).toBe("mutation_confirm");
+    expect(result.decision.intent).toBe("confirm_cancel");
+    expect(result.decision.card).toMatchObject({
+      kind: "mutation_confirm",
+      action: "cancel",
+    });
+    expect(result.decision.pendingEffect?.effect.kind).toBe("cancel_meeting");
+    expect(result.decision.reason).not.toBe("awaiting_confirm");
+  });
+
   it("mutation declined closes to main menu without get_working_time", () => {
     let draft: BookingDraft | null = draftAtDetailsWithPhone();
     draft = reduceBookingDraft(draft, {

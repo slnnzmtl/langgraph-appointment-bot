@@ -6,7 +6,8 @@
  * reduceBookingDraft. Informational tool results are allowlisted facts only.
  */
 import type { BaseMessage } from "@langchain/core/messages";
-import { Overwrite } from "@langchain/langgraph";
+import { Command, Overwrite } from "@langchain/langgraph";
+import { FAQ_AGENT_ID } from "../types.js";
 
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { asJsonRecord } from "../../shared/json-record.js";
@@ -69,6 +70,103 @@ const INFORMATIONAL_FACT_KEYS = [
   "serviceId",
   "serviceName",
 ] as const satisfies readonly (keyof InformationalFacts)[];
+
+const CONTACT_FIELD_SET = new Set<BookingContactField>([
+  "phoneNumber",
+  "firstName",
+  "lastName",
+]);
+
+const firstString = (...candidates: unknown[]): string | undefined => {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.length > 0) {
+      return candidate;
+    }
+  }
+  return undefined;
+};
+
+const awaitingContactFieldFromDraft = (
+  draft: BookingDraft | null | undefined,
+): BookingContactField | undefined => {
+  const pending = draft?.pendingDecision;
+  if (pending?.kind === "clarification" && typeof pending.reason === "string") {
+    const prefix = "need_";
+    if (pending.reason.startsWith(prefix)) {
+      const field = pending.reason.slice(prefix.length);
+      if (CONTACT_FIELD_SET.has(field as BookingContactField)) {
+        return field as BookingContactField;
+      }
+    }
+  }
+  if (draft?.phase === "details") {
+    return "phoneNumber";
+  }
+  return undefined;
+};
+
+const coerceServiceRows = (record: Record<string, unknown> | unknown[] | null): unknown[] => {
+  if (record == null) {
+    return [];
+  }
+  if (Array.isArray(record)) {
+    return record;
+  }
+  if (Array.isArray(record.services)) {
+    return record.services;
+  }
+  if (Array.isArray(record.list)) {
+    return record.list;
+  }
+  return [];
+};
+
+const serviceNameFromRow = (item: {
+  name?: unknown;
+  cName?: unknown;
+}): string => {
+  if (typeof item.name === "string" && item.name.trim().length > 0) {
+    return item.name.trim();
+  }
+  if (typeof item.cName === "string" && item.cName.trim().length > 0) {
+    return item.cName.trim();
+  }
+  return "";
+};
+
+const contactWriteOutcome = (
+  name: "create_contact" | "update_contact" | "link_telegram_to_contact",
+): "created" | "updated" | "linked" => {
+  switch (name) {
+    case "create_contact":
+      return "created";
+    case "update_contact":
+      return "updated";
+    case "link_telegram_to_contact":
+      return "linked";
+    default: {
+      const _exhaustive: never = name;
+      return _exhaustive;
+    }
+  }
+};
+
+const bookingContextWithoutMeeting = (
+  bookingContext: ClinicState["bookingContext"],
+  meetingId: string | undefined,
+): ClinicState["bookingContext"] | undefined => {
+  if (
+    meetingId == null
+    || meetingId.length === 0
+    || bookingContext == null
+  ) {
+    return undefined;
+  }
+  return {
+    ...bookingContext,
+    meetings: bookingContext.meetings.filter((meeting) => meeting.id !== meetingId),
+  };
+};
 
 /** Copy only allowlisted informational fields; drop raw tool text and unknown keys. */
 export const allowlistedInformationalFacts = (
@@ -153,6 +251,19 @@ export const readModelsFromClinicState = (state: ClinicState): BookingReadModels
       stepMinutes: availability.stepMinutes,
     })
     : undefined;
+  const plannedMeetings = (state.bookingContext?.meetings ?? []).flatMap((meeting) => {
+    if (typeof meeting.id !== "string" || meeting.id.trim().length === 0) {
+      return [];
+    }
+    return [{
+      id: meeting.id.trim(),
+      ...(typeof meeting.name === "string" && meeting.name.trim().length > 0
+        ? { name: meeting.name.trim() }
+        : {}),
+      ...(typeof meeting.dateStart === "string" ? { dateStart: meeting.dateStart } : {}),
+      ...(typeof meeting.dateEnd === "string" ? { dateEnd: meeting.dateEnd } : {}),
+    }];
+  });
   return {
     contactContextDirty: state.prefetchDirty === true,
     bookingContextDirty: state.prefetchDirty === true,
@@ -172,6 +283,7 @@ export const readModelsFromClinicState = (state: ClinicState): BookingReadModels
       }
       : {}),
     ...(snapshotId != null ? { availabilitySnapshotId: snapshotId } : {}),
+    ...(plannedMeetings.length > 0 ? { plannedMeetings } : {}),
   };
 };
 
@@ -415,12 +527,7 @@ export const effectResultFromToolMessages = (
     || name === "update_contact"
     || name === "link_telegram_to_contact"
   ) {
-    const contactId =
-      typeof record?.id === "string"
-        ? record.id
-        : typeof record?.contactId === "string"
-          ? record.contactId
-          : undefined;
+    const contactId = firstString(record?.id, record?.contactId);
     if (contactId != null) {
       const missingRaw = record?.missingFields;
       const crmComplete = Array.isArray(missingRaw)
@@ -429,11 +536,7 @@ export const effectResultFromToolMessages = (
       return {
         effectId: expectedEffectId,
         kind: "contact_write",
-        outcome: name === "create_contact"
-          ? "created"
-          : name === "update_contact"
-            ? "updated"
-            : "linked",
+        outcome: contactWriteOutcome(name),
         contactId,
         crmComplete,
       };
@@ -455,8 +558,19 @@ export const effectResultFromToolMessages = (
     // One classifier for HITL leave (left+cancelled), ❌ (cancelled), commit, etc.
     const classified = classifyMeetingMutationToolMessage(matching);
     switch (classified) {
-      case "pending_confirmation":
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "pending" };
+      case "pending_confirmation": {
+        const userReply =
+          typeof record?.userReply === "string" && record.userReply.trim().length > 0
+            ? record.userReply.trim()
+            : undefined;
+        return {
+          effectId: expectedEffectId,
+          kind: "mutation",
+          action,
+          outcome: "pending",
+          ...(userReply != null ? { userReply } : {}),
+        };
+      }
       case "committed":
         return { effectId: expectedEffectId, kind: "mutation", action, outcome: "committed" };
       case "declined":
@@ -479,24 +593,13 @@ export const effectResultFromToolMessages = (
     if (record?.error != null || body.startsWith("Error:")) {
       return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
     }
-    const rawList = Array.isArray(record?.services)
-      ? record.services
-      : Array.isArray(record?.list)
-        ? record.list
-        : Array.isArray(record)
-          ? record
-          : [];
-    const services = rawList.flatMap((row) => {
+    const services = coerceServiceRows(record).flatMap((row) => {
       if (row == null || typeof row !== "object") {
         return [];
       }
       const item = row as { id?: unknown; name?: unknown; cName?: unknown };
       const id = typeof item.id === "string" ? item.id.trim() : "";
-      const serviceName = typeof item.name === "string"
-        ? item.name.trim()
-        : typeof item.cName === "string"
-          ? item.cName.trim()
-          : "";
+      const serviceName = serviceNameFromRow(item);
       if (id.length === 0 || serviceName.length === 0) {
         return [];
       }
@@ -600,7 +703,9 @@ export const createBookingDecideNode = (
 ) => {
   const interpretTurn = options.interpretTurn;
 
-  return async (state: ClinicState): Promise<ClinicStateUpdate> => {
+  return async (
+    state: ClinicState,
+  ): Promise<ClinicStateUpdate | Command> => {
     const readModels = readModelsFromClinicState(state);
     const seeded = seedDraftFromTelegramPrefetch(
       state.bookingDraft ?? null,
@@ -638,17 +743,7 @@ export const createBookingDecideNode = (
           readModels,
         );
       } else {
-        const awaitingContactField =
-          workingDraft?.pendingDecision?.kind === "clarification"
-          && typeof workingDraft.pendingDecision.reason === "string"
-          && workingDraft.pendingDecision.reason.startsWith("need_")
-            ? (workingDraft.pendingDecision.reason.replace("need_", "") as
-              | "phoneNumber"
-              | "firstName"
-              | "lastName")
-            : workingDraft?.phase === "details"
-              ? ("phoneNumber" as const)
-              : undefined;
+        const awaitingContactField = awaitingContactFieldFromDraft(workingDraft);
         // Reply-keyboard taps send labels; inline callbacks send ids.
         // Prefer inboundChoiceId; otherwise map the open card label → choice id.
         const fromInbound = state.inboundChoiceId;
@@ -665,11 +760,7 @@ export const createBookingDecideNode = (
             : {}),
           awaitingNote: workingDraft?.note.status === "awaiting"
             || workingDraft?.phase === "note",
-          ...(awaitingContactField === "phoneNumber"
-            || awaitingContactField === "firstName"
-            || awaitingContactField === "lastName"
-            ? { awaitingContactField }
-            : {}),
+          ...(awaitingContactField != null ? { awaitingContactField } : {}),
           awaitingServiceConfirm: workingDraft?.serviceAcceptance?.status === "pending",
         };
         const rawPatch = interpretTurn != null
@@ -679,17 +770,28 @@ export const createBookingDecideNode = (
           ...state,
           bookingDraft: workingDraft,
         }, readModels);
-        result = Object.keys(patch).length > 0
-          ? decideBooking(
+        // Empty interpreter patch with an open draft → decideFromRequirement
+        // (cancel seed, note re-ask). Non-empty text without a draft still uses
+        // patient_turn → need_interpreter.
+        if (Object.keys(patch).length > 0) {
+          result = decideBooking(
             workingDraft,
             { source: "semantic_patch", patch },
             readModels,
-          )
-          : decideBooking(
+          );
+        } else if (workingDraft != null) {
+          result = decideBooking(
+            workingDraft,
+            { source: "semantic_patch", patch: {} },
+            readModels,
+          );
+        } else {
+          result = decideBooking(
             workingDraft,
             { source: "patient_turn", rawText: interpretInput.rawText },
             readModels,
           );
+        }
       }
     }
 
@@ -705,6 +807,38 @@ export const createBookingDecideNode = (
       previousInteraction: state.pendingInteraction ?? null,
     });
 
+    // Drop the cancelled visit from bookingContext after REPLACE cancel so the
+    // next decide/readModels turn does not re-open visit_select/replacement.
+    const cancelCompleted = result.events.some(
+      (event) => event.type === "cancel_existing_completed",
+    );
+    const bookingContextAfterCancel = bookingContextWithoutMeeting(
+      state.bookingContext,
+      cancelCompleted ? workingDraft?.replacement?.meeting.id : undefined,
+    );
+
+    // REPLACE cancel with no accepted service → FAQ root catalog.
+    if (result.decision.reason === "replacement_cancel_catalog") {
+      return new Command({
+        goto: "faq__prepare",
+        update: {
+          bookingDraft: draft,
+          bookingSchemaVersion: 2,
+          inboundChoiceId: null,
+          bookingDecision: null,
+          pendingInteraction: null,
+          next: FAQ_AGENT_ID,
+          lastHandoff: null,
+          ...(bookingContextAfterCancel != null
+            ? { bookingContext: bookingContextAfterCancel }
+            : {}),
+          // Keep cancel ToolMessage so FAQ prepare opens the root catalog and
+          // finalize can prefix «Запис скасовано.» (Overwrite — do not append).
+          agentMessages: new Overwrite(state.agentMessages ?? []),
+        },
+      });
+    }
+
     // Overwrite the tool tape. `agentMessages: []` is a no-op under the messages
     // reducer, so stale ToolMessages would keep recycled effect ids looking
     // fulfilled and skip booking__tools (date prompt with no chips).
@@ -715,6 +849,9 @@ export const createBookingDecideNode = (
       bookingDecision: result.decision,
       pendingInteraction,
       agentMessages: new Overwrite([] as BaseMessage[]),
+      ...(bookingContextAfterCancel != null
+        ? { bookingContext: bookingContextAfterCancel }
+        : {}),
     };
 
     if (

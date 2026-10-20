@@ -1,3 +1,5 @@
+import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
+
 import { trackEvent } from "../../../analytics/track.js";
 import { extractFaqCatalogAction } from "../../../shared/message-content.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
@@ -24,13 +26,26 @@ import type {
   SelectServiceCandidates,
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { ensureServicesContext } from "../protocol/index.js";
+import {
+  classifyMeetingMutationToolMessage,
+  ensureServicesContext,
+} from "../protocol/index.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,
   withServiceConfirmQuestion,
   type FinalizeReply,
 } from "./shared.js";
+
+const classifyMeetingMutationCommittedCancel = (
+  messages: BaseMessage[] | undefined,
+): boolean =>
+  (messages ?? []).some(
+    (message) =>
+      message instanceof ToolMessage
+      && message.name === "cancel_meeting"
+      && classifyMeetingMutationToolMessage(message) === "committed",
+  );
 
 export type FinalizeFaqOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -54,9 +69,15 @@ export const tryFaqNoAiFinalize = (
       interaction,
       state.servicesContext?.list ?? [],
     );
+    // REPLACE cancel continue: acknowledge cancel then show the catalog.
+    const replaceCancelAck =
+      interaction.consultationDeclined === true
+      && classifyMeetingMutationCommittedCancel(state.agentMessages)
+        ? "Запис скасовано.\n\n"
+        : "";
     return {
       ...emptyFinalizeReply("ok"),
-      replyText: chips.replyText,
+      replyText: `${replaceCancelAck}${chips.replyText}`,
       replyButtons: chips.replyButtons,
       replySource: "runtime",
       patch: {

@@ -202,7 +202,7 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
       });
     }
 
-    const replacementCancellation = null === "replacement";
+    const replacementCancellation = state.bookingDraft?.replacement != null;
     const committedVisitLabel =
       outcome === "committed" ? visitLabelFromToolResult(result) : undefined;
     const replyText = meetingMutationReplyText({
@@ -214,13 +214,18 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     const committed = outcome === "committed";
     const declined = outcome === "declined";
-    const replyButtons = mutationName === "cancel_meeting" && !committed && !replacementCancellation
+    const showVisitChangeMenu =
+      mutationName === "cancel_meeting" && !committed && !replacementCancellation;
+    let hasVisit = defaultMenuHasVisit(
+      state.agentMessages ?? [],
+      state.bookingContext,
+    );
+    if (committed && mutationName === "create_meeting") {
+      hasVisit = true;
+    }
+    const replyButtons = showVisitChangeMenu
       ? [...VISIT_CHANGE_MENU]
-      : [...defaultMenuLabels(
-          committed && mutationName === "create_meeting"
-            ? true
-            : defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext),
-        )];
+      : [...defaultMenuLabels(hasVisit)];
     const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
     trackEvent("meeting_mutation_outcome", {
       mutation: mutationName,

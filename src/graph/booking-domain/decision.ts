@@ -128,6 +128,14 @@ export type AvailabilitySlotReadModel = {
   dateEnd: string;
 };
 
+/** Allowlisted planned visit for preemptive REPLACE (id + display fields only). */
+export type PlannedMeetingReadModel = {
+  id: string;
+  name?: string;
+  dateStart?: string;
+  dateEnd?: string;
+};
+
 /** CRM / availability read models passed into decideBooking (not a second aggregate). */
 export type BookingReadModels = {
   contactContextDirty: boolean;
@@ -140,6 +148,8 @@ export type BookingReadModels = {
     slots: AvailabilitySlotReadModel[];
   }>;
   availabilitySnapshotId?: string;
+  /** Prefetched planned meetings (REPLACE gate). */
+  plannedMeetings?: PlannedMeetingReadModel[];
 };
 
 /**

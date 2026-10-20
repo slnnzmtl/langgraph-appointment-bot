@@ -626,6 +626,18 @@ const openFromNull = (event: BookingEvent): BookingDraft | null => {
         version: 1,
       };
     }
+    case "existing_booking_detected": {
+      return {
+        ...createEmptyBookingDraft(),
+        mode: "replace",
+        phase: "confirming",
+        replacement: {
+          meeting: event.meeting,
+          status: "offered",
+        },
+        version: 1,
+      };
+    }
     default:
       return null;
   }

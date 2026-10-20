@@ -5,15 +5,21 @@ import {
   CONSULTATION_SERVICE_NAME_UK,
   CREATE_CONFIRMATION_UK,
   OTHER_DATE_LABEL,
-  RESCHEDULE_CONFIRMATION_UK,
 } from "../../shared/clinic-constants.js";
 import {
+  isConfirmationAffirmation,
+  isConfirmationDecline,
+} from "../../shared/message-content.js";
+import { cancelCommandFromMeeting } from "../cancel-command.js";
+import {
+  availabilityRequestFieldsFromDraft,
   nextMissingContactField,
   reduceBookingDraft,
   slotEvidenceForSelection,
   type BookingContactDetails,
   type BookingDraft,
   type BookingEvent,
+  type ReplacementMeeting,
 } from "../booking-draft.js";
 import type {
   BookingDecision,
@@ -31,12 +37,41 @@ import {
 import type { BookingEffect, EffectResult, PendingEffect } from "./effects.js";
 import { nextBookingRequirement } from "./requirement.js";
 import type { PendingDecision } from "./session.js";
-import type { UnderstoodBookingTurn } from "./turn.js";
+import type { ScheduleIntent, UnderstoodBookingTurn } from "./turn.js";
 
 const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSemanticIntent> = {
   phoneNumber: "ask_phone",
   firstName: "ask_first_name",
   lastName: "ask_last_name",
+};
+
+type RelativeOrNavSchedule =
+  | Extract<ScheduleIntent, { kind: "relative" }>
+  | Extract<ScheduleIntent, { kind: "choice" }>;
+
+const queryKindFromSchedule = (
+  schedule: RelativeOrNavSchedule,
+): "nearest" | "earlier" | "later" => {
+  if (schedule.kind === "relative") {
+    return schedule.queryKind;
+  }
+  if (schedule.choiceId === "earlier") {
+    return "earlier";
+  }
+  if (schedule.choiceId === "later" || schedule.choiceId === "other_date") {
+    return "later";
+  }
+  return "nearest";
+};
+
+const dateFromSchedule = (
+  schedule: RelativeOrNavSchedule,
+  working: BookingDraft | null | undefined,
+): string | undefined => {
+  if (schedule.kind === "relative" && schedule.anchor != null) {
+    return schedule.anchor;
+  }
+  return working?.selectedDate ?? undefined;
 };
 
 /** Deep structural equality for emit-once effect correlation. */
@@ -45,6 +80,19 @@ const sameEffect = (a: BookingEffect, b: BookingEffect): boolean =>
 
 const localDate = (iso: string): string => iso.slice(0, 10);
 const localTime = (iso: string): string => iso.slice(11, 16);
+
+/** Mint present_availability with draft scope (duration + excludeMeetingIds). */
+const presentAvailabilityEffect = (
+  draft: BookingDraft | null | undefined,
+  fields: Omit<
+    Extract<BookingEffect, { kind: "present_availability" }>,
+    "kind" | "durationMinutes" | "excludeMeetingIds"
+  >,
+): Extract<BookingEffect, { kind: "present_availability" }> => ({
+  kind: "present_availability",
+  ...fields,
+  ...availabilityRequestFieldsFromDraft(draft),
+});
 
 /** Human-readable service label for CRM meeting titles — never a raw CRM id. */
 const serviceLabelForMeeting = (w: BookingDraft): string => {
@@ -200,13 +248,15 @@ export const decideBooking = (
       && w.selectedSlot != null
       && (w.slotProvenance !== "availability_tool" || w.slotEvidence?.snapshotId == null)
     ) {
-      return runEffect("run_effect", {
-        kind: "present_availability",
-        queryKind: "exact",
-        date: w.selectedDate ?? localDate(w.selectedSlot.dateStart),
-        preferredTime: localTime(w.selectedSlot.dateStart),
-        revalidate: true,
-      });
+      return runEffect(
+        "run_effect",
+        presentAvailabilityEffect(w, {
+          queryKind: "exact",
+          date: w.selectedDate ?? localDate(w.selectedSlot.dateStart),
+          preferredTime: localTime(w.selectedSlot.dateStart),
+          revalidate: true,
+        }),
+      );
     }
     const pending = preparePendingEffect(effect);
     if (pending.status === "completed") {
@@ -300,6 +350,39 @@ export const decideBooking = (
     return ask("ask_last_name", { kind: "contact_field", field: "lastName" }, "need_lastName");
   };
 
+  /** Meeting ids to ignore for preemptive REPLACE (just-cancelled REPLACE continue). */
+  const replaceGateExcludeIds = new Set<string>();
+
+  const firstPlannedMeeting = (): ReplacementMeeting | null => {
+    const row = readModels.plannedMeetings?.find(
+      (meeting) => !replaceGateExcludeIds.has(meeting.id.trim()),
+    );
+    if (row == null || row.id.trim().length === 0) {
+      return null;
+    }
+    return {
+      id: row.id.trim(),
+      ...(row.name != null ? { name: row.name } : {}),
+      ...(row.dateStart != null ? { dateStart: row.dateStart } : {}),
+      ...(row.dateEnd != null ? { dateEnd: row.dateEnd } : {}),
+    };
+  };
+
+  /** Show REPLACE chips; detect existing visit once when not already offered. */
+  const askReplacementOffer = (meeting: ReplacementMeeting): BookingDecision => {
+    if (ctx.working?.replacement == null) {
+      emit({ type: "existing_booking_detected", meeting });
+    }
+    emitDecision({ kind: "visit_select", stage: "replacement" });
+    return {
+      tag: "ask",
+      intent: "clarification",
+      facts: {},
+      card: { kind: "visit_select", stage: "replacement" },
+      reason: "replacement_offer",
+    };
+  };
+
   const decideFromRequirement = (): BookingDecision => {
     const w = ctx.working;
     if (w == null) {
@@ -318,6 +401,11 @@ export const decideBooking = (
         w.pendingEffect.id,
         w.pendingEffect,
       );
+    }
+
+    // Replacement offered → chips (not immediate cancel HITL).
+    if (w.replacement?.status === "offered") {
+      return askReplacementOffer(w.replacement.meeting);
     }
 
     // Pending service confirmation.
@@ -363,27 +451,29 @@ export const decideBooking = (
       });
     }
 
-    // Replacement offered → cancel existing before create.
-    if (w.replacement?.status === "offered") {
-      return emitMutationConfirm(
-        { kind: "cancel_meeting", payload: { meetingId: w.replacement.meeting.id } },
-        "cancel",
-      );
-    }
-
     const requirement = nextBookingRequirement(w, readModels);
     switch (requirement) {
       case "service":
         emitDecision({ kind: "clarification", reason: "need_service" });
         return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
       case "date":
-      case "time":
-        return runEffect(requirement === "date" ? "present_dates" : "present_times", {
-          kind: "present_availability",
-          queryKind: w.selectedDate != null ? "exact" : "nearest",
-          ...(w.selectedDate != null ? { date: w.selectedDate } : {}),
-          ...(w.requestedTime != null ? { preferredTime: w.requestedTime.value } : {}),
-        });
+      case "time": {
+        // Preemptive REPLACE before fetching slots for a new create.
+        if (w.mode !== "reschedule" && w.replacement == null) {
+          const existing = firstPlannedMeeting();
+          if (existing != null) {
+            return askReplacementOffer(existing);
+          }
+        }
+        return runEffect(
+          requirement === "date" ? "present_dates" : "present_times",
+          presentAvailabilityEffect(w, {
+            queryKind: w.selectedDate != null ? "exact" : "nearest",
+            ...(w.selectedDate != null ? { date: w.selectedDate } : {}),
+            ...(w.requestedTime != null ? { preferredTime: w.requestedTime.value } : {}),
+          }),
+        );
+      }
       case "note":
         emitDecision({ kind: "clarification", reason: "need_note" });
         return {
@@ -396,6 +486,7 @@ export const decideBooking = (
         return decideContactDetails();
       case "ready": {
         if (w.mode === "reschedule" && w.rescheduleTarget != null && w.selectedSlot != null) {
+          const slotTime = localTime(w.selectedSlot.dateStart);
           return emitMutationConfirm(
             {
               kind: "reschedule_meeting",
@@ -403,7 +494,8 @@ export const decideBooking = (
                 meetingId: w.rescheduleTarget.id,
                 dateStart: w.selectedSlot.dateStart,
                 dateEnd: w.selectedSlot.dateEnd,
-                confirmMessage: RESCHEDULE_CONFIRMATION_UK,
+                // Smoke / adapter expect «Підтвердити перенесення візиту на HH:mm?»
+                confirmMessage: `Підтвердити перенесення візиту на ${slotTime}?`,
                 ...(w.rescheduleTarget.name != null
                   ? { name: w.rescheduleTarget.name }
                   : {}),
@@ -443,6 +535,13 @@ export const decideBooking = (
       case "confirming":
         if (w.pendingDecision?.kind === "mutation_confirm") {
           return mutationConfirmDecision(w, w.pendingDecision.action, w.pendingDecision.effectId);
+        }
+        // Supervisor visit-cancel seeds pendingCommand without pendingDecision.
+        if (w.pendingCommand?.action === "cancel") {
+          return emitMutationConfirm(
+            { kind: "cancel_meeting", payload: { ...w.pendingCommand.payload } },
+            "cancel",
+          );
         }
         return ask(
           "clarification",
@@ -538,8 +637,90 @@ export const decideBooking = (
         emitDecision({ kind: "clarification", reason: "mutation_outcome_unknown" });
         return runEffect("run_effect", { kind: "get_working_time" });
       }
+      // Chat aside / typed affirm while HITL was open.
+      if (result.outcome === "pending") {
+        const open = ctx.working?.pendingEffect;
+        if (
+          open != null
+          && (
+            open.effect.kind === "create_meeting"
+            || open.effect.kind === "reschedule_meeting"
+            || open.effect.kind === "cancel_meeting"
+          )
+        ) {
+          const reply = result.userReply?.trim() ?? "";
+          if (reply.length > 0 && isConfirmationDecline(reply)) {
+            return applyControl("menu");
+          }
+          if (
+            reply.length > 0
+            && isConfirmationAffirmation(reply, result.action)
+          ) {
+            // Clear so preparePendingEffect mints a fresh call with confirmationGiven.
+            emit({ type: "effect_cleared" });
+            const effect = open.effect;
+            if (effect.kind === "cancel_meeting") {
+              return emitMutationConfirm(
+                {
+                  kind: "cancel_meeting",
+                  payload: { ...effect.payload, confirmationGiven: true },
+                },
+                "cancel",
+              );
+            }
+            if (effect.kind === "create_meeting") {
+              return emitMutationConfirm(
+                {
+                  kind: "create_meeting",
+                  payload: { ...effect.payload, confirmationGiven: true },
+                },
+                "create",
+              );
+            }
+            return emitMutationConfirm(
+              {
+                kind: "reschedule_meeting",
+                payload: { ...effect.payload, confirmationGiven: true },
+              },
+              "reschedule",
+            );
+          }
+          // Re-arm the same HITL card (FAQ aside / non-affirm chat).
+          return emitMutationConfirm(open.effect, result.action);
+        }
+        emit({ type: "effect_cleared" });
+        emit({ type: "command_cleared" });
+        return {
+          tag: "reply",
+          intent: "mutation_failed",
+          facts: { action: result.action, failureCode: "pending" },
+          card: null,
+        };
+      }
       if (result.outcome === "committed") {
         const w = ctx.working;
+        // REPLACE cancel: continue into create (catalog or accepted service), do not
+        // close with terminal «Запис скасовано.»
+        if (
+          result.action === "cancel"
+          && w?.replacement?.status === "cancelling"
+        ) {
+          replaceGateExcludeIds.add(w.replacement.meeting.id);
+          emit({ type: "effect_cleared" });
+          emit({ type: "decision_cleared" });
+          emit({ type: "cancel_existing_completed" });
+          if (ctx.working?.serviceAcceptance?.status === "accepted") {
+            return decideFromRequirement();
+          }
+          // No accepted service — FAQ prepare opens root catalog (owner=faq).
+          return {
+            tag: "reply",
+            intent: "clarification",
+            facts: {},
+            card: null,
+            reason: "replacement_cancel_catalog",
+          };
+        }
         const facts: BookingVerifiedFacts = { action: result.action };
         if (w != null && result.action !== "cancel") {
           const sid = w.serviceAcceptance?.service.id;
@@ -728,6 +909,16 @@ export const decideBooking = (
           return decideFromRequirement();
         }
         case "hitl_no":
+          if (ctx.working?.replacement?.status === "offered") {
+            emit({ type: "cancel_existing_declined" });
+            return {
+              tag: "terminal",
+              intent: "abandon",
+              facts: {},
+              card: null,
+              reason: "abandon",
+            };
+          }
           emit({ type: "draft_abandoned" });
           return { tag: "terminal", intent: "abandon", facts: {}, card: null, reason: "abandon" };
         case "visit_status":
@@ -747,6 +938,20 @@ export const decideBooking = (
       }
     }
 
+    // REPLACE chip: cancel current visit, then HITL.
+    if (
+      patch.choice?.choiceId === "cancel_existing"
+      && ctx.working?.replacement?.status === "offered"
+    ) {
+      const meeting = ctx.working.replacement.meeting;
+      const command = cancelCommandFromMeeting(meeting);
+      emit({ type: "cancel_existing_requested", command });
+      return emitMutationConfirm(
+        { kind: "cancel_meeting", payload: { ...command.payload } },
+        "cancel",
+      );
+    }
+
     const service = patch.serviceIntent;
     if (service?.kind === "confirm_pending_service") {
       if (ctx.working?.serviceAcceptance?.status === "pending") {
@@ -764,6 +969,13 @@ export const decideBooking = (
         accepted: true,
       });
     } else if (service?.kind === "named_procedure") {
+      // Book-with-visit: REPLACE before catalog resolve.
+      if (ctx.working?.replacement == null) {
+        const existing = firstPlannedMeeting();
+        if (existing != null) {
+          return askReplacementOffer(existing);
+        }
+      }
       // Never trust a model CRM id — resolve via list_services catalog evidence.
       return runEffect("run_effect", {
         kind: "list_services",
@@ -775,6 +987,13 @@ export const decideBooking = (
         ...(service.query != null ? { query: service.query } : {}),
       });
     } else if (service?.kind === "consultation") {
+      // Book-with-visit: REPLACE before consultation offer.
+      if (ctx.working?.replacement == null) {
+        const existing = firstPlannedMeeting();
+        if (existing != null) {
+          return askReplacementOffer(existing);
+        }
+      }
       emit({
         type: "service_selected",
         service: {
@@ -804,23 +1023,15 @@ export const decideBooking = (
       {
         emit({ type: "decision_cleared" });
       }
-      const queryKind =
-        schedule.kind === "relative"
-          ? schedule.queryKind
-          : schedule.choiceId === "earlier"
-            ? "earlier"
-            : schedule.choiceId === "later" || schedule.choiceId === "other_date"
-              ? "later"
-              : "nearest";
-      return runEffect("present_dates", {
-        kind: "present_availability",
-        queryKind,
-        ...(schedule.kind === "relative" && schedule.anchor != null
-          ? { date: schedule.anchor }
-          : ctx.working?.selectedDate != null
-            ? { date: ctx.working.selectedDate }
-            : {}),
-      });
+      const queryKind = queryKindFromSchedule(schedule);
+      const date = dateFromSchedule(schedule, ctx.working);
+      return runEffect(
+        "present_dates",
+        presentAvailabilityEffect(ctx.working, {
+          queryKind,
+          ...(date != null ? { date } : {}),
+        }),
+      );
     }
     if (schedule?.kind === "date") {
       if (ctx.working?.pendingDecision?.kind === "date_select"

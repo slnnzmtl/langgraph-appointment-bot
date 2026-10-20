@@ -57,6 +57,28 @@ export const interpretBookingTurnDeterministic = (
     return {};
   }
 
+  // Open name field: non-empty non-control text is the name (same spirit as phone).
+  if (
+    input.awaitingContactField === "firstName"
+    || input.awaitingContactField === "lastName"
+  ) {
+    const labelId = labelIdFor(raw);
+    if (
+      labelId === "mainMenu"
+      || labelId === "mainBook"
+      || labelId === "mainMyVisit"
+      || labelId === "visitCancel"
+      || labelId === "visitReschedule"
+      || labelId === "visitDecline"
+    ) {
+      return {};
+    }
+    if (input.awaitingContactField === "firstName") {
+      return { contactFacts: { firstName: raw } };
+    }
+    return { contactFacts: { lastName: raw } };
+  }
+
   // Strict structural: raw text equals an offered choice id (e.g. typed ISO date).
   if (offered.has(raw)) {
     return interpretExactChoiceId(raw, input);

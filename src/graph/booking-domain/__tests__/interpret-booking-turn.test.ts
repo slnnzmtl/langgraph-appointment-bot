@@ -45,11 +45,23 @@ describe("interpretBookingTurnDeterministic", () => {
 });
 
 describe("normalizeBookingTurnClassification (structured LLM)", () => {
-  it("does not invent a firstName from hedges while awaiting first name", () => {
-    // Deterministic layer never guesses names from free text.
+  it("captures non-empty text as firstName while the field is open", () => {
     expect(
       interpretBookingTurnDeterministic({
         rawText: "не знаю",
+        awaitingContactField: "firstName",
+      }),
+    ).toEqual({ contactFacts: { firstName: "не знаю" } });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Daniel",
+        awaitingContactField: "firstName",
+      }),
+    ).toEqual({ contactFacts: { firstName: "Daniel" } });
+    // Main-menu label is control, not a name.
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Головне меню",
         awaitingContactField: "firstName",
       }),
     ).toEqual({});

@@ -52,6 +52,7 @@ import {
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import {
   drillToProcedureOffer,
+  openServicesEntryWithVisit,
   expectFamilyCatalogTurn,
   loadCatalogServiceRows,
   openBookingOffer,
@@ -446,19 +447,16 @@ export const replaceProcedureScenario: SmokeScenario = {
 
       // Do not use openBookingOffer («Записатись»): with a visit on file that
       // opens REPLACE before any service is chosen. Mirror the live catalog path.
-      const hasOfferKeyboard = (buttons: string[]): boolean =>
-        buttons.includes(BOOKING_OFFER_MENU[0]) && buttons.includes(BOOKING_OFFER_MENU[1]);
-      let servicesTurn = await bundle.session.say("Послуги");
-      for (let i = 0; i < 4 && !hasOfferKeyboard(servicesTurn.buttons); i += 1) {
-        servicesTurn = await bundle.session.say("Послуги");
-      }
-      if (!hasOfferKeyboard(servicesTurn.buttons)) {
-        throw new SmokeAssertError(
-          `replace-procedure: expected BOOKING OFFER after Послуги, got [${servicesTurn.buttons.join(" | ") || "none"}]`,
-        );
-      }
-
-      const offer = await drillToProcedureOffer(bundle.session, "replace-procedure");
+      const servicesTurn = await openServicesEntryWithVisit(
+        bundle.session,
+        "replace-procedure",
+      );
+      const offer = await drillToProcedureOffer(
+        bundle.session,
+        "replace-procedure",
+        8,
+        servicesTurn,
+      );
       const interaction = offer.state.pendingInteraction;
       if (interaction?.kind !== "service_confirm") {
         throw new SmokeAssertError(

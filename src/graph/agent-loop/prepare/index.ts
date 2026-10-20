@@ -6,7 +6,7 @@ import type {
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
 import { Overwrite } from "@langchain/langgraph";
-import { prepareFaqTurn } from "./faq.js";
+import { isReplaceCancelCreateDraft, prepareFaqTurn } from "./faq.js";
 
 export type CreateFaqPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -25,7 +25,13 @@ const wipeAgentTape = (state: ClinicState): ClinicStateUpdate => ({
 export const createFaqPrepareNode = (
   options?: CreateFaqPrepareOptions,
 ) =>
-  async (state: ClinicState): Promise<ClinicStateUpdate> => ({
-    ...wipeAgentTape(state),
-    ...await prepareFaqTurn(state, options),
-  });
+  async (state: ClinicState): Promise<ClinicStateUpdate> => {
+    const faqUpdate = await prepareFaqTurn(state, options);
+    // REPLACE cancel continue: keep cancel_meeting ToolMessage so FAQ finalize
+    // can prefix «Запис скасовано.» (wipe would erase the committed ack).
+    const keepCancelTape = isReplaceCancelCreateDraft(state);
+    return {
+      ...(keepCancelTape ? { stepCount: 0 } : wipeAgentTape(state)),
+      ...faqUpdate,
+    };
+  };

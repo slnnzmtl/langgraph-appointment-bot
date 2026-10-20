@@ -270,6 +270,8 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addNode(
       bookingDecide,
       createBookingDecideNode({ interpretTurn: interpretBookingTurn }),
+      // REPLACE cancel without an accepted service hands off to FAQ catalog.
+      { ends: [bookingTools, bookingRespond, faqPrepare] },
     )
     .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))
     .addNode(

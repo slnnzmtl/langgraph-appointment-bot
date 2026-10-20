@@ -5,6 +5,7 @@
 
 import {
   BOOKING_OFFER_MENU,
+  BOOKING_REPLACE_MENU,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   INTENT_SKIP_LABEL,
@@ -32,7 +33,9 @@ export const choiceIdsFromCard = (card: BookingViewCard | null): string[] => {
     case "contact_field":
       return ["menu"];
     case "visit_select":
-      return ["menu"];
+      return card.stage === "replacement"
+        ? ["cancel_existing", "decline"]
+        : ["menu"];
     case "mutation_confirm":
       return ["confirm", "decline", "menu"];
     case "clarification":
@@ -41,6 +44,38 @@ export const choiceIdsFromCard = (card: BookingViewCard | null): string[] => {
       const _exhaustive: never = card;
       return _exhaustive;
     }
+  }
+};
+
+/** Default Ukrainian chip label when card.labels / labelById omit the id. */
+const defaultLabelForChoiceId = (
+  id: string,
+  card: BookingViewCard | null,
+): string => {
+  // Visit-select decline is REPLACE «Ні, дякую», not HITL ❌.
+  if (id === "decline" && card?.kind === "visit_select") {
+    return BOOKING_REPLACE_MENU[1];
+  }
+  switch (id) {
+    case "confirm":
+    case "hitl_yes":
+      return CONFIRM_YES_LABEL;
+    case "cancel_existing":
+      return BOOKING_REPLACE_MENU[0];
+    case "decline":
+    case "hitl_no":
+      return CONFIRM_NO_LABEL;
+    case "offer_accept":
+      return BOOKING_OFFER_MENU[0];
+    case "offer_choose_other":
+      return BOOKING_OFFER_MENU[1];
+    case "menu":
+    case "main_menu":
+      return MAIN_MENU_LABEL;
+    case "note_skip":
+      return INTENT_SKIP_LABEL;
+    default:
+      return id;
   }
 };
 
@@ -57,18 +92,6 @@ export const replyChoicesFromCard = (
     id,
     label: labelById?.get(id)
       ?? cardLabels?.[id]
-      ?? (id === "confirm" || id === "hitl_yes"
-        ? CONFIRM_YES_LABEL
-        : id === "decline" || id === "hitl_no"
-          ? CONFIRM_NO_LABEL
-          : id === "offer_accept"
-            ? BOOKING_OFFER_MENU[0]
-            : id === "offer_choose_other"
-              ? BOOKING_OFFER_MENU[1]
-              : id === "menu" || id === "main_menu"
-                ? MAIN_MENU_LABEL
-                : id === "note_skip"
-                  ? INTENT_SKIP_LABEL
-                  : id),
+      ?? defaultLabelForChoiceId(id, card),
   }));
 };

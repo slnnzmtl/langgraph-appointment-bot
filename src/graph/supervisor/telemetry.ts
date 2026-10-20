@@ -11,6 +11,7 @@ export type SupervisorRoutingPath =
   | "pending_reschedule"
   | "abandon"
   | "main_menu"
+  | "services_guide"
   | "llm"
   | "llm_choice"
   | "llm_status"

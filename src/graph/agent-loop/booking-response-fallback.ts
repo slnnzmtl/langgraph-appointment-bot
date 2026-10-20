@@ -50,7 +50,14 @@ const CLARIFICATION_UK: Record<string, string> = {
 
 /** Code-owned success line from verified facts only. */
 export const bookingSuccessText = (facts?: BookingVerifiedFacts): string => {
-  const parts: string[] = ["Готово! Запис підтверджено."];
+  if (facts?.action === "cancel") {
+    return "Запис скасовано.";
+  }
+  const parts: string[] = [
+    facts?.action === "reschedule"
+      ? "Готово! Запис перенесено."
+      : "Готово! Запис підтверджено.",
+  ];
   if (facts?.serviceName != null && facts.serviceName.trim().length > 0) {
     parts.push(facts.serviceName.trim());
   }

@@ -114,9 +114,8 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     }
     // A committed replacement cancellation is a continuation, not a
     // patient-facing terminal outcome: the replacement create flow owns it.
-    // Declined/failed/abandoned replacement cancellation outcomes are terminal,
-    // but must retain their replacement origin for the correct response/menu.
-    if (null === "replacement") {
+    // Declined/failed/abandoned replacement cancellation outcomes are terminal.
+    if (state.bookingDraft?.replacement != null) {
       // Failed/blocked/abandoned replacement cancel must close the session —
       // leaving cancelling + originalCommand would replay a stale create later.
       return outcome === "declined"
@@ -125,11 +124,6 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
         || outcome === "blocked"
         ? message
         : null;
-    }
-    // Keep the legacy state guard for checkpoints created before the explicit
-    // cancellation-purpose field existed.
-    if (state.bookingDraft?.replacement != null) {
-      return null;
     }
     if (
       outcome === "committed"

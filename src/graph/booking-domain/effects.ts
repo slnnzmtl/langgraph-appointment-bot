@@ -11,6 +11,10 @@ export type BookingEffect =
       preferredTime?: string;
       /** When true, this is an exact-slot revalidation before mutation. */
       revalidate?: boolean;
+      /** Draft-owned visit duration for the CRM free/busy query. */
+      durationMinutes?: number;
+      /** Meeting ids to treat as free (reschedule target). */
+      excludeMeetingIds?: string[];
     }
   | { kind: "lookup_contact_by_phone"; phoneNumber: string }
   | {
@@ -41,6 +45,8 @@ export type BookingEffect =
         name: string;
         confirmMessage: string;
         description?: string;
+        /** Chat affirmation after HITL — tool consumes matching pending confirm. */
+        confirmationGiven?: boolean;
       };
     }
   | {
@@ -51,6 +57,7 @@ export type BookingEffect =
         dateEnd: string;
         confirmMessage: string;
         name?: string;
+        confirmationGiven?: boolean;
       };
     }
   | {
@@ -129,6 +136,8 @@ export type EffectResult =
         | "failed"
         | "malformed"
         | "unknown";
+      /** Chat text while HITL was open (awaitingConfirmation). */
+      userReply?: string;
     }
   | {
       effectId: string;
