@@ -50,6 +50,7 @@ const bookingTurnClassificationSchema = z.object({
       "hitl_no",
       "return_to_booking",
       "visit_status",
+      "visit_cancel",
     ])
     .optional(),
   sideQuestionKind: z.enum(["none", "hours", "address", "price", "catalog"]).optional(),

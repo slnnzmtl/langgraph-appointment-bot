@@ -901,6 +901,34 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     });
   });
 
+  it("seeds cancel after a closed success handoff when model returns visit_cancel", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "visit_cancel" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [
+          new AIMessage("Готово! Запис перенесено."),
+          new HumanMessage("скасувати запис"),
+        ],
+        bookingDraft: null,
+        pendingInteraction: null,
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Готово! Запис перенесено.",
+          replyButtons: ["Мій запис", "Послуги", "Адреса"],
+        },
+      }),
+    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toMatchObject({
+      action: "cancel",
+      payload: { meetingId: "m-1" },
+    });
+    expect(unwrapCommandUpdate(update).bookingDraft?.mode).not.toBe("reschedule");
+  });
+
   it("opens the meeting picker for visit_cancel intent with 2+ visits", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "visit_cancel" });
     const update = await nodeWithPrefetch(twoMeetings)(

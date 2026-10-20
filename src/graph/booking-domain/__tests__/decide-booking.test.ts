@@ -326,6 +326,55 @@ describe("decideBooking atomic contract", () => {
     expect(result.decision.reason).not.toBe("awaiting_confirm");
   });
 
+  it("controlKind visit_cancel with one planned meeting opens cancel HITL", () => {
+    const meeting = {
+      id: "meeting-1",
+      name: "Консультація",
+      dateStart: "2026-10-23 12:00:00",
+      dateEnd: "2026-10-23 13:00:00",
+    };
+    const result = decideBooking(
+      null,
+      { source: "semantic_patch", patch: { controlIntent: { kind: "visit_cancel" } } },
+      { ...READ_MODELS, plannedMeetings: [meeting] },
+    );
+
+    expect(result.decision.tag).toBe("mutation_confirm");
+    expect(result.decision.intent).toBe("confirm_cancel");
+    expect(result.decision.pendingEffect?.effect).toMatchObject({
+      kind: "cancel_meeting",
+      payload: { meetingId: "meeting-1" },
+    });
+    const draft = apply(null, result.events);
+    expect(draft?.pendingCommand?.action).toBe("cancel");
+  });
+
+  it("abandon does not wipe a just-seeded cancel pendingCommand before HITL", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "command_prepared",
+      command: {
+        action: "cancel",
+        payload: {
+          meetingId: "meeting-1",
+          confirmMessage: "Підтвердити скасування?",
+        },
+      },
+    });
+    expect(draft?.pendingDecision).toBeNull();
+
+    const result = decideBooking(
+      draft,
+      { source: "semantic_patch", patch: { controlIntent: { kind: "abandon" } } },
+      READ_MODELS,
+    );
+
+    expect(result.decision.tag).toBe("mutation_confirm");
+    expect(result.decision.intent).toBe("confirm_cancel");
+    expect(result.events.some((e) => e.type === "draft_abandoned")).toBe(false);
+    const next = apply(draft, result.events);
+    expect(next?.pendingCommand?.action).toBe("cancel");
+  });
+
   it("mutation declined closes to main menu without get_working_time", () => {
     let draft: BookingDraft | null = draftAtDetailsWithPhone();
     draft = reduceBookingDraft(draft, {

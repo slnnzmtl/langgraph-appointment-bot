@@ -54,7 +54,8 @@ const isCancelChip = (line: string): boolean =>
 
 /**
  * Classify a bare «Скасувати» / Cancel chip once for the turn.
- * null when the line is not a cancel chip.
+ * null when the line is not a cancel chip. Free-text cancel uses supervisor
+ * `intent: visit_cancel` — not patient-phrase matching.
  */
 export const classifyCancelTap = (
   state: ClinicState,

@@ -167,7 +167,8 @@ export type BookingTurnClassification = {
     | "hitl_yes"
     | "hitl_no"
     | "return_to_booking"
-    | "visit_status";
+    | "visit_status"
+    | "visit_cancel";
   sideQuestionKind?: "none" | "hours" | "address" | "price" | "catalog";
 };
 
@@ -183,6 +184,8 @@ Rules:
 - human_handoff only when the patient explicitly asks for a human/operator/admin (not for a service name that contains "оператор").
 - Names only when the open field is firstName/lastName AND the message is clearly answering with that name.
 - Notes only when awaiting a visit note AND the message is clearly a note (not a schedule/service/control ask).
+- abandon = leave an unfinished booking wizard (date/time/phone/service steps) without writing CRM. Cancelling a listed/planned visit is visit_cancel — not abandon.
+- visit_cancel = the patient wants to cancel an existing planned visit (CRM soft-cancel). Questions about how to cancel, or "do not cancel", are not visit_cancel.
 - Ukrainian, English, and mixed language are valid.
 - Do not use keyword lists; decide from meaning and the open-field context provided.`;
 

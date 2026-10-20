@@ -47,7 +47,8 @@ export type ControlIntent =
   | { kind: "hitl_yes" }
   | { kind: "hitl_no" }
   | { kind: "return_to_booking" }
-  | { kind: "visit_status" };
+  | { kind: "visit_status" }
+  | { kind: "visit_cancel" };
 
 /**
  * Canonical application order (Phase 4):

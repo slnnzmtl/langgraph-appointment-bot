@@ -731,6 +731,7 @@ export const decideBooking = (
           if (sid != null) facts.serviceId = sid;
           if (sname != null) facts.serviceName = sname;
           if (w.selectedSlot != null) {
+            facts.dateStart = w.selectedSlot.dateStart;
             facts.date = localDate(w.selectedSlot.dateStart);
             facts.time = localTime(w.selectedSlot.dateStart);
           }
@@ -926,13 +927,52 @@ export const decideBooking = (
     return decideFromRequirement();
   };
 
+  /**
+   * Open cancel HITL from a supervisor-seeded pendingCommand or a single
+   * planned meeting. null when 0 or 2+ meetings (picker is supervisor-owned).
+   */
+  const openVisitCancelConfirm = (): BookingDecision | null => {
+    if (ctx.working?.pendingCommand?.action === "cancel") {
+      return emitMutationConfirm(
+        { kind: "cancel_meeting", payload: { ...ctx.working.pendingCommand.payload } },
+        "cancel",
+      );
+    }
+    const meetings = readModels.plannedMeetings ?? [];
+    if (meetings.length !== 1) {
+      return null;
+    }
+    const meeting = firstPlannedMeeting();
+    if (meeting == null) {
+      return null;
+    }
+    const command = cancelCommandFromMeeting(meeting);
+    emit({ type: "command_prepared", command });
+    return emitMutationConfirm(
+      { kind: "cancel_meeting", payload: { ...command.payload } },
+      "cancel",
+    );
+  };
+
   const applySemanticPatch = (patch: UnderstoodBookingTurn): BookingDecision => {
     if (patch.controlIntent != null) {
       switch (patch.controlIntent.kind) {
         case "main_menu":
           return applyControl("menu");
-        case "abandon":
+        case "abandon": {
+          // Same-turn cancel seed: cancel prose must not wipe pendingCommand
+          // before the confirm card is open (interpreter often emits abandon).
+          if (
+            ctx.working?.pendingCommand?.action === "cancel"
+            && ctx.working.pendingDecision?.kind !== "mutation_confirm"
+          ) {
+            const opened = openVisitCancelConfirm();
+            if (opened != null) {
+              return opened;
+            }
+          }
           return applyControl("abandon");
+        }
         case "human_handoff":
           return applyControl("handoff");
         case "hitl_yes": {
@@ -966,6 +1006,18 @@ export const decideBooking = (
             facts: { clarificationReason: "visit_status" },
             card: { kind: "clarification", reason: "visit_status" },
           };
+        case "visit_cancel": {
+          const opened = openVisitCancelConfirm();
+          if (opened != null) {
+            return opened;
+          }
+          emitDecision({ kind: "clarification", reason: "visit_cancel_ambiguous" });
+          return ask(
+            "clarification",
+            { kind: "clarification", reason: "visit_cancel_ambiguous" },
+            "visit_cancel_ambiguous",
+          );
+        }
         case "return_to_booking":
           if (ctx.working?.pendingDecision != null) {
             emit({ type: "decision_cleared" });
