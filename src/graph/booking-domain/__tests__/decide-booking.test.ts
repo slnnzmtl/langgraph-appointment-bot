@@ -130,6 +130,60 @@ describe("decideBooking atomic contract", () => {
     expect(result.decision.facts.address).toBe("вул. Прикладна 1");
   });
 
+  it("resumes open time_select card on answer_side_question after get_service", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, name: CONSULTATION_SERVICE_NAME_UK, source: "catalog" },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "time_select",
+        date: "2026-09-10",
+        snapshotId: "snap-1",
+        choiceIds: ["s1", "other_date"],
+        labels: { s1: "14:00", other_date: "Інша дата" },
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_2_get_service",
+        expectedRevision: 2,
+        effect: { kind: "get_service", serviceId: CONSULTATION_SERVICE_ID },
+        status: "executing",
+      },
+    });
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_2_get_service",
+          kind: "informational",
+          outcome: "ok",
+          facts: {
+            servicePrice: "500",
+            serviceName: CONSULTATION_SERVICE_NAME_UK,
+            serviceId: CONSULTATION_SERVICE_ID,
+          },
+        },
+      },
+      READ_MODELS,
+    );
+
+    expect(result.decision.intent).toBe("answer_side_question");
+    expect(result.decision.facts.servicePrice).toBe("500");
+    expect(result.decision.card).toMatchObject({
+      kind: "time_select",
+      date: "2026-09-10",
+      choiceIds: ["s1", "other_date"],
+    });
+  });
+
   it("decline_pending_service abandons and prepares list_services (not need_service)", () => {
     let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",

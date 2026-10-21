@@ -76,6 +76,85 @@ const dateFromSchedule = (
   return working?.selectedDate ?? undefined;
 };
 
+/**
+ * Open DATE/TIME/confirm card still on the draft. Priority matches
+ * decideFromRequirement: service confirm, then date_select, then time_select.
+ * Null when nothing to resume.
+ */
+const viewCardFromPendingDecision = (
+  draft: BookingDraft | null | undefined,
+): BookingViewCard | null => {
+  if (draft == null) {
+    return null;
+  }
+  // service_confirm is derived from acceptance, not stored as pendingDecision.
+  if (draft.serviceAcceptance?.status === "pending") {
+    const service = draft.serviceAcceptance.service;
+    return {
+      kind: "service_confirm",
+      serviceId: service.id,
+      choiceIds: ["offer_accept", "offer_choose_other"],
+      labels: {
+        offer_accept: BOOKING_OFFER_MENU[0],
+        offer_choose_other: BOOKING_OFFER_MENU[1],
+      },
+    };
+  }
+  const pending = draft.pendingDecision;
+  if (pending?.kind === "date_select") {
+    return {
+      kind: "date_select",
+      snapshotId: pending.snapshotId,
+      choiceIds: [...pending.choiceIds],
+      labels: { ...pending.labels },
+      ...(pending.emptyMode != null ? { emptyMode: pending.emptyMode } : {}),
+    };
+  }
+  if (pending?.kind === "time_select") {
+    return {
+      kind: "time_select",
+      date: pending.date,
+      snapshotId: pending.snapshotId,
+      choiceIds: [...pending.choiceIds],
+      labels: { ...pending.labels },
+    };
+  }
+  return null;
+};
+
+/** Ask decision that re-shows the open card (unstamped-effect resume). */
+export const askDecisionFromPendingView = (
+  draft: BookingDraft | null | undefined,
+): BookingDecision | null => {
+  const card = viewCardFromPendingDecision(draft);
+  if (card == null) {
+    return null;
+  }
+  if (card.kind === "service_confirm") {
+    const facts: BookingVerifiedFacts = { serviceId: card.serviceId };
+    const name = draft?.serviceAcceptance?.service.name;
+    if (name != null) facts.serviceName = name;
+    return { tag: "ask", intent: "confirm_service", facts, card };
+  }
+  if (card.kind === "date_select") {
+    return { tag: "ask", intent: "present_dates", facts: {}, card };
+  }
+  if (card.kind === "time_select") {
+    return { tag: "ask", intent: "present_times", facts: {}, card };
+  }
+  return null;
+};
+
+const sideQuestionReply = (
+  facts: BookingVerifiedFacts,
+  draft: BookingDraft | null | undefined,
+): BookingDecision => ({
+  tag: "reply",
+  intent: "answer_side_question",
+  facts,
+  card: viewCardFromPendingDecision(draft),
+});
+
 /** Deep structural equality for emit-once effect correlation. */
 const sameEffect = (a: BookingEffect, b: BookingEffect): boolean =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -413,48 +492,16 @@ export const decideBooking = (
       return askReplacementOffer(w.replacement.meeting);
     }
 
-    // Pending service confirmation.
-    if (w.serviceAcceptance?.status === "pending") {
+    // Open service confirm / DATE / TIME card — single builder + ask mapper.
+    const openCard = viewCardFromPendingDecision(w);
+    if (openCard?.kind === "service_confirm") {
       emitDecision({ kind: "clarification", reason: "confirm_service" });
-      const service = w.serviceAcceptance.service;
-      const facts: BookingVerifiedFacts = { serviceId: service.id };
-      if (service.name != null) facts.serviceName = service.name;
-      return {
-        tag: "ask",
-        intent: "confirm_service",
-        facts,
-        card: {
-          kind: "service_confirm",
-          serviceId: service.id,
-          choiceIds: ["offer_accept", "offer_choose_other"],
-          labels: {
-            offer_accept: BOOKING_OFFER_MENU[0],
-            offer_choose_other: BOOKING_OFFER_MENU[1],
-          },
-        },
-      };
     }
-
-    // Fresh availability snapshot awaiting a date/time choice — do not re-fetch.
-    if (w.pendingDecision?.kind === "date_select") {
-      const pending = w.pendingDecision;
-      return ask("present_dates", {
-        kind: "date_select",
-        snapshotId: pending.snapshotId,
-        choiceIds: [...pending.choiceIds],
-        labels: { ...pending.labels },
-        ...(pending.emptyMode != null ? { emptyMode: pending.emptyMode } : {}),
-      });
-    }
-    if (w.pendingDecision?.kind === "time_select") {
-      const pending = w.pendingDecision;
-      return ask("present_times", {
-        kind: "time_select",
-        date: pending.date,
-        snapshotId: pending.snapshotId,
-        choiceIds: [...pending.choiceIds],
-        labels: { ...pending.labels },
-      });
+    if (openCard != null) {
+      const resumed = askDecisionFromPendingView(w);
+      if (resumed != null) {
+        return resumed;
+      }
     }
 
     const requirement = nextBookingRequirement(w, readModels);
@@ -594,7 +641,7 @@ export const decideBooking = (
       if (f?.serviceName != null) facts.serviceName = f.serviceName;
       const nextReq = nextBookingRequirement(ctx.working, readModels);
       if (nextReq !== "none") facts.nextStep = nextReq;
-      return { tag: "reply", intent: "answer_side_question", facts, card: null };
+      return sideQuestionReply(facts, ctx.working);
     }
 
     if (result.kind === "catalog") {
@@ -1260,15 +1307,13 @@ export const decideBooking = (
       }
       if (kind === "address" || kind.includes("address") || kind.includes("адрес")) {
         const nextReq = nextBookingRequirement(ctx.working, readModels);
-        return {
-          tag: "reply",
-          intent: "answer_side_question",
-          facts: {
+        return sideQuestionReply(
+          {
             address: CLINIC_ADDRESS,
             ...(nextReq !== "none" ? { nextStep: nextReq } : {}),
           },
-          card: null,
-        };
+          ctx.working,
+        );
       }
       if (kind === "price" || kind.includes("price") || kind.includes("цін")) {
         const serviceId = ctx.working?.serviceAcceptance?.service.id;

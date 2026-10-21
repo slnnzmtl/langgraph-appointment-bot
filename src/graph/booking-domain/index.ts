@@ -49,7 +49,7 @@ export {
   type NextBookingRequirement,
 } from "./requirement.js";
 
-export { decideBooking } from "./decide.js";
+export { askDecisionFromPendingView, decideBooking } from "./decide.js";
 
 export {
   labelsFromPresentation,

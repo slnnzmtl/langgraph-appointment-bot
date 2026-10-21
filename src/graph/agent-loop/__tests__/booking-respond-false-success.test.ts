@@ -235,6 +235,68 @@ describe("booking__respond card copy + markup", () => {
     ]);
   });
 
+  it("prefixes price facts then listed TIME copy and keeps hour chips", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const card = {
+      kind: "time_select" as const,
+      date: "2026-09-10",
+      snapshotId: "snap-1",
+      choiceIds: ["s1", "s2", "other_date"],
+      labels: {
+        s1: "14:00",
+        s2: "14:30",
+        other_date: OTHER_DATE_LABEL,
+      },
+    };
+    const pending: PendingInteraction = {
+      kind: "time_select",
+      date: "2026-09-10",
+      snapshot: {
+        snapshotId: "snap-1",
+        days: [
+          {
+            date: "2026-09-10",
+            displayLabel: "10 вер",
+            slotSummaries: ["14:00", "14:30"],
+            slots: [],
+          },
+        ],
+      },
+      choices: [
+        { id: "s1", label: "14:00" },
+        { id: "s2", label: "14:30" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    const update = await node({
+      bookingDecision: {
+        tag: "reply",
+        intent: "answer_side_question",
+        facts: {
+          servicePrice: "500",
+          serviceName: "Консультація",
+        },
+        card,
+      },
+      pendingInteraction: pending,
+      bookingDraft: null,
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toMatch(/^Вартість Консультація становить 500 грн\./);
+    expect(update.lastHandoff?.replyText).toContain("Вільні години на 10 вер");
+    expect(update.lastHandoff?.replyButtons).toEqual([
+      "14:00",
+      "14:30",
+      OTHER_DATE_LABEL,
+    ]);
+  });
+
   it("ships listed TIME copy with every hour from pendingInteraction (no LLM)", async () => {
     const invoke = vi.fn(async () => ({ text: "should not be used" }));
     const node = createBookingRespondNode({

@@ -1,9 +1,11 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { describe, expect, it } from "vitest";
+import { Overwrite } from "@langchain/langgraph";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CONSULTATION_SERVICE_ID,
   OTHER_DATE_LABEL,
+  PATIENT_FALLBACK_MESSAGE,
 } from "../../../shared/clinic-constants.js";
 import {
   createEmptyBookingDraft,
@@ -12,11 +14,14 @@ import {
 } from "../../booking-draft.js";
 import { interpretBookingTurnDeterministic } from "../../booking-domain/interpret.js";
 import type { InterpretBookingTurnInput } from "../../booking-domain/interpret.js";
+import type { UnderstoodBookingTurn } from "../../booking-domain/turn.js";
+import { hasPendingToolCalls } from "../../tool-routing.js";
 import { createBookingDecideNode } from "../booking-decide-nodes.js";
+import * as stampBookingEffectMod from "../stamp-booking-effect.js";
 
 /** Mirror production: deterministic first, then optional LLM stub. */
 const withDeterministicFirst = (
-  llm?: (input: InterpretBookingTurnInput) => Promise<Record<string, never>>,
+  llm?: (input: InterpretBookingTurnInput) => Promise<UnderstoodBookingTurn>,
 ) =>
   async (input: InterpretBookingTurnInput) => {
     const deterministic = interpretBookingTurnDeterministic(input);
@@ -107,6 +112,87 @@ const availabilityContext = {
 };
 
 describe("createBookingDecideNode chip label ingress", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("stamps list_services when named_procedure arrives on open time_select", async () => {
+    const node = createBookingDecideNode({
+      interpretTurn: withDeterministicFirst(async () => ({
+        serviceIntent: { kind: "named_procedure", query: "ботокс" },
+      })),
+    });
+    const update = await node({
+      messages: [new HumanMessage("краще запиши на ботокс")],
+      agentMessages: [],
+      bookingDraft: draftAtTimeSelect(),
+      pendingInteraction: {
+        kind: "time_select",
+        date: DATE_ID,
+        snapshot: { snapshotId: "snap-1", days: [] },
+        choices: [
+          { id: SLOT_ID, label: "11:00" },
+          { id: "other_date", label: OTHER_DATE_LABEL },
+        ],
+      },
+      availabilityContext,
+      inboundChoiceId: null,
+    } as never);
+
+    expect(update.bookingDecision?.tag).toBe("effect");
+    expect(update.bookingDecision?.pendingEffect?.effect).toEqual({
+      kind: "list_services",
+      query: "ботокс",
+    });
+    expect(update.agentMessages).toBeInstanceOf(Overwrite);
+    const tape = (update.agentMessages as Overwrite<unknown[]>).value as never[];
+    expect(hasPendingToolCalls(tape)).toBe(true);
+    const ai = tape.find(
+      (message) =>
+        message != null
+        && typeof message === "object"
+        && "tool_calls" in message
+        && Array.isArray((message as { tool_calls?: unknown }).tool_calls),
+    ) as { tool_calls?: Array<{ name: string; args: Record<string, unknown> }> } | undefined;
+    expect(ai?.tool_calls?.[0]?.name).toBe("list_services");
+    expect(ai?.tool_calls?.[0]?.args).toMatchObject({
+      query: "ботокс",
+      __bookingEffectStamp: "bookingEffectV1",
+    });
+  });
+
+  it("resumes time_select when an effect cannot be stamped", async () => {
+    vi.spyOn(stampBookingEffectMod, "stampBookingEffect").mockReturnValue(null);
+    const node = createBookingDecideNode({
+      interpretTurn: withDeterministicFirst(async () => ({
+        serviceIntent: { kind: "named_procedure", query: "ботокс" },
+      })),
+    });
+    const update = await node({
+      messages: [new HumanMessage("запиши на ботокс")],
+      agentMessages: [],
+      bookingDraft: draftAtTimeSelect(),
+      pendingInteraction: {
+        kind: "time_select",
+        date: DATE_ID,
+        snapshot: { snapshotId: "snap-1", days: [] },
+        choices: [
+          { id: SLOT_ID, label: "11:00" },
+          { id: "other_date", label: OTHER_DATE_LABEL },
+        ],
+      },
+      availabilityContext,
+      inboundChoiceId: null,
+    } as never);
+
+    expect(update.bookingDecision?.tag).toBe("ask");
+    expect(update.bookingDecision?.intent).toBe("present_times");
+    expect(update.bookingDecision?.card?.kind).toBe("time_select");
+    expect(update.pendingInteraction?.kind).toBe("time_select");
+    expect(hasPendingToolCalls(update.agentMessages ?? [])).toBe(false);
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+  });
+
   it("maps reply-keyboard 11:00 to the slot id when inboundChoiceId is null", async () => {
     const node = createBookingDecideNode({
       interpretTurn: withDeterministicFirst(async () => {

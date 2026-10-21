@@ -14,7 +14,10 @@ import {
 } from "../../shared/clinic-constants.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
-import type { BookingDecision } from "../booking-domain/decision.js";
+import type {
+  BookingDecision,
+  BookingVerifiedFacts,
+} from "../booking-domain/decision.js";
 import { renderBookingInteractionMessage } from "../booking-interaction-render.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { BOOKING_AGENT_ID, type ILLMConnector } from "../types.js";
@@ -24,6 +27,33 @@ import {
   bookingSuccessText,
 } from "./booking-response-fallback.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
+
+/** Code-owned side-question sentence(s) from allowlisted facts only. */
+const sideQuestionFactPrefix = (facts: BookingVerifiedFacts): string | null => {
+  const lines: string[] = [];
+  const price = facts.servicePrice?.trim();
+  if (price != null && price.length > 0) {
+    const name = facts.serviceName?.trim();
+    const withCurrency = /грн|uah/i.test(price) ? price : `${price} грн`;
+    lines.push(
+      name != null && name.length > 0
+        ? `Вартість ${name} становить ${withCurrency}.`
+        : `Вартість становить ${withCurrency}.`,
+    );
+  }
+  const hours = facts.hours?.trim();
+  if (hours != null && hours.length > 0) {
+    lines.push(hours);
+  }
+  const address = facts.address?.trim();
+  if (address != null && address.length > 0) {
+    lines.push(`Адреса: ${address}`);
+  }
+  if (lines.length === 0) {
+    return null;
+  }
+  return lines.join("\n");
+};
 
 const patientTextSchema = z.object({
   text: z.string().min(1).max(2000),
@@ -137,6 +167,7 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
     }
 
     // Open cards: matching pendingInteraction is the sole listed-copy path.
+    // Side-question facts (price/hours/address) prefix that listed copy — no LLM.
     if (decision.card != null) {
       let replyText = fallback;
       const pending = state.pendingInteraction;
@@ -146,6 +177,14 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
         ).trim();
         if (listed.length > 0) {
           replyText = listed;
+        }
+      }
+      if (decision.intent === "answer_side_question") {
+        const prefix = sideQuestionFactPrefix(decision.facts);
+        if (prefix != null) {
+          replyText = replyText.trim().length > 0
+            ? `${prefix}\n\n${replyText}`
+            : prefix;
         }
       }
       return {

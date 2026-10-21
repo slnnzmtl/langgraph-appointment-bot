@@ -17,7 +17,10 @@ import {
   type BookingDraft,
   type BookingEvent,
 } from "../booking-draft.js";
-import { decideBooking } from "../booking-domain/decide.js";
+import {
+  askDecisionFromPendingView,
+  decideBooking,
+} from "../booking-domain/decide.js";
 import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
 import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
 import type { EffectResult } from "../booking-domain/effects.js";
@@ -506,6 +509,21 @@ export const createBookingDecideNode = (
           type: "tool_call",
         }], stamped.action);
         update.agentMessages = new Overwrite(appendOrReplacePendingToolCall([], ai));
+      } else if (result.decision.tag === "effect") {
+        // Unstamped effect must not reach respond (PATIENT_FALLBACK). Resume
+        // the open DATE/TIME/confirm card still on the draft.
+        draft = applyEvents(draft, [{ type: "effect_cleared" }]);
+        const resumeDecision = askDecisionFromPendingView(draft);
+        if (resumeDecision != null) {
+          update.bookingDraft = draft;
+          update.bookingDecision = resumeDecision;
+          update.pendingInteraction = projectPendingInteraction({
+            decision: resumeDecision,
+            draft,
+            availabilityContext: state.availabilityContext ?? null,
+            previousInteraction: state.pendingInteraction ?? null,
+          });
+        }
       }
     }
 
