@@ -745,4 +745,107 @@ describe("decideBooking atomic contract", () => {
       ),
     ).toBe(false);
   });
+
+  it("open catalog page beats a pending service offer across empty and side-question turns", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-offer", name: "Консультація", source: "catalog" },
+      accepted: false,
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "ботокс",
+        catalogRows: [
+          { id: "svc-a", name: "Botox A" },
+          { id: "svc-b", name: "Botox B" },
+        ],
+        choices: [
+          { id: "svc-a", label: "Botox A", serviceIds: ["svc-a"] },
+          { id: "svc-b", label: "Botox B", serviceIds: ["svc-b"] },
+        ],
+      },
+    });
+
+    const emptyTurn = decideBooking(
+      draft,
+      { source: "semantic_patch", patch: {} },
+      READ_MODELS,
+    );
+    expect(emptyTurn.decision.card).toMatchObject({
+      kind: "service_candidate",
+      choices: [
+        { id: "svc-a", label: "Botox A" },
+        { id: "svc-b", label: "Botox B" },
+      ],
+    });
+
+    const side = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { informationalQuestion: "address" },
+      },
+      READ_MODELS,
+    );
+    expect(side.decision.card).toMatchObject({
+      kind: "service_candidate",
+      choices: [
+        { id: "svc-a", label: "Botox A" },
+        { id: "svc-b", label: "Botox B" },
+      ],
+    });
+  });
+
+  it("availability error does not re-offer an open DATE/TIME wait", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox", source: "catalog", durationMinutes: 30 },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "time_select",
+        date: "2026-09-10",
+        snapshotId: "snap-1",
+        choiceIds: ["s1", "other_date"],
+        labels: { s1: "14:00", other_date: "Інша дата" },
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_revalidate",
+        expectedRevision: draft!.version + 1,
+        effect: {
+          kind: "present_availability",
+          queryKind: "exact",
+          date: "2026-09-10",
+          revalidate: true,
+        },
+        status: "executing",
+      },
+    });
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_revalidate",
+          kind: "availability",
+          outcome: "error",
+        },
+      },
+      READ_MODELS,
+    );
+    expect(result.decision.card?.kind).not.toBe("time_select");
+    expect(result.decision.card?.kind).not.toBe("date_select");
+    expect(result.decision).toMatchObject({
+      reason: "availability_failed",
+    });
+  });
 });

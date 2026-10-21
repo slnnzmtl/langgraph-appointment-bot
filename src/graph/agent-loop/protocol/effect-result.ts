@@ -347,6 +347,10 @@ export const effectResultFromToolMessages = (
     if (parsed == null) {
       return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
     }
+    // Incomplete page (total > returned) — fail closed; do not present a partial family.
+    if (parsed.total != null && parsed.total > parsed.list.length) {
+      return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
+    }
     const services = parsed.list.map((row) => ({
       id: row.id,
       name: row.name,

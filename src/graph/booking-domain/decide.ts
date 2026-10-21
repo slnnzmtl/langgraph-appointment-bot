@@ -4,6 +4,7 @@ import {
   CONSULTATION_SERVICE_ID,
   CONSULTATION_SERVICE_NAME_UK,
   CREATE_CONFIRMATION_UK,
+  SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import {
   isConfirmationAffirmation,
@@ -47,12 +48,30 @@ const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSe
   lastName: "ask_last_name",
 };
 
-const chipsFromCatalogRows = (rows: readonly CatalogRow[]): CatalogChip[] =>
-  rows.map((row) => ({
-    id: row.id,
-    label: row.name,
-    serviceIds: [row.id],
-  }));
+/** Last-resort page when the node did not attach FAQ-bounded choices. */
+const chipsFromCatalogRows = (rows: readonly CatalogRow[]): CatalogChip[] => {
+  if (rows.length <= 8) {
+    return rows.map((row) => ({
+      id: row.id,
+      label: row.name,
+      serviceIds: [row.id],
+    }));
+  }
+  const visible = rows.slice(0, 7);
+  const overflow = rows.slice(7);
+  return [
+    ...visible.map((row) => ({
+      id: row.id,
+      label: row.name,
+      serviceIds: [row.id],
+    })),
+    {
+      id: "faq_other",
+      label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+      serviceIds: overflow.map((row) => row.id),
+    },
+  ];
+};
 
 const uniqueAllowlistedIds = (
   ids: readonly string[],
@@ -61,25 +80,15 @@ const uniqueAllowlistedIds = (
 
 const catalogCardFromChips = (
   chips: readonly CatalogChip[],
-): Extract<BookingViewCard, { kind: "service_candidate" }> => {
-  const labels: Record<string, string> = {};
-  const displayLabels: Record<string, string> = {};
-  const serviceIdsByChoice: Record<string, string[]> = {};
-  for (const chip of chips) {
-    labels[chip.id] = chip.label;
-    serviceIdsByChoice[chip.id] = [...chip.serviceIds];
-    if (chip.displayLabel != null && chip.displayLabel.length > 0) {
-      displayLabels[chip.id] = chip.displayLabel;
-    }
-  }
-  return {
-    kind: "service_candidate",
-    choiceIds: chips.map((chip) => chip.id),
-    ...(Object.keys(labels).length > 0 ? { labels } : {}),
-    ...(Object.keys(displayLabels).length > 0 ? { displayLabels } : {}),
-    ...(Object.keys(serviceIdsByChoice).length > 0 ? { serviceIdsByChoice } : {}),
-  };
-};
+): Extract<BookingViewCard, { kind: "service_candidate" }> => ({
+  kind: "service_candidate",
+  choices: chips.map((chip) => ({
+    id: chip.id,
+    label: chip.label,
+    serviceIds: [...chip.serviceIds],
+    ...(chip.displayLabel != null ? { displayLabel: chip.displayLabel } : {}),
+  })),
+});
 
 type RelativeOrNavSchedule =
   | Extract<ScheduleIntent, { kind: "relative" }>
@@ -111,28 +120,14 @@ const dateFromSchedule = (
 };
 
 /**
- * Open DATE/TIME/confirm card still on the draft. Priority matches
- * decideFromRequirement: service confirm, then date_select, then time_select.
- * Null when nothing to resume.
+ * Active booking view from the draft. An open pendingDecision wins; a pending
+ * service offer or awaiting note supplies a derived wait only when it does not.
  */
 const viewCardFromPendingDecision = (
   draft: BookingDraft | null | undefined,
 ): BookingViewCard | null => {
   if (draft == null) {
     return null;
-  }
-  // service_confirm is derived from acceptance, not stored as pendingDecision.
-  if (draft.serviceAcceptance?.status === "pending") {
-    const service = draft.serviceAcceptance.service;
-    return {
-      kind: "service_confirm",
-      serviceId: service.id,
-      choiceIds: ["offer_accept", "offer_choose_other"],
-      labels: {
-        offer_accept: BOOKING_OFFER_MENU[0],
-        offer_choose_other: BOOKING_OFFER_MENU[1],
-      },
-    };
   }
   const pending = draft.pendingDecision;
   if (pending?.kind === "service_candidate" && (pending.choices?.length ?? 0) > 0) {
@@ -156,7 +151,20 @@ const viewCardFromPendingDecision = (
       labels: { ...pending.labels },
     };
   }
-  // Note step stores pendingDecision as clarification/need_note; the ask card is visit_note.
+  // Derived waits — only when pendingDecision is not an open card.
+  if (draft.serviceAcceptance?.status === "pending") {
+    const service = draft.serviceAcceptance.service;
+    return {
+      kind: "service_confirm",
+      serviceId: service.id,
+      choiceIds: ["offer_accept", "offer_choose_other"],
+      labels: {
+        offer_accept: BOOKING_OFFER_MENU[0],
+        offer_choose_other: BOOKING_OFFER_MENU[1],
+      },
+    };
+  }
+  // Note step may store pendingDecision as clarification/need_note; ask card is visit_note.
   if (draft.note.status === "awaiting") {
     return { kind: "visit_note", skipChoiceId: "note_skip" };
   }
@@ -700,15 +708,15 @@ export const decideBooking = (
     const allowlist = new Map(catalogRows.map((row) => [row.id, row]));
     const remaining = uniqueAllowlistedIds(remainingIds, allowlist);
     if (remaining.length === 0) {
-      emitDecision({ kind: "clarification", reason: "need_service" });
-      const resumed = askDecisionFromPendingView(ctx.working);
-      if (resumed != null) {
+      const captured = askDecisionFromPendingView(ctx.working);
+      if (captured != null) {
         return {
-          ...resumed,
+          ...captured,
           reason: "need_service",
-          facts: { ...resumed.facts, clarificationReason: "need_service" },
+          facts: { ...captured.facts, clarificationReason: "need_service" },
         };
       }
+      emitDecision({ kind: "clarification", reason: "need_service" });
       return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
     }
     if (remaining.length === 1) {
@@ -770,17 +778,16 @@ export const decideBooking = (
       const query =
         pending?.effect.kind === "list_services" ? pending.effect.query : undefined;
       if (result.outcome === "error" || result.outcome === "empty" || services.length === 0) {
-        emitDecision({ kind: "clarification", reason: "need_service" });
-        // Keep the open DATE/TIME/note/confirm card so catalog miss does not
-        // wipe the keyboard (need_service prose comes from clarificationReason).
-        const resumed = askDecisionFromPendingView(ctx.working);
-        if (resumed != null) {
+        // Keep the open wait on the draft; need_service lives in facts/reason only.
+        const captured = askDecisionFromPendingView(ctx.working);
+        if (captured != null) {
           return {
-            ...resumed,
+            ...captured,
             reason: "need_service",
-            facts: { ...resumed.facts, clarificationReason: "need_service" },
+            facts: { ...captured.facts, clarificationReason: "need_service" },
           };
         }
+        emitDecision({ kind: "clarification", reason: "need_service" });
         return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
       }
       if (services.length === 1) {
@@ -919,9 +926,28 @@ export const decideBooking = (
       emit({ type: "effect_cleared" });
       if (result.outcome === "error") {
         // Fail closed: do not decideFromRequirement (that would remint
-        // present_availability in the same consume hop).
+        // present_availability in the same consume hop). Slot revalidation may
+        // have invalidated DATE/TIME — never re-offer those waits.
         if (ctx.working?.selectedSlot != null) {
           emit({ type: "slot_provenance_set", provenance: "unverified_legacy", evidence: null });
+        }
+        const captured = askDecisionFromPendingView(ctx.working);
+        const stillValid =
+          captured != null
+          && captured.card?.kind !== "date_select"
+          && captured.card?.kind !== "time_select"
+            ? captured
+            : null;
+        if (stillValid != null) {
+          // Keep the open wait; do not overwrite pendingDecision with clarification.
+          return {
+            ...stillValid,
+            reason: "availability_failed",
+            facts: {
+              ...stillValid.facts,
+              clarificationReason: "availability_failed",
+            },
+          };
         }
         emitDecision({ kind: "clarification", reason: "availability_failed" });
         return ask(

@@ -78,12 +78,10 @@ describe("projectPendingInteraction", () => {
       decision: baseDecision(
         {
           kind: "service_candidate",
-          choiceIds: ["g0", "g1"],
-          labels: { g0: "Botox", g1: "Disport" },
-          serviceIdsByChoice: {
-            g0: ["svc-0", "svc-1"],
-            g1: ["svc-2"],
-          },
+          choices: [
+            { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+            { id: "g1", label: "Disport", serviceIds: ["svc-2"] },
+          ],
         },
         "ask_service",
       ),

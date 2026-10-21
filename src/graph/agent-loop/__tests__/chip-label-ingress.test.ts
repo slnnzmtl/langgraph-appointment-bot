@@ -163,15 +163,15 @@ describe("createBookingDecideNode chip label ingress", () => {
     });
   });
 
-  it("resumes time_select when an effect cannot be stamped", async () => {
+  it("unstamped present_availability fails closed without re-offering DATE/TIME", async () => {
     vi.spyOn(stampBookingEffectMod, "stampBookingEffect").mockReturnValue(null);
     const node = createBookingDecideNode({
       interpretTurn: withDeterministicFirst(async () => ({
-        serviceIntent: { kind: "named_procedure", query: "ботокс" },
+        scheduleIntent: { kind: "relative", queryKind: "nearest" },
       })),
     });
     const update = await node({
-      messages: [new HumanMessage("запиши на ботокс")],
+      messages: [new HumanMessage("найближчий час")],
       agentMessages: [],
       bookingDraft: draftAtTimeSelect(),
       pendingInteraction: {
@@ -187,10 +187,12 @@ describe("createBookingDecideNode chip label ingress", () => {
       inboundChoiceId: null,
     } as never);
 
-    expect(update.bookingDecision?.tag).toBe("ask");
-    expect(update.bookingDecision?.intent).toBe("present_times");
-    expect(update.bookingDecision?.card?.kind).toBe("time_select");
-    expect(update.pendingInteraction?.kind).toBe("time_select");
+    expect(update.bookingDecision?.card?.kind).not.toBe("time_select");
+    expect(update.bookingDecision?.card?.kind).not.toBe("date_select");
+    expect(update.bookingDecision).toMatchObject({
+      tag: "ask",
+      reason: "availability_failed",
+    });
     expect(hasPendingToolCalls(update.agentMessages ?? [])).toBe(false);
     expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
   });
@@ -225,11 +227,9 @@ describe("createBookingDecideNode chip label ingress", () => {
     );
   });
 
-  it("maps free-text bare hour 11 to the 11:00 slot", async () => {
+  it("does not treat bare hour prose as a reply-keyboard match", async () => {
     const node = createBookingDecideNode({
-      interpretTurn: withDeterministicFirst(async () => {
-        throw new Error("LLM interpreter must not run for a matched bare hour");
-      }),
+      interpretTurn: withDeterministicFirst(async () => ({})),
     });
     const update = await node({
       messages: [new HumanMessage("11")],
@@ -249,9 +249,8 @@ describe("createBookingDecideNode chip label ingress", () => {
       inboundChoiceId: null,
     } as never);
 
-    expect(update.bookingDraft?.selectedSlot?.dateStart).toBe(
-      "2026-10-20T11:00:00+03:00",
-    );
+    expect(update.bookingDraft?.selectedSlot?.dateStart).toBeUndefined();
+    expect(update.bookingDecision?.card?.kind).toBe("time_select");
   });
 
   it("maps a date label and Інша дата to their choice ids", async () => {
@@ -301,11 +300,9 @@ describe("createBookingDecideNode chip label ingress", () => {
     );
   });
 
-  it("maps free-text bare day 20 to the unique ISO date choice", async () => {
+  it("does not treat bare day prose as a reply-keyboard match", async () => {
     const node = createBookingDecideNode({
-      interpretTurn: withDeterministicFirst(async () => {
-        throw new Error("LLM interpreter must not run for a matched bare day");
-      }),
+      interpretTurn: withDeterministicFirst(async () => ({})),
     });
     const update = await node({
       messages: [new HumanMessage("20")],
@@ -323,8 +320,8 @@ describe("createBookingDecideNode chip label ingress", () => {
       inboundChoiceId: null,
     } as never);
 
-    expect(update.bookingDraft?.selectedDate).toBe(DATE_ID);
-    expect(update.bookingDecision?.card?.kind).toBe("time_select");
+    expect(update.bookingDraft?.selectedDate ?? null).toBeNull();
+    expect(update.bookingDecision?.card?.kind).toBe("date_select");
   });
 
   it("does not invent a date when bare day is ambiguous across open choices", async () => {
@@ -509,14 +506,19 @@ describe("createBookingDecideNode catalog family selector", () => {
       intent: "ask_service",
       card: {
         kind: "service_candidate",
-        choiceIds: ["svc-latin", "svc-corr"],
+        choices: [
+          { id: "svc-latin", serviceIds: ["svc-latin"] },
+          { id: "svc-corr", serviceIds: ["svc-corr"] },
+        ],
       },
     });
-    const labels = update.bookingDecision?.card?.kind === "service_candidate"
-      ? update.bookingDecision.card.labels
-      : {};
-    expect(labels?.["svc-corr"]).toBe("Корекція ботокс");
-    expect(labels?.["svc-latin"]).toMatch(/^Ботулінотерапія Botox/);
+    const choices = update.bookingDecision?.card?.kind === "service_candidate"
+      ? update.bookingDecision.card.choices
+      : [];
+    expect(choices.find((chip) => chip.id === "svc-corr")?.label).toBe("Корекція ботокс");
+    expect(choices.find((chip) => chip.id === "svc-latin")?.label).toMatch(
+      /^Ботулінотерапія Botox/,
+    );
   });
 
   it("selector empty at visit_note resumes note with need_service (not PATIENT_FALLBACK)", async () => {
@@ -590,12 +592,10 @@ describe("createBookingDecideNode catalog family selector", () => {
 
     expect(update.bookingDecision?.card).toMatchObject({
       kind: "service_candidate",
-      choiceIds: ["g0", "g1"],
-      labels: { g0: "Botox", g1: "Disport" },
-      serviceIdsByChoice: {
-        g0: ["svc-0", "svc-1", "svc-2"],
-        g1: ["svc-3", "svc-4", "svc-5"],
-      },
+      choices: [
+        { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1", "svc-2"] },
+        { id: "g1", label: "Disport", serviceIds: ["svc-3", "svc-4", "svc-5"] },
+      ],
     });
     expect(update.pendingInteraction).toMatchObject({
       kind: "service_candidate",
@@ -709,7 +709,7 @@ describe("createBookingDecideNode catalog family selector", () => {
     } as never);
 
     const openedIds = opened.bookingDecision?.card?.kind === "service_candidate"
-      ? opened.bookingDecision.card.choiceIds
+      ? opened.bookingDecision.card.choices.map((chip) => chip.id)
       : [];
     expect(openedIds).toEqual(["g0", "g1"]);
     expect(
@@ -736,7 +736,7 @@ describe("createBookingDecideNode catalog family selector", () => {
       query: "ботокс",
     });
     const pageIds = paged.bookingDecision?.card?.kind === "service_candidate"
-      ? paged.bookingDecision.card.choiceIds
+      ? paged.bookingDecision.card.choices.map((chip) => chip.id)
       : [];
     expect(pageIds).toContain("svc-deep");
 
@@ -753,6 +753,105 @@ describe("createBookingDecideNode catalog family selector", () => {
       id: "svc-deep",
       name: "Ботулінотерапія глибока зона",
     });
+  });
+
+  it("rejects a stale unoffered group id without selecting a CRM service", async () => {
+    let draft = draftWithCatalogEffect();
+    draft = reduceBookingDraft(draft, { type: "effect_cleared" });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "ботокс",
+        catalogRows: [
+          { id: "svc-0", name: "A" },
+          { id: "svc-1", name: "B" },
+        ],
+        choices: [
+          { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+        ],
+      },
+    });
+    const node = createBookingDecideNode();
+    const update = await node({
+      messages: [new HumanMessage("stale")],
+      agentMessages: [],
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "service_candidate",
+        utterance: "ботокс",
+        query: "ботокс",
+        owner: "booking",
+        choices: [{ id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] }],
+      },
+      inboundChoiceId: "g99",
+    } as never);
+
+    expect(update.bookingDraft?.serviceAcceptance?.service?.id).not.toBe("svc-0");
+    expect(update.bookingDraft?.serviceAcceptance?.service?.id).not.toBe("svc-1");
+    expect(update.bookingDecision?.card?.kind).toBe("service_candidate");
+  });
+
+  it("ignores a buried catalogRows CRM id that is not on the current chip page", async () => {
+    let draft = draftWithCatalogEffect();
+    draft = reduceBookingDraft(draft, { type: "effect_cleared" });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "ботокс",
+        catalogRows: [
+          { id: "svc-0", name: "A" },
+          { id: "svc-1", name: "B" },
+          { id: "svc-2", name: "C" },
+        ],
+        choices: [
+          { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+          { id: "g1", label: "Disport", serviceIds: ["svc-2"] },
+        ],
+      },
+    });
+    const node = createBookingDecideNode();
+    const buried = await node({
+      messages: [new HumanMessage("svc-0")],
+      agentMessages: [],
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "service_candidate",
+        utterance: "ботокс",
+        query: "ботокс",
+        owner: "booking",
+        choices: [
+          { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+          { id: "g1", label: "Disport", serviceIds: ["svc-2"] },
+        ],
+      },
+      inboundChoiceId: "svc-0",
+    } as never);
+    expect(buried.bookingDraft?.serviceAcceptance?.service?.id).not.toBe("svc-0");
+    expect(buried.bookingDecision?.card?.kind).toBe("service_candidate");
+
+    const groupTap = await node({
+      messages: [new HumanMessage("Botox")],
+      agentMessages: [],
+      bookingDraft: draft,
+      pendingInteraction: buried.pendingInteraction ?? {
+        kind: "service_candidate",
+        utterance: "ботокс",
+        query: "ботокс",
+        owner: "booking",
+        choices: [
+          { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+          { id: "g1", label: "Disport", serviceIds: ["svc-2"] },
+        ],
+      },
+      inboundChoiceId: "g0",
+    } as never);
+    expect(groupTap.bookingDecision?.card?.kind).toBe("service_candidate");
+    const pageIds = groupTap.bookingDecision?.card?.kind === "service_candidate"
+      ? groupTap.bookingDecision.card.choices.map((chip) => chip.id)
+      : [];
+    expect(pageIds).toEqual(expect.arrayContaining(["svc-0", "svc-1"]));
   });
 });
 

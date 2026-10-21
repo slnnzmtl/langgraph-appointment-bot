@@ -29,6 +29,7 @@ import { CATALOG_FAMILY_SELECTOR_QUERY } from "../catalog-match.js";
 import { resolveFaqCatalogChoices } from "../faq-catalog.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
+  FAQ_ROOT_PARTITION_QUERY,
   safeSelect,
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
@@ -219,30 +220,6 @@ export const enrichPatchWithReadModels = (
     };
   }
 
-  // Catalog service candidate (id was offered from list_services evidence).
-  const offered = state.bookingDraft?.offeredChoiceIds ?? [];
-  const pendingService = state.bookingDraft?.pendingDecision;
-  if (
-    offered.includes(choiceId)
-    && pendingService?.kind === "service_candidate"
-  ) {
-    const remaining = remainingIdsForCatalogChoice(pendingService, choiceId);
-    if (remaining.length === 1) {
-      const serviceId = remaining[0]!;
-      const canonicalName = pendingService.catalogRows?.find((row) => row.id === serviceId)
-        ?.name;
-      const { scheduleIntent: _s, choice: _c, ...rest } = patch;
-      return {
-        ...rest,
-        serviceIntent: {
-          kind: "catalog_service",
-          serviceId,
-          ...(canonicalName != null ? { serviceName: canonicalName } : {}),
-        },
-      };
-    }
-  }
-
   const days = readModels.availabilityDays ?? [];
   for (const day of days) {
     const slot = day.slots.find((s) => s.id === choiceId);
@@ -305,6 +282,7 @@ export type CreateBookingDecideNodeOptions = {
   partitionCandidates?: PartitionServiceCandidates;
 };
 
+/** Resolve remaining CRM ids from the active chip page only — not catalogRows. */
 const remainingIdsForCatalogChoice = (
   pending: BookingDraft["pendingDecision"],
   choiceId: string,
@@ -315,9 +293,6 @@ const remainingIdsForCatalogChoice = (
   const chip = pending.choices?.find((entry) => entry.id === choiceId);
   if (chip != null && chip.serviceIds.length > 0) {
     return [...chip.serviceIds];
-  }
-  if (pending.catalogRows?.some((row) => row.id === choiceId) === true) {
-    return [choiceId];
   }
   return [];
 };
@@ -333,10 +308,9 @@ const chipsFromInteractionChoices = (choices: InteractionChoice[]): CatalogChip[
   }));
 
 /**
- * When list_services ran with a query (named_procedure), ask the family selector
- * which CRM rows belong — never re-stem the utterance in the kernel.
- * Selector empty / fail → empty services so decide resumes need_service.
- * Bare catalog browse (no query) leaves the full list untouched.
+ * Bound every multi-row catalog through the FAQ choice flow (selector →
+ * partition → overflow). Named_procedure uses the family selector; bare
+ * browse uses FAQ_ROOT_PARTITION_QUERY. Never re-stem in the kernel.
  */
 const narrowCatalogWithFamilySelector = async (
   effectResult: EffectResult,
@@ -351,38 +325,57 @@ const narrowCatalogWithFamilySelector = async (
   ) {
     return effectResult;
   }
-  const query = pendingEffect.effect.query?.trim();
-  if (query == null || query.length === 0) {
+  const raw = effectResult.services ?? [];
+  if (raw.length === 0) {
     return effectResult;
   }
-  const raw = effectResult.services ?? [];
-  if (raw.length === 0 || selectCandidates == null) {
-    return { ...effectResult, services: [] };
+  const namedQuery = pendingEffect.effect.query?.trim();
+  if (namedQuery != null && namedQuery.length > 0) {
+    if (selectCandidates == null) {
+      return { ...effectResult, services: [] };
+    }
+    const allowlist = new Map(raw.map((row) => [row.id, row]));
+    const selection = await safeSelect(selectCandidates, {
+      utterance: namedQuery,
+      query: CATALOG_FAMILY_SELECTOR_QUERY,
+      candidates: raw.map((row) => ({ id: row.id, name: row.name })),
+    });
+    const ids = [...new Set(
+      (selection?.serviceIds ?? []).filter((id) => allowlist.has(id)),
+    )];
+    const services = ids.map((id) => allowlist.get(id)!);
+    if (services.length <= 1) {
+      return { ...effectResult, services };
+    }
+    const choices = await resolveFaqCatalogChoices({
+      services,
+      remainingIds: ids,
+      utterance: namedQuery,
+      query: CATALOG_FAMILY_SELECTOR_QUERY,
+      ...(selection?.groups != null ? { groups: selection.groups } : {}),
+      ...(partitionCandidates != null ? { partitionCandidates } : {}),
+    });
+    return {
+      ...effectResult,
+      services,
+      ...(choices.length > 0 ? { choices: chipsFromInteractionChoices(choices) } : {}),
+    };
   }
-  const allowlist = new Map(raw.map((row) => [row.id, row]));
-  const selection = await safeSelect(selectCandidates, {
-    utterance: query,
-    query: CATALOG_FAMILY_SELECTOR_QUERY,
-    candidates: raw.map((row) => ({ id: row.id, name: row.name })),
-  });
-  const ids = [...new Set(
-    (selection?.serviceIds ?? []).filter((id) => allowlist.has(id)),
-  )];
-  const services = ids.map((id) => allowlist.get(id)!);
-  if (services.length <= 1) {
-    return { ...effectResult, services };
+  // Bare browse / «Обрати іншу процедуру»: full list through the same overflow path.
+  if (raw.length === 1) {
+    return effectResult;
   }
+  const ids = raw.map((row) => row.id);
   const choices = await resolveFaqCatalogChoices({
-    services,
+    services: raw,
     remainingIds: ids,
-    utterance: query,
-    query: CATALOG_FAMILY_SELECTOR_QUERY,
-    ...(selection?.groups != null ? { groups: selection.groups } : {}),
+    utterance: FAQ_ROOT_PARTITION_QUERY,
+    query: FAQ_ROOT_PARTITION_QUERY,
     ...(partitionCandidates != null ? { partitionCandidates } : {}),
   });
   return {
     ...effectResult,
-    services,
+    services: raw,
     ...(choices.length > 0 ? { choices: chipsFromInteractionChoices(choices) } : {}),
   };
 };
@@ -425,6 +418,77 @@ export const seedDraftFromTelegramPrefetch = (
   return { draft: applyEvents(draft, events), events };
 };
 
+type CatalogChipTap =
+  | {
+      kind: "select";
+      serviceId: string;
+      serviceName?: string;
+    }
+  | {
+      kind: "page";
+      remainingIds: string[];
+      choices: CatalogChip[];
+    }
+  | { kind: "unmatched" };
+
+/**
+ * Sole booking catalog-tap resolver against the active card's chips.
+ * Does not consult offeredChoiceIds.
+ */
+const resolveCatalogChipTap = async (
+  draft: BookingDraft | null,
+  choiceId: string,
+  partitionCandidates: PartitionServiceCandidates | undefined,
+  utterance: string,
+): Promise<CatalogChipTap> => {
+  const pending = draft?.pendingDecision;
+  if (pending?.kind !== "service_candidate") {
+    return { kind: "unmatched" };
+  }
+  if (pending.choices?.some((entry) => entry.id === choiceId) !== true) {
+    return { kind: "unmatched" };
+  }
+  const remaining = remainingIdsForCatalogChoice(pending, choiceId);
+  if (remaining.length === 0) {
+    return { kind: "unmatched" };
+  }
+  if (remaining.length === 1) {
+    const serviceId = remaining[0]!;
+    const serviceName = pending.catalogRows?.find((row) => row.id === serviceId)?.name;
+    return {
+      kind: "select",
+      serviceId,
+      ...(serviceName != null ? { serviceName } : {}),
+    };
+  }
+  const catalogRows = pending.catalogRows ?? [];
+  const remainingRows = remaining.flatMap((id) => {
+    const row = catalogRows.find((entry) => entry.id === id);
+    return row != null ? [row] : [];
+  });
+  if (remainingRows.length <= 1) {
+    if (remainingRows.length === 1) {
+      const row = remainingRows[0]!;
+      return { kind: "select", serviceId: row.id, serviceName: row.name };
+    }
+    return { kind: "unmatched" };
+  }
+  const remainingIds = remainingRows.map((row) => row.id);
+  const probe = pending.query ?? utterance;
+  const choices = await resolveFaqCatalogChoices({
+    services: remainingRows,
+    remainingIds,
+    utterance: probe,
+    ...(pending.query != null ? { query: pending.query } : {}),
+    ...(partitionCandidates != null ? { partitionCandidates } : {}),
+  });
+  return {
+    kind: "page",
+    remainingIds,
+    choices: chipsFromInteractionChoices(choices),
+  };
+};
+
 const catalogChoiceIdFromState = (
   state: ClinicState,
   draft: BookingDraft | null,
@@ -435,51 +499,20 @@ const catalogChoiceIdFromState = (
   if (state.inboundChoiceId != null && state.inboundChoiceId.length > 0) {
     return state.inboundChoiceId;
   }
-  const fromChip = interpretInteractionReply(
-    state.pendingInteraction,
-    lastHumanText(state.messages),
-  );
-  return fromChip?.kind === "choice" ? fromChip.choiceId : undefined;
-};
-
-const catalogPageFromChipTap = async (
-  draft: BookingDraft | null,
-  choiceId: string,
-  partitionCandidates: PartitionServiceCandidates | undefined,
-  utterance: string,
-): Promise<{ remainingIds: string[]; choices: CatalogChip[] } | null> => {
-  const remaining = remainingIdsForCatalogChoice(draft?.pendingDecision, choiceId);
-  if (remaining.length <= 1) {
-    return null;
+  const rawText = lastHumanText(state.messages);
+  const fromChip = interpretInteractionReply(state.pendingInteraction, rawText);
+  if (fromChip?.kind === "choice") {
+    return fromChip.choiceId;
   }
-  const pending = draft?.pendingDecision;
-  const catalogRows = pending?.kind === "service_candidate"
-    ? pending.catalogRows ?? []
-    : [];
-  const remainingRows = remaining.flatMap((id) => {
-    const row = catalogRows.find((entry) => entry.id === id);
-    return row != null ? [row] : [];
-  });
-  if (remainingRows.length <= 1) {
-    return null;
+  // Typed text equal to a current chip id (not a buried catalogRows CRM id).
+  const trimmed = rawText.trim();
+  if (
+    trimmed.length > 0
+    && draft.pendingDecision.choices?.some((chip) => chip.id === trimmed) === true
+  ) {
+    return trimmed;
   }
-  const remainingIds = remainingRows.map((row) => row.id);
-  // Family probe from the open catalog page — never the chip label («Botox»).
-  const probe = (pending?.kind === "service_candidate" ? pending.query : undefined)
-    ?? utterance;
-  const choices = await resolveFaqCatalogChoices({
-    services: remainingRows,
-    remainingIds,
-    utterance: probe,
-    ...(pending?.kind === "service_candidate" && pending.query != null
-      ? { query: pending.query }
-      : {}),
-    ...(partitionCandidates != null ? { partitionCandidates } : {}),
-  });
-  return {
-    remainingIds,
-    choices: chipsFromInteractionChoices(choices),
-  };
+  return undefined;
 };
 
 export const createBookingDecideNode = (
@@ -497,7 +530,7 @@ export const createBookingDecideNode = (
       state.bookingDraft ?? null,
       state.contactContext,
     );
-    const workingDraft = seeded.draft;
+    let workingDraft = seeded.draft;
     const pendingEffect = workingDraft?.pendingEffect ?? null;
     const toolsStillPending = hasPendingToolCalls(state.agentMessages);
 
@@ -518,8 +551,8 @@ export const createBookingDecideNode = (
     const catalogChoiceId = effectResult == null
       ? catalogChoiceIdFromState(state, workingDraft)
       : undefined;
-    const catalogPage = catalogChoiceId != null
-      ? await catalogPageFromChipTap(
+    const catalogTap = catalogChoiceId != null
+      ? await resolveCatalogChipTap(
         workingDraft,
         catalogChoiceId,
         partitionCandidates,
@@ -534,14 +567,38 @@ export const createBookingDecideNode = (
         { source: "effect_result", result: effectResult },
         readModels,
       );
-    } else if (catalogPage != null) {
+    } else if (catalogTap?.kind === "page") {
       result = decideBooking(
         workingDraft,
         {
           source: "catalog_page",
-          remainingIds: catalogPage.remainingIds,
-          choices: catalogPage.choices,
+          remainingIds: catalogTap.remainingIds,
+          choices: catalogTap.choices,
         },
+        readModels,
+      );
+    } else if (catalogTap?.kind === "select") {
+      result = decideBooking(
+        workingDraft,
+        {
+          source: "semantic_patch",
+          patch: {
+            serviceIntent: {
+              kind: "catalog_service",
+              serviceId: catalogTap.serviceId,
+              ...(catalogTap.serviceName != null
+                ? { serviceName: catalogTap.serviceName }
+                : {}),
+            },
+          },
+        },
+        readModels,
+      );
+    } else if (catalogTap?.kind === "unmatched") {
+      // Stale/unoffered chip — fail closed; re-ask the open page.
+      result = decideBooking(
+        workingDraft,
+        { source: "semantic_patch", patch: {} },
         readModels,
       );
     } else {
@@ -561,24 +618,25 @@ export const createBookingDecideNode = (
           workingDraft,
           state.pendingInteraction,
         );
-        // Reply-keyboard taps send labels; inline callbacks send ids.
-        // Prefer inboundChoiceId; otherwise map the open card label → choice id.
         const fromInbound = state.inboundChoiceId;
         const fromChip = fromInbound == null
           ? interpretInteractionReply(state.pendingInteraction, rawText)
           : null;
         const callbackChoiceId = fromInbound
           ?? (fromChip?.kind === "choice" ? fromChip.choiceId : undefined);
+        // Offered ids for this hop come from the active card, not a second authority.
+        const activeView = askDecisionFromPendingView(workingDraft);
+        const offeredFromCard = choiceIdsFromCard(activeView?.card ?? null);
         const interpretInput = {
           rawText,
           ...(callbackChoiceId != null ? { callbackChoiceId } : {}),
-          ...(workingDraft?.offeredChoiceIds != null
-            ? { offeredChoiceIds: workingDraft.offeredChoiceIds }
+          ...(offeredFromCard.length > 0
+            ? { offeredChoiceIds: offeredFromCard }
             : {}),
           awaitingNote: workingDraft?.note.status === "awaiting"
             || workingDraft?.phase === "note",
           ...(openContactField != null ? { awaitingContactField: openContactField } : {}),
-          awaitingServiceConfirm: workingDraft?.serviceAcceptance?.status === "pending",
+          awaitingServiceConfirm: activeView?.card?.kind === "service_confirm",
         };
         const rawPatch = interpretTurn != null
           ? await interpretTurn(interpretInput)
@@ -587,9 +645,6 @@ export const createBookingDecideNode = (
           ...state,
           bookingDraft: workingDraft,
         }, readModels);
-        // Empty interpreter patch with an open draft → decideFromRequirement
-        // (cancel seed, note re-ask). Non-empty text without a draft still uses
-        // patient_turn → need_interpreter.
         if (Object.keys(patch).length > 0) {
           result = decideBooking(
             workingDraft,
@@ -608,6 +663,37 @@ export const createBookingDecideNode = (
             { source: "patient_turn", rawText: interpretInput.rawText },
             readModels,
           );
+        }
+      }
+    }
+
+    // Unstamped present_availability: stamp only returns null for that effect.
+    // Apply effect_prepared locally, fail-closed consume, project once.
+    if (
+      result.decision.tag === "effect"
+      && result.decision.pendingEffect?.effect.kind === "present_availability"
+    ) {
+      const provisional = applyEvents(workingDraft, result.events);
+      const stamped = stampBookingEffect(result.decision.pendingEffect, {
+        availabilityContext: state.availabilityContext,
+        availabilityCursor: state.availabilityCursor,
+        scope: bookingAvailabilityScope(provisional),
+        anchors: bookingDateAnchors(state),
+        availabilityPagedThisTurn: availabilitySlotsRanThisTurn(state.agentMessages ?? []),
+      });
+      if (stamped == null) {
+        const openEffect = provisional?.pendingEffect;
+        if (openEffect != null) {
+          result = decideBooking(
+            provisional,
+            {
+              source: "effect_result",
+              result: failClosedForPending(openEffect),
+            },
+            readModels,
+          );
+          // Second decide's events apply on top of provisional (first events kept).
+          workingDraft = provisional;
         }
       }
     }
@@ -631,7 +717,9 @@ export const createBookingDecideNode = (
     );
     const bookingContextAfterCancel = bookingContextWithoutMeeting(
       state.bookingContext,
-      cancelCompleted ? workingDraft?.replacement?.meeting.id : undefined,
+      cancelCompleted
+        ? (state.bookingDraft ?? workingDraft)?.replacement?.meeting.id
+        : undefined,
     );
 
     // REPLACE cancel with no accepted service → FAQ root catalog via
@@ -696,22 +784,8 @@ export const createBookingDecideNode = (
           type: "tool_call",
         }], stamped.action);
         update.agentMessages = new Overwrite(appendOrReplacePendingToolCall([], ai));
-      } else if (result.decision.tag === "effect") {
-        // Unstamped effect must not reach respond (PATIENT_FALLBACK). Resume
-        // the open DATE/TIME/confirm card still on the draft.
-        draft = applyEvents(draft, [{ type: "effect_cleared" }]);
-        const resumeDecision = askDecisionFromPendingView(draft);
-        if (resumeDecision != null) {
-          update.bookingDraft = draft;
-          update.bookingDecision = resumeDecision;
-          update.pendingInteraction = projectPendingInteraction({
-            decision: resumeDecision,
-            draft,
-            availabilityContext: state.availabilityContext ?? null,
-            previousInteraction: state.pendingInteraction ?? null,
-          });
-        }
       }
+      // Unstamped non-mutation already consumed above; do not restore a card here.
     }
 
     return update;

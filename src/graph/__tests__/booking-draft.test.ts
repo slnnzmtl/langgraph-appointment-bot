@@ -711,28 +711,21 @@ describe("BookingDraft contactDetails", () => {
     expect(next.contactDetails).toEqual({ phoneNumber: "+380501112233" });
   });
 
-  it("title-cases firstName and lastName on contact_field_submitted only", () => {
+  it("trims firstName and lastName on contact_field_submitted without rewriting casing", () => {
     let draft = reduceBookingDraft(detailsReady(), {
       type: "contact_field_submitted",
       field: "firstName",
-      value: "дар'я",
+      value: "  дар'я  ",
     });
     draft = reduceBookingDraft(draft, {
       type: "contact_field_submitted",
       field: "lastName",
-      value: "тестова",
+      value: " Тестова ",
     });
     expect(draft.contactDetails).toEqual({
-      firstName: "Дар'я",
+      firstName: "дар'я",
       lastName: "Тестова",
     });
-
-    const hyphenated = reduceBookingDraft(detailsReady(), {
-      type: "contact_field_submitted",
-      field: "firstName",
-      value: "анна-марія",
-    });
-    expect(hyphenated.contactDetails?.firstName).toBe("Анна-Марія");
 
     const alreadyCased = reduceBookingDraft(detailsReady(), {
       type: "contact_field_submitted",
@@ -852,5 +845,47 @@ describe("BookingDraft contactDetails", () => {
       accepted: true,
     });
     expect(withService.contactDetails ?? null).toBeNull();
+  });
+
+  it("clears service_candidate when reaffirming the same CRM id without resetting date/slot/note", () => {
+    let draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox", source: "catalog" },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-10-20" });
+    draft = reduceBookingDraft(draft, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-10-20T11:00:00+03:00",
+        dateEnd: "2026-10-20T11:30:00+03:00",
+        label: "11:00",
+      },
+      snapshotId: "snap-1",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "note_status",
+      status: "answered",
+      value: "про шкіру",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        catalogRows: [{ id: "svc-1", name: "Botox" }],
+        choices: [{ id: "svc-1", label: "Botox", serviceIds: ["svc-1"] }],
+      },
+    });
+
+    const next = reduceBookingDraft(draft, {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox canonical", source: "catalog" },
+      accepted: true,
+    });
+    expect(next.pendingDecision).toBeNull();
+    expect(next.selectedDate).toBe("2026-10-20");
+    expect(next.selectedSlot?.label).toBe("11:00");
+    expect(next.note).toEqual({ status: "answered", value: "про шкіру" });
+    expect(next.serviceAcceptance?.service.name).toBe("Botox canonical");
   });
 });

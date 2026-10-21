@@ -23,8 +23,9 @@ export const choiceIdsFromCard = (card: BookingViewCard | null): string[] => {
     return [];
   }
   switch (card.kind) {
-    case "service_confirm":
     case "service_candidate":
+      return card.choices.map((chip) => chip.id);
+    case "service_confirm":
     case "date_select":
     case "time_select":
       return [...card.choiceIds];
@@ -83,6 +84,12 @@ export const replyChoicesFromCard = (
   card: BookingViewCard | null,
   labelById?: ReadonlyMap<string, string>,
 ): BookingReplyChoice[] => {
+  if (card?.kind === "service_candidate") {
+    return card.choices.map((chip) => ({
+      id: chip.id,
+      label: labelById?.get(chip.id) ?? chip.label,
+    }));
+  }
   const ids = choiceIdsFromCard(card);
   const cardLabels =
     card != null && "labels" in card && card.labels != null

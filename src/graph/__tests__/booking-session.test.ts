@@ -1093,7 +1093,7 @@ describe("interpretInteractionReply", () => {
     expect(interpretInteractionReply(visitNote, "  ")).toEqual({ kind: "unmatched" });
   });
 
-  it("maps bare hour free text to a unique time_select chip", () => {
+  it("matches exact time labels only — bare hour prose is unmatched", () => {
     const timeSelect: PendingInteraction = {
       kind: "time_select",
       date: "2026-10-20",
@@ -1104,17 +1104,14 @@ describe("interpretInteractionReply", () => {
         { id: "other_date", label: OTHER_DATE_LABEL },
       ],
     };
-    expect(interpretInteractionReply(timeSelect, "11")).toEqual({
-      kind: "choice",
-      choiceId: "2026-10-20T1100",
-    });
+    expect(interpretInteractionReply(timeSelect, "11")).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(timeSelect, "11:30")).toEqual({
       kind: "choice",
       choiceId: "2026-10-20T1130",
     });
   });
 
-  it("maps a unique bare day on date_select and rejects ambiguous days", () => {
+  it("matches exact date labels only — bare day prose is unmatched", () => {
     const unique: PendingInteraction = {
       kind: "date_select",
       snapshot: { snapshotId: "snap-1", days: [] },
@@ -1123,21 +1120,11 @@ describe("interpretInteractionReply", () => {
         { id: "other_date", label: OTHER_DATE_LABEL },
       ],
     };
-    expect(interpretInteractionReply(unique, "20")).toEqual({
+    expect(interpretInteractionReply(unique, "20")).toEqual({ kind: "unmatched" });
+    expect(interpretInteractionReply(unique, "20 жов")).toEqual({
       kind: "choice",
       choiceId: "2026-10-20",
     });
-
-    const ambiguous: PendingInteraction = {
-      kind: "date_select",
-      snapshot: { snapshotId: "snap-1", days: [] },
-      choices: [
-        { id: "2026-10-20", label: "20 жов" },
-        { id: "2026-11-20", label: "20 лис" },
-        { id: "other_date", label: OTHER_DATE_LABEL },
-      ],
-    };
-    expect(interpretInteractionReply(ambiguous, "20")).toEqual({ kind: "unmatched" });
   });
 });
 

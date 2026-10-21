@@ -195,4 +195,32 @@ describe("effectResultFromToolMessages list_services catalog", () => {
       name: "Service 64",
     });
   });
+
+  it("fails closed when list_services total exceeds returned rows", () => {
+    const id = "eff_partial_list_services";
+    const list = Array.from({ length: 200 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+    }));
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({ list, total: 350 }),
+          tool_call_id: id,
+          name: "list_services",
+        }),
+      ],
+      {
+        id,
+        expectedRevision: 1,
+        effect: { kind: "list_services" },
+        status: "executing",
+      },
+    );
+    expect(result).toEqual({
+      effectId: id,
+      kind: "catalog",
+      outcome: "error",
+    });
+  });
 });

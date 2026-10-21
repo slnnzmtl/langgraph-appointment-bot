@@ -309,7 +309,8 @@ export const renderFaqCatalogReply = (
 
 /**
  * Deterministic fallback when the LLM partitioner is unavailable or empty.
- * Returns raw CRM labels — caller runs {@link shortenFaqChoiceLabels} once.
+ * One chip per remaining row (uncapped). {@link resolveFaqCatalogChoices}
+ * runs {@link mergeCatalogChoicesToPageCap} then {@link shortenFaqChoiceLabels}.
  */
 export const buildFaqCatalogChoices = (
   services: ServicesContext["list"],
@@ -318,41 +319,93 @@ export const buildFaqCatalogChoices = (
   const rows = remainingIds != null && remainingIds.length > 0
     ? services.filter((row) => remainingIds.includes(row.id))
     : services;
-  if (rows.length === 0) {
-    return [];
-  }
-  if (rows.length === 1) {
-    const row = rows[0]!;
-    return [{
-      id: row.id,
-      label: row.name.trim(),
-      serviceIds: [row.id],
-    }];
-  }
+  return rows.map((row) => ({
+    id: row.id,
+    label: row.name.trim(),
+    serviceIds: [row.id],
+  }));
+};
 
-  if (rows.length <= MAX_FAQ_CATALOG_CHOICES) {
-    return rows.map((row) => ({
-      id: row.id,
-      label: row.name.trim(),
-      serviceIds: [row.id],
+/**
+ * Cap a page at {@link MAX_FAQ_CATALOG_CHOICES} before label/id disambiguation.
+ * Fold leftover ids into an existing «Інші варіанти» group when present.
+ */
+export const mergeCatalogChoicesToPageCap = (
+  choices: readonly InteractionChoice[],
+): InteractionChoice[] => {
+  if (choices.length <= MAX_FAQ_CATALOG_CHOICES) {
+    return choices.map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+      serviceIds: choice.serviceIds != null ? [...choice.serviceIds] : [choice.id],
+      ...(choice.displayLabel != null ? { displayLabel: choice.displayLabel } : {}),
+      ...(choice.aliases != null ? { aliases: [...choice.aliases] } : {}),
     }));
   }
-
-  // Keep seven CRM chips + one overflow group so every id stays reachable.
-  const visible = rows.slice(0, MAX_FAQ_CATALOG_CHOICES - 1);
-  const overflow = rows.slice(MAX_FAQ_CATALOG_CHOICES - 1);
+  const head = choices.slice(0, MAX_FAQ_CATALOG_CHOICES - 1);
+  const tail = choices.slice(MAX_FAQ_CATALOG_CHOICES - 1);
+  const overflowIds = tail.flatMap((choice) =>
+    choice.serviceIds != null && choice.serviceIds.length > 0
+      ? [...choice.serviceIds]
+      : [choice.id]
+  );
+  const otherInHead = head.findIndex(
+    (choice) => choice.label.trim() === SERVICE_CANDIDATE_OTHER_LABEL_UK,
+  );
+  if (otherInHead >= 0) {
+    const existing = head[otherInHead]!;
+    const mergedIds = [
+      ...(existing.serviceIds != null && existing.serviceIds.length > 0
+        ? existing.serviceIds
+        : [existing.id]),
+      ...overflowIds,
+    ];
+    return head.map((choice, index) =>
+      index === otherInHead
+        ? {
+          ...choice,
+          id: choice.id,
+          label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+          serviceIds: [...new Set(mergedIds)],
+        }
+        : {
+          id: choice.id,
+          label: choice.label,
+          serviceIds: choice.serviceIds != null ? [...choice.serviceIds] : [choice.id],
+          ...(choice.displayLabel != null ? { displayLabel: choice.displayLabel } : {}),
+          ...(choice.aliases != null ? { aliases: [...choice.aliases] } : {}),
+        }
+    );
+  }
   return [
-    ...visible.map((row) => ({
-      id: row.id,
-      label: row.name.trim(),
-      serviceIds: [row.id],
+    ...head.map((choice) => ({
+      id: choice.id,
+      label: choice.label,
+      serviceIds: choice.serviceIds != null ? [...choice.serviceIds] : [choice.id],
+      ...(choice.displayLabel != null ? { displayLabel: choice.displayLabel } : {}),
+      ...(choice.aliases != null ? { aliases: [...choice.aliases] } : {}),
     })),
     {
       id: "faq_other",
       label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
-      serviceIds: overflow.map((row) => row.id),
+      serviceIds: [...new Set(overflowIds)],
     },
   ];
+};
+
+/** Stable unique chip ids after merge (keep CRM singleton ids; uniquify group ids). */
+const uniquifyCatalogChoiceIds = (
+  choices: readonly InteractionChoice[],
+): InteractionChoice[] => {
+  const seen = new Set<string>();
+  return choices.map((choice, index) => {
+    let id = choice.id;
+    if (seen.has(id)) {
+      id = `g${index}`;
+    }
+    seen.add(id);
+    return { ...choice, id };
+  });
 };
 
 export const resolveFaqCatalogChoices = async (input: {
@@ -371,28 +424,27 @@ export const resolveFaqCatalogChoices = async (input: {
       input.groups,
     )
     : [];
+  let raw: InteractionChoice[];
   if (fromSelectorGroups.length > 0) {
-    return shortenFaqChoiceLabels(
-      fromSelectorGroups,
-      input.selectedLabel != null && input.selectedLabel.length > 0
-        ? { selectedLabel: input.selectedLabel }
-        : undefined,
-    );
+    raw = fromSelectorGroups;
+  } else {
+    const partitioned = await partitionRemainingServiceChoices({
+      rows: input.services,
+      ...(input.remainingIds != null ? { remainingIds: input.remainingIds } : {}),
+      utterance: input.utterance,
+      ...(input.query != null ? { query: input.query } : {}),
+      ...(input.partitionCandidates != null
+        ? { partitionCandidates: input.partitionCandidates }
+        : {}),
+    });
+    raw = partitioned.length > 0
+      ? partitioned
+      : buildFaqCatalogChoices(input.services, input.remainingIds);
   }
-  const partitioned = await partitionRemainingServiceChoices({
-    rows: input.services,
-    ...(input.remainingIds != null ? { remainingIds: input.remainingIds } : {}),
-    utterance: input.utterance,
-    ...(input.query != null ? { query: input.query } : {}),
-    ...(input.partitionCandidates != null
-      ? { partitionCandidates: input.partitionCandidates }
-      : {}),
-  });
-  const choices = partitioned.length > 0
-    ? partitioned
-    : buildFaqCatalogChoices(input.services, input.remainingIds);
+  // Merge excess before shorten/uniquify so a second «Інші варіанти» is never appended.
+  const capped = uniquifyCatalogChoiceIds(mergeCatalogChoicesToPageCap(raw));
   return shortenFaqChoiceLabels(
-    choices,
+    capped,
     input.selectedLabel != null && input.selectedLabel.length > 0
       ? { selectedLabel: input.selectedLabel }
       : undefined,

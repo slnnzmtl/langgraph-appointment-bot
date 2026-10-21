@@ -1,4 +1,4 @@
-import { AIMessage, HumanMessage, type BaseMessage } from "@langchain/core/messages";
+import { AIMessage } from "@langchain/core/messages";
 
 import {
   BOOKING_NOTE_QUESTION_UK,
@@ -13,14 +13,6 @@ import {
   SERVICE_CONFIRM_PROCEDURE_UK,
   CLINIC_SLOT_MINUTES,
 } from "../shared/clinic-constants.js";
-import { isOtherDateChip } from "../shared/other-date-chip.js";
-import { extractMessageTextContent } from "../shared/message-content.js";
-import type { ClinicState } from "./state.js";
-import { availabilityMatchesBooking } from "./booking-draft.js";
-import {
-  availabilitySlotsRanThisTurn,
-  captureAvailabilityFromMessages,
-} from "./agent-loop/protocol/index.js";
 import {
   availabilityQueryFromContext,
   type AvailabilityContext,
@@ -395,146 +387,6 @@ export const formatAvailabilityEmptyOffer = (
 ): { replyText: string; replyButtons: string[]; interaction: DateSelectInteraction } => {
   const interaction = buildEmptyAvailabilityInteraction(context);
   return { ...renderedAvailabilityOffer(interaction), interaction };
-};
-
-/** Match a patient day pick to a snapshot day (keyboard short label, dayLabel, or YYYY-MM-DD). */
-export const matchAvailabilityDay = (
-  humanText: string,
-  days: AvailabilityContext["days"],
-): AvailabilityContext["days"][number] | null => {
-  const trimmed = humanText.trim();
-  if (!trimmed || isOtherDateChip(trimmed)) {
-    return null;
-  }
-  const normalized = trimmed.toLowerCase();
-  for (const day of days) {
-    if (day.slots.length === 0) {
-      continue;
-    }
-    const dayLabel = day.dayLabel ?? day.date;
-    const short = shortDayMonthLabel(dayLabel);
-    if (
-      trimmed === day.date
-      || trimmed === dayLabel
-      || trimmed === short
-      || normalized === dayLabel.toLowerCase()
-      || normalized === short.toLowerCase()
-    ) {
-      return day;
-    }
-  }
-  // Telegram users often type only the day number after DATE buttons are shown.
-  // Resolve it only against the trusted snapshot and only when it is unique;
-  // never invent a month or silently choose between two matching months.
-  const bareDay = /^(\d{1,2})$/.exec(trimmed);
-  if (bareDay) {
-    const wanted = Number(bareDay[1]);
-    const matches = days.filter(
-      (day) => day.slots.length > 0 && Number(day.date.slice(8, 10)) === wanted,
-    );
-    if (matches.length === 1) {
-      return matches[0]!;
-    }
-  }
-  return null;
-};
-
-/** Kept with availability recovery copy; unused until a caller needs the slot-required prompt. */
-const BOOKING_SLOT_REQUIRED_UK =
-  "Будь ласка, спочатку оберіть дату й час із запропонованих варіантів.";
-void BOOKING_SLOT_REQUIRED_UK;
-
-/**
- * When present_availability_slots ran this turn, replace invented DATE/TIME copy with the
- * snapshot. Multi-day → DATE; one day → TIME. Returns null when this turn is not a slot offer.
- */
-type AvailabilityOfferResult = {
-  replyText: string;
-  replyButtons: string[];
-  interaction: DateSelectInteraction | TimeSelectInteraction;
-};
-
-const lastHumanText = (messages: BaseMessage[]): string => {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message instanceof HumanMessage) {
-      return extractMessageTextContent(message.content).trim();
-    }
-  }
-  return "";
-};
-
-export const availabilityOfferFromToolTurn = (
-  messages: BaseMessage[],
-): AvailabilityOfferResult | null => {
-  if (!availabilitySlotsRanThisTurn(messages)) {
-    return null;
-  }
-  const captured = captureAvailabilityFromMessages(messages);
-  if (!captured) {
-    return null;
-  }
-  const open = captured.days.filter((day) => day.slots.length > 0);
-  if (open.length === 0) {
-    return formatAvailabilityEmptyOffer(captured);
-  }
-  if (open.length === 1) {
-    return formatAvailabilityTimeOffer(open[0]!, captured);
-  }
-  return formatAvailabilityDateOffer(captured);
-};
-
-/**
- * Code-owned DATE/TIME for booking finalize: TIME when the latest human message picks a
- * snapshot day (even if this-turn present_availability_slots returned a multi-day DATE);
- * else DATE/TIME from this-turn tool snapshot.
- */
-export const resolveAvailabilityOffer = (
-  messages: BaseMessage[],
-  availabilityContext: AvailabilityContext | null | undefined,
-  allowCheckpointDayPick = true,
-): AvailabilityOfferResult | null => {
-  const captured = captureAvailabilityFromMessages(messages);
-  const context = captured ?? availabilityContext ?? null;
-  const days = context?.days ?? [];
-  const day = allowCheckpointDayPick
-    ? matchAvailabilityDay(lastHumanText(messages), days)
-    : null;
-  if (day && context != null) {
-    return formatAvailabilityTimeOffer(day, context);
-  }
-  if (day) {
-    return formatAvailabilityTimeOffer(day);
-  }
-  return availabilityOfferFromToolTurn(messages);
-};
-
-/**
- * Re-render trusted checkpoint availability from draft phase + selectedDate.
- * Ignores the human line. Refuses when the snapshot belongs to another service.
- */
-export const availabilityRecoveryOffer = (
-  state: ClinicState,
-): AvailabilityOfferResult | null => {
-  const availability = state.availabilityContext;
-  if (!availability) {
-    return null;
-  }
-  if (!availabilityMatchesBooking(availability, state.bookingDraft)) {
-    return null;
-  }
-  const selectedDate = state.bookingDraft?.selectedDate;
-  const selectedDay = selectedDate == null
-    ? undefined
-    : availability.days.find((day) => day.date === selectedDate);
-  if (selectedDay && selectedDay.slots.length > 0) {
-    return formatAvailabilityTimeOffer(selectedDay, availability);
-  }
-  const open = availability.days.filter((day) => day.slots.length > 0);
-  if (open.length === 0) {
-    return formatAvailabilityEmptyOffer(availability);
-  }
-  return formatAvailabilityDateOffer(availability);
 };
 
 export const SLOT_JUST_TAKEN_PREFIX = "На жаль, обраний час щойно зайняли.\n\n";

@@ -373,12 +373,15 @@ describe("multi-fact side questions and catalog resolve", () => {
       intent: "ask_service",
       card: {
         kind: "service_candidate",
-        choiceIds: ["svc-corr", "svc-meso", "svc-latin"],
-        labels: {
-          "svc-corr": "Корекція ботокс",
-          "svc-meso": "Мезоботокс",
-          "svc-latin": "Ботулінотерапія Botox, Disport 1 зона",
-        },
+        choices: [
+          { id: "svc-corr", label: "Корекція ботокс", serviceIds: ["svc-corr"] },
+          { id: "svc-meso", label: "Мезоботокс", serviceIds: ["svc-meso"] },
+          {
+            id: "svc-latin",
+            label: "Ботулінотерапія Botox, Disport 1 зона",
+            serviceIds: ["svc-latin"],
+          },
+        ],
       },
     });
     const pending = decision.events.find((e) => e.type === "decision_set");
@@ -438,7 +441,11 @@ describe("multi-fact side questions and catalog resolve", () => {
     );
     expect(decision.decision.card).toMatchObject({
       kind: "service_candidate",
-      choiceIds: services.map((row) => row.id),
+      choices: services.map((row) => ({
+        id: row.id,
+        label: row.name,
+        serviceIds: [row.id],
+      })),
     });
   });
 
@@ -487,12 +494,10 @@ describe("multi-fact side questions and catalog resolve", () => {
     );
     expect(decision.decision.card).toMatchObject({
       kind: "service_candidate",
-      choiceIds: ["g0", "g1"],
-      labels: { g0: "Botox", g1: "Disport" },
-      serviceIdsByChoice: {
-        g0: ["svc-0", "svc-1", "svc-2"],
-        g1: ["svc-3", "svc-4", "svc-5"],
-      },
+      choices: [
+        { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1", "svc-2"] },
+        { id: "g1", label: "Disport", serviceIds: ["svc-3", "svc-4", "svc-5"] },
+      ],
     });
     const pending = decision.events.find((e) => e.type === "decision_set");
     expect(pending).toMatchObject({

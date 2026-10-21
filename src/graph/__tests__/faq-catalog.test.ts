@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.js";
 import {
   buildFaqCatalogChoices,
   faqCatalogIntroFromModel,
   faqChoiceTextLabel,
+  mergeCatalogChoicesToPageCap,
   renderFaqCatalogReply,
+  resolveFaqCatalogChoices,
   shortenFaqChoiceLabels,
 } from "../faq-catalog.js";
 
@@ -231,13 +234,16 @@ describe("buildFaqCatalogChoices", () => {
       { id: "7", name: "Ботулінотерапія Botox, Dysport 2 зони (лоб+міжбрів'я)" },
       { id: "8", name: "Ботулінотерапія Botox, Dysport 1 зона" },
     ];
-    const unselected = shortenFaqChoiceLabels(buildFaqCatalogChoices(rows));
+    const unselected = shortenFaqChoiceLabels(
+      mergeCatalogChoicesToPageCap(buildFaqCatalogChoices(rows)),
+    );
     expect(unselected.every((c) => faqChoiceTextLabel(c).startsWith("Ботулінотерапія"))).toBe(
       true,
     );
-    const choices = shortenFaqChoiceLabels(buildFaqCatalogChoices(rows), {
-      selectedLabel: "Ботулінотерапія",
-    });
+    const choices = shortenFaqChoiceLabels(
+      mergeCatalogChoicesToPageCap(buildFaqCatalogChoices(rows)),
+      { selectedLabel: "Ботулінотерапія" },
+    );
     expect(choices).toHaveLength(8);
     for (const choice of choices) {
       expect(faqChoiceTextLabel(choice).startsWith("Ботулінотерапія")).toBe(false);
@@ -281,5 +287,56 @@ describe("buildFaqCatalogChoices", () => {
     ]));
     expect(choices[0]!.label).not.toBe(choices[1]!.label);
     expect(choices[1]!.label).toContain("(2)");
+  });
+});
+
+describe("mergeCatalogChoicesToPageCap", () => {
+  it("folds excess into an existing Інші варіанти group without duplicating the label", () => {
+    const choices = Array.from({ length: 10 }, (_, index) => ({
+      id: `g${index}`,
+      label: index === 3 ? SERVICE_CANDIDATE_OTHER_LABEL_UK : `Group ${index}`,
+      serviceIds: [`svc-${index}a`, `svc-${index}b`],
+    }));
+    const capped = mergeCatalogChoicesToPageCap(choices);
+    // Head is 7 chips with overflow folded into the existing «Інші варіанти».
+    expect(capped).toHaveLength(7);
+    const other = capped.filter((chip) => chip.label === SERVICE_CANDIDATE_OTHER_LABEL_UK);
+    expect(other).toHaveLength(1);
+    expect(other[0]!.serviceIds).toEqual(
+      expect.arrayContaining(["svc-3a", "svc-3b", "svc-8a", "svc-9a"]),
+    );
+    expect(new Set(capped.map((chip) => chip.id)).size).toBe(7);
+  });
+
+  it("resolveFaqCatalogChoices keeps every id reachable when selector returns >8 groups", async () => {
+    const services = Array.from({ length: 12 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+    }));
+    const groups = [
+      ...Array.from({ length: 7 }, (_, index) => ({
+        label: `Family ${index}`,
+        serviceIds: [`svc-${index}`],
+      })),
+      {
+        label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+        serviceIds: ["svc-7", "svc-8"],
+      },
+      { label: "Extra A", serviceIds: ["svc-9"] },
+      { label: "Extra B", serviceIds: ["svc-10", "svc-11"] },
+    ];
+    const resolved = await resolveFaqCatalogChoices({
+      services,
+      remainingIds: services.map((row) => row.id),
+      utterance: "послуги",
+      groups,
+    });
+    expect(resolved.length).toBeLessThanOrEqual(8);
+    expect(new Set(resolved.map((chip) => chip.id)).size).toBe(resolved.length);
+    expect(new Set(resolved.map((chip) => chip.label)).size).toBe(resolved.length);
+    const covered = new Set(resolved.flatMap((chip) => chip.serviceIds ?? []));
+    for (const row of services) {
+      expect(covered.has(row.id)).toBe(true);
+    }
   });
 });

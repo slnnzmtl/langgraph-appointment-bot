@@ -186,23 +186,12 @@ export type BookingEvent =
   | { type: "choices_cleared" };
 
 /**
- * Patient-submit name normalize: trim + title-case (uk locale, hyphen segments).
- * Apostrophes stay («дар'я» → «Дар'я»). Write path only — not CRM merge/read.
+ * Patient-submit name normalize: trim only. Preserve submitted casing.
+ * Write path only — not CRM merge/read.
  */
 const normalizeContactName = (value: string): string | null => {
   const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  const titlePart = (part: string): string => {
-    const chars = Array.from(part);
-    if (chars.length === 0) {
-      return part;
-    }
-    const [head, ...tail] = chars;
-    return `${head!.toLocaleUpperCase("uk")}${tail.join("").toLocaleLowerCase("uk")}`;
-  };
-  return trimmed.split("-").map(titlePart).join("-");
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 /** Ladder order for patient identity collection (phone before names). */
@@ -682,21 +671,25 @@ export const reduceBookingDraft = (
       // their choice cannot restart the booking ladder.
       if (existing?.service.id === event.service.id) {
         const accepted = existing.status === "accepted" || event.accepted === true;
+        // Close an open catalog page even when reaffirming the same CRM id.
+        const pendingDecision: BookingDraft["pendingDecision"] =
+          draft.pendingDecision?.kind === "service_candidate"
+            ? null
+            : (draft.pendingDecision ?? null);
+        const nextAcceptance: ServiceAcceptance = {
+          ...existing,
+          status: accepted ? "accepted" : existing.status,
+          service: { ...existing.service, ...event.service },
+          ...(accepted && event.turn != null ? { acceptedAtTurn: event.turn } : {}),
+        };
         return withVersion(draft, {
           ...draft,
-          serviceAcceptance: {
-            ...existing,
-            status: accepted ? "accepted" : existing.status,
-            service: { ...existing.service, ...event.service },
-            ...(accepted && event.turn != null ? { acceptedAtTurn: event.turn } : {}),
-          },
+          serviceAcceptance: nextAcceptance,
+          pendingDecision,
           phase: bookingDraftPhase({
             ...draft,
-            serviceAcceptance: {
-              ...existing,
-              status: accepted ? "accepted" : existing.status,
-              service: { ...existing.service, ...event.service },
-            },
+            serviceAcceptance: nextAcceptance,
+            pendingDecision,
           }),
         });
       }

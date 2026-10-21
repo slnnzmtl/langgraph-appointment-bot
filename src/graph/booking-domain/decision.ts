@@ -67,10 +67,8 @@ export type BookingViewCard =
   | { kind: "service_confirm"; serviceId: string; choiceIds: string[]; labels?: Record<string, string> }
   | {
       kind: "service_candidate";
-      choiceIds: string[];
-      labels?: Record<string, string>;
-      displayLabels?: Record<string, string>;
-      serviceIdsByChoice?: Record<string, string[]>;
+      /** Current keyboard page — sole catalog representation (no parallel id/label maps). */
+      choices: CatalogChip[];
     }
   | {
       kind: "date_select";
