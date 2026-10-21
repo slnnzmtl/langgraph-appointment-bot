@@ -86,6 +86,11 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
         : null,
     ].filter((line): line is string => line != null);
 
+    const phoneFormatFallback = (): UnderstoodBookingTurn =>
+      input.awaitingContactField === "phoneNumber"
+        ? { contactFormatError: "phoneNumber" }
+        : {};
+
     try {
       const result = await chain.invoke([
         { role: "system", content: BOOKING_TURN_INTERPRETER_INSTRUCTION },
@@ -96,15 +101,20 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
       ]);
       const parsed = bookingTurnClassificationSchema.safeParse(result);
       if (!parsed.success) {
-        return {};
+        return phoneFormatFallback();
       }
       // Strip explicit undefined keys for exactOptionalPropertyTypes.
       const cleaned = Object.fromEntries(
         Object.entries(parsed.data).filter(([, value]) => value !== undefined),
       );
-      return normalizeBookingTurnClassification(cleaned, input);
+      const patch = normalizeBookingTurnClassification(cleaned, input);
+      if (Object.keys(patch).length > 0) {
+        return patch;
+      }
+      // Open phone field, no other semantic intent — format clarification.
+      return phoneFormatFallback();
     } catch {
-      return {};
+      return phoneFormatFallback();
     }
   };
 };

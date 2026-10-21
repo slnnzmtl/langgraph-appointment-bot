@@ -48,4 +48,38 @@ describe("createBookingTurnInterpreter open name field", () => {
     expect(patch.contactFacts?.phoneNumber).toMatch(/^\+/);
     expect(invoke).not.toHaveBeenCalled();
   });
+
+  it("classifies phone-step control prose before issuing a format error", async () => {
+    const invoke = vi.fn();
+    const llm = {
+      bindRoutingTools: () => ({ invoke }),
+    } as unknown as ILLMConnector;
+    const interpret = createBookingTurnInterpreter(llm);
+
+    invoke.mockResolvedValueOnce({ controlKind: "visit_cancel" });
+    await expect(
+      interpret({
+        rawText: "Скасуйте мій запис",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).resolves.toEqual({ controlIntent: { kind: "visit_cancel" } });
+
+    invoke.mockResolvedValueOnce({ controlKind: "human_handoff" });
+    await expect(
+      interpret({
+        rawText: "Я хочу поговорити з адміністратором",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).resolves.toEqual({ controlIntent: { kind: "human_handoff" } });
+
+    invoke.mockResolvedValueOnce({ controlKind: "none" });
+    await expect(
+      interpret({
+        rawText: "38050504023",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).resolves.toEqual({ contactFormatError: "phoneNumber" });
+
+    expect(invoke).toHaveBeenCalledTimes(3);
+  });
 });

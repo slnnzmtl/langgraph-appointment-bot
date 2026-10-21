@@ -460,7 +460,6 @@ describe("booking session lifecycle", () => {
       },
     }],
     [{ type: "command_cleared" }],
-    [{ type: "existing_booking_detected", meeting: { id: "m-1" } }],
     [{
       type: "cancel_existing_requested",
       command: { action: "cancel", payload: { meetingId: "m-1" } },
@@ -476,6 +475,19 @@ describe("booking session lifecycle", () => {
       expect(reduceBookingDraft(null, event)).toBeNull();
     },
   );
+
+  it("opens a replace draft from null on existing_booking_detected", () => {
+    expect(
+      reduceBookingDraft(null, {
+        type: "existing_booking_detected",
+        meeting: { id: "m-1" },
+      }),
+    ).toMatchObject({
+      mode: "replace",
+      phase: "confirming",
+      replacement: { meeting: { id: "m-1" }, status: "offered" },
+    });
+  });
 
   it("treats empty create drafts as legacy closed sessions", () => {
     const empty = createEmptyBookingDraft();

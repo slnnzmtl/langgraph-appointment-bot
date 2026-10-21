@@ -61,7 +61,9 @@ export const interpretBookingTurnDeterministic = (
     return {};
   }
 
-  // Strict structural: phone shape only (never treat free text as a name/note).
+  // Strict structural: valid phone only. Non-phone prose → {} so the structured
+  // interpreter can classify visit_cancel / handoff / etc.; format error is
+  // issued only after that path finds no other intent.
   if (input.awaitingContactField === "phoneNumber") {
     if (isExactBookingControlLabel(raw)) {
       return {};
@@ -70,8 +72,7 @@ export const interpretBookingTurnDeterministic = (
     if (phone != null) {
       return { contactFacts: { phoneNumber: phone } };
     }
-    // Non-empty failed shape — decide shows format clarification (skips LLM).
-    return { contactFormatError: "phoneNumber" };
+    return {};
   }
 
   // Open name fields: never accept names here — structured LLM classifies free text.

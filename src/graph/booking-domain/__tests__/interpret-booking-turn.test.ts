@@ -61,12 +61,25 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
         awaitingContactField: "lastName",
       }),
     ).toEqual({});
+    // Non-phone / invalid shape stays {} so the structured interpreter can run.
     expect(
       interpretBookingTurnDeterministic({
         rawText: "38050504023",
         awaitingContactField: "phoneNumber",
       }),
-    ).toEqual({ contactFormatError: "phoneNumber" });
+    ).toEqual({});
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Скасуйте мій запис",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).toEqual({});
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Я хочу поговорити з адміністратором",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).toEqual({});
     // Main-menu label is control, not a format error (phone or name).
     expect(
       interpretBookingTurnDeterministic({
