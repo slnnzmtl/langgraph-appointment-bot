@@ -24,11 +24,22 @@ import {
 const choicesFromIds = (
   choiceIds: readonly string[],
   labels?: Record<string, string>,
+  extras?: {
+    displayLabels?: Record<string, string>;
+    serviceIdsByChoice?: Record<string, string[]>;
+  },
 ): InteractionChoice[] =>
-  choiceIds.map((id) => ({
-    id,
-    label: labels?.[id] ?? id,
-  }));
+  choiceIds.map((id) => {
+    const label = labels?.[id] ?? extras?.displayLabels?.[id] ?? id;
+    const displayLabel = extras?.displayLabels?.[id];
+    const serviceIds = extras?.serviceIdsByChoice?.[id];
+    return {
+      id,
+      label,
+      ...(displayLabel != null && displayLabel !== label ? { displayLabel } : {}),
+      ...(serviceIds != null && serviceIds.length > 0 ? { serviceIds } : {}),
+    };
+  });
 
 const snapshotFromAvailability = (
   context: AvailabilityContext | null,
@@ -70,13 +81,33 @@ const projectCard = (
         ),
       };
     }
-    case "service_candidate":
+    case "service_candidate": {
+      const pending = draft?.pendingDecision;
+      const catalogPending = pending?.kind === "service_candidate" ? pending : null;
+      const probe = catalogPending?.query ?? "";
+      const fromPending = catalogPending?.choices;
       return {
         kind: "service_candidate",
-        utterance: "",
+        utterance: probe,
+        ...(catalogPending?.query != null ? { query: catalogPending.query } : {}),
         owner: "booking",
-        choices: choicesFromIds(card.choiceIds, card.labels),
+        choices: fromPending != null && fromPending.length > 0
+          ? fromPending.map((chip) => ({
+            id: chip.id,
+            label: chip.label,
+            serviceIds: [...chip.serviceIds],
+            ...(chip.displayLabel != null && chip.displayLabel !== chip.label
+              ? { displayLabel: chip.displayLabel }
+              : {}),
+          }))
+          : choicesFromIds(card.choiceIds, card.labels, {
+            ...(card.displayLabels != null ? { displayLabels: card.displayLabels } : {}),
+            ...(card.serviceIdsByChoice != null
+              ? { serviceIdsByChoice: card.serviceIdsByChoice }
+              : {}),
+          }),
       };
+    }
     case "date_select": {
       const snapshot = snapshotFromAvailability(availabilityContext, card.snapshotId);
       return {

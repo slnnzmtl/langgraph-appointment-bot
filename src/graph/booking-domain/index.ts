@@ -7,6 +7,8 @@
  */
 
 export {
+  type CatalogChip,
+  type CatalogRow,
   type FrozenMutationCommand,
   type PendingDecision,
   type SlotAvailabilityEvidence,

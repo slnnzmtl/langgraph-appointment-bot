@@ -13,7 +13,7 @@ import {
   contactMissingFields,
   normalizeContactLookupResult,
 } from "../../../tools/contact-tools.js";
-import { normalizeListServicesResult } from "../../../tools/service-tools.js";
+import { parseListServicesPayload } from "../../../tools/service-tools.js";
 import {
   presentationSnapshotId,
   projectAvailabilityPresentation,
@@ -343,11 +343,11 @@ export const effectResultFromToolMessages = (
     if (body.startsWith("Error:")) {
       return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
     }
-    const servicesContext = normalizeListServicesResult(body);
-    if (servicesContext == null) {
+    const parsed = parseListServicesPayload(body);
+    if (parsed == null) {
       return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
     }
-    const services = servicesContext.list.map((row) => ({
+    const services = parsed.list.map((row) => ({
       id: row.id,
       name: row.name,
     }));

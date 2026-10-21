@@ -510,12 +510,13 @@ describe("createBookingDecideNode catalog family selector", () => {
       card: {
         kind: "service_candidate",
         choiceIds: ["svc-latin", "svc-corr"],
-        labels: {
-          "svc-latin": "Ботулінотерапія Botox, Disport 1 зона",
-          "svc-corr": "Корекція ботокс",
-        },
       },
     });
+    const labels = update.bookingDecision?.card?.kind === "service_candidate"
+      ? update.bookingDecision.card.labels
+      : {};
+    expect(labels?.["svc-corr"]).toBe("Корекція ботокс");
+    expect(labels?.["svc-latin"]).toMatch(/^Ботулінотерапія Botox/);
   });
 
   it("selector empty at visit_note resumes note with need_service (not PATIENT_FALLBACK)", async () => {
@@ -542,6 +543,216 @@ describe("createBookingDecideNode catalog family selector", () => {
     });
     expect(update.pendingInteraction?.kind).toBe("visit_note");
     expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+  });
+
+  it("opens selector groups instead of the first five CRM titles", async () => {
+    const family = [
+      { id: "svc-0", name: "Ботулінотерапія Botox 1 зона" },
+      { id: "svc-1", name: "Ботулінотерапія Botox 2 зони" },
+      { id: "svc-2", name: "Ботулінотерапія Botox 3 зони" },
+      { id: "svc-3", name: "Ботулінотерапія Disport 1 зона" },
+      { id: "svc-4", name: "Ботулінотерапія Disport 2 зони" },
+      { id: "svc-5", name: "Ботулінотерапія Disport 3 зони" },
+    ];
+    const selectCandidates = vi.fn(async () => ({
+      serviceIds: family.map((row) => row.id),
+      groups: [
+        { label: "Botox", serviceIds: ["svc-0", "svc-1", "svc-2"] },
+        { label: "Disport", serviceIds: ["svc-3", "svc-4", "svc-5"] },
+      ],
+    }));
+    const node = createBookingDecideNode({ selectCandidates });
+    const update = await node({
+      messages: [new HumanMessage("запиши на ботокс краще")],
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: EFFECT_ID,
+            name: "list_services",
+            args: { query: "ботокс" },
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ list: family, total: family.length }),
+          tool_call_id: EFFECT_ID,
+          name: "list_services",
+        }),
+      ],
+      bookingDraft: draftWithCatalogEffect(),
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+      inboundChoiceId: null,
+    } as never);
+
+    expect(update.bookingDecision?.card).toMatchObject({
+      kind: "service_candidate",
+      choiceIds: ["g0", "g1"],
+      labels: { g0: "Botox", g1: "Disport" },
+      serviceIdsByChoice: {
+        g0: ["svc-0", "svc-1", "svc-2"],
+        g1: ["svc-3", "svc-4", "svc-5"],
+      },
+    });
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "booking",
+      choices: [
+        { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1", "svc-2"] },
+        { id: "g1", label: "Disport", serviceIds: ["svc-3", "svc-4", "svc-5"] },
+      ],
+    });
+    expect(update.bookingDraft?.pendingDecision).toMatchObject({
+      kind: "service_candidate",
+      query: "ботокс",
+      catalogRows: family,
+      choices: [
+        { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1", "svc-2"] },
+        { id: "g1", label: "Disport", serviceIds: ["svc-3", "svc-4", "svc-5"] },
+      ],
+    });
+  });
+
+  it("singleton group tap uses the CRM row name, not the group label", async () => {
+    let draft = draftWithCatalogEffect();
+    draft = reduceBookingDraft(draft, { type: "effect_cleared" });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "ботокс",
+        catalogRows: [
+          { id: "svc-deep", name: "Ботулінотерапія Botox 3 зони" },
+        ],
+        choices: [{ id: "g0", label: "Botox", serviceIds: ["svc-deep"] }],
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "choices_offered",
+      choiceIds: ["g0"],
+    });
+    const node = createBookingDecideNode();
+    const update = await node({
+      messages: [new HumanMessage("Botox")],
+      agentMessages: [],
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "service_candidate",
+        utterance: "ботокс",
+        query: "ботокс",
+        owner: "booking",
+        choices: [{ id: "g0", label: "Botox", serviceIds: ["svc-deep"] }],
+      },
+      inboundChoiceId: "g0",
+      servicesContext: { list: [], truncated: true },
+    } as never);
+
+    expect(update.bookingDraft?.serviceAcceptance?.service).toMatchObject({
+      id: "svc-deep",
+      name: "Ботулінотерапія Botox 3 зони",
+    });
+  });
+
+  it("reaches a family row beyond the first 60 catalog entries via a group tap", async () => {
+    const pads = Array.from({ length: 61 }, (_, index) => ({
+      id: `pad-${index}`,
+      name: `Pad ${index}`,
+    }));
+    const familyHead = Array.from({ length: 8 }, (_, index) => ({
+      id: `fam-${index}`,
+      name: `Family ${index}`,
+    }));
+    const deep = { id: "svc-deep", name: "Ботулінотерапія глибока зона" };
+    const fullCatalog = [...pads, ...familyHead, deep];
+    expect(fullCatalog.findIndex((row) => row.id === "svc-deep")).toBeGreaterThanOrEqual(60);
+
+    const familyIds = [...familyHead.map((row) => row.id), deep.id];
+    const selectCandidates = vi.fn(async () => ({
+      serviceIds: familyIds,
+      groups: [
+        { label: "Botox", serviceIds: familyHead.slice(0, 4).map((row) => row.id) },
+        {
+          label: "Інші варіанти",
+          serviceIds: [...familyHead.slice(4).map((row) => row.id), deep.id],
+        },
+      ],
+    }));
+    const node = createBookingDecideNode({ selectCandidates });
+    const opened = await node({
+      messages: [new HumanMessage("запиши на ботокс краще")],
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: EFFECT_ID,
+            name: "list_services",
+            args: { query: "ботокс" },
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ list: fullCatalog, total: fullCatalog.length }),
+          tool_call_id: EFFECT_ID,
+          name: "list_services",
+        }),
+      ],
+      bookingDraft: draftWithCatalogEffect(),
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+      inboundChoiceId: null,
+      servicesContext: { list: pads.slice(0, 60), truncated: true, total: fullCatalog.length },
+    } as never);
+
+    const openedIds = opened.bookingDecision?.card?.kind === "service_candidate"
+      ? opened.bookingDecision.card.choiceIds
+      : [];
+    expect(openedIds).toEqual(["g0", "g1"]);
+    expect(
+      opened.bookingDraft?.pendingDecision?.kind === "service_candidate"
+        ? opened.bookingDraft.pendingDecision.catalogRows?.some((row) => row.id === "svc-deep")
+        : false,
+    ).toBe(true);
+
+    const paged = await node({
+      messages: [new HumanMessage("Інші варіанти")],
+      agentMessages: [],
+      bookingDraft: opened.bookingDraft,
+      pendingInteraction: opened.pendingInteraction,
+      inboundChoiceId: "g1",
+      servicesContext: { list: pads.slice(0, 60), truncated: true, total: fullCatalog.length },
+    } as never);
+
+    expect(paged.bookingDecision?.card).toMatchObject({
+      kind: "service_candidate",
+    });
+    // Drill-down keeps the family probe — never the chip label («Інші варіанти»).
+    expect(paged.bookingDraft?.pendingDecision).toMatchObject({
+      kind: "service_candidate",
+      query: "ботокс",
+    });
+    const pageIds = paged.bookingDecision?.card?.kind === "service_candidate"
+      ? paged.bookingDecision.card.choiceIds
+      : [];
+    expect(pageIds).toContain("svc-deep");
+
+    const selected = await node({
+      messages: [new HumanMessage("Ботулінотерапія глибока зона")],
+      agentMessages: [],
+      bookingDraft: paged.bookingDraft,
+      pendingInteraction: paged.pendingInteraction,
+      inboundChoiceId: "svc-deep",
+      servicesContext: { list: pads.slice(0, 60), truncated: true, total: fullCatalog.length },
+    } as never);
+
+    expect(selected.bookingDraft?.serviceAcceptance?.service).toMatchObject({
+      id: "svc-deep",
+      name: "Ботулінотерапія глибока зона",
+    });
   });
 });
 

@@ -166,4 +166,33 @@ describe("effectResultFromToolMessages list_services catalog", () => {
       ],
     });
   });
+
+  it("keeps catalog rows beyond the 60-row servicesContext cap", () => {
+    const id = "eff_65_list_services";
+    const list = Array.from({ length: 65 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+    }));
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({ list, total: 65 }),
+          tool_call_id: id,
+          name: "list_services",
+        }),
+      ],
+      {
+        id,
+        expectedRevision: 1,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    );
+    expect(result?.kind).toBe("catalog");
+    expect(result?.kind === "catalog" ? result.services : []).toHaveLength(65);
+    expect(result?.kind === "catalog" ? result.services?.[64] : undefined).toEqual({
+      id: "svc-64",
+      name: "Service 64",
+    });
+  });
 });

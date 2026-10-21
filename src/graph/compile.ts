@@ -269,6 +269,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       createBookingDecideNode({
         interpretTurn: interpretBookingTurn,
         selectCandidates: faqSelectCandidates,
+        partitionCandidates: faqPartitionCandidates,
       }),
     )
     .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))

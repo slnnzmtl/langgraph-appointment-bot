@@ -3,6 +3,8 @@
  * Command idempotency — not event sourcing.
  */
 
+import type { CatalogChip } from "./session.js";
+
 export type BookingEffect =
   | {
       kind: "present_availability";
@@ -152,4 +154,9 @@ export type EffectResult =
       outcome: "ok" | "error" | "empty";
       /** Allowlisted catalog rows only (id + display name). */
       services?: Array<{ id: string; name: string }>;
+      /**
+       * Current keyboard page from the family selector / FAQ grouping helper.
+       * Present only on a real list_services correlation — not a synthesized page.
+       */
+      choices?: CatalogChip[];
     };

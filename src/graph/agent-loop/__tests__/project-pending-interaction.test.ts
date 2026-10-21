@@ -57,6 +57,52 @@ describe("projectPendingInteraction", () => {
     expect(projected?.kind === "visit_note" ? projected.choices[0]?.id : null).toBe("note_skip");
   });
 
+  it("copies catalog group serviceIds onto booking-owned chips", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "ботокс",
+        catalogRows: [
+          { id: "svc-0", name: "A" },
+          { id: "svc-1", name: "B" },
+          { id: "svc-2", name: "C" },
+        ],
+        choices: [
+          { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+          { id: "g1", label: "Disport", serviceIds: ["svc-2"] },
+        ],
+      },
+    });
+    const projected = projectPendingInteraction({
+      decision: baseDecision(
+        {
+          kind: "service_candidate",
+          choiceIds: ["g0", "g1"],
+          labels: { g0: "Botox", g1: "Disport" },
+          serviceIdsByChoice: {
+            g0: ["svc-0", "svc-1"],
+            g1: ["svc-2"],
+          },
+        },
+        "ask_service",
+      ),
+      draft,
+      availabilityContext: null,
+      previousInteraction: null,
+    });
+    expect(projected).toMatchObject({
+      kind: "service_candidate",
+      owner: "booking",
+      utterance: "ботокс",
+      query: "ботокс",
+      choices: [
+        { id: "g0", label: "Botox", serviceIds: ["svc-0", "svc-1"] },
+        { id: "g1", label: "Disport", serviceIds: ["svc-2"] },
+      ],
+    });
+  });
+
   it("preserves FAQ-owned service_candidate when card is null", () => {
     const faqCatalog = {
       kind: "service_candidate" as const,

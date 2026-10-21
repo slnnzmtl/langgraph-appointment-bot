@@ -21,6 +21,20 @@ export type SlotAvailabilityEvidence = {
   excludeMeetingIds?: string[];
 };
 
+/** Allowlisted CRM row persisted with an open catalog family page. */
+export type CatalogRow = {
+  id: string;
+  name: string;
+};
+
+/** One keyboard chip on a catalog family page (group or singleton CRM id). */
+export type CatalogChip = {
+  id: string;
+  label: string;
+  serviceIds: string[];
+  displayLabel?: string;
+};
+
 /**
  * Irreducible waits owned by the aggregate. Ordinary DATE/TIME/contact cards
  * are projections — not independently authoritative.
@@ -28,10 +42,12 @@ export type SlotAvailabilityEvidence = {
 export type PendingDecision =
   | {
       kind: "service_candidate";
-      utterance?: string;
+      /** Family probe from list_services.query — partitioner input, not a chip label. */
       query?: string;
-      choiceIds?: string[];
-      labels?: Record<string, string>;
+      /** Full selected family (id + canonical name) — not truncated servicesContext. */
+      catalogRows?: CatalogRow[];
+      /** Current keyboard page (groups or leaf CRM chips). */
+      choices?: CatalogChip[];
     }
   | {
       kind: "visit_select";

@@ -1,4 +1,5 @@
 import type { BookingEvent } from "../booking-draft.js";
+import type { CatalogChip } from "./session.js";
 import type { EffectResult, PendingEffect } from "./effects.js";
 import type { UnderstoodBookingTurn } from "./turn.js";
 
@@ -64,7 +65,13 @@ export type BookingVerifiedFacts = {
  */
 export type BookingViewCard =
   | { kind: "service_confirm"; serviceId: string; choiceIds: string[]; labels?: Record<string, string> }
-  | { kind: "service_candidate"; choiceIds: string[]; labels?: Record<string, string> }
+  | {
+      kind: "service_candidate";
+      choiceIds: string[];
+      labels?: Record<string, string>;
+      displayLabels?: Record<string, string>;
+      serviceIdsByChoice?: Record<string, string[]>;
+    }
   | {
       kind: "date_select";
       snapshotId: string;
@@ -170,4 +177,9 @@ export type BookingInput =
   | { source: "patient_turn"; rawText: string }
   | { source: "semantic_patch"; patch: UnderstoodBookingTurn }
   | { source: "effect_result"; result: EffectResult }
+  | {
+      source: "catalog_page";
+      remainingIds: string[];
+      choices: CatalogChip[];
+    }
   | { source: "control"; intent: "menu" | "abandon" | "handoff" };

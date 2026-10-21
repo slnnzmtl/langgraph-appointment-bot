@@ -47,8 +47,16 @@ const truncateServiceDescription = (value: string): string => {
   return `${trimmed.slice(0, SERVICES_CONTEXT_DESC_MAX - 1)}…`;
 };
 
-/** Normalize a successful list_services tool payload for checkpoint reuse. */
-export const normalizeListServicesResult = (raw: string): ServicesContext | null => {
+export type ParsedServiceList = {
+  list: ServicesContext["list"];
+  total?: number;
+};
+
+/**
+ * Full list_services payload (every id + name). Booking catalog effects use this;
+ * checkpoint/prompt context still goes through {@link normalizeListServicesResult}.
+ */
+export const parseListServicesPayload = (raw: string): ParsedServiceList | null => {
   const record = asJsonRecord(raw);
   if (!record || typeof record.error === "string" || !Array.isArray(record.list)) {
     return null;
@@ -70,10 +78,22 @@ export const normalizeListServicesResult = (raw: string): ServicesContext | null
     });
   }
 
-  const truncated = list.length > SERVICES_CONTEXT_MAX_ROWS;
   return {
-    list: truncated ? list.slice(0, SERVICES_CONTEXT_MAX_ROWS) : list,
+    list,
     ...(typeof record.total === "number" ? { total: record.total } : {}),
+  };
+};
+
+/** Normalize a successful list_services tool payload for checkpoint reuse. */
+export const normalizeListServicesResult = (raw: string): ServicesContext | null => {
+  const parsed = parseListServicesPayload(raw);
+  if (parsed == null) {
+    return null;
+  }
+  const truncated = parsed.list.length > SERVICES_CONTEXT_MAX_ROWS;
+  return {
+    list: truncated ? parsed.list.slice(0, SERVICES_CONTEXT_MAX_ROWS) : parsed.list,
+    ...(parsed.total != null ? { total: parsed.total } : {}),
     ...(truncated ? { truncated: true } : {}),
   };
 };

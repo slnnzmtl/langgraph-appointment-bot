@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 
-import { createReadTools, getWorkingTime, listServices, normalizeListServicesResult } from "../service-tools.js";
+import { createReadTools, getWorkingTime, listServices, normalizeListServicesResult, parseListServicesPayload } from "../service-tools.js";
 
 type CallRecord = { name: string; args: Record<string, unknown> };
 
@@ -48,6 +48,19 @@ describe("normalizeListServicesResult", () => {
     expect(normalized!.total).toBe(65);
     expect(normalized!.list[0]?.description).toHaveLength(160);
     expect(normalized!.list[0]?.description?.endsWith("…")).toBe(true);
+  });
+
+  it("parseListServicesPayload keeps rows beyond the context cap", () => {
+    const list = Array.from({ length: 65 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+    }));
+    const parsed = parseListServicesPayload(JSON.stringify({ total: 65, list }));
+    expect(parsed?.list).toHaveLength(65);
+    expect(parsed?.list[64]?.id).toBe("svc-64");
+    const normalized = normalizeListServicesResult(JSON.stringify({ total: 65, list }));
+    expect(normalized?.list).toHaveLength(60);
+    expect(normalized?.list.some((row) => row.id === "svc-64")).toBe(false);
   });
 });
 

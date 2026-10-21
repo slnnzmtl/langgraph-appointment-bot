@@ -38,13 +38,47 @@ import {
 } from "./availability-presentation.js";
 import type { BookingEffect, EffectResult, PendingEffect } from "./effects.js";
 import { nextBookingRequirement } from "./requirement.js";
-import type { PendingDecision } from "./session.js";
+import type { CatalogChip, CatalogRow, PendingDecision } from "./session.js";
 import type { ScheduleIntent, UnderstoodBookingTurn } from "./turn.js";
 
 const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSemanticIntent> = {
   phoneNumber: "ask_phone",
   firstName: "ask_first_name",
   lastName: "ask_last_name",
+};
+
+const chipsFromCatalogRows = (rows: readonly CatalogRow[]): CatalogChip[] =>
+  rows.map((row) => ({
+    id: row.id,
+    label: row.name,
+    serviceIds: [row.id],
+  }));
+
+const uniqueAllowlistedIds = (
+  ids: readonly string[],
+  allowlist: ReadonlyMap<string, CatalogRow>,
+): string[] => [...new Set(ids.filter((id) => allowlist.has(id)))];
+
+const catalogCardFromChips = (
+  chips: readonly CatalogChip[],
+): Extract<BookingViewCard, { kind: "service_candidate" }> => {
+  const labels: Record<string, string> = {};
+  const displayLabels: Record<string, string> = {};
+  const serviceIdsByChoice: Record<string, string[]> = {};
+  for (const chip of chips) {
+    labels[chip.id] = chip.label;
+    serviceIdsByChoice[chip.id] = [...chip.serviceIds];
+    if (chip.displayLabel != null && chip.displayLabel.length > 0) {
+      displayLabels[chip.id] = chip.displayLabel;
+    }
+  }
+  return {
+    kind: "service_candidate",
+    choiceIds: chips.map((chip) => chip.id),
+    ...(Object.keys(labels).length > 0 ? { labels } : {}),
+    ...(Object.keys(displayLabels).length > 0 ? { displayLabels } : {}),
+    ...(Object.keys(serviceIdsByChoice).length > 0 ? { serviceIdsByChoice } : {}),
+  };
 };
 
 type RelativeOrNavSchedule =
@@ -101,6 +135,9 @@ const viewCardFromPendingDecision = (
     };
   }
   const pending = draft.pendingDecision;
+  if (pending?.kind === "service_candidate" && (pending.choices?.length ?? 0) > 0) {
+    return catalogCardFromChips(pending.choices!);
+  }
   if (pending?.kind === "date_select") {
     return {
       kind: "date_select",
@@ -148,6 +185,9 @@ export const askDecisionFromPendingView = (
   }
   if (card.kind === "visit_note") {
     return { tag: "ask", intent: "ask_note", facts: {}, card };
+  }
+  if (card.kind === "service_candidate") {
+    return { tag: "ask", intent: "ask_service", facts: {}, card };
   }
   return null;
 };
@@ -244,6 +284,35 @@ export const decideBooking = (
     card,
     ...(reason != null ? { reason } : {}),
   });
+
+  const persistedCatalogRows = (): CatalogRow[] => {
+    const pending = ctx.working?.pendingDecision;
+    return pending?.kind === "service_candidate" ? [...(pending.catalogRows ?? [])] : [];
+  };
+
+  const openCatalogPage = (
+    catalogRows: readonly CatalogRow[],
+    chips: readonly CatalogChip[],
+    query?: string,
+  ): BookingDecision => {
+    const card = catalogCardFromChips(chips);
+    const priorQuery = ctx.working?.pendingDecision?.kind === "service_candidate"
+      ? ctx.working.pendingDecision.query
+      : undefined;
+    const probe = query ?? priorQuery;
+    emitDecision({
+      kind: "service_candidate",
+      catalogRows: catalogRows.map((row) => ({ id: row.id, name: row.name })),
+      choices: chips.map((chip) => ({
+        id: chip.id,
+        label: chip.label,
+        serviceIds: [...chip.serviceIds],
+        ...(chip.displayLabel != null ? { displayLabel: chip.displayLabel } : {}),
+      })),
+      ...(probe != null ? { query: probe } : {}),
+    });
+    return ask("ask_service", card, "service_candidates");
+  };
 
   /** Prepare (or reuse, emit-once) a pending effect for `effect`. */
   const preparePendingEffect = (effect: BookingEffect): PendingEffect => {
@@ -614,6 +683,48 @@ export const decideBooking = (
     }
   };
 
+  const selectCatalogRow = (row: CatalogRow): BookingDecision => {
+    emit({
+      type: "service_selected",
+      service: { id: row.id, name: row.name, source: "catalog" },
+      accepted: false,
+    });
+    return decideFromRequirement();
+  };
+
+  const applyCatalogPage = (
+    remainingIds: readonly string[],
+    choices: readonly CatalogChip[],
+  ): BookingDecision => {
+    const catalogRows = persistedCatalogRows();
+    const allowlist = new Map(catalogRows.map((row) => [row.id, row]));
+    const remaining = uniqueAllowlistedIds(remainingIds, allowlist);
+    if (remaining.length === 0) {
+      emitDecision({ kind: "clarification", reason: "need_service" });
+      const resumed = askDecisionFromPendingView(ctx.working);
+      if (resumed != null) {
+        return {
+          ...resumed,
+          reason: "need_service",
+          facts: { ...resumed.facts, clarificationReason: "need_service" },
+        };
+      }
+      return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
+    }
+    if (remaining.length === 1) {
+      return selectCatalogRow(allowlist.get(remaining[0]!)!);
+    }
+    const remainingSet = new Set(remaining);
+    const chips = choices.length > 0
+      ? choices.map((chip) => ({
+        ...chip,
+        serviceIds: uniqueAllowlistedIds(chip.serviceIds, allowlist)
+          .filter((id) => remainingSet.has(id)),
+      })).filter((chip) => chip.serviceIds.length > 0)
+      : chipsFromCatalogRows(remaining.map((id) => allowlist.get(id)!));
+    return openCatalogPage(catalogRows, chips);
+  };
+
   const applyControl = (intent: "menu" | "abandon" | "handoff"): BookingDecision => {
     if (intent === "abandon") {
       emit({ type: "draft_abandoned" });
@@ -673,30 +784,12 @@ export const decideBooking = (
         return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
       }
       if (services.length === 1) {
-        const only = services[0]!;
-        emit({
-          type: "service_selected",
-          service: { id: only.id, name: only.name, source: "catalog" },
-          accepted: false,
-        });
-        return decideFromRequirement();
+        return selectCatalogRow(services[0]!);
       }
-      const choiceIds = services.slice(0, 5).map((s) => s.id);
-      const labels: Record<string, string> = {};
-      for (const service of services.slice(0, 5)) {
-        labels[service.id] = service.name;
-      }
-      emitDecision({
-        kind: "service_candidate",
-        ...(query != null ? { utterance: query, query } : {}),
-        choiceIds,
-        labels,
-      });
-      return ask("ask_service", {
-        kind: "service_candidate",
-        choiceIds,
-        labels,
-      }, "service_candidates");
+      const chips = (result.choices != null && result.choices.length > 0)
+        ? result.choices
+        : chipsFromCatalogRows(services);
+      return openCatalogPage(services, chips, query);
     }
 
     if (result.kind === "mutation") {
@@ -1355,6 +1448,9 @@ export const decideBooking = (
       break;
     case "effect_result":
       decision = applyEffectResult(input.result);
+      break;
+    case "catalog_page":
+      decision = applyCatalogPage(input.remainingIds, input.choices);
       break;
     case "semantic_patch":
       decision = applySemanticPatch(input.patch);
