@@ -13,7 +13,7 @@ import {
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
-import { extractMessageTextContent } from "../../shared/message-content.js";
+import { extractRawMessageText } from "../../shared/message-content.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { reduceBookingDraft } from "../booking-draft.js";
 import { closedBookingSessionUpdate } from "../booking-session.js";
@@ -87,7 +87,7 @@ export const defaultMenuHasVisit = (
 };
 
 const visitLabelFromToolResult = (result: ToolMessage): string | undefined => {
-  const record = asJsonRecord(extractMessageTextContent(result.content).trim());
+  const record = asJsonRecord(extractRawMessageText(result.content).trim());
   const visitLabel = record?.visitLabel;
   return typeof visitLabel === "string" && visitLabel.length > 0 ? visitLabel : undefined;
 };

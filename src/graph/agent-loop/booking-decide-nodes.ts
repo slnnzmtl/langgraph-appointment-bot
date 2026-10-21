@@ -25,7 +25,12 @@ import type { BookingDecision, BookingReadModels } from "../booking-domain/decis
 import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
 import type { EffectResult } from "../booking-domain/effects.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
+import { CATALOG_FAMILY_SELECTOR_QUERY } from "../catalog-match.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
+import {
+  safeSelect,
+  type SelectServiceCandidates,
+} from "../service-resolution.js";
 import { hasPendingToolCalls } from "../tool-routing.js";
 import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
 import { resolveContactIdentity } from "../contact-command.js";
@@ -285,6 +290,49 @@ const withOfferedChoices = (
 
 export type CreateBookingDecideNodeOptions = {
   interpretTurn?: InterpretBookingTurn;
+  /** Family selector — narrows list_services rows after named_procedure (no stem parsing). */
+  selectCandidates?: SelectServiceCandidates;
+};
+
+/**
+ * When list_services ran with a query (named_procedure), ask the family selector
+ * which CRM rows belong — never re-stem the utterance in the kernel.
+ * Selector empty / fail → empty services so decide resumes need_service.
+ * Bare catalog browse (no query) leaves the full list untouched.
+ */
+const narrowCatalogWithFamilySelector = async (
+  effectResult: EffectResult,
+  pendingEffect: BookingDraft["pendingEffect"],
+  selectCandidates: SelectServiceCandidates | undefined,
+): Promise<EffectResult> => {
+  if (
+    effectResult.kind !== "catalog"
+    || effectResult.outcome !== "ok"
+    || pendingEffect?.effect.kind !== "list_services"
+  ) {
+    return effectResult;
+  }
+  const query = pendingEffect.effect.query?.trim();
+  if (query == null || query.length === 0) {
+    return effectResult;
+  }
+  const raw = effectResult.services ?? [];
+  if (raw.length === 0 || selectCandidates == null) {
+    return { ...effectResult, services: [] };
+  }
+  const allowlist = new Map(raw.map((row) => [row.id, row]));
+  const selection = await safeSelect(selectCandidates, {
+    utterance: query,
+    query: CATALOG_FAMILY_SELECTOR_QUERY,
+    candidates: raw.map((row) => ({ id: row.id, name: row.name })),
+  });
+  const ids = [...new Set(
+    (selection?.serviceIds ?? []).filter((id) => allowlist.has(id)),
+  )];
+  return {
+    ...effectResult,
+    services: ids.map((id) => allowlist.get(id)!),
+  };
 };
 
 const CONTACT_LADDER_SEED_FIELDS = [
@@ -329,6 +377,7 @@ export const createBookingDecideNode = (
   options: CreateBookingDecideNodeOptions = {},
 ) => {
   const interpretTurn = options.interpretTurn;
+  const selectCandidates = options.selectCandidates;
 
   return async (
     state: ClinicState,
@@ -348,6 +397,11 @@ export const createBookingDecideNode = (
       // Do not re-interpret patient text («Так») while the fetch is still open.
       effectResult = effectResultFromToolMessages(state.agentMessages, pendingEffect)
         ?? failClosedForPending(pendingEffect);
+      effectResult = await narrowCatalogWithFamilySelector(
+        effectResult,
+        pendingEffect,
+        selectCandidates,
+      );
     }
 
     let result;

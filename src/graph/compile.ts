@@ -266,7 +266,10 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addEdge(faqFinalize, END)
     .addNode(
       bookingDecide,
-      createBookingDecideNode({ interpretTurn: interpretBookingTurn }),
+      createBookingDecideNode({
+        interpretTurn: interpretBookingTurn,
+        selectCandidates: faqSelectCandidates,
+      }),
     )
     .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))
     .addNode(

@@ -120,3 +120,50 @@ describe("effectResultFromToolMessages meeting mutation", () => {
     });
   });
 });
+
+describe("effectResultFromToolMessages list_services catalog", () => {
+  it("parses catalog JSON that contains escaped newlines in descriptions", () => {
+    const id = "eff_22_list_services";
+    // CRM descriptions often embed \\n; unescapeModelLineBreaks would corrupt this.
+    const content = JSON.stringify({
+      list: [
+        {
+          id: "svc-1",
+          name: "Корекція ботокс",
+          description: "Line A\nLine B\nLine C",
+        },
+        {
+          id: "svc-2",
+          name: "Мезоботокс",
+          description: "Neuvia\nCollevia\nDives",
+        },
+      ],
+      total: 2,
+    });
+    expect(content).toContain("\\n");
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content,
+          tool_call_id: id,
+          name: "list_services",
+        }),
+      ],
+      {
+        id,
+        expectedRevision: 22,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    );
+    expect(result).toEqual({
+      effectId: id,
+      kind: "catalog",
+      outcome: "ok",
+      services: [
+        { id: "svc-1", name: "Корекція ботокс" },
+        { id: "svc-2", name: "Мезоботокс" },
+      ],
+    });
+  });
+});

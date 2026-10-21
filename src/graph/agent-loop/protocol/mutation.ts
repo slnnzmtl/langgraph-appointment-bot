@@ -1,7 +1,7 @@
 import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { BOOKING_CONTACT_REQUIRED_FIELDS } from "../../../tools/contact-tools.js";
 import { asJsonRecord, committedMeetingEntityId } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import type { ClinicState } from "../../state.js";
 import { type ReplacementMeeting } from "../../booking-draft.js";
 
@@ -18,7 +18,7 @@ export const meetingMutationUnauthorizedThisTurn = (
     if (!(message instanceof ToolMessage) || !MEETING_MUTATION_TOOLS.has(message.name ?? "")) {
       return false;
     }
-    return asJsonRecord(extractMessageTextContent(message.content).trim())?.error
+    return asJsonRecord(extractRawMessageText(message.content).trim())?.error
       === "Not authorized";
   });
 
@@ -46,7 +46,7 @@ export const classifyMeetingMutationToolMessage = (
   if (!name || !MEETING_MUTATION_TOOLS.has(name)) {
     return null;
   }
-  const body = extractMessageTextContent(message.content).trim();
+  const body = extractRawMessageText(message.content).trim();
   if (body.startsWith("Error:")) {
     return "failed";
   }
@@ -91,7 +91,7 @@ export const terminalMeetingMutationOutcome = (state: ClinicState): ToolMessage 
     }
     const outcome = classifyMeetingMutationToolMessage(message);
     if (message.name !== "cancel_meeting") {
-      const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+      const record = asJsonRecord(extractRawMessageText(message.content).trim());
       const isReplacementConflict = record?.error === "Already booked";
       // Contact incomplete is typed ContactCommand recovery via command_prepare.
       const isContactIncomplete = record?.error === "Contact incomplete";
@@ -169,7 +169,7 @@ const latestMeetingMutationJson = (
     if (!isMeeting && !(options?.includeLinkTool === true && isLink)) {
       continue;
     }
-    return asJsonRecord(extractMessageTextContent(message.content).trim()) ?? {};
+    return asJsonRecord(extractRawMessageText(message.content).trim()) ?? {};
   }
   return null;
 };
@@ -223,7 +223,7 @@ export const latestCreateMeetingError = (messages: BaseMessage[]): string | unde
     if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
       continue;
     }
-    const body = extractMessageTextContent(message.content).trim();
+    const body = extractRawMessageText(message.content).trim();
     if (body.startsWith("Error:")) {
       return undefined;
     }
@@ -244,7 +244,7 @@ export const alreadyBookedMeetingFromMessages = (
     if (!(message instanceof ToolMessage) || message.name !== "create_meeting") {
       continue;
     }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const record = asJsonRecord(extractRawMessageText(message.content).trim());
     if (record?.error !== "Already booked" || !Array.isArray(record.meetings)) {
       return null;
     }

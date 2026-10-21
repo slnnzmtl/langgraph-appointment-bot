@@ -48,6 +48,17 @@ describe("bookingResponseFallback contact format clarification", () => {
   });
 });
 
+describe("bookingResponseFallback clarification", () => {
+  it("owns need_service copy instead of PATIENT_FALLBACK", () => {
+    const text = bookingResponseFallback({
+      intent: "ask_service",
+      card: { kind: "clarification", reason: "need_service" },
+    });
+    expect(text).toMatch(/послуг/i);
+    expect(text).not.toBe(PATIENT_FALLBACK_MESSAGE);
+  });
+});
+
 describe("bookingResponseFallback date/time cards", () => {
   it("does not own empty-window prose — last-resort SAFETY only", () => {
     const card = {

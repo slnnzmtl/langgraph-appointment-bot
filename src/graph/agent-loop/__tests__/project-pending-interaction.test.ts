@@ -73,6 +73,31 @@ describe("projectPendingInteraction", () => {
     expect(projected).toBe(faqCatalog);
   });
 
+  it("keeps visit_note while a list_services effect is open", () => {
+    const previous = {
+      kind: "visit_note" as const,
+      choices: [{ id: "note_skip", label: "Продовжити без коментаря" }],
+    };
+    const projected = projectPendingInteraction({
+      decision: {
+        tag: "effect",
+        intent: "run_effect",
+        facts: {},
+        card: null,
+        pendingEffect: {
+          id: "eff_1_list_services",
+          expectedRevision: 1,
+          effect: { kind: "list_services", query: "ботокс" },
+          status: "prepared",
+        },
+      },
+      draft: null,
+      availabilityContext: null,
+      previousInteraction: previous,
+    });
+    expect(projected).toBe(previous);
+  });
+
   it("clears booking-owned interaction when card is null", () => {
     const projected = projectPendingInteraction({
       decision: { tag: "reply", intent: "idle", facts: {}, card: null },

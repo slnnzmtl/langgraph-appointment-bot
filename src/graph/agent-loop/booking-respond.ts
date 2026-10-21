@@ -25,6 +25,7 @@ import { replyChoicesFromCard } from "./booking-card-choices.js";
 import {
   bookingResponseFallback,
   bookingSuccessText,
+  clarificationCopyUk,
 } from "./booking-response-fallback.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
 
@@ -167,7 +168,8 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
     }
 
     // Open cards: matching pendingInteraction is the sole listed-copy path.
-    // Side-question facts (price/hours/address) prefix that listed copy — no LLM.
+    // Side-question facts (price/hours/address) and catalog-miss clarification
+    // prefix that listed copy — no LLM.
     if (decision.card != null) {
       let replyText = fallback;
       const pending = state.pendingInteraction;
@@ -179,7 +181,13 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           replyText = listed;
         }
       }
-      if (decision.intent === "answer_side_question") {
+      const clarificationPrefix = clarificationCopyUk(decision.facts?.clarificationReason);
+      if (clarificationPrefix != null) {
+        replyText = replyText.trim().length > 0
+          && replyText !== clarificationPrefix
+          ? `${clarificationPrefix}\n\n${replyText}`
+          : clarificationPrefix;
+      } else if (decision.intent === "answer_side_question") {
         const prefix = sideQuestionFactPrefix(decision.facts);
         if (prefix != null) {
           replyText = replyText.trim().length > 0

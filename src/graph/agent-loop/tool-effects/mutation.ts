@@ -1,7 +1,7 @@
 import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { trackEvent } from "../../../analytics/track.js";
 import { asJsonRecord } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import { reduceBookingDraft } from "../../booking-draft.js";
 import {
   closedBookingSessionUpdate,
@@ -45,7 +45,7 @@ const normalizeMutationEvent = (
     if (outcome == null) {
       continue;
     }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const record = asJsonRecord(extractRawMessageText(message.content).trim());
     return {
       kind: "event",
       outcome,

@@ -1,6 +1,6 @@
 import { ToolMessage } from "@langchain/core/messages";
 import { asJsonRecord, jsonEntityId } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import type { ClinicState } from "../../state.js";
 import {
   NAME_NOT_PROVIDED_ERROR,
@@ -61,7 +61,7 @@ export const classifyContactWriteToolMessage = (
   if (!name || !CONTACT_WRITE_TOOLS.has(name)) {
     return null;
   }
-  const body = extractMessageTextContent(message.content).trim();
+  const body = extractRawMessageText(message.content).trim();
   if (body.startsWith("Error:")) {
     return { outcome: "operational", tool: name, category: "operational" };
   }
@@ -126,7 +126,7 @@ export const phoneLookupFailedThisTurn = (state: ClinicState): boolean => {
     if (!(message instanceof ToolMessage) || message.name !== "find_contact_by_phone") {
       continue;
     }
-    const body = extractMessageTextContent(message.content).trim();
+    const body = extractRawMessageText(message.content).trim();
     if (body.startsWith("Error:")) {
       return true;
     }

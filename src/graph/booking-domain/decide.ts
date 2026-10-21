@@ -119,6 +119,10 @@ const viewCardFromPendingDecision = (
       labels: { ...pending.labels },
     };
   }
+  // Note step stores pendingDecision as clarification/need_note; the ask card is visit_note.
+  if (draft.note.status === "awaiting") {
+    return { kind: "visit_note", skipChoiceId: "note_skip" };
+  }
   return null;
 };
 
@@ -141,6 +145,9 @@ export const askDecisionFromPendingView = (
   }
   if (card.kind === "time_select") {
     return { tag: "ask", intent: "present_times", facts: {}, card };
+  }
+  if (card.kind === "visit_note") {
+    return { tag: "ask", intent: "ask_note", facts: {}, card };
   }
   return null;
 };
@@ -646,9 +653,23 @@ export const decideBooking = (
 
     if (result.kind === "catalog") {
       emit({ type: "effect_cleared" });
+      // Node already narrowed via family selector when list_services had a query.
+      // Kernel only consumes the allowlisted rows (never re-stems the utterance).
       const services = result.services ?? [];
+      const query =
+        pending?.effect.kind === "list_services" ? pending.effect.query : undefined;
       if (result.outcome === "error" || result.outcome === "empty" || services.length === 0) {
         emitDecision({ kind: "clarification", reason: "need_service" });
+        // Keep the open DATE/TIME/note/confirm card so catalog miss does not
+        // wipe the keyboard (need_service prose comes from clarificationReason).
+        const resumed = askDecisionFromPendingView(ctx.working);
+        if (resumed != null) {
+          return {
+            ...resumed,
+            reason: "need_service",
+            facts: { ...resumed.facts, clarificationReason: "need_service" },
+          };
+        }
         return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
       }
       if (services.length === 1) {
@@ -667,9 +688,7 @@ export const decideBooking = (
       }
       emitDecision({
         kind: "service_candidate",
-        ...(pending?.effect.kind === "list_services" && pending.effect.query != null
-          ? { utterance: pending.effect.query, query: pending.effect.query }
-          : {}),
+        ...(query != null ? { utterance: query, query } : {}),
         choiceIds,
         labels,
       });

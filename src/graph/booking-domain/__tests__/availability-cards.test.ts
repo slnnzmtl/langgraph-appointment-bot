@@ -320,7 +320,7 @@ describe("multi-fact side questions and catalog resolve", () => {
           effectId: "eff_1_list_services",
           kind: "catalog",
           outcome: "ok",
-          services: [{ id: "svc-botox", name: "Botox" }],
+          services: [{ id: "svc-botox", name: "Корекція ботокс" }],
         },
       },
       {
@@ -332,7 +332,107 @@ describe("multi-fact side questions and catalog resolve", () => {
     const selected = decision.events.find((e) => e.type === "service_selected");
     expect(selected).toMatchObject({
       type: "service_selected",
-      service: { id: "svc-botox", name: "Botox", source: "catalog" },
+      service: { id: "svc-botox", name: "Корекція ботокс", source: "catalog" },
+    });
+  });
+
+  it("catalog effect with already-narrowed rows opens service_candidate chips", () => {
+    // Node (family selector) already narrowed; kernel must not re-stem the query.
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_2_list_services",
+        expectedRevision: 1,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    });
+    const decision = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_2_list_services",
+          kind: "catalog",
+          outcome: "ok",
+          services: [
+            { id: "svc-corr", name: "Корекція ботокс" },
+            { id: "svc-meso", name: "Мезоботокс" },
+            { id: "svc-latin", name: "Ботулінотерапія Botox, Disport 1 зона" },
+          ],
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      },
+    );
+    expect(decision.decision).toMatchObject({
+      tag: "ask",
+      intent: "ask_service",
+      card: {
+        kind: "service_candidate",
+        choiceIds: ["svc-corr", "svc-meso", "svc-latin"],
+        labels: {
+          "svc-corr": "Корекція ботокс",
+          "svc-meso": "Мезоботокс",
+          "svc-latin": "Ботулінотерапія Botox, Disport 1 зона",
+        },
+      },
+    });
+  });
+
+  it("catalog miss at visit_note resumes note with need_service clarification", () => {
+    let draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-10-22" });
+    draft = reduceBookingDraft(draft, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-10-22T12:00:00",
+        dateEnd: "2026-10-22T12:30:00",
+        label: "12:00",
+      },
+      snapshotId: "snap-1",
+    });
+    draft = reduceBookingDraft(draft, { type: "note_status", status: "awaiting" });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_note_list_services",
+        expectedRevision: 1,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    });
+    const decision = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_note_list_services",
+          kind: "catalog",
+          outcome: "ok",
+          // Selector returned no ids — node leaves services empty.
+          services: [],
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      },
+    );
+    expect(decision.decision).toMatchObject({
+      tag: "ask",
+      intent: "ask_note",
+      reason: "need_service",
+      facts: { clarificationReason: "need_service" },
+      card: { kind: "visit_note", skipChoiceId: "note_skip" },
     });
   });
 });

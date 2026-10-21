@@ -1,9 +1,10 @@
-import { HumanMessage } from "@langchain/core/messages";
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { Overwrite } from "@langchain/langgraph";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CONSULTATION_SERVICE_ID,
+  INTENT_SKIP_LABEL,
   OTHER_DATE_LABEL,
   PATIENT_FALLBACK_MESSAGE,
 } from "../../../shared/clinic-constants.js";
@@ -12,6 +13,7 @@ import {
   reduceBookingDraft,
   type BookingDraft,
 } from "../../booking-draft.js";
+import { CATALOG_FAMILY_SELECTOR_QUERY } from "../../catalog-match.js";
 import { interpretBookingTurnDeterministic } from "../../booking-domain/interpret.js";
 import type { InterpretBookingTurnInput } from "../../booking-domain/interpret.js";
 import type { UnderstoodBookingTurn } from "../../booking-domain/turn.js";
@@ -409,6 +411,137 @@ describe("createBookingDecideNode chip label ingress", () => {
     expect(update.bookingDecision?.pendingEffect?.effect.kind).toBe(
       "present_availability",
     );
+  });
+});
+
+describe("createBookingDecideNode catalog family selector", () => {
+  const EFFECT_ID = "eff_22_list_services";
+  const FULL_CATALOG = [
+    { id: "svc-consult", name: "Консультація" },
+    { id: "svc-corr", name: "Корекція ботокс" },
+    { id: "svc-latin", name: "Ботулінотерапія Botox, Disport 1 зона" },
+    { id: "svc-filler", name: "Філер губи" },
+  ];
+
+  const draftWithCatalogEffect = (): BookingDraft => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: {
+        id: CONSULTATION_SERVICE_ID,
+        name: "Консультація",
+        source: "catalog",
+      },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: DATE_ID });
+    draft = reduceBookingDraft(draft, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-10-20T11:00:00+03:00",
+        dateEnd: "2026-10-20T11:30:00+03:00",
+        label: "11:00",
+      },
+      snapshotId: "snap-1",
+    });
+    draft = reduceBookingDraft(draft, { type: "note_status", status: "awaiting" });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: EFFECT_ID,
+        expectedRevision: 1,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    });
+    if (draft == null) {
+      throw new Error("expected draft");
+    }
+    return draft;
+  };
+
+  const catalogToolTape = () => [
+    new AIMessage({
+      content: "",
+      tool_calls: [{
+        id: EFFECT_ID,
+        name: "list_services",
+        args: { query: "ботокс" },
+        type: "tool_call",
+      }],
+    }),
+    new ToolMessage({
+      content: JSON.stringify({ list: FULL_CATALOG, total: FULL_CATALOG.length }),
+      tool_call_id: EFFECT_ID,
+      name: "list_services",
+    }),
+  ];
+
+  it("uses family selector ids (not stems) for service_candidate chips", async () => {
+    const selectCandidates = vi.fn(async (input: {
+      utterance: string;
+      query?: string;
+      candidates: Array<{ id: string; name: string }>;
+    }) => {
+      expect(input.utterance).toBe("ботокс");
+      expect(input.query).toBe(CATALOG_FAMILY_SELECTOR_QUERY);
+      expect(input.candidates.map((c) => c.id)).toEqual(
+        FULL_CATALOG.map((r) => r.id),
+      );
+      return {
+        serviceIds: ["svc-latin", "svc-corr"],
+      };
+    });
+    const node = createBookingDecideNode({ selectCandidates });
+    const update = await node({
+      messages: [new HumanMessage("запиши на ботокс краще")],
+      agentMessages: catalogToolTape(),
+      bookingDraft: draftWithCatalogEffect(),
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+      inboundChoiceId: null,
+    } as never);
+
+    expect(selectCandidates).toHaveBeenCalledTimes(1);
+    expect(update.bookingDecision).toMatchObject({
+      tag: "ask",
+      intent: "ask_service",
+      card: {
+        kind: "service_candidate",
+        choiceIds: ["svc-latin", "svc-corr"],
+        labels: {
+          "svc-latin": "Ботулінотерапія Botox, Disport 1 зона",
+          "svc-corr": "Корекція ботокс",
+        },
+      },
+    });
+  });
+
+  it("selector empty at visit_note resumes note with need_service (not PATIENT_FALLBACK)", async () => {
+    const selectCandidates = vi.fn(async () => ({ serviceIds: [] as string[] }));
+    const node = createBookingDecideNode({ selectCandidates });
+    const update = await node({
+      messages: [new HumanMessage("запиши на ботокс краще")],
+      agentMessages: catalogToolTape(),
+      bookingDraft: draftWithCatalogEffect(),
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+      inboundChoiceId: null,
+    } as never);
+
+    expect(selectCandidates).toHaveBeenCalledTimes(1);
+    expect(update.bookingDecision).toMatchObject({
+      tag: "ask",
+      intent: "ask_note",
+      reason: "need_service",
+      facts: { clarificationReason: "need_service" },
+      card: { kind: "visit_note", skipChoiceId: "note_skip" },
+    });
+    expect(update.pendingInteraction?.kind).toBe("visit_note");
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
   });
 });
 

@@ -161,6 +161,11 @@ export const projectPendingInteraction = (
 ): PendingInteraction | null => {
   const { decision, draft, availabilityContext, previousInteraction } = input;
   if (decision.card == null) {
+    // Keep open chips while an effect/HITL tool round-trip runs (list_services,
+    // availability, …). Clearing here dropped visit_note/DATE/TIME mid-fetch.
+    if (decision.tag === "effect" || decision.tag === "mutation_confirm") {
+      return previousInteraction;
+    }
     if (
       previousInteraction?.kind === "service_candidate"
       && previousInteraction.owner === "faq"

@@ -57,7 +57,13 @@ const CLARIFICATION_UK: Record<string, string> = {
   invalid_phone: BOOKING_PHONE_INVALID_UK,
   invalid_firstName: BOOKING_FIRST_NAME_INVALID_UK,
   invalid_lastName: BOOKING_LAST_NAME_INVALID_UK,
+  need_service:
+    "Уточніть, будь ласка, послугу — напишіть назву або скажіть «консультація».",
 };
+
+/** Patient prose for a clarification reason, or null when unknown. */
+export const clarificationCopyUk = (reason: string | undefined): string | null =>
+  reason != null && CLARIFICATION_UK[reason] != null ? CLARIFICATION_UK[reason]! : null;
 
 /**
  * Shared create/reschedule confirmation (booking__respond + mutation-finalize).

@@ -11,6 +11,7 @@ import {
   MAIN_MENU_GREETING_UK,
   MAIN_MENU_LABEL,
   OTHER_DATE_LABEL,
+  PATIENT_FALLBACK_MESSAGE,
   SERVICE_CONFIRM_CONSULTATION_UK,
   defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
@@ -489,6 +490,42 @@ describe("replyChoicesFromCard offer labels", () => {
       skipChoiceId: "note_skip",
     });
     expect(choices.map((c) => c.label)).toEqual([
+      INTENT_SKIP_LABEL,
+      MAIN_MENU_LABEL,
+    ]);
+  });
+});
+
+describe("booking__respond catalog-miss on visit_note", () => {
+  it("prefixes need_service prose and keeps note chips (not PATIENT_FALLBACK)", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const update = await node({
+      bookingDecision: {
+        tag: "ask",
+        intent: "ask_note",
+        reason: "need_service",
+        facts: { clarificationReason: "need_service" },
+        card: { kind: "visit_note", skipChoiceId: "note_skip" },
+      },
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [
+          { id: "note_skip", label: INTENT_SKIP_LABEL },
+          { id: "menu", label: MAIN_MENU_LABEL },
+        ],
+      },
+      bookingDraft: null,
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(update.lastHandoff?.replyText).toMatch(/послуг/i);
+    expect(update.lastHandoff?.replyButtons).toEqual([
       INTENT_SKIP_LABEL,
       MAIN_MENU_LABEL,
     ]);

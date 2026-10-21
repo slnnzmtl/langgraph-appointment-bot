@@ -5,7 +5,7 @@
 import type { BaseMessage } from "@langchain/core/messages";
 
 import { asJsonRecord } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import {
   normalizePresentAvailabilityResult,
 } from "../../../tools/availability-tools.js";
@@ -178,7 +178,8 @@ export const effectResultFromToolMessages = (
     return failClosedForPending(pendingEffect);
   }
 
-  const body = extractMessageTextContent(matching.content).trim();
+  // Raw text only — unescapeModelLineBreaks corrupts JSON with \\n in CRM fields.
+  const body = extractRawMessageText(matching.content).trim();
   const record = asJsonRecord(body);
 
   if (name === "present_availability_slots") {

@@ -4,7 +4,7 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import { asJsonRecord } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../../tools/contact-tools.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import {
@@ -50,7 +50,7 @@ export const projectContactEffects = (input: {
     if (authorizationFailure) {
       continue;
     }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const record = asJsonRecord(extractRawMessageText(message.content).trim());
     if (!record || typeof record.error === "string") {
       continue;
     }
