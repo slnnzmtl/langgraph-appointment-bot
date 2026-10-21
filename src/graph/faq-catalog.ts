@@ -1,4 +1,5 @@
 import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js";
+import { normalizeReplyLabel } from "../shared/message-content.js";
 import type { InteractionChoice } from "./booking-session.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import {
@@ -103,7 +104,8 @@ const ensureUniqueChipLabels = (
   labels: readonly string[],
   maxLength: number = MAX_FAQ_CHIP_LABEL_LENGTH,
 ): string[] => {
-  // Uniqueness is on the final emitted string (Telegram sends the label as text).
+  // Same key as matchesReplyLabel — case-fold + collapse whitespace — so taps
+  // cannot first-match a later chip that only differs by casing/spacing.
   const used = new Set<string>();
   return labels.map((raw) => {
     const trimmed = raw.trim();
@@ -115,17 +117,14 @@ const ensureUniqueChipLabels = (
       const room = Math.max(1, maxLength - suffix.length);
       candidate = `${truncateLabel(trimmed, room)}${suffix}`;
       n += 1;
-    } while (used.has(candidate));
-    used.add(candidate);
+    } while (used.has(normalizeReplyLabel(candidate)));
+    used.add(normalizeReplyLabel(candidate));
     return candidate;
   });
 };
 
 const sourceTextLabel = (choice: InteractionChoice): string =>
   (choice.displayLabel ?? choice.label).trim();
-
-const normalizeLabelKey = (value: string): string =>
-  value.trim().toLocaleLowerCase().replace(/\s+/g, " ");
 
 /**
  * Strip a shared path only when the patient already chose that path
@@ -138,11 +137,11 @@ const shouldStripSharedPrefix = (
   if (sharedPrefix.length === 0) {
     return false;
   }
-  const selected = normalizeLabelKey(selectedLabel ?? "");
+  const selected = normalizeReplyLabel(selectedLabel ?? "");
   if (selected.length === 0) {
     return false;
   }
-  return normalizeLabelKey(sharedPrefix).includes(selected);
+  return normalizeReplyLabel(sharedPrefix).includes(selected);
 };
 
 export type ShortenFaqChoiceLabelsOptions = {

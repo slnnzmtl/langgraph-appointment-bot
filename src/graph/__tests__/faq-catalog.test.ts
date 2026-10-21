@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.js";
+import { normalizeReplyLabel } from "../../shared/message-content.js";
 import {
   buildFaqCatalogChoices,
   faqCatalogIntroFromModel,
@@ -302,6 +303,19 @@ describe("buildFaqCatalogChoices", () => {
     expect(labels[1]).toBe("Other (2)");
     expect(labels[2]).not.toBe(labels[0]);
     expect(labels[2]).not.toBe(labels[1]);
+  });
+
+  it("disambiguates labels that only differ by case or whitespace", () => {
+    const choices = shortenFaqChoiceLabels([
+      { id: "a", label: "Foo Bar" },
+      { id: "b", label: "foo  bar" },
+      { id: "c", label: "FOO BAR" },
+    ]);
+    const labels = choices.map((choice) => choice.label);
+    expect(new Set(labels.map(normalizeReplyLabel)).size).toBe(3);
+    expect(labels[0]).toBe("Foo Bar");
+    expect(labels[1]).toContain("(2)");
+    expect(labels[2]).toContain("(3)");
   });
 });
 
