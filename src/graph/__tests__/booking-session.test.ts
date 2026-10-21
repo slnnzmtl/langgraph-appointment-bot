@@ -17,7 +17,11 @@ import {
   repairInvalidScheduleInteraction,
   type PendingInteraction,
 } from "../booking-session.js";
-import { CONSULTATION_SERVICE_ID, INTENT_SKIP_LABEL } from "../../shared/clinic-constants.js";
+import {
+  CONSULTATION_SERVICE_ID,
+  INTENT_SKIP_LABEL,
+  OTHER_DATE_LABEL,
+} from "../../shared/clinic-constants.js";
 
 const selectedSlot = {
   dateStart: "2026-10-17T11:30:00",
@@ -1087,6 +1091,53 @@ describe("interpretInteractionReply", () => {
     expect(interpretInteractionReply(visitNote, "Так")).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(null, INTENT_SKIP_LABEL)).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(visitNote, "  ")).toEqual({ kind: "unmatched" });
+  });
+
+  it("maps bare hour free text to a unique time_select chip", () => {
+    const timeSelect: PendingInteraction = {
+      kind: "time_select",
+      date: "2026-10-20",
+      snapshot: { snapshotId: "snap-1", days: [] },
+      choices: [
+        { id: "2026-10-20T1100", label: "11:00" },
+        { id: "2026-10-20T1130", label: "11:30" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    expect(interpretInteractionReply(timeSelect, "11")).toEqual({
+      kind: "choice",
+      choiceId: "2026-10-20T1100",
+    });
+    expect(interpretInteractionReply(timeSelect, "11:30")).toEqual({
+      kind: "choice",
+      choiceId: "2026-10-20T1130",
+    });
+  });
+
+  it("maps a unique bare day on date_select and rejects ambiguous days", () => {
+    const unique: PendingInteraction = {
+      kind: "date_select",
+      snapshot: { snapshotId: "snap-1", days: [] },
+      choices: [
+        { id: "2026-10-20", label: "20 жов" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    expect(interpretInteractionReply(unique, "20")).toEqual({
+      kind: "choice",
+      choiceId: "2026-10-20",
+    });
+
+    const ambiguous: PendingInteraction = {
+      kind: "date_select",
+      snapshot: { snapshotId: "snap-1", days: [] },
+      choices: [
+        { id: "2026-10-20", label: "20 жов" },
+        { id: "2026-11-20", label: "20 лис" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    expect(interpretInteractionReply(ambiguous, "20")).toEqual({ kind: "unmatched" });
   });
 });
 

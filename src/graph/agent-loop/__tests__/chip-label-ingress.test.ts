@@ -137,6 +137,35 @@ describe("createBookingDecideNode chip label ingress", () => {
     );
   });
 
+  it("maps free-text bare hour 11 to the 11:00 slot", async () => {
+    const node = createBookingDecideNode({
+      interpretTurn: withDeterministicFirst(async () => {
+        throw new Error("LLM interpreter must not run for a matched bare hour");
+      }),
+    });
+    const update = await node({
+      messages: [new HumanMessage("11")],
+      agentMessages: [],
+      bookingDraft: draftAtTimeSelect(),
+      pendingInteraction: {
+        kind: "time_select",
+        date: DATE_ID,
+        snapshot: { snapshotId: "snap-1", days: [] },
+        choices: [
+          { id: SLOT_ID, label: "11:00" },
+          { id: "2026-10-20T1130", label: "11:30" },
+          { id: "other_date", label: OTHER_DATE_LABEL },
+        ],
+      },
+      availabilityContext,
+      inboundChoiceId: null,
+    } as never);
+
+    expect(update.bookingDraft?.selectedSlot?.dateStart).toBe(
+      "2026-10-20T11:00:00+03:00",
+    );
+  });
+
   it("maps a date label and Інша дата to their choice ids", async () => {
     const node = createBookingDecideNode({
       interpretTurn: withDeterministicFirst(async () => {
@@ -182,6 +211,60 @@ describe("createBookingDecideNode chip label ingress", () => {
     expect(otherUpdate.bookingDecision?.pendingEffect?.effect.kind).toBe(
       "present_availability",
     );
+  });
+
+  it("maps free-text bare day 20 to the unique ISO date choice", async () => {
+    const node = createBookingDecideNode({
+      interpretTurn: withDeterministicFirst(async () => {
+        throw new Error("LLM interpreter must not run for a matched bare day");
+      }),
+    });
+    const update = await node({
+      messages: [new HumanMessage("20")],
+      agentMessages: [],
+      bookingDraft: draftAtDateSelect(),
+      pendingInteraction: {
+        kind: "date_select",
+        snapshot: { snapshotId: "snap-1", days: [] },
+        choices: [
+          { id: DATE_ID, label: "20 жов" },
+          { id: "other_date", label: OTHER_DATE_LABEL },
+        ],
+      },
+      availabilityContext,
+      inboundChoiceId: null,
+    } as never);
+
+    expect(update.bookingDraft?.selectedDate).toBe(DATE_ID);
+    expect(update.bookingDecision?.card?.kind).toBe("time_select");
+  });
+
+  it("does not invent a date when bare day is ambiguous across open choices", async () => {
+    let sawCallback: string | undefined;
+    const node = createBookingDecideNode({
+      interpretTurn: withDeterministicFirst(async (input) => {
+        sawCallback = input.callbackChoiceId;
+        return {};
+      }),
+    });
+    await node({
+      messages: [new HumanMessage("20")],
+      agentMessages: [],
+      bookingDraft: draftAtDateSelect(),
+      pendingInteraction: {
+        kind: "date_select",
+        snapshot: { snapshotId: "snap-1", days: [] },
+        choices: [
+          { id: "2026-10-20", label: "20 жов" },
+          { id: "2026-11-20", label: "20 лис" },
+          { id: "other_date", label: OTHER_DATE_LABEL },
+        ],
+      },
+      availabilityContext,
+      inboundChoiceId: null,
+    } as never);
+
+    expect(sawCallback).toBeUndefined();
   });
 
   it("does not invent callbackChoiceId for unmatched prose on an open time card", async () => {

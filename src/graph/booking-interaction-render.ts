@@ -15,7 +15,6 @@ import {
 } from "../shared/clinic-constants.js";
 import { isOtherDateChip } from "../shared/other-date-chip.js";
 import { extractMessageTextContent } from "../shared/message-content.js";
-import type { SelectedBookingSlot } from "./types.js";
 import type { ClinicState } from "./state.js";
 import { availabilityMatchesBooking } from "./booking-draft.js";
 import {
@@ -435,54 +434,6 @@ export const matchAvailabilityDay = (
     );
     if (matches.length === 1) {
       return matches[0]!;
-    }
-  }
-  return null;
-};
-
-const clockKey = (text: string): string | null => {
-  const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(text);
-  if (!match) {
-    return null;
-  }
-  return `${Number(match[1])}:${match[2] ?? "00"}`;
-};
-
-/** Match a patient clock-time pick to a snapshot slot (label, HH:mm, or bare hour). */
-export const matchAvailabilitySlot = (
-  humanText: string,
-  availabilityContext: AvailabilityContext | null | undefined,
-  selectedDate?: string | null,
-): SelectedBookingSlot | null => {
-  if (!availabilityContext || availabilityContext.days.length === 0) {
-    return null;
-  }
-  const trimmed = humanText.trim();
-  if (!trimmed || isOtherDateChip(trimmed)) {
-    return null;
-  }
-  const normalized = trimmed.toLowerCase().replace(/\s+/g, "");
-  const wantClock = clockKey(normalized);
-  const openDays = availabilityContext.days.filter((day) => day.slots.length > 0);
-  // A bare time is safe without an explicit day only for a single-day snapshot.
-  // With multiple days, choosing the first matching clock time silently books the
-  // wrong day when common hours occur on more than one date.
-  const candidateDays = selectedDate != null
-    ? availabilityContext.days.filter((day) => day.date === selectedDate)
-    : openDays.length === 1
-      ? openDays
-      : [];
-  for (const day of candidateDays) {
-    for (const slot of day.slots) {
-      const labelNorm = slot.label.trim().toLowerCase().replace(/\s+/g, "");
-      if (normalized === labelNorm || (wantClock != null && clockKey(labelNorm) === wantClock)) {
-        return {
-          slotId: slot.id,
-          dateStart: slot.dateStart,
-          dateEnd: slot.dateEnd,
-          label: slot.label,
-        };
-      }
     }
   }
   return null;

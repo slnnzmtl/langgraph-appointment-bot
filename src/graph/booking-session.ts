@@ -505,9 +505,22 @@ export const interactionChoiceEquals = (
   return aliases.includes(actual);
 };
 
+/** Normalize clock text: "11" / "11:00" → "11:00"; non-clock → null. */
+const clockKey = (text: string): string | null => {
+  const match = /^(\d{1,2})(?::(\d{2}))?$/.exec(text);
+  if (!match) {
+    return null;
+  }
+  return `${Number(match[1])}:${match[2] ?? "00"}`;
+};
+
+const ISO_DATE_CHOICE = /^\d{4}-\d{2}-\d{2}$/;
+
 /**
  * Match patient text against the current interaction only.
- * Exact label → stable choice.id. Labels absent from the current interaction are unmatched
+ * Exact label → stable choice.id. On time_select, bare hours map to HH:00 chips.
+ * On date_select, a unique bare day number maps to the ISO date choice id.
+ * Labels absent from the current interaction are unmatched
  * (Telegram cannot attribute reused labels to an older keyboard).
  */
 export const interpretInteractionReply = (
@@ -525,9 +538,42 @@ export const interpretInteractionReply = (
     const labels = [entry.label, ...(entry.aliases ?? [])];
     return matchesReplyLabel(trimmed, labels);
   });
-  return choice != null
-    ? { kind: "choice", choiceId: choice.id }
-    : { kind: "unmatched" };
+  if (choice != null) {
+    return { kind: "choice", choiceId: choice.id };
+  }
+
+  if (interaction.kind === "time_select") {
+    const wantClock = clockKey(trimmed.toLowerCase().replace(/\s+/g, ""));
+    if (wantClock != null) {
+      const clockMatches = interaction.choices.filter((entry) => {
+        const labels = [entry.label, ...(entry.aliases ?? [])];
+        return labels.some((label) => {
+          const labelNorm = label.trim().toLowerCase().replace(/\s+/g, "");
+          return clockKey(labelNorm) === wantClock;
+        });
+      });
+      if (clockMatches.length === 1) {
+        return { kind: "choice", choiceId: clockMatches[0]!.id };
+      }
+    }
+  }
+
+  if (interaction.kind === "date_select") {
+    const bareDay = /^(\d{1,2})$/.exec(trimmed);
+    if (bareDay) {
+      const wanted = Number(bareDay[1]);
+      const dayMatches = interaction.choices.filter(
+        (entry) =>
+          ISO_DATE_CHOICE.test(entry.id)
+          && Number(entry.id.slice(8, 10)) === wanted,
+      );
+      if (dayMatches.length === 1) {
+        return { kind: "choice", choiceId: dayMatches[0]!.id };
+      }
+    }
+  }
+
+  return { kind: "unmatched" };
 };
 
 const withoutReturnChoice = (interaction: PendingInteraction): PendingInteraction => ({
