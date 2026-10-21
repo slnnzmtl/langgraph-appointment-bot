@@ -8,7 +8,6 @@ import { z } from "zod";
 import {
   BOOKING_TURN_INTERPRETER_INSTRUCTION,
   interpretBookingTurnDeterministic,
-  isStructuralNameToken,
   type InterpretBookingTurnInput,
   normalizeBookingTurnClassification,
 } from "../booking-domain/interpret.js";
@@ -87,23 +86,12 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
         : null,
     ].filter((line): line is string => line != null);
 
-    const emptyPatchFallback = (): UnderstoodBookingTurn => {
-      if (input.awaitingContactField === "phoneNumber") {
-        return { contactFormatError: "phoneNumber" };
-      }
-      // Mirror phone: after empty LLM patch, accept a structural name token so
-      // Latin given names (e.g. Smoke) do not stall when the model omits firstName.
-      if (
-        (input.awaitingContactField === "firstName"
-          || input.awaitingContactField === "lastName")
-        && isStructuralNameToken(rawText)
-      ) {
-        return input.awaitingContactField === "firstName"
-          ? { contactFacts: { firstName: rawText } }
-          : { contactFacts: { lastName: rawText } };
-      }
-      return {};
-    };
+    // Names require an explicit LLM firstName/lastName — never invent from raw text.
+    // Phone still gets a format clarification when the patch is empty.
+    const phoneFormatFallback = (): UnderstoodBookingTurn =>
+      input.awaitingContactField === "phoneNumber"
+        ? { contactFormatError: "phoneNumber" }
+        : {};
 
     try {
       const result = await chain.invoke([
@@ -115,7 +103,7 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
       ]);
       const parsed = bookingTurnClassificationSchema.safeParse(result);
       if (!parsed.success) {
-        return emptyPatchFallback();
+        return phoneFormatFallback();
       }
       // Strip explicit undefined keys for exactOptionalPropertyTypes.
       const cleaned = Object.fromEntries(
@@ -125,10 +113,11 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
       if (Object.keys(patch).length > 0) {
         return patch;
       }
-      // Open phone → format clarification; open name → structural token.
-      return emptyPatchFallback();
+      // Open phone field, no other semantic intent — format clarification.
+      // Open name field with empty classification — leave unanswered (re-ask).
+      return phoneFormatFallback();
     } catch {
-      return emptyPatchFallback();
+      return phoneFormatFallback();
     }
   };
 };

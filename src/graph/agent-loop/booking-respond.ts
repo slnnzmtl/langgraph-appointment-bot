@@ -136,15 +136,11 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
       };
     }
 
-    // Open cards: one code-owned copy path (no LLM rewrite of the chip prompt).
+    // Open cards: matching pendingInteraction is the sole listed-copy path.
     if (decision.card != null) {
       let replyText = fallback;
       const pending = state.pendingInteraction;
-      if (
-        (decision.card.kind === "date_select" || decision.card.kind === "time_select")
-        && pending != null
-        && pending.kind === decision.card.kind
-      ) {
+      if (pending != null && pending.kind === decision.card.kind) {
         const listed = extractMessageTextContent(
           renderBookingInteractionMessage(pending).content,
         ).trim();

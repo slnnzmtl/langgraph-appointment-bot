@@ -30,15 +30,6 @@ export type InterpretBookingTurnInput = {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HH_MM = /^\d{1,2}:\d{2}$/;
 
-/**
- * Single-token given/family name (letters, hyphen, apostrophe).
- * Used only as post-LLM empty-patch fallback — not on the deterministic path.
- */
-const STRUCTURAL_NAME_TOKEN = /^[\p{L}]([\p{L}'\u2019\u02BC-]{0,46}[\p{L}])?$/u;
-
-export const isStructuralNameToken = (raw: string): boolean =>
-  raw.length >= 2 && raw.length <= 48 && STRUCTURAL_NAME_TOKEN.test(raw);
-
 /** Exact keyboard labels that must not become phone facts or format errors. */
 const isExactBookingControlLabel = (raw: string): boolean => {
   const labelId = labelIdFor(raw);
@@ -191,7 +182,8 @@ export const BOOKING_TURN_INTERPRETER_INSTRUCTION = `You extract a bounded seman
 Return only fields that are clearly present. Prefer none/omit over guessing.
 
 Rules:
-- Never invent a firstName or lastName from hedges like "не знаю", "I don't know", jokes, or questions.
+- Never invent a firstName or lastName from hedges like "не знаю", "невідомо", "unknown", "I don't know", jokes, or questions — omit the name field so the bot can ask again.
+- When the open field is firstName or lastName and the message is clearly answering with that name (including a short 1–2 token answer), set firstName/lastName even if the token is uncommon or also an English common noun (e.g. Smoke, Apple). Apostrophes stay in the value (Дар'я, O'Brien).
 - Never treat a service-change request ("Хочу змінити послугу", "change the service") as a visit note.
 - A message that both books and asks price/hours/address may set serviceIntent plus sideQuestionKind/informationalQuestion.
 - Catalog/service questions ("Чи працює оператор лазера?", "do you have laser?") are catalog_browse or informationalQuestion — never human_handoff.

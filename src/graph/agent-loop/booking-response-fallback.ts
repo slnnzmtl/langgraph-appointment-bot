@@ -107,10 +107,11 @@ const cardSpecificFallback = (
     }
     case "service_candidate":
       return "Оберіть, будь ласка, послугу зі списку.";
-    // DATE/TIME listed copy (including emptyMode) lives in
+    // DATE/TIME/visit_select listed copy lives in
     // renderBookingInteractionMessage — not a second fallback writer.
     case "date_select":
     case "time_select":
+    case "visit_select":
       return null;
     case "visit_note":
       return `Можете коротко описати запит або натисніть «${INTENT_SKIP_LABEL}».`;
@@ -130,8 +131,6 @@ const cardSpecificFallback = (
         return SAFETY_UK.confirm_cancel ?? "Підтвердіть, будь ласка, скасування.";
       }
       return SAFETY_UK.confirm_create ?? "Підтвердіть, будь ласка, запис.";
-    case "visit_select":
-      return "Оберіть, будь ласка, дію зі списку.";
     case "clarification":
       return CLARIFICATION_UK[card.reason] ?? PATIENT_FALLBACK_MESSAGE;
     default: {

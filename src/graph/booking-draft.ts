@@ -185,9 +185,24 @@ export type BookingEvent =
   | { type: "choices_offered"; choiceIds: string[] }
   | { type: "choices_cleared" };
 
-const trimContactName = (value: string): string | null => {
+/**
+ * Patient-submit name normalize: trim + title-case (uk locale, hyphen segments).
+ * Apostrophes stay («дар'я» → «Дар'я»). Write path only — not CRM merge/read.
+ */
+const normalizeContactName = (value: string): string | null => {
   const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const titlePart = (part: string): string => {
+    const chars = Array.from(part);
+    if (chars.length === 0) {
+      return part;
+    }
+    const [head, ...tail] = chars;
+    return `${head!.toLocaleUpperCase("uk")}${tail.join("").toLocaleLowerCase("uk")}`;
+  };
+  return trimmed.split("-").map(titlePart).join("-");
 };
 
 /** Ladder order for patient identity collection (phone before names). */
@@ -203,7 +218,9 @@ const contactFieldFromUnknown = (
   if (field === "phoneNumber") {
     return normalizeClinicPhone(value) ?? undefined;
   }
-  return trimContactName(value) ?? undefined;
+  // Merge/read: keep CRM casing; only drop blanks.
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 };
 
 const mergeContactFields = (
@@ -819,7 +836,7 @@ export const reduceBookingDraft = (
     case "contact_field_submitted": {
       const accepted = event.field === "phoneNumber"
         ? normalizeClinicPhone(event.value)
-        : trimContactName(event.value);
+        : normalizeContactName(event.value);
       if (accepted == null) {
         return draft;
       }

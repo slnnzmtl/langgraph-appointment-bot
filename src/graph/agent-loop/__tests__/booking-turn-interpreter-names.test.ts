@@ -4,7 +4,7 @@ import type { ILLMConnector } from "../../types.js";
 import { createBookingTurnInterpreter } from "../booking-turn-interpreter.js";
 
 describe("createBookingTurnInterpreter open name field", () => {
-  it("applies a model firstName; empty patch falls back to structural tokens", async () => {
+  it("submits a name only when the model sets firstName; empty omit re-asks", async () => {
     const invoke = vi.fn();
     const llm = {
       bindRoutingTools: () => ({ invoke }),
@@ -21,23 +21,22 @@ describe("createBookingTurnInterpreter open name field", () => {
       interpret({ rawText: "Дар'я", awaitingContactField: "firstName" }),
     ).resolves.toEqual({ contactFacts: { firstName: "Дар'я" } });
 
-    // Gemini-style empty omit: structural token still becomes the name.
-    invoke.mockResolvedValueOnce({ controlKind: "none" });
+    invoke.mockResolvedValueOnce({ firstName: "Smoke" });
     await expect(
       interpret({ rawText: "Smoke", awaitingContactField: "firstName" }),
     ).resolves.toEqual({ contactFacts: { firstName: "Smoke" } });
 
+    // Empty / hedge classifications must not invent a name from raw text.
     invoke.mockResolvedValueOnce({ controlKind: "none" });
     await expect(
-      interpret({ rawText: "Іван", awaitingContactField: "firstName" }),
-    ).resolves.toEqual({ contactFacts: { firstName: "Іван" } });
+      interpret({ rawText: "Smoke", awaitingContactField: "firstName" }),
+    ).resolves.toEqual({});
 
     invoke.mockResolvedValueOnce({ controlKind: "none" });
     await expect(
-      interpret({ rawText: "Дар'я", awaitingContactField: "firstName" }),
-    ).resolves.toEqual({ contactFacts: { firstName: "Дар'я" } });
+      interpret({ rawText: "Невідомо", awaitingContactField: "firstName" }),
+    ).resolves.toEqual({});
 
-    // Multi-word hedge fails the structural token regex.
     invoke.mockResolvedValueOnce({ controlKind: "none" });
     await expect(
       interpret({ rawText: "не знаю", awaitingContactField: "firstName" }),
@@ -46,7 +45,7 @@ describe("createBookingTurnInterpreter open name field", () => {
     expect(invoke).toHaveBeenCalledTimes(6);
   });
 
-  it("keeps visit_cancel over structural name fallback", async () => {
+  it("keeps visit_cancel when the model classifies control on the name step", async () => {
     const invoke = vi.fn();
     const llm = {
       bindRoutingTools: () => ({ invoke }),

@@ -711,6 +711,44 @@ describe("BookingDraft contactDetails", () => {
     expect(next.contactDetails).toEqual({ phoneNumber: "+380501112233" });
   });
 
+  it("title-cases firstName and lastName on contact_field_submitted only", () => {
+    let draft = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "дар'я",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "тестова",
+    });
+    expect(draft.contactDetails).toEqual({
+      firstName: "Дар'я",
+      lastName: "Тестова",
+    });
+
+    const hyphenated = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "анна-марія",
+    });
+    expect(hyphenated.contactDetails?.firstName).toBe("Анна-Марія");
+
+    const alreadyCased = reduceBookingDraft(detailsReady(), {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Smoke",
+    });
+    expect(alreadyCased.contactDetails?.firstName).toBe("Smoke");
+
+    // CRM merge/read must not rewrite stored casing.
+    expect(
+      effectiveBookingContactDetails({
+        crmContact: { firstName: "дар'я", lastName: "ТЕСТОВА" },
+      }),
+    ).toEqual({ firstName: "дар'я", lastName: "ТЕСТОВА" });
+  });
+
   it("persists names across link-style contact_resolved and clears only with clearDetails", () => {
     let draft = reduceBookingDraft(detailsReady(), {
       type: "contact_field_submitted",

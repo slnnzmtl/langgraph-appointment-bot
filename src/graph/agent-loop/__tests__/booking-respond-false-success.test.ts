@@ -343,6 +343,52 @@ describe("booking__respond card copy + markup", () => {
     );
     expect(update.lastHandoff?.replyButtons).toEqual([LATER_DATE_LABEL]);
   });
+
+  it("ships REPLACE copy from pendingInteraction visit_select/replacement (no LLM)", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const card = {
+      kind: "visit_select" as const,
+      stage: "replacement" as const,
+      choiceIds: ["cancel", "decline"],
+      labels: {
+        cancel: BOOKING_REPLACE_MENU[0],
+        decline: BOOKING_REPLACE_MENU[1],
+      },
+    };
+    const pending: PendingInteraction = {
+      kind: "visit_select",
+      stage: "replacement",
+      choices: [
+        { id: "cancel", label: BOOKING_REPLACE_MENU[0] },
+        { id: "decline", label: BOOKING_REPLACE_MENU[1] },
+      ],
+    };
+    const update = await node({
+      bookingDecision: {
+        tag: "ask",
+        intent: "clarification",
+        reason: "replacement_offer",
+        facts: {},
+        card,
+      },
+      pendingInteraction: pending,
+      bookingDraft: null,
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toContain(
+      "У вас уже є запланований візит",
+    );
+    expect(update.lastHandoff?.replyText).not.toContain(
+      "Оберіть, будь ласка, дію зі списку",
+    );
+    expect(update.lastHandoff?.replyButtons).toEqual([...BOOKING_REPLACE_MENU]);
+  });
 });
 
 describe("replyChoicesFromCard offer labels", () => {
