@@ -13,6 +13,7 @@ import {
 import { cancelCommandFromMeeting } from "../cancel-command.js";
 import {
   availabilityRequestFieldsFromDraft,
+  effectiveBookingContactDetails,
   nextMissingContactField,
   reduceBookingDraft,
   slotEvidenceForSelection,
@@ -110,9 +111,12 @@ const serviceLabelForMeeting = (w: BookingDraft): string => {
 };
 
 /** CRM meeting title: "[service name] - [first last]" (service alone if names missing). */
-const createMeetingName = (w: BookingDraft): string => {
+const createMeetingName = (w: BookingDraft, readModels: BookingReadModels): string => {
   const service = serviceLabelForMeeting(w);
-  const details = w.contactDetails ?? {};
+  const details = effectiveBookingContactDetails({
+    crmContact: readModels.ownedContact ?? null,
+    contactDetails: w.contactDetails ?? null,
+  });
   const first = details.firstName?.trim() ?? "";
   const last = details.lastName?.trim() ?? "";
   const patient = [first, last].filter((part) => part.length > 0).join(" ");
@@ -520,7 +524,7 @@ export const decideBooking = (
                 contactId: w.contactId,
                 dateStart: w.selectedSlot.dateStart,
                 dateEnd: w.selectedSlot.dateEnd,
-                name: createMeetingName(w),
+                name: createMeetingName(w, readModels),
                 confirmMessage: CREATE_CONFIRMATION_UK,
                 ...(w.note.value ? { description: w.note.value } : {}),
               },
@@ -896,6 +900,7 @@ export const decideBooking = (
           "ask_phone",
           { kind: "contact_field", field: "phoneNumber" },
           "contact_lookup_failed",
+          { clarificationReason: "contact_lookup_failed" },
         );
       }
       const phone =
@@ -969,6 +974,22 @@ export const decideBooking = (
   };
 
   const applySemanticPatch = (patch: UnderstoodBookingTurn): BookingDecision => {
+    if (patch.contactFormatError != null) {
+      const field = patch.contactFormatError;
+      const clarificationReason =
+        field === "phoneNumber"
+          ? "invalid_phone"
+          : field === "firstName"
+            ? "invalid_firstName"
+            : "invalid_lastName";
+      emitDecision({ kind: "clarification", reason: clarificationReason });
+      return ask(
+        CONTACT_INTENT[field],
+        { kind: "contact_field", field },
+        clarificationReason,
+        { clarificationReason },
+      );
+    }
     if (patch.controlIntent != null) {
       switch (patch.controlIntent.kind) {
         case "main_menu":

@@ -259,21 +259,40 @@ export const effectResultFromToolMessages = (
     || name === "update_contact"
     || name === "link_telegram_to_contact"
   ) {
-    const contactId = firstString(record?.id, record?.contactId);
-    if (contactId != null) {
-      const missingRaw = record?.missingFields;
-      const crmComplete = Array.isArray(missingRaw)
-        ? missingRaw.filter((entry): entry is string => typeof entry === "string").length === 0
-        : contactMissingFields(record ?? {}).length === 0;
-      return {
-        effectId: expectedEffectId,
-        kind: "contact_write",
-        outcome: contactWriteOutcome(name),
-        contactId,
-        crmComplete,
-      };
+    const pendingKind = pendingEffect.effect.kind;
+    const expectedKind =
+      name === "create_contact"
+        ? "create_contact" as const
+        : name === "update_contact"
+          ? "update_contact" as const
+          : "link_telegram_contact" as const;
+    if (pendingKind !== expectedKind) {
+      return failClosedForPending(pendingEffect);
     }
-    return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+    const contactId = firstString(record?.id, record?.contactId);
+    if (contactId == null) {
+      return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+    }
+    if (pendingKind === "link_telegram_contact" && contactId !== pendingEffect.effect.contactId) {
+      return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+    }
+    if (
+      pendingKind === "update_contact"
+      && contactId !== pendingEffect.effect.payload.contactId
+    ) {
+      return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+    }
+    const missingRaw = record?.missingFields;
+    const crmComplete = Array.isArray(missingRaw)
+      ? missingRaw.filter((entry): entry is string => typeof entry === "string").length === 0
+      : contactMissingFields(record ?? {}).length === 0;
+    return {
+      effectId: expectedEffectId,
+      kind: "contact_write",
+      outcome: contactWriteOutcome(name),
+      contactId,
+      crmComplete,
+    };
   }
 
   if (

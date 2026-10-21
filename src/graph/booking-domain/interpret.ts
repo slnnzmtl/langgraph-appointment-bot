@@ -29,14 +29,19 @@ export type InterpretBookingTurnInput = {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HH_MM = /^\d{1,2}:\d{2}$/;
-/**
- * Single name token: letters + optional internal hyphen/apostrophe, length 2–48.
- * Apostrophe covers UA names like «Дар'я» (ASCII ', U+2019 ’, U+02BC ʼ).
- */
-const STRUCTURAL_NAME_TOKEN = /^[\p{L}]([\p{L}'\u2019\u02BC-]{0,46}[\p{L}])?$/u;
 
-const isStructuralNameToken = (raw: string): boolean =>
-  raw.length >= 2 && raw.length <= 48 && STRUCTURAL_NAME_TOKEN.test(raw);
+/** Exact keyboard labels that must not become phone facts or format errors. */
+const isExactBookingControlLabel = (raw: string): boolean => {
+  const labelId = labelIdFor(raw);
+  return (
+    labelId === "mainMenu"
+    || labelId === "mainBook"
+    || labelId === "mainMyVisit"
+    || labelId === "visitCancel"
+    || labelId === "visitReschedule"
+    || labelId === "visitDecline"
+  );
+};
 
 /** Deterministic: callback id in offered set, or structural phone / offered date-time token. */
 export const interpretBookingTurnDeterministic = (
@@ -58,36 +63,23 @@ export const interpretBookingTurnDeterministic = (
 
   // Strict structural: phone shape only (never treat free text as a name/note).
   if (input.awaitingContactField === "phoneNumber") {
+    if (isExactBookingControlLabel(raw)) {
+      return {};
+    }
     const phone = normalizeClinicPhone(raw);
     if (phone != null) {
       return { contactFacts: { phoneNumber: phone } };
     }
-    return {};
+    // Non-empty failed shape — decide shows format clarification (skips LLM).
+    return { contactFormatError: "phoneNumber" };
   }
 
-  // Open name fields: structural single-token names only (same spirit as phone).
-  // Hedges / multi-word asides («не знаю») return {} for the structured interpreter.
+  // Open name fields: never accept names here — structured LLM classifies free text.
+  // Control labels and free text both return {} (labels must not become contactFacts).
   if (
     input.awaitingContactField === "firstName"
     || input.awaitingContactField === "lastName"
   ) {
-    const labelId = labelIdFor(raw);
-    if (
-      labelId === "mainMenu"
-      || labelId === "mainBook"
-      || labelId === "mainMyVisit"
-      || labelId === "visitCancel"
-      || labelId === "visitReschedule"
-      || labelId === "visitDecline"
-    ) {
-      return {};
-    }
-    if (isStructuralNameToken(raw)) {
-      if (input.awaitingContactField === "firstName") {
-        return { contactFacts: { firstName: raw } };
-      }
-      return { contactFacts: { lastName: raw } };
-    }
     return {};
   }
 

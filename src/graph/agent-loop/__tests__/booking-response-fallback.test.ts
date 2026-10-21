@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  BOOKING_FIRST_NAME_INVALID_UK,
+  BOOKING_LAST_NAME_INVALID_UK,
+  BOOKING_PHONE_INVALID_UK,
+  BOOKING_PHONE_QUESTION_UK,
   CLINIC_ADDRESS,
   CLINIC_MAPS_MARKDOWN,
   LATER_DATE_LABEL,
@@ -13,6 +17,36 @@ import {
   committedCreateOrRescheduleReply,
 } from "../booking-response-fallback.js";
 import { replyChoicesFromCard } from "../booking-card-choices.js";
+
+describe("bookingResponseFallback contact format clarification", () => {
+  it("prefers invalid_phone over generic ask_phone card copy", () => {
+    const text = bookingResponseFallback({
+      intent: "ask_phone",
+      facts: { clarificationReason: "invalid_phone" },
+      card: { kind: "contact_field", field: "phoneNumber" },
+    });
+    expect(text).toBe(BOOKING_PHONE_INVALID_UK);
+    expect(text).not.toBe(BOOKING_PHONE_QUESTION_UK);
+  });
+
+  it("prefers invalid_firstName over generic ask_first_name card copy", () => {
+    const text = bookingResponseFallback({
+      intent: "ask_first_name",
+      facts: { clarificationReason: "invalid_firstName" },
+      card: { kind: "contact_field", field: "firstName" },
+    });
+    expect(text).toBe(BOOKING_FIRST_NAME_INVALID_UK);
+  });
+
+  it("prefers invalid_lastName over generic ask_last_name card copy", () => {
+    const text = bookingResponseFallback({
+      intent: "ask_last_name",
+      facts: { clarificationReason: "invalid_lastName" },
+      card: { kind: "contact_field", field: "lastName" },
+    });
+    expect(text).toBe(BOOKING_LAST_NAME_INVALID_UK);
+  });
+});
 
 describe("bookingResponseFallback empty date window", () => {
   it("uses empty earlier copy, not PATIENT_FALLBACK_MESSAGE", () => {

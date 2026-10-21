@@ -793,7 +793,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
     bindRoutingTools.mockClear();
   });
 
-  it.each(["Записатись", "Послуги", "Обрати іншу процедуру"] as const)(
+  it.each(["Записатись", "Обрати іншу процедуру"] as const)(
     "nulls availabilityContext on owned label %s (prefetch reuse)",
     async (label) => {
       invoke.mockResolvedValue({ next: label === "Записатись" ? "booking" : "faq", reply: "ok" });
@@ -832,6 +832,52 @@ describe("createClinicSupervisorNode availability session reset", () => {
       expect(update.availabilityContext).toBeNull();
     },
   );
+
+  it("closes booking availability on «Послуги» without the supervisor LLM", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      specialists,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["28 вересня", "Інша дата"],
+        },
+        messages: [
+          new AIMessage("Який день вам зручний?"),
+          new HumanMessage("Послуги"),
+        ],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: pagedSnapshot,
+        bookingDraft: createEmptyBookingDraft(),
+        pendingInteraction: {
+          kind: "date_select",
+          snapshot: { snapshotId: "sticky-test", days: [] },
+          choices: [{ id: "2026-10-05", label: "5 жовтня" }],
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("faq");
+    expect(update.availabilityContext).toBeNull();
+    expect(update.availabilityCursor).toBeNull();
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingInteraction).toBeNull();
+  });
 
   it("nulls availabilityContext when FAQ routes to booking", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "consultation_request" });

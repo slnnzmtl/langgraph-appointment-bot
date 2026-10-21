@@ -50,6 +50,15 @@ export const PATIENT_FALLBACK_MESSAGE =
 /** Code-owned first identity question once the booking choices are complete. */
 export const BOOKING_PHONE_QUESTION_UK =
   "Для завершення запису надішліть, будь ласка, ваш номер телефону.";
+/** Typed phone failed structural parse — format hint, not a repeated first ask. */
+export const BOOKING_PHONE_INVALID_UK =
+  "Не вдалося розпізнати номер. Надішліть у форматі +380XXXXXXXXX або 0XXXXXXXXX.";
+/** Typed first name failed structural token — format hint. */
+export const BOOKING_FIRST_NAME_INVALID_UK =
+  "Напишіть, будь ласка, ім'я одним словом (літери; можна дефіс чи апостроф, наприклад Дар'я).";
+/** Typed last name failed structural token — format hint. */
+export const BOOKING_LAST_NAME_INVALID_UK =
+  "Напишіть, будь ласка, прізвище одним словом (літери; можна дефіс чи апостроф).";
 /** Graph-owned reply when the typed phone matches a Contact linked to another Telegram user. */
 export const BOOKING_PHONE_OCCUPIED_UK =
   "Цей номер уже прив’язаний до іншого акаунта. Надішліть, будь ласка, інший номер.";

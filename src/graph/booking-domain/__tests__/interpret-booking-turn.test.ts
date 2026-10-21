@@ -45,64 +45,59 @@ describe("interpretBookingTurnDeterministic", () => {
 });
 
 describe("normalizeBookingTurnClassification (structured LLM)", () => {
-  it("captures structural single-token names; hedges stay empty for the interpreter", () => {
-    expect(
-      interpretBookingTurnDeterministic({
-        rawText: "Smoke",
-        awaitingContactField: "firstName",
-      }),
-    ).toEqual({ contactFacts: { firstName: "Smoke" } });
+  it("leaves free-text names for the structured interpreter; phone stays structural", () => {
+    // Deterministic path never accepts names (including hedges and real tokens).
+    for (const rawText of ["Невідомо", "Іван", "Дар'я", "Дар’я", "Smoke", "не знаю", "!!!"]) {
+      expect(
+        interpretBookingTurnDeterministic({
+          rawText,
+          awaitingContactField: "firstName",
+        }),
+      ).toEqual({});
+    }
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Tester",
         awaitingContactField: "lastName",
       }),
-    ).toEqual({ contactFacts: { lastName: "Tester" } });
-    expect(
-      interpretBookingTurnDeterministic({
-        rawText: "Іван",
-        awaitingContactField: "firstName",
-      }),
-    ).toEqual({ contactFacts: { firstName: "Іван" } });
-    expect(
-      interpretBookingTurnDeterministic({
-        rawText: "Daniel",
-        awaitingContactField: "firstName",
-      }),
-    ).toEqual({ contactFacts: { firstName: "Daniel" } });
-    // Ukrainian apostrophe (ASCII / typographic) stays a single name token.
-    expect(
-      interpretBookingTurnDeterministic({
-        rawText: "Дар'я",
-        awaitingContactField: "firstName",
-      }),
-    ).toEqual({ contactFacts: { firstName: "Дар'я" } });
-    expect(
-      interpretBookingTurnDeterministic({
-        rawText: "Дар’я",
-        awaitingContactField: "firstName",
-      }),
-    ).toEqual({ contactFacts: { firstName: "Дар’я" } });
-    // Multi-word hedges / asides are not names.
-    expect(
-      interpretBookingTurnDeterministic({
-        rawText: "не знаю",
-        awaitingContactField: "firstName",
-      }),
     ).toEqual({});
-    // Main-menu label is control, not a name.
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "38050504023",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).toEqual({ contactFormatError: "phoneNumber" });
+    // Main-menu label is control, not a format error (phone or name).
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Головне меню",
         awaitingContactField: "firstName",
       }),
     ).toEqual({});
-    // Structured LLM that correctly classifies an aside yields no name patch.
-    const patch = normalizeBookingTurnClassification(
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Головне меню",
+        awaitingContactField: "phoneNumber",
+      }),
+    ).toEqual({});
+    // Structured LLM applies a clear firstName; hedges yield no name patch.
+    expect(
+      normalizeBookingTurnClassification(
+        { firstName: "Іван" },
+        { rawText: "Іван", awaitingContactField: "firstName" },
+      ),
+    ).toEqual({ contactFacts: { firstName: "Іван" } });
+    expect(
+      normalizeBookingTurnClassification(
+        { firstName: "Дар'я" },
+        { rawText: "Дар'я", awaitingContactField: "firstName" },
+      ),
+    ).toEqual({ contactFacts: { firstName: "Дар'я" } });
+    const hedge = normalizeBookingTurnClassification(
       { controlKind: "none" },
       { rawText: "не знаю", awaitingContactField: "firstName" },
     );
-    expect(patch.contactFacts?.firstName).toBeUndefined();
+    expect(hedge.contactFacts?.firstName).toBeUndefined();
   });
 
   it("does not treat a service-change ask as a visit note without awaitingNote", () => {

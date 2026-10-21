@@ -4,7 +4,10 @@
  */
 
 import {
+  BOOKING_FIRST_NAME_INVALID_UK,
+  BOOKING_LAST_NAME_INVALID_UK,
   BOOKING_OFFER_MENU,
+  BOOKING_PHONE_INVALID_UK,
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
   CLINIC_ADDRESS,
@@ -51,6 +54,9 @@ const CLARIFICATION_UK: Record<string, string> = {
     "Не вдалося перевірити номер. Вкажіть, будь ласка, телефон ще раз.",
   availability_failed:
     "Не вдалося перевірити вільний час. Спробуйте, будь ласка, трохи пізніше.",
+  invalid_phone: BOOKING_PHONE_INVALID_UK,
+  invalid_firstName: BOOKING_FIRST_NAME_INVALID_UK,
+  invalid_lastName: BOOKING_LAST_NAME_INVALID_UK,
 };
 
 /**
@@ -154,7 +160,8 @@ export const bookingResponseFallback = (input: {
     return bookingSuccessText(input.facts);
   }
   const reason = input.facts?.clarificationReason ?? input.facts?.failureCode;
-  if (input.intent === "clarification" && reason != null && CLARIFICATION_UK[reason] != null) {
+  // Prefer specialized reason copy over generic contact_field / ask_* prompts.
+  if (reason != null && CLARIFICATION_UK[reason] != null) {
     return CLARIFICATION_UK[reason]!;
   }
   if (input.intent === "mutation_failed" && input.facts?.failureCode === "phone_occupied") {

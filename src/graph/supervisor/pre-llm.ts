@@ -69,7 +69,7 @@ const mainMenu: PreLlmRule = (ctx) => {
   };
 };
 
-/** «Послуги» — always FAQ catalog/guide (never booking clarification). */
+/** «Послуги» — leave booking like FAQ browse, then catalog/guide. */
 const servicesGuide: PreLlmRule = (ctx) => {
   if (!isFaqServicesGuideLabel(ctx.lastHumanLine)) {
     return null;
@@ -81,6 +81,9 @@ const servicesGuide: PreLlmRule = (ctx) => {
       lastHandoff: null,
       supervisorIntent: null,
       ...ctx.prefetchUpdate,
+      availabilityContext: null,
+      availabilityCursor: null,
+      ...closedBookingSessionUpdate(),
     },
   };
 };

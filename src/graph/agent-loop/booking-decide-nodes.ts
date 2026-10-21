@@ -113,6 +113,28 @@ const lastHumanText = (messages: BaseMessage[] | undefined): string => {
   return "";
 };
 
+const ownedContactFromState = (
+  state: ClinicState,
+): BookingReadModels["ownedContact"] => {
+  const identity = resolveContactIdentity(
+    state.contactContext,
+    state.bookingDraft?.contactId,
+  );
+  if (identity.kind !== "owned") {
+    return undefined;
+  }
+  const row = identity.contact;
+  const firstName = typeof row.firstName === "string" ? row.firstName.trim() : "";
+  const lastName = typeof row.lastName === "string" ? row.lastName.trim() : "";
+  if (firstName.length === 0 && lastName.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(firstName.length > 0 ? { firstName } : {}),
+    ...(lastName.length > 0 ? { lastName } : {}),
+  };
+};
+
 export const readModelsFromClinicState = (state: ClinicState): BookingReadModels => {
   const availability = state.availabilityContext;
   const query = availability != null ? availabilityQueryFromContext(availability) : null;
@@ -140,6 +162,7 @@ export const readModelsFromClinicState = (state: ClinicState): BookingReadModels
       ...(typeof meeting.dateEnd === "string" ? { dateEnd: meeting.dateEnd } : {}),
     }];
   });
+  const ownedContact = ownedContactFromState(state);
   return {
     contactContextDirty: state.prefetchDirty === true,
     bookingContextDirty: state.prefetchDirty === true,
@@ -160,6 +183,7 @@ export const readModelsFromClinicState = (state: ClinicState): BookingReadModels
       : {}),
     ...(snapshotId != null ? { availabilitySnapshotId: snapshotId } : {}),
     ...(plannedMeetings.length > 0 ? { plannedMeetings } : {}),
+    ...(ownedContact != null ? { ownedContact } : {}),
   };
 };
 

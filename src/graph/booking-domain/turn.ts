@@ -64,6 +64,11 @@ export type UnderstoodBookingTurn = {
   scheduleIntent?: ScheduleIntent;
   note?: NoteInput;
   contactFacts?: Partial<ContactPatch>;
+  /**
+   * Open contact field received non-empty text that failed structural shape.
+   * Decide re-asks the same field with clarificationReason; not a submitted fact.
+   */
+  contactFormatError?: "phoneNumber" | "firstName" | "lastName";
   choice?: SemanticChoice;
   informationalQuestion?: string;
   controlIntent?: ControlIntent;

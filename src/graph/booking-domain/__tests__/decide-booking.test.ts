@@ -467,6 +467,52 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("create_meeting name uses ownedContact after clearDetails wiped draft names", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Іван",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "Петренко",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_resolved",
+      contactId: "contact-1",
+      clearDetails: true,
+    });
+    expect(draft?.contactDetails ?? null).toBeNull();
+    expect(draft?.phase).toBe("ready");
+
+    const withNames = decideBooking(
+      draft,
+      { source: "patient_turn", rawText: "" },
+      {
+        ...READ_MODELS,
+        ownedContact: { firstName: "Іван", lastName: "Петренко" },
+      },
+    );
+    const named = withNames.decision.pendingEffect?.effect;
+    expect(named?.kind).toBe("create_meeting");
+    if (named?.kind === "create_meeting") {
+      expect(named.payload.name).toBe("Botox - Іван Петренко");
+    }
+
+    const withoutNames = decideBooking(
+      draft,
+      { source: "patient_turn", rawText: "" },
+      READ_MODELS,
+    );
+    const bare = withoutNames.decision.pendingEffect?.effect;
+    expect(bare?.kind).toBe("create_meeting");
+    if (bare?.kind === "create_meeting") {
+      expect(bare.payload.name).toBe("Botox");
+    }
+  });
+
   it("REPLACE cancel without accepted service returns replacement_cancel_catalog", () => {
     let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "existing_booking_detected",
@@ -517,6 +563,89 @@ describe("decideBooking atomic contract", () => {
     expect(result.decision.reason).toBe("replacement_cancel_catalog");
     expect(result.decision.pendingEffect).toBeUndefined();
     expect(result.events.some((e) => e.type === "cancel_existing_completed")).toBe(true);
+  });
+
+  it("contactFormatError phone re-asks contact_field with invalid_phone facts", () => {
+    const draft = draftAtDetailsWithPhone();
+    const result = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { contactFormatError: "phoneNumber" },
+      },
+      READ_MODELS,
+    );
+    expect(result.decision).toMatchObject({
+      tag: "ask",
+      intent: "ask_phone",
+      reason: "invalid_phone",
+      facts: { clarificationReason: "invalid_phone" },
+      card: { kind: "contact_field", field: "phoneNumber" },
+    });
+    expect(
+      result.events.some(
+        (e) => e.type === "contact_field_submitted",
+      ),
+    ).toBe(false);
+  });
+
+  it("contactFormatError firstName re-asks with invalid_firstName facts", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, {
+      type: "phone_lookup_recorded",
+      evidence: {
+        phoneNumber: "+380501234567",
+        result: "none",
+        contactIds: [],
+      },
+    });
+    const result = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { contactFormatError: "firstName" },
+      },
+      READ_MODELS,
+    );
+    expect(result.decision).toMatchObject({
+      tag: "ask",
+      intent: "ask_first_name",
+      reason: "invalid_firstName",
+      facts: { clarificationReason: "invalid_firstName" },
+      card: { kind: "contact_field", field: "firstName" },
+    });
+  });
+
+  it("contactFormatError lastName re-asks with invalid_lastName facts", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, {
+      type: "phone_lookup_recorded",
+      evidence: {
+        phoneNumber: "+380501234567",
+        result: "none",
+        contactIds: [],
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Smoke",
+    });
+    const result = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { contactFormatError: "lastName" },
+      },
+      READ_MODELS,
+    );
+    expect(result.decision).toMatchObject({
+      tag: "ask",
+      intent: "ask_last_name",
+      reason: "invalid_lastName",
+      facts: { clarificationReason: "invalid_lastName" },
+      card: { kind: "contact_field", field: "lastName" },
+    });
   });
 
   it("availability error fails closed without reminting present_availability", () => {

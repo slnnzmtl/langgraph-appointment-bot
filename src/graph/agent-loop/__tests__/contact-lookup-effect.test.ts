@@ -201,6 +201,113 @@ describe("effectResultFromToolMessages contact lookup", () => {
   });
 });
 
+describe("effectResultFromToolMessages contact write ID match", () => {
+  it("rejects link_telegram_contact when returned id differs from pending", () => {
+    const pending: PendingEffect = {
+      id: "eff_1_link_telegram_contact",
+      expectedRevision: 1,
+      effect: { kind: "link_telegram_contact", contactId: "c-expected" },
+      status: "executing",
+    };
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-other" }),
+          tool_call_id: pending.id,
+          name: "link_telegram_to_contact",
+        }),
+      ],
+      pending,
+    );
+    expect(result).toMatchObject({
+      kind: "contact_write",
+      outcome: "failed",
+    });
+  });
+
+  it("accepts link_telegram_contact when returned id matches pending", () => {
+    const pending: PendingEffect = {
+      id: "eff_1_link_telegram_contact",
+      expectedRevision: 1,
+      effect: { kind: "link_telegram_contact", contactId: "c-expected" },
+      status: "executing",
+    };
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-expected" }),
+          tool_call_id: pending.id,
+          name: "link_telegram_to_contact",
+        }),
+      ],
+      pending,
+    );
+    expect(result).toMatchObject({
+      kind: "contact_write",
+      outcome: "linked",
+      contactId: "c-expected",
+    });
+  });
+
+  it("rejects update_contact when returned id differs from pending payload", () => {
+    const pending: PendingEffect = {
+      id: "eff_1_update_contact",
+      expectedRevision: 1,
+      effect: {
+        kind: "update_contact",
+        payload: { contactId: "c-owned", firstName: "Smoke" },
+      },
+      status: "executing",
+    };
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-other", firstName: "Smoke" }),
+          tool_call_id: pending.id,
+          name: "update_contact",
+        }),
+      ],
+      pending,
+    );
+    expect(result).toMatchObject({
+      kind: "contact_write",
+      outcome: "failed",
+    });
+  });
+
+  it("accepts create_contact with a CRM-minted id", () => {
+    const pending: PendingEffect = {
+      id: "eff_1_create_contact",
+      expectedRevision: 1,
+      effect: {
+        kind: "create_contact",
+        payload: {
+          phoneNumber: "+380501234567",
+          firstName: "Smoke",
+          lastName: "Tester",
+        },
+      },
+      status: "executing",
+    };
+    const result = effectResultFromToolMessages(
+      [
+        new ToolMessage({
+          content: JSON.stringify({ id: "c-minted", missingFields: [] }),
+          tool_call_id: pending.id,
+          name: "create_contact",
+        }),
+      ],
+      pending,
+    );
+    expect(result).toMatchObject({
+      kind: "contact_write",
+      outcome: "created",
+      contactId: "c-minted",
+      crmComplete: true,
+    });
+  });
+});
+
 describe("contact lookup consume-once (kernel)", () => {
   const phone = "+380931233323";
 
@@ -282,7 +389,7 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       : []).toEqual(["offer_accept", "offer_choose_other"]);
   });
 
-  it("submits structural firstName from pendingInteraction card without the LLM", async () => {
+  it("submits firstName from pendingInteraction via the structured interpreter", async () => {
     const phone = "+380931233323";
     let draft: BookingDraft | null = draftAwaitingLookup(phone);
     // Consume the lookup as none so decide is on the name ladder.
@@ -299,8 +406,9 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
     }
     expect(draft.phase).toBe("details");
 
-    // No interpretTurn → deterministic only. Card field (not details→phone) is the oracle.
-    const node = createBookingDecideNode();
+    const node = createBookingDecideNode({
+      interpretTurn: async () => ({ contactFacts: { firstName: "Smoke" } }),
+    });
     const update = await node({
       messages: [new HumanMessage("Smoke")],
       agentMessages: [],

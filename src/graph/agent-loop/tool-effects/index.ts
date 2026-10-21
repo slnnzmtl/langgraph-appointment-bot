@@ -75,7 +75,6 @@ export const applyToolEffects = (
     const contact = projectContactEffects({
       state: effectiveState,
       resultMessages,
-      includeDraftEvents: false,
     });
     update = { ...update, ...contact };
     effectiveState = applyEffective(effectiveState, contact);

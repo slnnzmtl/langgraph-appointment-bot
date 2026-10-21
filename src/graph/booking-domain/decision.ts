@@ -154,6 +154,11 @@ export type BookingReadModels = {
   availabilitySnapshotId?: string;
   /** Prefetched planned meetings (REPLACE gate). */
   plannedMeetings?: PlannedMeetingReadModel[];
+  /**
+   * Telegram-owned CRM names when identity is resolved.
+   * Used for create_meeting titles after contactDetails were cleared.
+   */
+  ownedContact?: { firstName?: string; lastName?: string };
 };
 
 /**
