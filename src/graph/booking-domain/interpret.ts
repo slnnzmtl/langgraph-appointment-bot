@@ -30,6 +30,15 @@ export type InterpretBookingTurnInput = {
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HH_MM = /^\d{1,2}:\d{2}$/;
 
+/**
+ * Single-token given/family name (letters, hyphen, apostrophe).
+ * Used only as post-LLM empty-patch fallback — not on the deterministic path.
+ */
+const STRUCTURAL_NAME_TOKEN = /^[\p{L}]([\p{L}'\u2019\u02BC-]{0,46}[\p{L}])?$/u;
+
+export const isStructuralNameToken = (raw: string): boolean =>
+  raw.length >= 2 && raw.length <= 48 && STRUCTURAL_NAME_TOKEN.test(raw);
+
 /** Exact keyboard labels that must not become phone facts or format errors. */
 const isExactBookingControlLabel = (raw: string): boolean => {
   const labelId = labelIdFor(raw);

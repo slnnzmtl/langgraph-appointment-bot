@@ -42,7 +42,6 @@ import {
 } from "./agent-loop/booking-respond.js";
 import { createBookingTurnInterpreter } from "./agent-loop/booking-turn-interpreter.js";
 import { createNoteTurnClassifier } from "./booking-note-classifier.js";
-import { createContactNameClassifier } from "./contact-name-classifier.js";
 import {
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
@@ -94,8 +93,6 @@ export type CompileClinicGraphOptions = {
   prefetchTtlMs?: number;
   /** Injected note-turn classifier (tests / legacy FAQ helpers). */
   classifyNoteTurn?: ReturnType<typeof createNoteTurnClassifier>;
-  /** Injected contact-name classifier (tests). */
-  classifyContactName?: ReturnType<typeof createContactNameClassifier>;
   /** Injected booking turn interpreter (tests). */
   interpretBookingTurn?: ReturnType<typeof createBookingTurnInterpreter>;
 };

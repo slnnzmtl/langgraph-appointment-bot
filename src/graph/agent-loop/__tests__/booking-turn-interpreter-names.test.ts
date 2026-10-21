@@ -4,7 +4,7 @@ import type { ILLMConnector } from "../../types.js";
 import { createBookingTurnInterpreter } from "../booking-turn-interpreter.js";
 
 describe("createBookingTurnInterpreter open name field", () => {
-  it("applies a model firstName and does not invent one for a hedge", async () => {
+  it("applies a model firstName; empty patch falls back to structural tokens", async () => {
     const invoke = vi.fn();
     const llm = {
       bindRoutingTools: () => ({ invoke }),
@@ -21,17 +21,47 @@ describe("createBookingTurnInterpreter open name field", () => {
       interpret({ rawText: "Дар'я", awaitingContactField: "firstName" }),
     ).resolves.toEqual({ contactFacts: { firstName: "Дар'я" } });
 
+    // Gemini-style empty omit: structural token still becomes the name.
     invoke.mockResolvedValueOnce({ controlKind: "none" });
     await expect(
-      interpret({ rawText: "Невідомо", awaitingContactField: "firstName" }),
-    ).resolves.toEqual({});
+      interpret({ rawText: "Smoke", awaitingContactField: "firstName" }),
+    ).resolves.toEqual({ contactFacts: { firstName: "Smoke" } });
 
+    invoke.mockResolvedValueOnce({ controlKind: "none" });
+    await expect(
+      interpret({ rawText: "Іван", awaitingContactField: "firstName" }),
+    ).resolves.toEqual({ contactFacts: { firstName: "Іван" } });
+
+    invoke.mockResolvedValueOnce({ controlKind: "none" });
+    await expect(
+      interpret({ rawText: "Дар'я", awaitingContactField: "firstName" }),
+    ).resolves.toEqual({ contactFacts: { firstName: "Дар'я" } });
+
+    // Multi-word hedge fails the structural token regex.
     invoke.mockResolvedValueOnce({ controlKind: "none" });
     await expect(
       interpret({ rawText: "не знаю", awaitingContactField: "firstName" }),
     ).resolves.toEqual({});
 
-    expect(invoke).toHaveBeenCalledTimes(4);
+    expect(invoke).toHaveBeenCalledTimes(6);
+  });
+
+  it("keeps visit_cancel over structural name fallback", async () => {
+    const invoke = vi.fn();
+    const llm = {
+      bindRoutingTools: () => ({ invoke }),
+    } as unknown as ILLMConnector;
+    const interpret = createBookingTurnInterpreter(llm);
+
+    invoke.mockResolvedValueOnce({ controlKind: "visit_cancel" });
+    await expect(
+      interpret({
+        rawText: "Скасуйте мій запис",
+        awaitingContactField: "firstName",
+      }),
+    ).resolves.toEqual({ controlIntent: { kind: "visit_cancel" } });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it("keeps structural phone on the deterministic path (no LLM)", async () => {

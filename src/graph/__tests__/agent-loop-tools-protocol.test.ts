@@ -20,9 +20,6 @@ import {
   humanProvidedName,
   normalizeNameForMatch,
 } from "../agent-loop/protocol/index.js";
-import {
-  CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION,
-} from "../contact-name-classifier.js";
 
 import {
   agentMessagesOf,
@@ -469,11 +466,6 @@ describe("DDD-59: name must appear in patient messages", () => {
     expect(normalizeNameForMatch(DARYA_MODIFIER)).toBe(normalizeNameForMatch(DARYA_ASCII));
     expect(humanProvidedName([new HumanMessage(DARYA_MODIFIER)], DARYA_ASCII)).toBe(true);
     expect(humanProvidedName([new HumanMessage(DARYA_ASCII)], DARYA_MODIFIER)).toBe(true);
-  });
-
-  it("classifier instruction documents Дар'я and O'Brien (DDD-206)", () => {
-    expect(CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION).toContain("Дар'я");
-    expect(CONTACT_NAME_TURN_CLASSIFIER_INSTRUCTION).toContain("O'Brien");
   });
 
   // DDD-267: removed skipped DDD-206 cases where contact_field stamp gate blocks

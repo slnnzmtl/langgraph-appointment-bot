@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   BOOKING_TURN_INTERPRETER_INSTRUCTION,
   interpretBookingTurnDeterministic,
+  isStructuralNameToken,
   type InterpretBookingTurnInput,
   normalizeBookingTurnClassification,
 } from "../booking-domain/interpret.js";
@@ -86,10 +87,23 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
         : null,
     ].filter((line): line is string => line != null);
 
-    const phoneFormatFallback = (): UnderstoodBookingTurn =>
-      input.awaitingContactField === "phoneNumber"
-        ? { contactFormatError: "phoneNumber" }
-        : {};
+    const emptyPatchFallback = (): UnderstoodBookingTurn => {
+      if (input.awaitingContactField === "phoneNumber") {
+        return { contactFormatError: "phoneNumber" };
+      }
+      // Mirror phone: after empty LLM patch, accept a structural name token so
+      // Latin given names (e.g. Smoke) do not stall when the model omits firstName.
+      if (
+        (input.awaitingContactField === "firstName"
+          || input.awaitingContactField === "lastName")
+        && isStructuralNameToken(rawText)
+      ) {
+        return input.awaitingContactField === "firstName"
+          ? { contactFacts: { firstName: rawText } }
+          : { contactFacts: { lastName: rawText } };
+      }
+      return {};
+    };
 
     try {
       const result = await chain.invoke([
@@ -101,7 +115,7 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
       ]);
       const parsed = bookingTurnClassificationSchema.safeParse(result);
       if (!parsed.success) {
-        return phoneFormatFallback();
+        return emptyPatchFallback();
       }
       // Strip explicit undefined keys for exactOptionalPropertyTypes.
       const cleaned = Object.fromEntries(
@@ -111,10 +125,10 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
       if (Object.keys(patch).length > 0) {
         return patch;
       }
-      // Open phone field, no other semantic intent — format clarification.
-      return phoneFormatFallback();
+      // Open phone → format clarification; open name → structural token.
+      return emptyPatchFallback();
     } catch {
-      return phoneFormatFallback();
+      return emptyPatchFallback();
     }
   };
 };

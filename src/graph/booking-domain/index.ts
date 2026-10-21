@@ -63,6 +63,7 @@ export {
 
 export {
   interpretBookingTurnDeterministic,
+  isStructuralNameToken,
   normalizeBookingTurnClassification,
   BOOKING_TURN_INTERPRETER_INSTRUCTION,
   type InterpretBookingTurnInput,
