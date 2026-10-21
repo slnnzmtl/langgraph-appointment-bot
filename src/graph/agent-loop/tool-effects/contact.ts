@@ -19,8 +19,14 @@ import {
 export const projectContactEffects = (input: {
   state: ClinicState;
   resultMessages: BaseMessage[];
+  /**
+   * FAQ may write phone_lookup_recorded onto the draft.
+   * Booking decide owns draft events via EffectResult — skip classify work.
+   */
+  includeDraftEvents?: boolean;
 }): ClinicStateUpdate => {
   const { state, resultMessages } = input;
+  const includeDraftEvents = input.includeDraftEvents !== false;
   const patch: ClinicStateUpdate = {};
   const agentMessages = state.agentMessages ?? [];
 
@@ -37,27 +43,29 @@ export const projectContactEffects = (input: {
     if (found.contacts.length > 0) {
       patch.contactContext = { ...found, ownership: "phone" };
     }
-    const lookupMessage = [...resultMessages]
-      .reverse()
-      .find((message) =>
-        message instanceof ToolMessage && message.name === "find_contact_by_phone",
-      );
-    const lookupCall = lookupMessage instanceof ToolMessage
-      ? agentMessages
-        .filter((candidate): candidate is AIMessage => candidate instanceof AIMessage)
-        .flatMap((candidate) => candidate.tool_calls ?? [])
-        .find((candidate) => candidate.id === lookupMessage.tool_call_id)
-      : undefined;
-    const queriedPhone = typeof lookupCall?.args?.phoneNumber === "string"
-      ? (normalizeClinicPhone(lookupCall.args.phoneNumber) ?? lookupCall.args.phoneNumber.trim())
-      : projectedBookingDraft?.contactDetails?.phoneNumber ?? null;
-    if (queriedPhone != null && queriedPhone.length > 0 && projectedBookingDraft != null) {
-      const evidence = classifyPhoneLookupResult(found.contacts, queriedPhone);
-      projectedBookingDraft = reduceBookingDraft(projectedBookingDraft, {
-        type: "phone_lookup_recorded",
-        evidence,
-      });
-      patch.bookingDraft = projectedBookingDraft;
+    if (includeDraftEvents) {
+      const lookupMessage = [...resultMessages]
+        .reverse()
+        .find((message) =>
+          message instanceof ToolMessage && message.name === "find_contact_by_phone",
+        );
+      const lookupCall = lookupMessage instanceof ToolMessage
+        ? agentMessages
+          .filter((candidate): candidate is AIMessage => candidate instanceof AIMessage)
+          .flatMap((candidate) => candidate.tool_calls ?? [])
+          .find((candidate) => candidate.id === lookupMessage.tool_call_id)
+        : undefined;
+      const queriedPhone = typeof lookupCall?.args?.phoneNumber === "string"
+        ? (normalizeClinicPhone(lookupCall.args.phoneNumber) ?? lookupCall.args.phoneNumber.trim())
+        : projectedBookingDraft?.contactDetails?.phoneNumber ?? null;
+      if (queriedPhone != null && queriedPhone.length > 0 && projectedBookingDraft != null) {
+        const evidence = classifyPhoneLookupResult(found.contacts, queriedPhone);
+        projectedBookingDraft = reduceBookingDraft(projectedBookingDraft, {
+          type: "phone_lookup_recorded",
+          evidence,
+        });
+        patch.bookingDraft = projectedBookingDraft;
+      }
     }
   }
 

@@ -45,19 +45,51 @@ describe("interpretBookingTurnDeterministic", () => {
 });
 
 describe("normalizeBookingTurnClassification (structured LLM)", () => {
-  it("captures non-empty text as firstName while the field is open", () => {
+  it("captures structural single-token names; hedges stay empty for the interpreter", () => {
     expect(
       interpretBookingTurnDeterministic({
-        rawText: "не знаю",
+        rawText: "Smoke",
         awaitingContactField: "firstName",
       }),
-    ).toEqual({ contactFacts: { firstName: "не знаю" } });
+    ).toEqual({ contactFacts: { firstName: "Smoke" } });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Tester",
+        awaitingContactField: "lastName",
+      }),
+    ).toEqual({ contactFacts: { lastName: "Tester" } });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Іван",
+        awaitingContactField: "firstName",
+      }),
+    ).toEqual({ contactFacts: { firstName: "Іван" } });
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Daniel",
         awaitingContactField: "firstName",
       }),
     ).toEqual({ contactFacts: { firstName: "Daniel" } });
+    // Ukrainian apostrophe (ASCII / typographic) stays a single name token.
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Дар'я",
+        awaitingContactField: "firstName",
+      }),
+    ).toEqual({ contactFacts: { firstName: "Дар'я" } });
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Дар’я",
+        awaitingContactField: "firstName",
+      }),
+    ).toEqual({ contactFacts: { firstName: "Дар’я" } });
+    // Multi-word hedges / asides are not names.
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "не знаю",
+        awaitingContactField: "firstName",
+      }),
+    ).toEqual({});
     // Main-menu label is control, not a name.
     expect(
       interpretBookingTurnDeterministic({

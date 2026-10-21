@@ -314,11 +314,10 @@ describe("date chips after service accept", () => {
       inboundChoiceId: null,
     } as never);
 
-    // Availability error → decideFromRequirement remints present_availability.
-    expect(update.bookingDecision?.tag).toBe("effect");
-    expect(update.bookingDecision?.pendingEffect?.effect.kind).toBe(
-      "present_availability",
-    );
-    expect(update.bookingDecision?.card).toBeNull();
+    // Availability error → fail closed (no same-hop remint of present_availability).
+    expect(update.bookingDecision?.tag).toBe("ask");
+    expect(update.bookingDecision?.intent).toBe("clarification");
+    expect(update.bookingDecision?.reason).toBe("availability_failed");
+    expect(update.bookingDecision?.pendingEffect).toBeUndefined();
   });
 });

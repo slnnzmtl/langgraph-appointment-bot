@@ -46,6 +46,8 @@ export type BookingVerifiedFacts = {
   serviceName?: string;
   date?: string;
   time?: string;
+  /** Kyiv-local ISO start of the selected slot (for visit-label success copy). */
+  dateStart?: string;
   address?: string;
   hours?: string;
   servicePrice?: string;

@@ -29,6 +29,14 @@ export type InterpretBookingTurnInput = {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HH_MM = /^\d{1,2}:\d{2}$/;
+/**
+ * Single name token: letters + optional internal hyphen/apostrophe, length 2–48.
+ * Apostrophe covers UA names like «Дар'я» (ASCII ', U+2019 ’, U+02BC ʼ).
+ */
+const STRUCTURAL_NAME_TOKEN = /^[\p{L}]([\p{L}'\u2019\u02BC-]{0,46}[\p{L}])?$/u;
+
+const isStructuralNameToken = (raw: string): boolean =>
+  raw.length >= 2 && raw.length <= 48 && STRUCTURAL_NAME_TOKEN.test(raw);
 
 /** Deterministic: callback id in offered set, or structural phone / offered date-time token. */
 export const interpretBookingTurnDeterministic = (
@@ -57,7 +65,8 @@ export const interpretBookingTurnDeterministic = (
     return {};
   }
 
-  // Open name field: non-empty non-control text is the name (same spirit as phone).
+  // Open name fields: structural single-token names only (same spirit as phone).
+  // Hedges / multi-word asides («не знаю») return {} for the structured interpreter.
   if (
     input.awaitingContactField === "firstName"
     || input.awaitingContactField === "lastName"
@@ -73,10 +82,13 @@ export const interpretBookingTurnDeterministic = (
     ) {
       return {};
     }
-    if (input.awaitingContactField === "firstName") {
-      return { contactFacts: { firstName: raw } };
+    if (isStructuralNameToken(raw)) {
+      if (input.awaitingContactField === "firstName") {
+        return { contactFacts: { firstName: raw } };
+      }
+      return { contactFacts: { lastName: raw } };
     }
-    return { contactFacts: { lastName: raw } };
+    return {};
   }
 
   // Strict structural: raw text equals an offered choice id (e.g. typed ISO date).

@@ -9,8 +9,6 @@ import { type ClinicAgentDefinition } from "../types.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
 import { trackEvent } from "../../analytics/track.js";
 import {
-  CLINIC_ADDRESS,
-  CLINIC_MAPS_MARKDOWN,
   VISIT_CHANGE_MENU,
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
@@ -20,6 +18,7 @@ import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { reduceBookingDraft } from "../booking-draft.js";
 import { closedBookingSessionUpdate } from "../booking-session.js";
 import { tagRuntimeAgentMessage } from "../sub-agent-messages.js";
+import { committedCreateOrRescheduleReply } from "./booking-response-fallback.js";
 
 import {
   classifyMeetingMutationToolMessage,
@@ -91,20 +90,6 @@ const visitLabelFromToolResult = (result: ToolMessage): string | undefined => {
   const record = asJsonRecord(extractMessageTextContent(result.content).trim());
   const visitLabel = record?.visitLabel;
   return typeof visitLabel === "string" && visitLabel.length > 0 ? visitLabel : undefined;
-};
-
-const committedCreateOrRescheduleReply = (
-  verb: "створено" | "перенесено",
-  visitLabel: string | undefined,
-): string => {
-  const headline = visitLabel != null
-    ? `Готово! Запис ${verb}.\n\n${visitLabel} ✨`
-    : `Готово! Запис ${verb}.`;
-  return (
-    headline
-    + `\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`
-    + "\n\nПереглянути або змінити візит можна в «Мій запис»."
-  );
 };
 
 const MUTATION_REPLY_FALLBACK = "Не вдалося обробити запис. Спробуйте ще раз.";

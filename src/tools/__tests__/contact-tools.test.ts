@@ -41,6 +41,9 @@ describe("contact-tools", () => {
     if (name === "update_entity") {
       return `Successfully updated Contact record with ID: ${args.entityId as string}`;
     }
+    if (name === "search_contacts") {
+      return { contacts: [] };
+    }
     return { ok: true };
   };
 
@@ -306,7 +309,7 @@ describe("contact-tools", () => {
           select: ["id", "firstName", "lastName", "phoneNumber", "cTelegram"],
         },
       });
-      expect(JSON.parse(result)).toEqual({ ok: true });
+      expect(JSON.parse(result)).toEqual({ contacts: [] });
       expect(events).toContainEqual(
         expect.objectContaining({
           name: "contact_lookup_telegram",
@@ -437,6 +440,17 @@ describe("contact-tools", () => {
     expect(normalizeContactLookupResult("not-json")).toEqual({
       contacts: [],
       error: "Invalid contact lookup JSON",
+    });
+  });
+
+  it("normalizeContactLookupResult treats missing contacts/list as malformed", () => {
+    expect(normalizeContactLookupResult("{}")).toEqual({
+      contacts: [],
+      error: "Unrecognized contact lookup shape",
+    });
+    expect(normalizeContactLookupResult("[]")).toEqual({
+      contacts: [],
+      error: "Invalid contact lookup result",
     });
   });
 

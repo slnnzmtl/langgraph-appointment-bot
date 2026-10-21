@@ -124,14 +124,19 @@ export const normalizeContactLookupResult = (contactJson: string): ContactLookup
   } catch {
     return { contacts: [], error: "Invalid contact lookup JSON" };
   }
-  if (!value || typeof value !== "object") {
+  // Top-level array or non-object is not a recognized contacts/list search shape.
+  if (value == null || typeof value !== "object" || Array.isArray(value)) {
     return { contacts: [], error: "Invalid contact lookup result" };
   }
   const record = value as Record<string, unknown>;
   if (typeof record.error === "string") {
     return { contacts: [], error: record.error };
   }
-  const rows = contactRowsFromSearch(record) ?? [];
+  const rows = contactRowsFromSearch(record);
+  // Require an explicit contacts or list array — bare {} is malformed, not "none".
+  if (rows == null) {
+    return { contacts: [], error: "Unrecognized contact lookup shape" };
+  }
   const contacts = rows
     .filter(
       (item): item is Record<string, unknown> =>

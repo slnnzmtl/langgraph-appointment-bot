@@ -7,12 +7,15 @@ import {
   BOOKING_OFFER_MENU,
   BOOKING_PHONE_OCCUPIED_UK,
   BOOKING_PHONE_QUESTION_UK,
+  CLINIC_ADDRESS,
+  CLINIC_MAPS_MARKDOWN,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   PATIENT_FALLBACK_MESSAGE,
   SERVICE_CONFIRM_CONSULTATION_UK,
   SERVICE_CONFIRM_PROCEDURE_UK,
 } from "../../shared/clinic-constants.js";
+import { visitLabelFromCommand } from "../../tools/visit-label.js";
 import type {
   BookingSemanticIntent,
   BookingVerifiedFacts,
@@ -46,30 +49,35 @@ const CLARIFICATION_UK: Record<string, string> = {
     "Не вдалося зберегти контактні дані. Спробуйте, будь ласка, трохи пізніше.",
   contact_lookup_failed:
     "Не вдалося перевірити номер. Вкажіть, будь ласка, телефон ще раз.",
+  availability_failed:
+    "Не вдалося перевірити вільний час. Спробуйте, будь ласка, трохи пізніше.",
 };
 
-/** Code-owned success line from verified facts only. */
+/**
+ * Shared create/reschedule confirmation (booking__respond + mutation-finalize).
+ * Screenshot shape: headline, Ukrainian visit label + sparkle, address + maps.
+ */
+export const committedCreateOrRescheduleReply = (
+  verb: "створено" | "перенесено",
+  visitLabel: string | undefined,
+): string => {
+  const headline = visitLabel != null && visitLabel.length > 0
+    ? `Готово! Запис ${verb}.\n\n${visitLabel} ✨`
+    : `Готово! Запис ${verb}.`;
+  return `${headline}\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`;
+};
+
+/** Code-owned success copy from verified facts only. */
 export const bookingSuccessText = (facts?: BookingVerifiedFacts): string => {
   if (facts?.action === "cancel") {
     return "Запис скасовано.";
   }
-  const parts: string[] = [
-    facts?.action === "reschedule"
-      ? "Готово! Запис перенесено."
-      : "Готово! Запис підтверджено.",
-  ];
-  if (facts?.serviceName != null && facts.serviceName.trim().length > 0) {
-    parts.push(facts.serviceName.trim());
-  }
-  if (facts?.date != null && facts.time != null) {
-    parts.push(`${facts.date} о ${facts.time}`);
-  } else if (facts?.date != null) {
-    parts.push(facts.date);
-  }
-  if (facts?.address != null && facts.address.trim().length > 0) {
-    parts.push(facts.address.trim());
-  }
-  return parts.join(" ");
+  const verb = facts?.action === "reschedule" ? "перенесено" : "створено";
+  const serviceName = facts?.serviceName?.trim();
+  const visitLabel = serviceName != null && serviceName.length > 0
+    ? visitLabelFromCommand(serviceName, facts?.dateStart)
+    : undefined;
+  return committedCreateOrRescheduleReply(verb, visitLabel);
 };
 
 const cardSpecificFallback = (

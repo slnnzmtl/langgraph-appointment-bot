@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { LATER_DATE_LABEL, PATIENT_FALLBACK_MESSAGE } from "../../../shared/clinic-constants.js";
-import { bookingResponseFallback } from "../booking-response-fallback.js";
+import {
+  CLINIC_ADDRESS,
+  CLINIC_MAPS_MARKDOWN,
+  LATER_DATE_LABEL,
+  PATIENT_FALLBACK_MESSAGE,
+} from "../../../shared/clinic-constants.js";
+import { visitLabelFromCommand } from "../../../tools/visit-label.js";
+import {
+  bookingResponseFallback,
+  bookingSuccessText,
+  committedCreateOrRescheduleReply,
+} from "../booking-response-fallback.js";
 import { replyChoicesFromCard } from "../booking-card-choices.js";
 
 describe("bookingResponseFallback empty date window", () => {
@@ -20,5 +30,38 @@ describe("bookingResponseFallback empty date window", () => {
     expect(text).toBe("Раніших вільних дат не знайшли. Пошукати пізніші дати?");
     expect(text).not.toBe(PATIENT_FALLBACK_MESSAGE);
     expect(replyChoicesFromCard(card).map((c) => c.label)).toEqual([LATER_DATE_LABEL]);
+  });
+});
+
+describe("bookingSuccessText visit confirmation", () => {
+  it("uses Ukrainian visit label, sparkle, address, and maps — not ISO one-liner", () => {
+    const dateStart = "2026-10-29T12:30:00";
+    const visitLabel = visitLabelFromCommand("Консультація", dateStart);
+    expect(visitLabel).toBeTruthy();
+
+    const text = bookingSuccessText({
+      action: "create",
+      serviceName: "Консультація",
+      dateStart,
+      date: "2026-10-29",
+      time: "12:30",
+    });
+
+    expect(text).toBe(committedCreateOrRescheduleReply("створено", visitLabel));
+    expect(text).toBe(
+      `Готово! Запис створено.\n\n${visitLabel} ✨\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`,
+    );
+    expect(text).toContain("о 12:30");
+    expect(text).not.toContain("підтверджено");
+    expect(text).not.toMatch(/Консультація 2026-10-29/);
+  });
+
+  it("uses перенесено for reschedule", () => {
+    const text = bookingSuccessText({
+      action: "reschedule",
+      serviceName: "Консультація",
+      dateStart: "2026-10-29T12:30:00",
+    });
+    expect(text.startsWith("Готово! Запис перенесено.")).toBe(true);
   });
 });

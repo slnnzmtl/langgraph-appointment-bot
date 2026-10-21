@@ -96,17 +96,24 @@ describe("booking__respond card copy + markup", () => {
         intent: "success",
         reason: "success",
         facts: {
+          action: "create",
           serviceName: "Консультація",
-          date: "2026-10-21",
-          time: "10:00",
+          dateStart: "2026-10-29T12:30:00",
+          date: "2026-10-29",
+          time: "12:30",
         },
         card: null,
       },
     } as never);
 
-    expect(update.lastHandoff?.replyText).toContain("Готово");
-    expect(update.lastHandoff?.replyText).toContain("Консультація");
-    expect(update.lastHandoff?.replyText).toContain("2026-10-21");
+    const text = update.lastHandoff?.replyText ?? "";
+    expect(text).toContain("Готово! Запис створено.");
+    expect(text).toContain("Консультація —");
+    expect(text).toContain("о 12:30 ✨");
+    expect(text).toContain("Адреса:");
+    expect(text).toContain("Google maps");
+    expect(text).not.toContain("2026-10-29");
+    expect(text).not.toContain("підтверджено");
     expect(update.lastHandoff?.replyChoices).toBeUndefined();
   });
 

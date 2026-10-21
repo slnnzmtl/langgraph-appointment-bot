@@ -145,6 +145,44 @@ describe("effectResultFromToolMessages contact lookup", () => {
         pending,
       ),
     ).toMatchObject({ kind: "contact_lookup", outcome: "error" });
+
+    // Bare {} / [] / empty body lack contacts|list — malformed, not "none".
+    expect(
+      effectResultFromToolMessages(
+        [
+          new ToolMessage({
+            content: "{}",
+            tool_call_id: pending.id,
+            name: "find_contact_by_phone",
+          }),
+        ],
+        pending,
+      ),
+    ).toMatchObject({ kind: "contact_lookup", outcome: "error" });
+    expect(
+      effectResultFromToolMessages(
+        [
+          new ToolMessage({
+            content: "[]",
+            tool_call_id: pending.id,
+            name: "find_contact_by_phone",
+          }),
+        ],
+        pending,
+      ),
+    ).toMatchObject({ kind: "contact_lookup", outcome: "error" });
+    expect(
+      effectResultFromToolMessages(
+        [
+          new ToolMessage({
+            content: "",
+            tool_call_id: pending.id,
+            name: "find_contact_by_phone",
+          }),
+        ],
+        pending,
+      ),
+    ).toMatchObject({ kind: "contact_lookup", outcome: "error" });
   });
 
   it("uses pending effect phoneNumber, not contacts in the body", () => {
@@ -244,6 +282,44 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       : []).toEqual(["offer_accept", "offer_choose_other"]);
   });
 
+  it("submits structural firstName from pendingInteraction card without the LLM", async () => {
+    const phone = "+380931233323";
+    let draft: BookingDraft | null = draftAwaitingLookup(phone);
+    // Consume the lookup as none so decide is on the name ladder.
+    draft = apply(draft, [
+      { type: "effect_cleared" },
+      {
+        type: "phone_lookup_recorded",
+        evidence: { phoneNumber: phone, result: "none", contactIds: [] },
+      },
+      { type: "decision_set", decision: { kind: "clarification", reason: "need_firstName" } },
+    ]);
+    if (draft == null) {
+      throw new Error("expected draft");
+    }
+    expect(draft.phase).toBe("details");
+
+    // No interpretTurn → deterministic only. Card field (not details→phone) is the oracle.
+    const node = createBookingDecideNode();
+    const update = await node({
+      messages: [new HumanMessage("Smoke")],
+      agentMessages: [],
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "contact_field",
+        field: "firstName",
+        choices: [],
+      },
+      availabilityContext: null,
+    } as never);
+
+    expect(update.bookingDraft?.contactDetails?.firstName).toBe("Smoke");
+    expect(update.pendingInteraction).toMatchObject({
+      kind: "contact_field",
+      field: "lastName",
+    });
+  });
+
   it("fail-closes when pending lookup has a ToolMessage that cannot be translated", async () => {
     const phone = "+380931233323";
     const pending = lookupPending(phone, "eff_8_lookup_contact_by_phone");
@@ -296,5 +372,57 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
     // Contact lookup error → ask for phone again, do not re-mint lookup.
     expect(update.bookingDecision?.pendingEffect).toBeUndefined();
     expect(update.bookingDecision?.card?.kind).toBe("contact_field");
+  });
+
+  it("REPLACE cancel without accepted service sets next=faq (plain update, not Command)", async () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "existing_booking_detected",
+      meeting: {
+        id: "meeting-old",
+        name: "Консультація",
+        dateStart: "2026-10-21T10:00:00",
+        dateEnd: "2026-10-21T10:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "cancel_existing_requested",
+      command: {
+        action: "cancel",
+        payload: {
+          meetingId: "meeting-old",
+          confirmMessage: "Підтвердити скасування?",
+        },
+      },
+    });
+    const pending: PendingEffect = {
+      id: "eff_1_cancel_meeting",
+      expectedRevision: 1,
+      effect: { kind: "cancel_meeting", payload: { meetingId: "meeting-old" } },
+      status: "executing",
+    };
+    draft = reduceBookingDraft(draft, { type: "effect_prepared", effect: pending });
+    if (draft == null) {
+      throw new Error("expected draft");
+    }
+
+    const node = createBookingDecideNode();
+    const update = await node({
+      messages: [new HumanMessage("Так")],
+      agentMessages: [
+        new ToolMessage({
+          content: JSON.stringify({ id: "meeting-old", success: true }),
+          tool_call_id: pending.id,
+          name: "cancel_meeting",
+        }),
+      ],
+      bookingDraft: draft,
+      pendingInteraction: null,
+      availabilityContext: null,
+    } as never);
+
+    // Exclusive routing: plain ClinicStateUpdate with next=faq for compile edges.
+    expect(update).not.toHaveProperty("goto");
+    expect(update.next).toBe("faq");
+    expect(update.bookingDecision).toBeNull();
   });
 });

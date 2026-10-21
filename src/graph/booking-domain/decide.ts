@@ -755,7 +755,21 @@ export const decideBooking = (
 
     if (result.kind === "availability") {
       emit({ type: "effect_cleared" });
-      if (result.outcome === "stale" || result.outcome === "error") {
+      if (result.outcome === "error") {
+        // Fail closed: do not decideFromRequirement (that would remint
+        // present_availability in the same consume hop).
+        if (ctx.working?.selectedSlot != null) {
+          emit({ type: "slot_provenance_set", provenance: "unverified_legacy", evidence: null });
+        }
+        emitDecision({ kind: "clarification", reason: "availability_failed" });
+        return ask(
+          "clarification",
+          { kind: "clarification", reason: "availability_failed" },
+          "availability_failed",
+          { clarificationReason: "availability_failed" },
+        );
+      }
+      if (result.outcome === "stale") {
         if (ctx.working?.selectedSlot != null) {
           emit({ type: "slot_provenance_set", provenance: "unverified_legacy", evidence: null });
         }

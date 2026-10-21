@@ -270,8 +270,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addNode(
       bookingDecide,
       createBookingDecideNode({ interpretTurn: interpretBookingTurn }),
-      // REPLACE cancel without an accepted service hands off to FAQ catalog.
-      { ends: [bookingTools, bookingRespond, faqPrepare] },
     )
     .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))
     .addNode(
@@ -284,12 +282,17 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addConditionalEdges(
       bookingDecide,
       (state: ClinicState) => {
+        // REPLACE cancel with no accepted service: decide sets next=faq.
+        if (state.next === FAQ_AGENT_ID) {
+          return faqPrepare;
+        }
         if (hasPendingToolCalls(state.agentMessages)) {
           return bookingTools;
         }
         return bookingRespond;
       },
       {
+        [faqPrepare]: faqPrepare,
         [bookingTools]: bookingTools,
         [bookingRespond]: bookingRespond,
       },

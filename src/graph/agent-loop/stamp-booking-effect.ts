@@ -107,8 +107,8 @@ const toolArgsForEffect = (
       const built = buildAvailabilitySlotsArgs({
         direction: effect.queryKind,
         ...(effect.date != null ? { date: effect.date } : {}),
-        availabilityContext: context.availabilityContext,
-        availabilityCursor: context.availabilityCursor,
+        availabilityContext: context.availabilityContext ?? null,
+        availabilityCursor: context.availabilityCursor ?? null,
         scope: context.scope ?? {
           ...(effect.durationMinutes != null
             ? { durationMinutes: effect.durationMinutes }

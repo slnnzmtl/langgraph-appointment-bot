@@ -466,4 +466,100 @@ describe("decideBooking atomic contract", () => {
       clearDetails: true,
     });
   });
+
+  it("REPLACE cancel without accepted service returns replacement_cancel_catalog", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "existing_booking_detected",
+      meeting: {
+        id: "meeting-old",
+        name: "Консультація",
+        dateStart: "2026-10-21T10:00:00",
+        dateEnd: "2026-10-21T10:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "cancel_existing_requested",
+      command: {
+        action: "cancel",
+        payload: {
+          meetingId: "meeting-old",
+          confirmMessage: "Підтвердити скасування?",
+        },
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_1_cancel_meeting",
+        expectedRevision: 1,
+        effect: {
+          kind: "cancel_meeting",
+          payload: { meetingId: "meeting-old" },
+        },
+        status: "executing",
+      },
+    });
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_1_cancel_meeting",
+          kind: "mutation",
+          action: "cancel",
+          outcome: "committed",
+        },
+      },
+      READ_MODELS,
+    );
+
+    expect(result.decision.reason).toBe("replacement_cancel_catalog");
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.events.some((e) => e.type === "cancel_existing_completed")).toBe(true);
+  });
+
+  it("availability error fails closed without reminting present_availability", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox", source: "catalog", durationMinutes: 30 },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_1_present_availability",
+        expectedRevision: 1,
+        effect: { kind: "present_availability", queryKind: "nearest" },
+        status: "executing",
+      },
+    });
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_1_present_availability",
+          kind: "availability",
+          outcome: "error",
+        },
+      },
+      READ_MODELS,
+    );
+
+    expect(result.decision).toMatchObject({
+      tag: "ask",
+      intent: "clarification",
+      reason: "availability_failed",
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(
+      result.events.some(
+        (e) =>
+          e.type === "effect_prepared"
+          && e.effect.effect.kind === "present_availability",
+      ),
+    ).toBe(false);
+  });
 });

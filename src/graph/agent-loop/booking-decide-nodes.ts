@@ -6,11 +6,10 @@
  * reduceBookingDraft. Informational tool results are allowlisted facts only.
  */
 import type { BaseMessage } from "@langchain/core/messages";
-import { Command, Overwrite } from "@langchain/langgraph";
+import { Overwrite } from "@langchain/langgraph";
 import { FAQ_AGENT_ID } from "../types.js";
 
-import { extractMessageTextContent } from "../../shared/message-content.js";
-import { asJsonRecord } from "../../shared/json-record.js";
+import { extractMessageTextContent, labelIdFor } from "../../shared/message-content.js";
 import {
   bookingAvailabilityScope,
   reduceBookingDraft,
@@ -20,28 +19,13 @@ import {
 } from "../booking-draft.js";
 import { decideBooking } from "../booking-domain/decide.js";
 import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
-import {
-  presentationSnapshotId,
-  projectAvailabilityPresentation,
-} from "../booking-domain/availability-presentation.js";
-import type {
-  EffectResult,
-  InformationalFacts,
-  PendingEffect,
-} from "../booking-domain/effects.js";
+import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
+import type { EffectResult } from "../booking-domain/effects.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { findToolMessageByCallId, hasPendingToolCalls } from "../tool-routing.js";
+import { hasPendingToolCalls } from "../tool-routing.js";
 import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
-import {
-  contactMissingFields,
-  normalizeContactLookupResult,
-} from "../../tools/contact-tools.js";
-import {
-  classifyPhoneLookupResult,
-  resolveContactIdentity,
-} from "../contact-command.js";
-import { labelIdFor } from "../../shared/message-content.js";
+import { resolveContactIdentity } from "../contact-command.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
@@ -49,29 +33,27 @@ import {
 import { choiceIdsFromCard } from "./booking-card-choices.js";
 import type { InterpretBookingTurn } from "./booking-turn-interpreter.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
-import { classifyMeetingMutationToolMessage } from "./protocol/mutation.js";
+import {
+  effectResultFromToolMessages,
+  failClosedForPending,
+} from "./protocol/effect-result.js";
 import { availabilitySlotsRanThisTurn, bookingDateAnchors } from "./protocol/availability.js";
 import { projectPendingInteraction } from "./project-pending-interaction.js";
 import {
   appendOrReplacePendingToolCall,
   stampRuntimeToolAi,
 } from "./runtime-tool-stamp.js";
-import {
-  stampBookingEffect,
-  toolNameForBookingEffect,
-} from "./stamp-booking-effect.js";
+import { stampBookingEffect } from "./stamp-booking-effect.js";
+
+export {
+  allowlistedInformationalFacts,
+  effectResultFromToolMessages,
+  failClosedForPending,
+} from "./protocol/effect-result.js";
 
 export const BOOKING_DECIDE_NODE = "booking__decide" as const;
 /** Keep legacy name as the ToolNode / HITL resume target. */
 export const BOOKING_EFFECTS_NODE = "booking__tools" as const;
-
-const INFORMATIONAL_FACT_KEYS = [
-  "hours",
-  "address",
-  "servicePrice",
-  "serviceId",
-  "serviceName",
-] as const satisfies readonly (keyof InformationalFacts)[];
 
 const CONTACT_FIELD_SET = new Set<BookingContactField>([
   "phoneNumber",
@@ -79,18 +61,15 @@ const CONTACT_FIELD_SET = new Set<BookingContactField>([
   "lastName",
 ]);
 
-const firstString = (...candidates: unknown[]): string | undefined => {
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.length > 0) {
-      return candidate;
-    }
-  }
-  return undefined;
-};
 
-const awaitingContactFieldFromDraft = (
+/** Open contact field from the card the patient was shown; else need_* on pendingDecision. */
+const awaitingContactField = (
   draft: BookingDraft | null | undefined,
+  pendingInteraction: ClinicState["pendingInteraction"],
 ): BookingContactField | undefined => {
+  if (pendingInteraction?.kind === "contact_field") {
+    return pendingInteraction.field;
+  }
   const pending = draft?.pendingDecision;
   if (pending?.kind === "clarification" && typeof pending.reason === "string") {
     const prefix = "need_";
@@ -101,56 +80,7 @@ const awaitingContactFieldFromDraft = (
       }
     }
   }
-  if (draft?.phase === "details") {
-    return "phoneNumber";
-  }
   return undefined;
-};
-
-const coerceServiceRows = (record: Record<string, unknown> | unknown[] | null): unknown[] => {
-  if (record == null) {
-    return [];
-  }
-  if (Array.isArray(record)) {
-    return record;
-  }
-  if (Array.isArray(record.services)) {
-    return record.services;
-  }
-  if (Array.isArray(record.list)) {
-    return record.list;
-  }
-  return [];
-};
-
-const serviceNameFromRow = (item: {
-  name?: unknown;
-  cName?: unknown;
-}): string => {
-  if (typeof item.name === "string" && item.name.trim().length > 0) {
-    return item.name.trim();
-  }
-  if (typeof item.cName === "string" && item.cName.trim().length > 0) {
-    return item.cName.trim();
-  }
-  return "";
-};
-
-const contactWriteOutcome = (
-  name: "create_contact" | "update_contact" | "link_telegram_to_contact",
-): "created" | "updated" | "linked" => {
-  switch (name) {
-    case "create_contact":
-      return "created";
-    case "update_contact":
-      return "updated";
-    case "link_telegram_to_contact":
-      return "linked";
-    default: {
-      const _exhaustive: never = name;
-      return _exhaustive;
-    }
-  }
 };
 
 const bookingContextWithoutMeeting = (
@@ -168,62 +98,6 @@ const bookingContextWithoutMeeting = (
     ...bookingContext,
     meetings: bookingContext.meetings.filter((meeting) => meeting.id !== meetingId),
   };
-};
-
-/** Copy only allowlisted informational fields; drop raw tool text and unknown keys. */
-export const allowlistedInformationalFacts = (
-  record: Record<string, unknown> | null,
-): InformationalFacts | undefined => {
-  if (record == null) {
-    return undefined;
-  }
-  const facts: InformationalFacts = {};
-  let saw = false;
-  for (const key of INFORMATIONAL_FACT_KEYS) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-      facts[key] = value.trim();
-      saw = true;
-    }
-  }
-  // Common CRM shapes → allowlisted keys.
-  if (facts.hours == null) {
-    const hours =
-      typeof record.workingTime === "string"
-        ? record.workingTime
-        : typeof record.openHours === "string"
-          ? record.openHours
-          : null;
-    if (hours != null && hours.trim().length > 0) {
-      facts.hours = hours.trim();
-      saw = true;
-    }
-  }
-  if (facts.address == null && typeof record.address === "string" && record.address.trim()) {
-    facts.address = record.address.trim();
-    saw = true;
-  }
-  if (facts.servicePrice == null) {
-    const price =
-      typeof record.total === "string" || typeof record.total === "number"
-        ? String(record.total)
-        : typeof record.price === "string" || typeof record.price === "number"
-          ? String(record.price)
-          : null;
-    if (price != null && price.trim().length > 0) {
-      facts.servicePrice = price.trim();
-      saw = true;
-    }
-  }
-  if (facts.serviceName == null && typeof record.name === "string" && record.name.trim()) {
-    facts.serviceName = record.name.trim();
-    saw = true;
-  }
-  if (facts.serviceId == null && typeof record.id === "string" && record.id.trim()) {
-    facts.serviceId = record.id.trim();
-    saw = true;
-  }
-  return saw ? facts : undefined;
 };
 
 const lastHumanText = (messages: BaseMessage[] | undefined): string => {
@@ -352,282 +226,6 @@ export const enrichPatchWithReadModels = (
   return patch;
 };
 
-/** Fail-closed EffectResult when a matching ToolMessage cannot be trusted. */
-const failClosedForPending = (pending: PendingEffect): EffectResult => {
-  const effectId = pending.id;
-  switch (pending.effect.kind) {
-    case "lookup_contact_by_phone":
-      return {
-        effectId,
-        kind: "contact_lookup",
-        outcome: "error",
-        phoneNumber: pending.effect.phoneNumber,
-      };
-    case "present_availability":
-      return { effectId, kind: "availability", outcome: "error" };
-    case "list_services":
-      return { effectId, kind: "catalog", outcome: "error" };
-    case "get_working_time":
-    case "get_service":
-      return { effectId, kind: "informational", outcome: "error" };
-    case "create_contact":
-    case "update_contact":
-    case "link_telegram_contact":
-      return { effectId, kind: "contact_write", outcome: "error" };
-    case "create_meeting":
-      return { effectId, kind: "mutation", action: "create", outcome: "malformed" };
-    case "reschedule_meeting":
-      return { effectId, kind: "mutation", action: "reschedule", outcome: "malformed" };
-    case "cancel_meeting":
-      return { effectId, kind: "mutation", action: "cancel", outcome: "malformed" };
-    default: {
-      const _exhaustive: never = pending.effect;
-      return _exhaustive;
-    }
-  }
-};
-
-/**
- * Translate the ToolMessage for {@link pendingEffect} into a typed EffectResult.
- * Passes the trusted pending effect (id + kind + phoneNumber) — never reconstructs
- * the queried phone from draft or AI tool-call args.
- * When a matching ToolMessage exists but cannot be translated, returns fail-closed.
- */
-export const effectResultFromToolMessages = (
-  messages: BaseMessage[] | undefined,
-  pendingEffect: PendingEffect | null,
-): EffectResult | null => {
-  if (messages == null || pendingEffect == null) {
-    return null;
-  }
-  const expectedEffectId = pendingEffect.id;
-  const expectedToolName = toolNameForBookingEffect(pendingEffect);
-
-  const matching = findToolMessageByCallId(messages, expectedEffectId);
-  if (matching == null) {
-    return null;
-  }
-
-  const name = matching.name ?? "";
-  if (name !== expectedToolName) {
-    return failClosedForPending(pendingEffect);
-  }
-
-  const body = extractMessageTextContent(matching.content).trim();
-  const record = asJsonRecord(body);
-
-  if (name === "present_availability_slots") {
-    if (record?.error != null || body.startsWith("Error:")) {
-      return { effectId: expectedEffectId, kind: "availability", outcome: "error" };
-    }
-    const parseSlots = (raw: unknown): Array<{ id: string; label: string }> =>
-      Array.isArray(raw)
-        ? raw.flatMap((slot) => {
-          if (slot == null || typeof slot !== "object") {
-            return [];
-          }
-          const s = slot as { id?: unknown; label?: unknown };
-          if (typeof s.id !== "string" || typeof s.label !== "string") {
-            return [];
-          }
-          return [{ id: s.id, label: s.label }];
-        })
-        : [];
-    // Multi-day `{ days }` and single-day `{ date, slots }` shapes (same as normalize).
-    const rawDays = Array.isArray(record?.days)
-      ? record.days
-      : typeof record?.date === "string" && Array.isArray(record?.slots)
-        ? [{
-          date: record.date,
-          ...(typeof record.dayLabel === "string" ? { dayLabel: record.dayLabel } : {}),
-          slots: record.slots,
-        }]
-        : [];
-    const days = rawDays.flatMap((day) => {
-      if (day == null || typeof day !== "object") {
-        return [];
-      }
-      const row = day as {
-        date?: unknown;
-        dayLabel?: unknown;
-        slots?: unknown;
-      };
-      if (typeof row.date !== "string") {
-        return [];
-      }
-      return [{
-        date: row.date,
-        ...(typeof row.dayLabel === "string" ? { dayLabel: row.dayLabel } : {}),
-        slots: parseSlots(row.slots),
-      }];
-    });
-    const slotCount = days.reduce((sum, day) => sum + day.slots.length, 0);
-    if (slotCount === 0) {
-      return { effectId: expectedEffectId, kind: "availability", outcome: "empty" };
-    }
-    const query = record?.query != null && typeof record.query === "object"
-      ? record.query as { kind?: string; anchor?: string; date?: string; rangeFrom?: string }
-      : null;
-    const snapshotId = typeof record?.snapshotId === "string"
-      ? record.snapshotId
-      : presentationSnapshotId({
-        ...(typeof record?.serviceId === "string" ? { serviceId: record.serviceId } : {}),
-        ...(typeof query?.kind === "string" ? { queryKind: query.kind } : {}),
-        ...(typeof (query?.anchor ?? query?.date ?? query?.rangeFrom) === "string"
-          ? { queryAnchor: String(query?.anchor ?? query?.date ?? query?.rangeFrom) }
-          : {}),
-        days,
-        ...(typeof record?.stepMinutes === "number" ? { stepMinutes: record.stepMinutes } : {}),
-      });
-    const open = days.filter((day) => day.slots.length > 0);
-    const selectedDateHint = open.length === 1 ? open[0]?.date : null;
-    const presentation = projectAvailabilityPresentation(days, {
-      ...(selectedDateHint != null ? { selectedDate: selectedDateHint } : {}),
-      snapshotId,
-    });
-    return {
-      effectId: expectedEffectId,
-      kind: "availability",
-      outcome: "slots",
-      snapshotId,
-      ...(presentation != null
-        ? {
-          presentationMode: presentation.mode,
-          presentationChoices: presentation.choices,
-          ...(presentation.date != null ? { presentationDate: presentation.date } : {}),
-        }
-        : {}),
-    };
-  }
-
-  if (name === "find_contact_by_phone") {
-    if (pendingEffect.effect.kind !== "lookup_contact_by_phone") {
-      return failClosedForPending(pendingEffect);
-    }
-    const phoneNumber = pendingEffect.effect.phoneNumber;
-    const normalized = normalizeContactLookupResult(body.length > 0 ? body : "{}");
-    if (normalized.error != null) {
-      return {
-        effectId: expectedEffectId,
-        kind: "contact_lookup",
-        outcome: "error",
-        phoneNumber,
-      };
-    }
-    const evidence = classifyPhoneLookupResult(normalized.contacts, phoneNumber);
-    return {
-      effectId: expectedEffectId,
-      kind: "contact_lookup",
-      outcome: evidence.result,
-      contactIds: evidence.contactIds,
-      phoneNumber,
-    };
-  }
-
-  if (
-    name === "create_contact"
-    || name === "update_contact"
-    || name === "link_telegram_to_contact"
-  ) {
-    const contactId = firstString(record?.id, record?.contactId);
-    if (contactId != null) {
-      const missingRaw = record?.missingFields;
-      const crmComplete = Array.isArray(missingRaw)
-        ? missingRaw.filter((entry): entry is string => typeof entry === "string").length === 0
-        : contactMissingFields(record ?? {}).length === 0;
-      return {
-        effectId: expectedEffectId,
-        kind: "contact_write",
-        outcome: contactWriteOutcome(name),
-        contactId,
-        crmComplete,
-      };
-    }
-    return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
-  }
-
-  if (
-    name === "create_meeting"
-    || name === "reschedule_meeting"
-    || name === "cancel_meeting"
-  ) {
-    const action =
-      name === "create_meeting"
-        ? "create" as const
-        : name === "reschedule_meeting"
-          ? "reschedule" as const
-          : "cancel" as const;
-    // One classifier for HITL leave (left+cancelled), ❌ (cancelled), commit, etc.
-    const classified = classifyMeetingMutationToolMessage(matching);
-    switch (classified) {
-      case "pending_confirmation": {
-        const userReply =
-          typeof record?.userReply === "string" && record.userReply.trim().length > 0
-            ? record.userReply.trim()
-            : undefined;
-        return {
-          effectId: expectedEffectId,
-          kind: "mutation",
-          action,
-          outcome: "pending",
-          ...(userReply != null ? { userReply } : {}),
-        };
-      }
-      case "committed":
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "committed" };
-      case "declined":
-      case "abandoned":
-        // Collapse leave and ❌ onto declined; decide maps both to main menu.
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "declined" };
-      case "failed":
-      case "blocked":
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "failed" };
-      case null:
-        return { effectId: expectedEffectId, kind: "mutation", action, outcome: "unknown" };
-      default: {
-        const _exhaustive: never = classified;
-        return _exhaustive;
-      }
-    }
-  }
-
-  if (name === "list_services") {
-    if (record?.error != null || body.startsWith("Error:")) {
-      return { effectId: expectedEffectId, kind: "catalog", outcome: "error" };
-    }
-    const services = coerceServiceRows(record).flatMap((row) => {
-      if (row == null || typeof row !== "object") {
-        return [];
-      }
-      const item = row as { id?: unknown; name?: unknown; cName?: unknown };
-      const id = typeof item.id === "string" ? item.id.trim() : "";
-      const serviceName = serviceNameFromRow(item);
-      if (id.length === 0 || serviceName.length === 0) {
-        return [];
-      }
-      return [{ id, name: serviceName }];
-    });
-    if (services.length === 0) {
-      return { effectId: expectedEffectId, kind: "catalog", outcome: "empty" };
-    }
-    return { effectId: expectedEffectId, kind: "catalog", outcome: "ok", services };
-  }
-
-  if (name === "get_working_time" || name === "get_service") {
-    if (record?.error != null || body.startsWith("Error:")) {
-      return { effectId: expectedEffectId, kind: "informational", outcome: "error" };
-    }
-    const facts = allowlistedInformationalFacts(record);
-    return {
-      effectId: expectedEffectId,
-      kind: "informational",
-      outcome: "ok",
-      ...(facts != null ? { facts } : {}),
-    };
-  }
-
-  return failClosedForPending(pendingEffect);
-};
 
 const applyEvents = (
   draft: ClinicState["bookingDraft"],
@@ -707,7 +305,7 @@ export const createBookingDecideNode = (
 
   return async (
     state: ClinicState,
-  ): Promise<ClinicStateUpdate | Command> => {
+  ): Promise<ClinicStateUpdate> => {
     const readModels = readModelsFromClinicState(state);
     const seeded = seedDraftFromTelegramPrefetch(
       state.bookingDraft ?? null,
@@ -745,7 +343,10 @@ export const createBookingDecideNode = (
           readModels,
         );
       } else {
-        const awaitingContactField = awaitingContactFieldFromDraft(workingDraft);
+        const openContactField = awaitingContactField(
+          workingDraft,
+          state.pendingInteraction,
+        );
         // Reply-keyboard taps send labels; inline callbacks send ids.
         // Prefer inboundChoiceId; otherwise map the open card label → choice id.
         const fromInbound = state.inboundChoiceId;
@@ -762,7 +363,7 @@ export const createBookingDecideNode = (
             : {}),
           awaitingNote: workingDraft?.note.status === "awaiting"
             || workingDraft?.phase === "note",
-          ...(awaitingContactField != null ? { awaitingContactField } : {}),
+          ...(openContactField != null ? { awaitingContactField: openContactField } : {}),
           awaitingServiceConfirm: workingDraft?.serviceAcceptance?.status === "pending",
         };
         const rawPatch = interpretTurn != null
@@ -819,26 +420,24 @@ export const createBookingDecideNode = (
       cancelCompleted ? workingDraft?.replacement?.meeting.id : undefined,
     );
 
-    // REPLACE cancel with no accepted service → FAQ root catalog.
+    // REPLACE cancel with no accepted service → FAQ root catalog via
+    // compile.ts conditional edges (next === FAQ_AGENT_ID). Keep cancel
+    // ToolMessage so FAQ prepare opens the catalog and finalize can prefix
+    // «Запис скасовано.» (Overwrite — do not append).
     if (result.decision.reason === "replacement_cancel_catalog") {
-      return new Command({
-        goto: "faq__prepare",
-        update: {
-          bookingDraft: draft,
-          bookingSchemaVersion: 2,
-          inboundChoiceId: null,
-          bookingDecision: null,
-          pendingInteraction: null,
-          next: FAQ_AGENT_ID,
-          lastHandoff: null,
-          ...(bookingContextAfterCancel != null
-            ? { bookingContext: bookingContextAfterCancel }
-            : {}),
-          // Keep cancel ToolMessage so FAQ prepare opens the root catalog and
-          // finalize can prefix «Запис скасовано.» (Overwrite — do not append).
-          agentMessages: new Overwrite(state.agentMessages ?? []),
-        },
-      });
+      return {
+        bookingDraft: draft,
+        bookingSchemaVersion: 2,
+        inboundChoiceId: null,
+        bookingDecision: null,
+        pendingInteraction: null,
+        next: FAQ_AGENT_ID,
+        lastHandoff: null,
+        ...(bookingContextAfterCancel != null
+          ? { bookingContext: bookingContextAfterCancel }
+          : {}),
+        agentMessages: new Overwrite(state.agentMessages ?? []),
+      };
     }
 
     // Overwrite the tool tape. `agentMessages: []` is a no-op under the messages

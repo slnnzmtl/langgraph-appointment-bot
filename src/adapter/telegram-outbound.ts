@@ -6,7 +6,6 @@ import {
 import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
 import {
   buildConfirmKeyboard,
-  buildInlineChoiceKeyboard,
   buildReplyKeyboard,
   withMainMenu,
   type TelegramReplyMarkup,
@@ -225,34 +224,18 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     | {
         replyButtons?: unknown;
         replyText?: unknown;
-        replyChoices?: Array<{ id?: unknown; label?: unknown }>;
       }
     | undefined;
   const confirmDraft = getConfirmBookingDraft(record);
   const handoffText =
     typeof handoff?.replyText === "string" ? handoff.replyText.trim() : "";
 
-  const inlineChoices = Array.isArray(handoff?.replyChoices)
-    ? handoff.replyChoices.flatMap((choice) => {
-        if (
-          choice != null
-          && typeof choice.id === "string"
-          && choice.id.trim().length > 0
-          && typeof choice.label === "string"
-          && choice.label.trim().length > 0
-        ) {
-          return [{ id: choice.id.trim(), label: choice.label.trim() }];
-        }
-        return [];
-      })
-    : [];
-
   if (confirmDraft) {
     const confirmText = formatConfirmBookingCaption(confirmDraft);
     const prefix = handoffText.length > 0
       ? extractReplyButtons(handoffText).text.trim()
       : "";
-    // Ignore leftover replyChoices from a prior card — HITL is always ✅/❌ reply kb.
+    // HITL confirm is always ✅/❌ reply keyboard (ignore leftover card buttons).
     return {
       text: confirmText,
       reply_markup: buildConfirmKeyboard(),
@@ -262,12 +245,6 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
 
   const visible = handoffText || lastVisibleAiText(record.messages) || "…";
   const stripped = extractReplyButtons(visible);
-  if (inlineChoices.length > 0) {
-    return {
-      text: stripped.text || "…",
-      reply_markup: buildInlineChoiceKeyboard(inlineChoices),
-    };
-  }
   const buttons = replyButtonLabels(handoff?.replyButtons);
   return {
     text: stripped.text || "…",

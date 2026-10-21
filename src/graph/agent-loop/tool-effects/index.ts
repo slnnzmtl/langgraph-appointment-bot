@@ -71,15 +71,14 @@ export const applyToolEffects = (
     update = { ...update, ...services };
     effectiveState = applyEffective(effectiveState, services);
 
-    // Contact CRM rows for supervisor/prefetch — not draft events (decide owns those).
+    // Contact CRM rows for supervisor/prefetch — decide owns draft events.
     const contact = projectContactEffects({
       state: effectiveState,
       resultMessages,
+      includeDraftEvents: false,
     });
-    const contactWithoutDraft: ClinicStateUpdate = { ...contact };
-    delete contactWithoutDraft.bookingDraft;
-    update = { ...update, ...contactWithoutDraft };
-    effectiveState = applyEffective(effectiveState, contactWithoutDraft);
+    update = { ...update, ...contact };
+    effectiveState = applyEffective(effectiveState, contact);
 
     if (crmWriteDirtiesPrefetch(resultMessages)) {
       update = { ...update, prefetchDirty: true };
