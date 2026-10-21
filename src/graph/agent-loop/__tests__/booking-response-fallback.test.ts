@@ -48,8 +48,8 @@ describe("bookingResponseFallback contact format clarification", () => {
   });
 });
 
-describe("bookingResponseFallback empty date window", () => {
-  it("uses empty earlier copy, not PATIENT_FALLBACK_MESSAGE", () => {
+describe("bookingResponseFallback date/time cards", () => {
+  it("does not own empty-window prose — last-resort SAFETY only", () => {
     const card = {
       kind: "date_select" as const,
       snapshotId: "empty-earlier",
@@ -61,9 +61,24 @@ describe("bookingResponseFallback empty date window", () => {
       intent: "present_dates",
       card,
     });
-    expect(text).toBe("Раніших вільних дат не знайшли. Пошукати пізніші дати?");
+    // Listed/empty copy is renderBookingInteractionMessage; fallback is SAFETY only.
+    expect(text).toBe("Оберіть, будь ласка, зручну дату.");
     expect(text).not.toBe(PATIENT_FALLBACK_MESSAGE);
+    expect(text).not.toContain("Раніших вільних дат");
     expect(replyChoicesFromCard(card).map((c) => c.label)).toEqual([LATER_DATE_LABEL]);
+  });
+
+  it("does not own time_select prose", () => {
+    const text = bookingResponseFallback({
+      intent: "present_times",
+      card: {
+        kind: "time_select",
+        date: "2026-09-10",
+        snapshotId: "snap",
+        choiceIds: ["slot-a", "other_date"],
+      },
+    });
+    expect(text).toBe("Оберіть, будь ласка, зручний час.");
   });
 });
 

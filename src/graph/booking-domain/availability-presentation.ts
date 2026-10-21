@@ -6,6 +6,7 @@
 import {
   EARLIER_DATE_LABEL,
   LATER_DATE_LABEL,
+  MAX_PROPOSED_AVAILABILITY_DAYS,
   OTHER_DATE_LABEL,
 } from "../../shared/clinic-constants.js";
 import { shortDayMonthLabel } from "../../tools/availability-slots.js";
@@ -70,8 +71,9 @@ export const projectAvailabilityPresentation = (
     : undefined;
 
   if (selectedDay != null) {
+    // All slots on the day (tool already caps at MAX_PRESENTED_SLOTS).
     const choices: AvailabilityPresentationChoice[] = [
-      ...selectedDay.slots.slice(0, 3).map((slot) => ({
+      ...selectedDay.slots.map((slot) => ({
         id: slot.id,
         label: slot.label,
         date: selectedDay.date,
@@ -88,7 +90,7 @@ export const projectAvailabilityPresentation = (
     };
   }
 
-  const dateDays = open.slice(0, 3);
+  const dateDays = open.slice(0, MAX_PROPOSED_AVAILABILITY_DAYS);
   const choices: AvailabilityPresentationChoice[] = [
     ...dateDays.map((day) => ({
       id: day.date,

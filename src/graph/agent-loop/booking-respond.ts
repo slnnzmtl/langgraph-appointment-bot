@@ -12,8 +12,10 @@ import {
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
+import { extractMessageTextContent } from "../../shared/message-content.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import type { BookingDecision } from "../booking-domain/decision.js";
+import { renderBookingInteractionMessage } from "../booking-interaction-render.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { BOOKING_AGENT_ID, type ILLMConnector } from "../types.js";
 import { replyChoicesFromCard } from "./booking-card-choices.js";
@@ -136,13 +138,27 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
 
     // Open cards: one code-owned copy path (no LLM rewrite of the chip prompt).
     if (decision.card != null) {
+      let replyText = fallback;
+      const pending = state.pendingInteraction;
+      if (
+        (decision.card.kind === "date_select" || decision.card.kind === "time_select")
+        && pending != null
+        && pending.kind === decision.card.kind
+      ) {
+        const listed = extractMessageTextContent(
+          renderBookingInteractionMessage(pending).content,
+        ).trim();
+        if (listed.length > 0) {
+          replyText = listed;
+        }
+      }
       return {
         bookingDecision: null,
         lastHandoff: {
           agentId: BOOKING_AGENT_ID,
           agentName,
           status: "ok",
-          replyText: fallback,
+          replyText,
           replyButtons,
         },
       };

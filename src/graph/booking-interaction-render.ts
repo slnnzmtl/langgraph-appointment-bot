@@ -251,7 +251,8 @@ export const availabilityRenderSnapshotFromContext = (
 export const buildDateSelectInteraction = (
   context: AvailabilityContext,
 ): DateSelectInteraction => {
-  const open = context.days.filter((day) => day.slots.length > 0).slice(0, 3);
+  // Projector caps day chips; snapshot lists all open days for message bullets.
+  const open = context.days.filter((day) => day.slots.length > 0);
   const snapshot = availabilityRenderSnapshotFromContext(context, open);
   const query = availabilityQueryFromContext(context);
   const presentation = projectAvailabilityPresentation(

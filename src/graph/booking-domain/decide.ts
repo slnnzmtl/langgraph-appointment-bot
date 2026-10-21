@@ -4,7 +4,6 @@ import {
   CONSULTATION_SERVICE_ID,
   CONSULTATION_SERVICE_NAME_UK,
   CREATE_CONFIRMATION_UK,
-  OTHER_DATE_LABEL,
 } from "../../shared/clinic-constants.js";
 import {
   isConfirmationAffirmation,
@@ -1169,28 +1168,28 @@ export const decideBooking = (
       const day = readModels.availabilityDays?.find((d) => d.date === schedule.date);
       if (day != null && day.slots.length > 0) {
         const snapshotId = readModels.availabilitySnapshotId ?? "availability";
-        const choiceIds = [
-          ...day.slots.slice(0, 3).map((s) => s.id),
-          "other_date",
-        ];
-        const labels: Record<string, string> = { other_date: OTHER_DATE_LABEL };
-        for (const slot of day.slots.slice(0, 3)) {
-          labels[slot.id] = slot.label;
+        const projected = projectAvailabilityPresentation(
+          readModels.availabilityDays ?? [day],
+          { selectedDate: schedule.date, snapshotId },
+        );
+        if (projected?.mode === "time_select" && projected.date != null) {
+          const choiceIds = projected.choices.map((c) => c.id);
+          const labels = labelsFromPresentation(projected);
+          emitDecision({
+            kind: "time_select",
+            date: projected.date,
+            snapshotId,
+            choiceIds,
+            labels,
+          });
+          return ask("present_times", {
+            kind: "time_select",
+            date: projected.date,
+            snapshotId,
+            choiceIds,
+            labels,
+          });
         }
-        emitDecision({
-          kind: "time_select",
-          date: schedule.date,
-          snapshotId,
-          choiceIds,
-          labels,
-        });
-        return ask("present_times", {
-          kind: "time_select",
-          date: schedule.date,
-          snapshotId,
-          choiceIds,
-          labels,
-        });
       }
     } else if (schedule?.kind === "date_and_time") {
       if (ctx.working?.pendingDecision != null) {

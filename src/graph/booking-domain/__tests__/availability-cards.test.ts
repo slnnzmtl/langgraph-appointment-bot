@@ -191,6 +191,66 @@ describe("availability cards from effect results", () => {
     expect(decision.events.some((e) => e.type === "slot_selected")).toBe(true);
     expect(decision.decision.pendingEffect?.effect.kind).not.toBe("present_availability");
   });
+
+  it("typed date uses projector: all day slots + other_date (not a 3-chip slice)", () => {
+    const manySlots = {
+      ...READ,
+      availabilityDays: [
+        {
+          date: "2026-09-10",
+          dayLabel: "10 вер",
+          slots: [
+            {
+              id: "s1",
+              label: "10:00",
+              dateStart: "2026-09-10T10:00:00",
+              dateEnd: "2026-09-10T10:30:00",
+            },
+            {
+              id: "s2",
+              label: "10:30",
+              dateStart: "2026-09-10T10:30:00",
+              dateEnd: "2026-09-10T11:00:00",
+            },
+            {
+              id: "s3",
+              label: "11:00",
+              dateStart: "2026-09-10T11:00:00",
+              dateEnd: "2026-09-10T11:30:00",
+            },
+            {
+              id: "s4",
+              label: "11:30",
+              dateStart: "2026-09-10T11:30:00",
+              dateEnd: "2026-09-10T12:00:00",
+            },
+            {
+              id: "s5",
+              label: "12:00",
+              dateStart: "2026-09-10T12:00:00",
+              dateEnd: "2026-09-10T12:30:00",
+            },
+          ],
+        },
+      ],
+    };
+    const decision = decideBooking(
+      draftWithAcceptedService(),
+      {
+        source: "semantic_patch",
+        patch: {
+          scheduleIntent: { kind: "date", date: "2026-09-10" },
+        },
+      },
+      manySlots,
+    );
+    expect(decision.decision.intent).toBe("present_times");
+    expect(decision.decision.card).toMatchObject({
+      kind: "time_select",
+      date: "2026-09-10",
+      choiceIds: ["s1", "s2", "s3", "s4", "s5", "other_date"],
+    });
+  });
 });
 
 describe("multi-fact side questions and catalog resolve", () => {

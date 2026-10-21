@@ -107,19 +107,11 @@ const cardSpecificFallback = (
     }
     case "service_candidate":
       return "Оберіть, будь ласка, послугу зі списку.";
+    // DATE/TIME listed copy (including emptyMode) lives in
+    // renderBookingInteractionMessage — not a second fallback writer.
     case "date_select":
-      if (card.emptyMode === "earlier") {
-        return "Раніших вільних дат не знайшли. Пошукати пізніші дати?";
-      }
-      if (card.emptyMode === "exact") {
-        return "На цю дату вільного часу немає. Пошукати іншу дату?";
-      }
-      if (card.emptyMode === "other") {
-        return "У цьому періоді вільного часу немає. Пошукати інші дати?";
-      }
-      return "Оберіть, будь ласка, зручну дату.";
     case "time_select":
-      return "Оберіть, будь ласка, зручний час.";
+      return null;
     case "visit_note":
       return `Можете коротко описати запит або натисніть «${INTENT_SKIP_LABEL}».`;
     case "contact_field":
