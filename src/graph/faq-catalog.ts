@@ -103,17 +103,21 @@ const ensureUniqueChipLabels = (
   labels: readonly string[],
   maxLength: number = MAX_FAQ_CHIP_LABEL_LENGTH,
 ): string[] => {
-  const used = new Map<string, number>();
+  // Uniqueness is on the final emitted string (Telegram sends the label as text).
+  const used = new Set<string>();
   return labels.map((raw) => {
-    const base = truncateLabel(raw.trim(), maxLength);
-    const count = used.get(base) ?? 0;
-    used.set(base, count + 1);
-    if (count === 0) {
-      return base;
-    }
-    const suffix = ` (${count + 1})`;
-    const room = Math.max(1, maxLength - suffix.length);
-    return `${truncateLabel(raw.trim(), room)}${suffix}`;
+    const trimmed = raw.trim();
+    let n = 0;
+    let candidate = "";
+    do {
+      // First chip keeps the base; collisions use (2), (3), …
+      const suffix = n === 0 ? "" : ` (${n + 1})`;
+      const room = Math.max(1, maxLength - suffix.length);
+      candidate = `${truncateLabel(trimmed, room)}${suffix}`;
+      n += 1;
+    } while (used.has(candidate));
+    used.add(candidate);
+    return candidate;
   });
 };
 
@@ -393,18 +397,43 @@ export const mergeCatalogChoicesToPageCap = (
   ];
 };
 
+const isCrmSingletonChoice = (choice: InteractionChoice): boolean =>
+  choice.serviceIds != null
+  && choice.serviceIds.length === 1
+  && choice.serviceIds[0] === choice.id;
+
 /** Stable unique chip ids after merge (keep CRM singleton ids; uniquify group ids). */
 const uniquifyCatalogChoiceIds = (
   choices: readonly InteractionChoice[],
 ): InteractionChoice[] => {
-  const seen = new Set<string>();
-  return choices.map((choice, index) => {
-    let id = choice.id;
-    if (seen.has(id)) {
-      id = `g${index}`;
+  // Lock CRM singleton ids first so a group never reuses them via g${index}.
+  const reserved = new Set(
+    choices.filter(isCrmSingletonChoice).map((choice) => choice.id),
+  );
+  const used = new Set<string>();
+  let nextG = 0;
+  const allocGroupId = (): string => {
+    while (used.has(`g${nextG}`) || reserved.has(`g${nextG}`)) {
+      nextG += 1;
     }
-    seen.add(id);
-    return { ...choice, id };
+    const id = `g${nextG}`;
+    nextG += 1;
+    used.add(id);
+    return id;
+  };
+  return choices.map((choice) => {
+    if (isCrmSingletonChoice(choice)) {
+      if (!used.has(choice.id)) {
+        used.add(choice.id);
+        return { ...choice, id: choice.id };
+      }
+      return { ...choice, id: allocGroupId() };
+    }
+    if (!used.has(choice.id) && !reserved.has(choice.id)) {
+      used.add(choice.id);
+      return { ...choice };
+    }
+    return { ...choice, id: allocGroupId() };
   });
 };
 

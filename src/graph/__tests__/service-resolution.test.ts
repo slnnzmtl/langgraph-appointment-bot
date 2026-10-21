@@ -365,7 +365,7 @@ describe("resolveServiceChange", () => {
         },
         { id: "svc-nabota", label: "Nabota Face", serviceIds: ["svc-nabota"] },
         {
-          id: "g2",
+          id: "g1",
           label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
           serviceIds: ["svc-correction", "svc-meso"],
         },
@@ -609,7 +609,7 @@ describe("partitionRemainingServiceChoices", () => {
         serviceIds: ["svc-consult"],
       },
       {
-        id: "g1",
+        id: "g0",
         label: "Ботокс",
         serviceIds: ["svc-botox", "svc-botox-face", "svc-botox-neck"],
       },

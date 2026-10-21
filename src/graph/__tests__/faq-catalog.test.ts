@@ -288,6 +288,21 @@ describe("buildFaqCatalogChoices", () => {
     expect(choices[0]!.label).not.toBe(choices[1]!.label);
     expect(choices[1]!.label).toContain("(2)");
   });
+
+  it("keeps final chip labels unique when a later base matches an earlier suffix", () => {
+    // First → "Other"; second → "Other (2)"; third's raw base is already "Other (2)".
+    const choices = shortenFaqChoiceLabels([
+      { id: "a", label: "Other" },
+      { id: "b", label: "Other" },
+      { id: "c", label: "Other (2)" },
+    ]);
+    const labels = choices.map((choice) => choice.label);
+    expect(new Set(labels).size).toBe(3);
+    expect(labels[0]).toBe("Other");
+    expect(labels[1]).toBe("Other (2)");
+    expect(labels[2]).not.toBe(labels[0]);
+    expect(labels[2]).not.toBe(labels[1]);
+  });
 });
 
 describe("mergeCatalogChoicesToPageCap", () => {
@@ -338,5 +353,66 @@ describe("mergeCatalogChoicesToPageCap", () => {
     for (const row of services) {
       expect(covered.has(row.id)).toBe(true);
     }
+  });
+
+  it("resolveFaqCatalogChoices keeps CRM g1 distinct from a generated group id", async () => {
+    const services = [
+      { id: "g1", name: "CRM Service G1" },
+      { id: "svc-a", name: "Alpha" },
+      { id: "svc-b", name: "Beta" },
+    ];
+    const resolved = await resolveFaqCatalogChoices({
+      services,
+      remainingIds: services.map((row) => row.id),
+      utterance: "послуги",
+      groups: [
+        { label: "CRM Service G1", serviceIds: ["g1"] },
+        { label: "Family", serviceIds: ["svc-a", "svc-b"] },
+      ],
+    });
+    expect(new Set(resolved.map((chip) => chip.id)).size).toBe(resolved.length);
+    const crm = resolved.find((chip) => chip.serviceIds?.length === 1 && chip.serviceIds[0] === "g1");
+    const group = resolved.find(
+      (chip) => chip.serviceIds?.includes("svc-a") === true && chip.serviceIds?.includes("svc-b") === true,
+    );
+    expect(crm?.id).toBe("g1");
+    expect(group).toBeDefined();
+    expect(group!.id).not.toBe("g1");
+    expect(group!.id).toMatch(/^g\d+$/);
+  });
+
+  it("200-row bare browse caps at 8 chips and keeps ids beyond the first eight reachable", async () => {
+    const services = Array.from({ length: 200 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+    }));
+    const deepId = "svc-150";
+    const resolved = await resolveFaqCatalogChoices({
+      services,
+      remainingIds: services.map((row) => row.id),
+      utterance: "послуги",
+    });
+    expect(resolved.length).toBeLessThanOrEqual(8);
+    expect(new Set(resolved.map((chip) => chip.id)).size).toBe(resolved.length);
+    expect(new Set(resolved.map((chip) => chip.label)).size).toBe(resolved.length);
+    const covered = new Set(resolved.flatMap((chip) => chip.serviceIds ?? [chip.id]));
+    expect(covered.has(deepId)).toBe(true);
+    expect(covered.size).toBe(200);
+    // Deep id is not a root singleton — reached via overflow group drill-down.
+    const deepChip = resolved.find((chip) => chip.id === deepId);
+    expect(deepChip).toBeUndefined();
+    const overflow = resolved.find((chip) => chip.serviceIds?.includes(deepId) === true);
+    expect(overflow).toBeDefined();
+    expect((overflow!.serviceIds?.length ?? 0)).toBeGreaterThan(1);
+
+    const drilled = await resolveFaqCatalogChoices({
+      services,
+      remainingIds: overflow!.serviceIds,
+      utterance: overflow!.label,
+      selectedLabel: overflow!.label,
+    });
+    expect(drilled.some((chip) => chip.id === deepId || chip.serviceIds?.includes(deepId))).toBe(
+      true,
+    );
   });
 });

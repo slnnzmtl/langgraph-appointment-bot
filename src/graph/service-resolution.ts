@@ -362,10 +362,25 @@ const groupsStrictlyShrink = (
 const choicesFromGroups = (
   groups: Array<{ label: string; serviceIds: string[] }>,
   allowlist: Map<string, ServiceCatalogRow>,
-): InteractionChoice[] =>
-  groups.map((group, index) => {
+): InteractionChoice[] => {
+  // Never mint gN that collides with a CRM row id on this page.
+  const reserved = new Set(allowlist.keys());
+  let nextG = 0;
+  const allocGroupId = (): string => {
+    while (reserved.has(`g${nextG}`)) {
+      nextG += 1;
+    }
+    const id = `g${nextG}`;
+    nextG += 1;
+    reserved.add(id);
+    return id;
+  };
+  return groups.map((group) => {
     const serviceIds = group.serviceIds;
-    const id = serviceIds.length === 1 ? serviceIds[0]! : `g${index}`;
+    const id = serviceIds.length === 1 ? serviceIds[0]! : allocGroupId();
+    if (serviceIds.length === 1) {
+      reserved.add(id);
+    }
     // Singleton groups apply that CRM id immediately — show the real service name,
     // not an abstract partition label the patient never confirmed.
     const label = serviceIds.length === 1
@@ -377,6 +392,7 @@ const choicesFromGroups = (
       serviceIds,
     };
   });
+};
 
 /**
  * Sanitize selector/partition groups against selected ids. Returns the groups

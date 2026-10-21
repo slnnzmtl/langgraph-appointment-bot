@@ -853,6 +853,150 @@ describe("createBookingDecideNode catalog family selector", () => {
       : [];
     expect(pageIds).toEqual(expect.arrayContaining(["svc-0", "svc-1"]));
   });
+
+  it("group tap after CRM id g1 collision pages the group, not the CRM singleton", async () => {
+    const catalog = [
+      { id: "g1", name: "CRM Service G1" },
+      { id: "svc-a", name: "Alpha" },
+      { id: "svc-b", name: "Beta" },
+    ];
+    const selectCandidates = vi.fn(async () => ({
+      serviceIds: catalog.map((row) => row.id),
+      groups: [
+        { label: "CRM Service G1", serviceIds: ["g1"] },
+        { label: "Family", serviceIds: ["svc-a", "svc-b"] },
+      ],
+    }));
+    const node = createBookingDecideNode({ selectCandidates });
+    const opened = await node({
+      messages: [new HumanMessage("запиши на ботокс краще")],
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: EFFECT_ID,
+            name: "list_services",
+            args: { query: "ботокс" },
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ list: catalog, total: catalog.length }),
+          tool_call_id: EFFECT_ID,
+          name: "list_services",
+        }),
+      ],
+      bookingDraft: draftWithCatalogEffect(),
+      pendingInteraction: {
+        kind: "visit_note",
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+      inboundChoiceId: null,
+    } as never);
+
+    const choices = opened.bookingDecision?.card?.kind === "service_candidate"
+      ? opened.bookingDecision.card.choices
+      : [];
+    expect(new Set(choices.map((chip) => chip.id)).size).toBe(choices.length);
+    const crm = choices.find((chip) => chip.serviceIds?.length === 1 && chip.serviceIds[0] === "g1");
+    const group = choices.find(
+      (chip) => chip.serviceIds?.includes("svc-a") === true
+        && chip.serviceIds?.includes("svc-b") === true,
+    );
+    expect(crm?.id).toBe("g1");
+    expect(group).toBeDefined();
+    expect(group!.id).not.toBe("g1");
+
+    const paged = await node({
+      messages: [new HumanMessage(group!.label)],
+      agentMessages: [],
+      bookingDraft: opened.bookingDraft,
+      pendingInteraction: opened.pendingInteraction,
+      inboundChoiceId: group!.id,
+    } as never);
+    expect(paged.bookingDraft?.serviceAcceptance?.service?.id).not.toBe("g1");
+    expect(paged.bookingDecision?.card?.kind).toBe("service_candidate");
+    const pageIds = paged.bookingDecision?.card?.kind === "service_candidate"
+      ? paged.bookingDecision.card.choices.map((chip) => chip.id)
+      : [];
+    expect(pageIds).toEqual(expect.arrayContaining(["svc-a", "svc-b"]));
+    expect(pageIds).not.toContain("g1");
+  });
+});
+
+describe("createBookingDecideNode unstamped effect next-turn tap", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("keeps service_candidate after unstamped availability and selects on the next tap", async () => {
+    vi.spyOn(stampBookingEffectMod, "stampBookingEffect").mockReturnValue(null);
+
+    let draft: BookingDraft | null = createEmptyBookingDraft();
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "послуги",
+        catalogRows: [
+          { id: "svc-a", name: "Alpha" },
+          { id: "svc-b", name: "Beta" },
+        ],
+        choices: [
+          { id: "svc-a", label: "Alpha", serviceIds: ["svc-a"] },
+          { id: "svc-b", label: "Beta", serviceIds: ["svc-b"] },
+        ],
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "choices_offered",
+      choiceIds: ["svc-a", "svc-b"],
+    });
+    if (draft == null) {
+      throw new Error("expected draft");
+    }
+
+    const pendingInteraction = {
+      kind: "service_candidate" as const,
+      utterance: "послуги",
+      query: "послуги",
+      owner: "booking" as const,
+      choices: [
+        { id: "svc-a", label: "Alpha", serviceIds: ["svc-a"] },
+        { id: "svc-b", label: "Beta", serviceIds: ["svc-b"] },
+      ],
+    };
+
+    const node = createBookingDecideNode({
+      interpretTurn: withDeterministicFirst(async () => ({
+        scheduleIntent: { kind: "relative", queryKind: "nearest" },
+      })),
+    });
+    const failed = await node({
+      messages: [new HumanMessage("найближчий час")],
+      agentMessages: [],
+      bookingDraft: draft,
+      pendingInteraction,
+      inboundChoiceId: null,
+    } as never);
+
+    expect(failed.bookingDecision?.reason).toBe("availability_failed");
+    expect(failed.bookingDecision?.card?.kind).toBe("service_candidate");
+    expect(hasPendingToolCalls(failed.agentMessages ?? [])).toBe(false);
+
+    const selected = await node({
+      messages: [new HumanMessage("Alpha")],
+      agentMessages: [],
+      bookingDraft: failed.bookingDraft,
+      pendingInteraction: failed.pendingInteraction ?? pendingInteraction,
+      inboundChoiceId: "svc-a",
+    } as never);
+
+    expect(selected.bookingDraft?.serviceAcceptance?.service).toMatchObject({
+      id: "svc-a",
+      name: "Alpha",
+    });
+  });
 });
 
 
