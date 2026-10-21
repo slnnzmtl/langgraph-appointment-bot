@@ -314,7 +314,7 @@ describe("text while HITL pending", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -409,7 +409,7 @@ describe("text while HITL pending", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -520,7 +520,7 @@ describe("text while HITL pending", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -729,7 +729,7 @@ describe("booking schema upgrade on text turn", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", source: "catalog" },
@@ -792,7 +792,7 @@ describe("booking schema upgrade on text turn", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", source: "catalog" },
@@ -859,7 +859,7 @@ describe("booking schema upgrade on text turn", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "  ", source: "catalog" },
@@ -913,7 +913,7 @@ describe("booking schema upgrade on text turn", () => {
             action: "create",
             effectId: "eff_create",
           },
-          
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", source: "catalog" },
