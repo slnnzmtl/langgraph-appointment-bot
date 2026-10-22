@@ -516,9 +516,10 @@ describe("createBookingDecideNode catalog family selector", () => {
       ? update.bookingDecision.card.choices
       : [];
     expect(choices.find((chip) => chip.id === "svc-corr")?.label).toBe("Корекція ботокс");
-    expect(choices.find((chip) => chip.id === "svc-latin")?.label).toMatch(
-      /^Ботулінотерапія Botox/,
-    );
+    const latin = choices.find((chip) => chip.id === "svc-latin")?.label ?? "";
+    expect(latin.startsWith("Ботулінотерапія")).toBe(true);
+    expect(latin.endsWith("1 зона")).toBe(true);
+    expect(latin).toContain("…");
   });
 
   it("selector empty at visit_note resumes note with need_service (not PATIENT_FALLBACK)", async () => {

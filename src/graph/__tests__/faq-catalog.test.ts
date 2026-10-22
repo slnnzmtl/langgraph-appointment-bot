@@ -4,6 +4,7 @@ import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.
 import { normalizeReplyLabel } from "../../shared/message-content.js";
 import {
   buildFaqCatalogChoices,
+  fallbackCatalogPageChoices,
   faqCatalogIntroFromModel,
   faqChoiceTextLabel,
   mergeCatalogChoicesToPageCap,
@@ -138,7 +139,7 @@ describe("shortenFaqChoiceLabels", () => {
     expect(faqChoiceTextLabel(choices[0]!)).toBe(longSuffix);
     expect(choices[0]!.label.length).toBeLessThanOrEqual(MAX_CHIP_LEN);
     expect(choices[0]!.displayLabel).toBe(longSuffix);
-    expect(choices[0]!.label.endsWith("…")).toBe(true);
+    expect(choices[0]!.label).toContain("…");
   });
 });
 
@@ -276,18 +277,53 @@ describe("buildFaqCatalogChoices", () => {
     const choices = shortenFaqChoiceLabels(buildFaqCatalogChoices([{ id: "x", name: longName }]));
     expect(choices).toHaveLength(1);
     expect(choices[0]!.label.length).toBeLessThanOrEqual(MAX_CHIP_LEN);
-    expect(choices[0]!.label.endsWith("…")).toBe(true);
+    expect(choices[0]!.label).toContain("…");
     expect(choices[0]!.displayLabel).toBe(longName);
   });
 
-  it("disambiguates chip labels that collide after truncation", () => {
+  it("keeps chip start and end when the CRM title is long", () => {
+    const name = "Ботулінотерапія Botox, Dysport FULL FACE+шия";
+    const choices = shortenFaqChoiceLabels(
+      buildFaqCatalogChoices([{ id: "x", name }]),
+    );
+    expect(choices[0]!.label.length).toBeLessThanOrEqual(MAX_CHIP_LEN);
+    expect(choices[0]!.label.startsWith("Ботулінотерапія")).toBe(true);
+    expect(choices[0]!.label.endsWith("FULL FACE+шия")).toBe(true);
+    expect(choices[0]!.label).toContain("…");
+    expect(choices[0]!.displayLabel).toBe(name);
+  });
+
+  it("keeps distinct chip ends when titles share a long prefix", () => {
     const prefix = "x".repeat(MAX_CHIP_LEN);
     const choices = shortenFaqChoiceLabels(buildFaqCatalogChoices([
       { id: "a", name: `${prefix}aaa` },
       { id: "b", name: `${prefix}bbb` },
     ]));
     expect(choices[0]!.label).not.toBe(choices[1]!.label);
+    expect(choices[0]!.label.endsWith("aaa")).toBe(true);
+    expect(choices[1]!.label.endsWith("bbb")).toBe(true);
+  });
+
+  it("disambiguates identical chip labels after truncation", () => {
+    const name = "Ботулінотерапія Botox, Dysport FULL FACE+шия";
+    const choices = shortenFaqChoiceLabels(buildFaqCatalogChoices([
+      { id: "a", name },
+      { id: "b", name },
+    ]));
+    expect(choices[0]!.label).not.toBe(choices[1]!.label);
     expect(choices[1]!.label).toContain("(2)");
+  });
+
+  it("disambiguates chips that collide after middle truncation (Botox vs Nabota)", () => {
+    const choices = shortenFaqChoiceLabels(buildFaqCatalogChoices([
+      { id: "a", name: "Ботулінотерапія Botox, Disport FULL FACE+шия" },
+      { id: "b", name: "Ботулінотерапія Nabota, Disport FULL FACE+шия" },
+    ]));
+    expect(choices[0]!.label).not.toBe(choices[1]!.label);
+    expect(choices[0]!.label.startsWith("Ботулінотерапія")).toBe(true);
+    expect(choices[1]!.label.startsWith("Ботулінотерапія")).toBe(true);
+    expect(choices[0]!.label).toMatch(/FULL FACE\+шия$/);
+    expect(choices[1]!.label).toMatch(/FULL FACE\+шия \(2\)$/);
   });
 
   it("keeps final chip labels unique when a later base matches an earlier suffix", () => {
@@ -316,6 +352,27 @@ describe("buildFaqCatalogChoices", () => {
     expect(labels[0]).toBe("Foo Bar");
     expect(labels[1]).toContain("(2)");
     expect(labels[2]).toContain("(3)");
+  });
+});
+
+describe("fallbackCatalogPageChoices", () => {
+  it("caps overflow and shortens long CRM chip labels with displayLabel", () => {
+    const longName = "Ботулінотерапія Botox, Dysport FULL FACE+шия";
+    const rows = [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `svc-${index}`,
+        name: `Service ${index}`,
+      })),
+      { id: "svc-long", name: longName },
+    ];
+    const choices = fallbackCatalogPageChoices(rows);
+    expect(choices).toHaveLength(8);
+    expect(choices[7]!.label).toBe(SERVICE_CANDIDATE_OTHER_LABEL_UK);
+    expect(choices[7]!.serviceIds).toEqual(["svc-7", "svc-long"]);
+    const alone = fallbackCatalogPageChoices([{ id: "x", name: longName }]);
+    expect(alone[0]!.label.startsWith("Ботулінотерапія")).toBe(true);
+    expect(alone[0]!.label.endsWith("FULL FACE+шия")).toBe(true);
+    expect(alone[0]!.displayLabel).toBe(longName);
   });
 });
 

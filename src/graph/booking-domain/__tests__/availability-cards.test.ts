@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { CONSULTATION_SERVICE_ID } from "../../../shared/clinic-constants.js";
+import {
+  CONSULTATION_SERVICE_ID,
+  SERVICE_CANDIDATE_OTHER_LABEL_UK,
+} from "../../../shared/clinic-constants.js";
 import {
   createEmptyBookingDraft,
   reduceBookingDraft,
@@ -378,7 +381,8 @@ describe("multi-fact side questions and catalog resolve", () => {
           { id: "svc-meso", label: "Мезоботокс", serviceIds: ["svc-meso"] },
           {
             id: "svc-latin",
-            label: "Ботулінотерапія Botox, Disport 1 зона",
+            label: "Ботулінотерапія…Disport 1 зона",
+            displayLabel: "Ботулінотерапія Botox, Disport 1 зона",
             serviceIds: ["svc-latin"],
           },
         ],
@@ -400,7 +404,8 @@ describe("multi-fact side questions and catalog resolve", () => {
           { id: "svc-meso", label: "Мезоботокс", serviceIds: ["svc-meso"] },
           {
             id: "svc-latin",
-            label: "Ботулінотерапія Botox, Disport 1 зона",
+            label: "Ботулінотерапія…Disport 1 зона",
+            displayLabel: "Ботулінотерапія Botox, Disport 1 зона",
             serviceIds: ["svc-latin"],
           },
         ],
@@ -446,6 +451,52 @@ describe("multi-fact side questions and catalog resolve", () => {
         label: row.name,
         serviceIds: [row.id],
       })),
+    });
+  });
+
+  it("catalog effect without node choices caps at 8 via FAQ fallback page", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_9_list_services",
+        expectedRevision: 1,
+        effect: { kind: "list_services", query: "ботокс" },
+        status: "executing",
+      },
+    });
+    const services = Array.from({ length: 9 }, (_, index) => ({
+      id: `svc-${index}`,
+      name: `Service ${index}`,
+    }));
+    const decision = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_9_list_services",
+          kind: "catalog",
+          outcome: "ok",
+          services,
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+      },
+    );
+    expect(decision.decision.card?.kind).toBe("service_candidate");
+    const choices = decision.decision.card?.kind === "service_candidate"
+      ? decision.decision.card.choices
+      : [];
+    expect(choices).toHaveLength(8);
+    expect(choices.slice(0, 7).map((chip) => chip.id)).toEqual(
+      services.slice(0, 7).map((row) => row.id),
+    );
+    expect(choices[7]).toMatchObject({
+      id: "faq_other",
+      label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
+      serviceIds: ["svc-7", "svc-8"],
     });
   });
 

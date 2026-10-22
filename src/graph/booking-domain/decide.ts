@@ -4,7 +4,6 @@ import {
   CONSULTATION_SERVICE_ID,
   CONSULTATION_SERVICE_NAME_UK,
   CREATE_CONFIRMATION_UK,
-  SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import {
   isConfirmationAffirmation,
@@ -41,6 +40,10 @@ import type { BookingEffect, EffectResult, PendingEffect } from "./effects.js";
 import { nextBookingRequirement } from "./requirement.js";
 import type { CatalogChip, CatalogRow, PendingDecision } from "./session.js";
 import type { ScheduleIntent, UnderstoodBookingTurn } from "./turn.js";
+import {
+  catalogChipsFromInteractionChoices,
+  fallbackCatalogPageChoices,
+} from "../catalog-page-choices.js";
 
 const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSemanticIntent> = {
   phoneNumber: "ask_phone",
@@ -49,29 +52,8 @@ const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSe
 };
 
 /** Last-resort page when the node did not attach FAQ-bounded choices. */
-const chipsFromCatalogRows = (rows: readonly CatalogRow[]): CatalogChip[] => {
-  if (rows.length <= 8) {
-    return rows.map((row) => ({
-      id: row.id,
-      label: row.name,
-      serviceIds: [row.id],
-    }));
-  }
-  const visible = rows.slice(0, 7);
-  const overflow = rows.slice(7);
-  return [
-    ...visible.map((row) => ({
-      id: row.id,
-      label: row.name,
-      serviceIds: [row.id],
-    })),
-    {
-      id: "faq_other",
-      label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
-      serviceIds: overflow.map((row) => row.id),
-    },
-  ];
-};
+const chipsFromCatalogRows = (rows: readonly CatalogRow[]): CatalogChip[] =>
+  catalogChipsFromInteractionChoices(fallbackCatalogPageChoices(rows));
 
 const uniqueAllowlistedIds = (
   ids: readonly string[],
@@ -82,12 +64,7 @@ const catalogCardFromChips = (
   chips: readonly CatalogChip[],
 ): Extract<BookingViewCard, { kind: "service_candidate" }> => ({
   kind: "service_candidate",
-  choices: chips.map((chip) => ({
-    id: chip.id,
-    label: chip.label,
-    serviceIds: [...chip.serviceIds],
-    ...(chip.displayLabel != null ? { displayLabel: chip.displayLabel } : {}),
-  })),
+  choices: catalogChipsFromInteractionChoices(chips),
 });
 
 type RelativeOrNavSchedule =

@@ -33,19 +33,7 @@ import {
   projectAvailabilityPresentation,
   projectEmptyAvailabilityPresentation,
 } from "./booking-domain/availability-presentation.js";
-
-const FAQ_CATALOG_CLOSE_UK = "Який варіант вам підходить?";
-
-/** Visible bullets must match the reply keyboard (FAQ catalog pattern). */
-const choiceBullets = (interaction: PendingInteraction): string => {
-  const labels = interaction.choices
-    .map((choice) => choice.label.trim())
-    .filter((label) => label.length > 0);
-  if (labels.length === 0) {
-    return "";
-  }
-  return `${labels.map((label) => `• ${label}`).join("\n")}\n\n${FAQ_CATALOG_CLOSE_UK}`;
-};
+import { catalogChoiceBulletBlock } from "./faq-catalog.js";
 
 const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
 const AVAILABILITY_GENERIC_DATE_HEADING = "Доступні дні";
@@ -156,7 +144,7 @@ const clarificationBody = (interaction: PendingInteraction): string => {
   if (interaction.kind === "mutation_confirm") {
     return "Підтвердити цю дію?";
   }
-  const options = choiceBullets(interaction);
+  const options = catalogChoiceBulletBlock(interaction.choices);
   if (interaction.kind === "service_or_note") {
     const service = interaction.currentService.name ?? interaction.currentService.id;
     const intro =
@@ -164,7 +152,7 @@ const clarificationBody = (interaction: PendingInteraction): string => {
     return options.length > 0 ? `${intro}\n\n${options}` : `${intro}\n\nОберіть, будь ласка:`;
   }
   if (interaction.kind === "service_candidate") {
-    // FAQ browse body is renderFaqCatalogReply in FAQ finalize, not this renderer.
+    // Same bullet+close block as FAQ; ack-only when the page has nothing to list.
     return options.length > 0
       ? `${SERVICE_CHANGE_ACK_UK}\n\n${options}`
       : SERVICE_CHANGE_ACK_UK;
