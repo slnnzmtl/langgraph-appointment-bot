@@ -1,8 +1,9 @@
 import type { InterpretBookingTurn } from "../agent-loop/booking-turn-interpreter.js";
 import {
   faqHighlightedService,
-  promoteBookHighlightedRoute,
+  resolveBookHighlightedPromotion,
 } from "../faq-highlight.js";
+import { clarificationCopy } from "../agent-loop/booking-response-fallback.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import { askDecisionFromPendingView } from "../booking-domain/decide.js";
@@ -246,13 +247,38 @@ export const createClinicSupervisorNode = (
       && interaction?.kind === "service_candidate"
       && interaction.owner === "faq"
     ) {
-      const promoted = promoteBookHighlightedRoute(
+      const promotion = resolveBookHighlightedPromotion(
         patch,
         faqHighlighted,
         state.servicesContext?.list ?? [],
       );
-      if (promoted != null) {
-        route = promoted;
+      if (promotion.status === "promoted") {
+        route = promotion.route;
+      } else if (promotion.status === "stale_highlight") {
+        const locale = resolvePatientLocale({
+          patientLocale,
+          messages: state.messages,
+        });
+        const staleCopy = clarificationCopy("highlight_stale", locale)
+          ?? clarificationCopy("need_service", locale)
+          ?? "";
+        const hasVisit = (ctx.bookingContext?.meetings.length ?? 0) > 0;
+        return finish({
+          path: "chip",
+          update: {
+            next: FINISH_ROUTE,
+            pendingInteraction: null,
+            ...ctx.prefetchUpdate,
+            lastHandoff: {
+              agentId: FINISH_ROUTE,
+              agentName: "supervisor",
+              status: "ok",
+              replyText: staleCopy,
+              replyButtons: [...defaultMenuLabels(hasVisit)],
+            },
+            understoodTurn: null,
+          },
+        });
       }
     }
 

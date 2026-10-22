@@ -49,34 +49,41 @@ export const faqHighlightedService = (
   };
 };
 
+export type BookHighlightedPromotion =
+  | { status: "not_requested" }
+  | { status: "promoted"; route: ReceptionistRoute }
+  | { status: "stale_highlight" };
+
 /**
- * Rewrite book_highlighted → catalog_service when the highlighted id is on the
- * current allowlisted list; otherwise stay FAQ with serviceIntent stripped.
+ * Promote book_highlighted → catalog_service when the id is on the current list.
+ * Missing/stale rows must clear the highlight (supervisor FINISH), not reopen FAQ chips.
  */
-export const promoteBookHighlightedRoute = (
+export const resolveBookHighlightedPromotion = (
   patch: UnderstoodBookingTurn,
   highlighted: FaqHighlightedService | null,
   servicesList: ServicesContext["list"] | readonly ServicesContext["list"][number][],
-): ReceptionistRoute | null => {
+): BookHighlightedPromotion => {
   if (patch.serviceIntent?.kind !== "book_highlighted") {
-    return null;
+    return { status: "not_requested" };
   }
   const row = highlighted != null
     ? servicesList.find((service) => service.id === highlighted.serviceId)
     : undefined;
   if (highlighted != null && row != null) {
     return {
-      kind: "booking",
-      patch: {
-        ...patch,
-        serviceIntent: {
-          kind: "catalog_service",
-          serviceId: row.id,
-          ...(row.name != null ? { serviceName: row.name } : {}),
+      status: "promoted",
+      route: {
+        kind: "booking",
+        patch: {
+          ...patch,
+          serviceIntent: {
+            kind: "catalog_service",
+            serviceId: row.id,
+            ...(row.name != null ? { serviceName: row.name } : {}),
+          },
         },
       },
     };
   }
-  const { serviceIntent: _stripped, ...rest } = patch;
-  return { kind: "faq_capability", patch: rest };
+  return { status: "stale_highlight" };
 };

@@ -91,10 +91,14 @@ export const prepareFaqTurn = async (
       const services = state.servicesContext?.list ?? [];
       if (remainingIds.length === 1) {
         const row = services.find((service) => service.id === remainingIds[0]);
+        if (row == null) {
+          update.pendingInteraction = null;
+          return update;
+        }
         return openFaqHighlight(
           interaction,
           remainingIds[0]!,
-          row?.name,
+          row.name,
           update,
         );
       }

@@ -63,6 +63,8 @@ const CLARIFICATION_UK: Record<string, string> = {
   invalid_lastName: BOOKING_LAST_NAME_INVALID_UK,
   need_service:
     "Уточніть, будь ласка, послугу — напишіть назву або скажіть «консультація».",
+  highlight_stale:
+    "Ця послуга зараз недоступна в каталозі. Оберіть іншу зі списку або напишіть «Послуги».",
   unknown_faq:
     "На жаль, я не маю цієї інформації. Можу допомогти із записом або іншими питаннями про клініку.",
   visit_cancel_ambiguous:
@@ -78,6 +80,8 @@ const CLARIFICATION_EN: Partial<Record<string, string>> = {
     "I could not check available times. Please try again in a moment.",
   need_service:
     "Please clarify the service — type a name or say “consultation”.",
+  highlight_stale:
+    "That service is no longer in the catalog. Choose another from the list or tap Services.",
   unknown_faq:
     "I do not have that information. I can help with booking or other clinic questions.",
   invalid_phone:

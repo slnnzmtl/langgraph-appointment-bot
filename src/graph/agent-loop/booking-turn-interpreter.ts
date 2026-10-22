@@ -23,6 +23,7 @@ const bookingTurnClassificationSchema = z.object({
       "catalog_browse",
       "confirm_pending_service",
       "decline_pending_service",
+      "book_highlighted",
     ])
     .optional(),
   serviceQuery: z.string().min(1).max(120).optional(),
@@ -94,6 +95,9 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
         ? `Open field: contact ${input.awaitingContactField}.`
         : null,
       input.awaitingServiceConfirm === true ? "Open field: pending service confirmation." : null,
+      input.faqHighlightOpen === true
+        ? "Idle FAQ context: one highlighted catalog row is informational until the patient explicitly books it (book_highlighted). Consultation requests stay consultation."
+        : null,
       input.activeRequirement != null
         ? `Active booking requirement: ${input.activeRequirement}.`
         : null,

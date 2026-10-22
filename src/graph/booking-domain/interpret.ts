@@ -55,30 +55,22 @@ const isBookHighlightedPhrase = (raw: string): boolean => {
   );
 };
 
-const asBookHighlightedIfOpen = (
-  patch: UnderstoodBookingTurn,
-  faqHighlightOpen: boolean | undefined,
-): UnderstoodBookingTurn => {
-  if (!faqHighlightOpen) {
-    return patch;
-  }
-  if (patch.serviceIntent?.kind === "consultation") {
-    return { ...patch, serviceIntent: { kind: "book_highlighted" } };
-  }
-  return patch;
-};
-
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const HH_MM = /^\d{1,2}:\d{2}$/;
 
 /** Exact DEFAULT / visit / services labels even when not on the current card. */
-const interpretGlobalKeyboardLabel = (raw: string): UnderstoodBookingTurn | null => {
+const interpretGlobalKeyboardLabel = (
+  raw: string,
+  faqHighlightOpen?: boolean,
+): UnderstoodBookingTurn | null => {
   const globalLabel = labelIdFor(raw);
   if (globalLabel === "mainMenu") {
     return { controlIntent: { kind: "main_menu" } };
   }
   if (globalLabel === "mainBook") {
-    return { serviceIntent: { kind: "consultation" } };
+    return faqHighlightOpen === true
+      ? { serviceIntent: { kind: "book_highlighted" } }
+      : { serviceIntent: { kind: "consultation" } };
   }
   if (globalLabel === "mainMyVisit") {
     return { controlIntent: { kind: "visit_status" } };
@@ -248,9 +240,9 @@ export const interpretBookingTurnDeterministic = (
   }
 
   // Global menu / visit labels win over open contact fields (no routing LLM).
-  const globalWhileContact = interpretGlobalKeyboardLabel(raw);
+  const globalWhileContact = interpretGlobalKeyboardLabel(raw, input.faqHighlightOpen);
   if (globalWhileContact != null) {
-    return asBookHighlightedIfOpen(globalWhileContact, input.faqHighlightOpen);
+    return globalWhileContact;
   }
 
   // Strict structural: valid phone only. Non-phone prose → {} so the structured
@@ -283,9 +275,9 @@ export const interpretBookingTurnDeterministic = (
     }
   }
 
-  const globalLabelPatch = interpretGlobalKeyboardLabel(raw);
+  const globalLabelPatch = interpretGlobalKeyboardLabel(raw, input.faqHighlightOpen);
   if (globalLabelPatch != null) {
-    return asBookHighlightedIfOpen(globalLabelPatch, input.faqHighlightOpen);
+    return globalLabelPatch;
   }
 
   // Idle FAQ highlight: explicit book-this prose (not confirm_pending_service).
@@ -350,7 +342,8 @@ export type BookingTurnClassification = {
     | "named_procedure"
     | "catalog_browse"
     | "confirm_pending_service"
-    | "decline_pending_service";
+    | "decline_pending_service"
+    | "book_highlighted";
   serviceQuery?: string;
   /** @deprecated Ignored — CRM ids must come from catalog evidence only. */
   serviceId?: string;
@@ -400,7 +393,7 @@ Rules:
 - visit_cancel = cancel an existing planned visit. visit_reschedule = move an existing visit. Ambiguous "I can't make it" without choosing cancel vs reschedule → visit_cancel so the bot can clarify.
 - visit_status = read-only "what is booked".
 - Ukrainian, English, and mixed language are valid.
-- When an idle FAQ unique service highlight is open, booking that highlighted row is not consultation and not confirm_pending_service — omit serviceIntentKind so the deterministic path can map book-this / «Записатись».
+- When context says an idle FAQ unique service highlight is open: use serviceIntentKind book_highlighted only when the patient explicitly asks to book that highlighted row (book this / записатись на цю). A separate consultation request stays consultation. Affirmations (yes/так) are not book_highlighted unless the open field is pending service confirmation.
 - Do not use keyword lists; decide from meaning and the open-field context provided.`;
 
 /** Normalize a structured LLM classification into an UnderstoodBookingTurn. */
@@ -415,10 +408,13 @@ export const normalizeBookingTurnClassification = (
   }
 
   switch (raw.serviceIntentKind) {
+    case "book_highlighted":
+      if (input.faqHighlightOpen === true) {
+        patch.serviceIntent = { kind: "book_highlighted" };
+      }
+      break;
     case "consultation":
-      patch.serviceIntent = input.faqHighlightOpen === true
-        ? { kind: "book_highlighted" }
-        : { kind: "consultation" };
+      patch.serviceIntent = { kind: "consultation" };
       break;
     case "named_procedure":
       if (raw.serviceQuery != null) {
@@ -436,10 +432,9 @@ export const normalizeBookingTurnClassification = (
       };
       break;
     case "confirm_pending_service":
-      // Idle FAQ highlight: confirm_pending_service is not a valid book signal.
-      patch.serviceIntent = input.faqHighlightOpen === true
-        ? { kind: "book_highlighted" }
-        : { kind: "confirm_pending_service" };
+      if (input.awaitingServiceConfirm === true) {
+        patch.serviceIntent = { kind: "confirm_pending_service" };
+      }
       break;
     case "decline_pending_service":
       patch.serviceIntent = { kind: "decline_pending_service" };

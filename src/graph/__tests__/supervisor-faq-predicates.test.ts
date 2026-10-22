@@ -207,7 +207,7 @@ describe("FAQ highlight book_highlighted promotion", () => {
     });
   });
 
-  it("stays FAQ and strips book_highlighted when the CRM row is missing", async () => {
+  it("clears stale highlight and replies when the CRM row is missing", async () => {
     const node = createClinicSupervisorNode({
       interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
     });
@@ -222,14 +222,13 @@ describe("FAQ highlight book_highlighted promotion", () => {
         bookingDraft: null,
       }),
     );
-    expect(update.next).toBe("faq");
-    expect(update.understoodTurn?.serviceIntent).toBeUndefined();
-    expect(update.understoodTurn).not.toMatchObject({
-      serviceIntent: { kind: "consultation" },
-    });
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toMatch(/каталозі|catalog/i);
+    expect(update.understoodTurn).toBeNull();
   });
 
-  it("stays FAQ when servicesContext is empty (refetch / re-browse)", async () => {
+  it("clears stale highlight when servicesContext is empty", async () => {
     const node = createClinicSupervisorNode({
       interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
     });
@@ -241,7 +240,46 @@ describe("FAQ highlight book_highlighted promotion", () => {
         bookingDraft: null,
       }),
     );
-    expect(update.next).toBe("faq");
-    expect(update.understoodTurn?.serviceIntent).toBeUndefined();
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toMatch(/каталозі|catalog/i);
+  });
+
+  it("routes consultation to booking without promoting Botox on FAQ highlight", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "consultation" } }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Хочу консультацію")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: {
+          list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: { kind: "consultation" },
+    });
+  });
+
+  it("does not start Botox booking when patient says yes without service confirm", async () => {
+    const node = createClinicSupervisorNode();
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Так")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: {
+          list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).not.toBe("booking");
+    expect(update.understoodTurn?.serviceIntent?.kind).not.toBe("catalog_service");
   });
 });

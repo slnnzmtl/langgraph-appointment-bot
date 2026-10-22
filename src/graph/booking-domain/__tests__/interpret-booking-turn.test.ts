@@ -223,20 +223,45 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
     ).toEqual({ serviceIntent: { kind: "consultation" } });
   });
 
-  it("rewrites LLM consultation to book_highlighted when FAQ highlight is open", () => {
+  it("keeps consultation and yes separate from book_highlighted on FAQ highlight", () => {
     expect(
       normalizeBookingTurnClassification(
         { serviceIntentKind: "consultation" },
-        { rawText: "book this", faqHighlightOpen: true },
+        { rawText: "I want a consultation", faqHighlightOpen: true },
       ).serviceIntent,
-    ).toEqual({ kind: "book_highlighted" });
+    ).toEqual({ kind: "consultation" });
 
     expect(
       normalizeBookingTurnClassification(
         { serviceIntentKind: "confirm_pending_service" },
         { rawText: "yes", faqHighlightOpen: true },
       ).serviceIntent,
+    ).toBeUndefined();
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "confirm_pending_service" },
+        {
+          rawText: "Так",
+          faqHighlightOpen: true,
+          awaitingServiceConfirm: true,
+        },
+      ).serviceIntent,
+    ).toEqual({ kind: "confirm_pending_service" });
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "book_highlighted" },
+        { rawText: "book this one", faqHighlightOpen: true },
+      ).serviceIntent,
     ).toEqual({ kind: "book_highlighted" });
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "book_highlighted" },
+        { rawText: "book this one", faqHighlightOpen: false },
+      ).serviceIntent,
+    ).toBeUndefined();
   });
 
   it("rejects unoffered accept callback even while awaitingServiceConfirm", () => {
