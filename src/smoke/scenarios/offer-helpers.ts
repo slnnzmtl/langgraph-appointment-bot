@@ -6,6 +6,7 @@ import {
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import { matchingCatalogRows } from "../../graph/catalog-match.js";
+import { faqHighlightedService } from "../../graph/faq-highlight.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { normalizeReplyLabel } from "../../shared/message-content.js";
 import type { McpCallTool } from "../../shared/mcp.js";
@@ -31,22 +32,6 @@ const isRootCatalogPending = (
 ): pending is Extract<NonNullable<Pending>, { kind: "service_candidate" }> =>
   pending?.kind === "service_candidate"
   && (pending.owner === "faq" || pending.owner === "booking");
-
-/** Idle FAQ unique CRM row (informational highlight) — book via «Записатись». */
-const isFaqUniqueHighlight = (pending: Pending): boolean => {
-  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
-    return false;
-  }
-  if (pending.choices.length !== 1) {
-    return false;
-  }
-  const choice = pending.choices[0]!;
-  const remaining =
-    choice.serviceIds != null && choice.serviceIds.length > 0
-      ? choice.serviceIds
-      : [choice.id];
-  return remaining.length === 1;
-};
 
 const BOOK_LABEL = DEFAULT_MENU_NO_VISITS[0];
 
@@ -231,7 +216,7 @@ export const selectUniqueProcedureAfterRootCatalog = async (
     if (pending?.kind === "service_confirm" && pending.service.id === procedure.id) {
       return turn;
     }
-    if (isFaqUniqueHighlight(pending)) {
+    if (faqHighlightedService(pending) != null) {
       turn = await requestExplicitBook(session, turn);
       continue;
     }
@@ -509,7 +494,11 @@ export const drillToProcedureOffer = async (
     }
     if (interaction?.kind === "service_candidate") {
       // Unique remaining CRM id stays FAQ-owned until an explicit book request.
-      if (isFaqUniqueHighlight(interaction) && !isConsultationName(interaction.choices[0]?.label ?? "")) {
+      const highlighted = faqHighlightedService(interaction);
+      if (
+        highlighted != null
+        && !isConsultationName(highlighted.serviceName ?? interaction.choices[0]?.label ?? "")
+      ) {
         turn = await requestExplicitBook(session, turn);
         continue;
       }

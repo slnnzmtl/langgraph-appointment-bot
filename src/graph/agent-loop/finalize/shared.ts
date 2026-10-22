@@ -26,6 +26,11 @@ import {
 } from "../../booking-interaction-render.js";
 import { renderFaqCatalogReply } from "../../faq-catalog.js";
 import {
+  FAQ_HIGHLIGHT_REPLY_BUTTONS,
+  faqHighlightedService,
+  renderFaqHighlightReply,
+} from "../../faq-highlight.js";
+import {
   consultationService,
   reduceBookingSession,
   type PendingInteraction,
@@ -216,10 +221,19 @@ export const offeredServiceForTurn = (
 export const faqCatalogChipReply = (
   interaction: PendingInteraction & { kind: "service_candidate" },
   services: ServicesContext["list"] = [],
-): { replyText: string; replyButtons: string[] } => ({
-  replyText: renderFaqCatalogReply(interaction.choices, services),
-  replyButtons: replyButtonsForInteraction(interaction),
-});
+): { replyText: string; replyButtons: string[] } => {
+  const highlighted = faqHighlightedService(interaction);
+  if (highlighted != null) {
+    return {
+      replyText: renderFaqHighlightReply(highlighted, services),
+      replyButtons: [...FAQ_HIGHLIGHT_REPLY_BUTTONS],
+    };
+  }
+  return {
+    replyText: renderFaqCatalogReply(interaction.choices, services),
+    replyButtons: replyButtonsForInteraction(interaction),
+  };
+};
 
 /**
  * Structured service-offer synthesis for FAQ or booking when no slot/REPLACE

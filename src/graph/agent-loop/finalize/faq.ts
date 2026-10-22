@@ -30,7 +30,10 @@ import {
   classifyMeetingMutationToolMessage,
   ensureServicesContext,
 } from "../protocol/index.js";
-import { faqHighlightChoice } from "../../faq-highlight.js";
+import {
+  faqHighlightChoice,
+  faqHighlightedService,
+} from "../../faq-highlight.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,
@@ -168,19 +171,13 @@ export const applyFaqCatalogAiFinalize = async (
         ...servicesUpdate,
         pendingInteraction: highlighted.pendingInteraction,
       };
-      const modelIntro = faqCatalogIntroFromModel(next.replyText);
+      const chips = highlighted.pendingInteraction?.kind === "service_candidate"
+        ? faqCatalogChipReply(highlighted.pendingInteraction, services)
+        : { replyText: "", replyButtons: [] as string[] };
       next = {
         ...next,
-        replyText: renderFaqCatalogReply(
-          highlighted.pendingInteraction?.kind === "service_candidate"
-            ? highlighted.pendingInteraction.choices
-            : [],
-          services,
-          modelIntro,
-        ),
-        replyButtons: highlighted.pendingInteraction != null
-          ? replyButtonsForInteraction(highlighted.pendingInteraction)
-          : [],
+        replyText: chips.replyText,
+        replyButtons: chips.replyButtons,
         replySource: "runtime",
       };
       trackEvent("reply_menu_filled", {
@@ -243,6 +240,8 @@ export const applyFaqCatalogAiFinalize = async (
         reason: "faq_catalog_close",
       });
     } else {
+      const services = state.servicesContext?.list ?? [];
+      const chips = faqCatalogChipReply(catalog, services);
       const preserved = faqCatalogAction === "keep_catalog"
         ? faqCatalogPreserveModelAnswer(next.replyText)
         : null;
@@ -250,20 +249,26 @@ export const applyFaqCatalogAiFinalize = async (
         next = {
           ...next,
           replyText: preserved,
-          replyButtons: replyButtonsForInteraction(catalog),
+          replyButtons: chips.replyButtons,
         };
-      } else {
-        const modelIntro = faqCatalogAction === "keep_catalog"
-          ? faqCatalogIntroFromModel(next.replyText)
-          : "";
+      } else if (
+        faqCatalogAction === "keep_catalog"
+        && faqHighlightedService(catalog) == null
+      ) {
         next = {
           ...next,
           replyText: renderFaqCatalogReply(
             catalog.choices,
-            state.servicesContext?.list ?? [],
-            modelIntro,
+            services,
+            faqCatalogIntroFromModel(next.replyText),
           ),
-          replyButtons: replyButtonsForInteraction(catalog),
+          replyButtons: chips.replyButtons,
+        };
+      } else {
+        next = {
+          ...next,
+          replyText: chips.replyText,
+          replyButtons: chips.replyButtons,
         };
       }
       trackEvent("reply_menu_filled", {

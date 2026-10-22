@@ -3,6 +3,7 @@
  * Keeps supervisor off agent-loop prepare modules.
  */
 
+import { DEFAULT_MENU_NO_VISITS } from "../shared/clinic-constants.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { UnderstoodBookingTurn } from "./booking-domain/turn.js";
 import type { InteractionChoice, PendingInteraction } from "./booking-session.js";
@@ -12,6 +13,15 @@ export type FaqHighlightedService = {
   serviceId: string;
   serviceName?: string;
 };
+
+/** Always offer book + browse; never drop «Записатись» when the patient has visits. */
+export const FAQ_HIGHLIGHT_REPLY_BUTTONS = [
+  DEFAULT_MENU_NO_VISITS[0],
+  DEFAULT_MENU_NO_VISITS[1],
+] as const;
+
+const FAQ_HIGHLIGHT_BOOK_HINT_UK =
+  "Щоб записатися на цю послугу, натисніть «Записатись».";
 
 /** FAQ-owned single-chip highlight (informational until explicit book). */
 export const faqHighlightChoice = (
@@ -47,6 +57,26 @@ export const faqHighlightedService = (
     serviceId,
     ...(label.length > 0 ? { serviceName: label } : {}),
   };
+};
+
+/**
+ * Informational card for a unique FAQ highlight — not a one-item picker.
+ * Optional CRM description from the current catalog list.
+ */
+export const renderFaqHighlightReply = (
+  highlighted: FaqHighlightedService,
+  services: ServicesContext["list"] | readonly ServicesContext["list"][number][] = [],
+): string => {
+  const row = services.find((service) => service.id === highlighted.serviceId);
+  const name = (row?.name ?? highlighted.serviceName ?? highlighted.serviceId).trim()
+    || highlighted.serviceId;
+  const description = row?.description?.trim();
+  const parts = [name];
+  if (description != null && description.length > 0) {
+    parts.push(description);
+  }
+  parts.push(FAQ_HIGHLIGHT_BOOK_HINT_UK);
+  return parts.join("\n\n");
 };
 
 export type BookHighlightedPromotion =

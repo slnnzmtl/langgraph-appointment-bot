@@ -86,22 +86,31 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
     }
   });
 
-  it("prepare unique id stays FAQ highlight without bookingDraft", async () => {
-    const catalog = faqCatalogPending(["Only"]);
+  it("prepare unique remaining from multi-choice opens FAQ highlight without bookingDraft", async () => {
     const state = supervisorState({
-      messages: [new HumanMessage("Only")],
+      messages: [new HumanMessage("Пілінг серединний")],
       pendingInteraction: {
-        ...catalog,
+        kind: "service_candidate",
+        owner: "faq",
+        utterance: "catalog",
         choices: [
           {
-            id: "svc-only",
-            label: "Only",
-            serviceIds: ["svc-only"],
+            id: "g-mid",
+            label: "Пілінг серединний",
+            serviceIds: ["svc-mid"],
+          },
+          {
+            id: "g-surf",
+            label: "Пілінг поверхневий",
+            serviceIds: ["svc-surf"],
           },
         ],
       },
       servicesContext: {
-        list: [{ id: "svc-only", name: "Only", duration: 30 }],
+        list: [
+          { id: "svc-mid", name: "Пілінг серединний", duration: 45 },
+          { id: "svc-surf", name: "Пілінг поверхневий", duration: 30 },
+        ],
         fetchedAt: Date.now(),
       },
       bookingDraft: null,
@@ -112,10 +121,80 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
     expect(result.pendingInteraction?.kind).toBe("service_candidate");
     expect(result.pendingInteraction).toMatchObject({
       owner: "faq",
-      choices: [{ id: "svc-only", serviceIds: ["svc-only"] }],
+      choices: [{ id: "svc-mid", serviceIds: ["svc-mid"] }],
     });
+    expect(result.faqSkipLlm).toBe(true);
     expect(result.understoodTurn).toBeUndefined();
     expect(result.next).toBeUndefined();
+  });
+
+  it("prepare re-tap of unique highlight is idempotent", async () => {
+    const highlight = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "catalog",
+      choices: [
+        {
+          id: "svc-mid",
+          label: "Пілінг серединний",
+          serviceIds: ["svc-mid"],
+        },
+      ],
+    };
+    const result = await prepareFaqTurn(
+      supervisorState({
+        messages: [new HumanMessage("Пілінг серединний")],
+        pendingInteraction: highlight,
+        servicesContext: {
+          list: [{ id: "svc-mid", name: "Пілінг серединний", duration: 45 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(result.pendingInteraction).toBe(highlight);
+    expect(result.faqSkipLlm).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(result, "bookingDraft")).toBe(false);
+  });
+
+  it("no-AI finalize unique highlight is informational with Записатись", () => {
+    const reply = tryFaqNoAiFinalize(
+      supervisorState({
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          choices: [
+            {
+              id: "svc-mid",
+              label: "Пілінг серединний",
+              serviceIds: ["svc-mid"],
+            },
+          ],
+        },
+        bookingDraft: null,
+        servicesContext: {
+          list: [
+            {
+              id: "svc-mid",
+              name: "Пілінг серединний",
+              duration: 45,
+              description: "Середня глибина",
+            },
+          ],
+          fetchedAt: Date.now(),
+        },
+      }),
+    );
+    expect(reply).not.toBeNull();
+    expect(reply?.replyText).toContain("Пілінг серединний");
+    expect(reply?.replyText).toContain("Середня глибина");
+    expect(reply?.replyText).toMatch(/Записатись/);
+    expect(reply?.replyText).not.toMatch(/Який варіант вам підходить/);
+    expect(reply?.replyButtons).toEqual(["Записатись", "Послуги"]);
+    expect(
+      Object.prototype.hasOwnProperty.call(reply?.patch ?? {}, "bookingDraft"),
+    ).toBe(false);
   });
 
   it("no-AI finalize does not set bookingDraft", () => {
@@ -138,6 +217,7 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
       Object.prototype.hasOwnProperty.call(reply?.patch ?? {}, "bookingDraft"),
     ).toBe(false);
     expect(reply?.yieldToSupervisor).toBe(false);
+    expect(reply?.replyText).toMatch(/Який варіант вам підходить/);
   });
 
   it("AI catalog finalize does not write bookingDraft on root open", async () => {
@@ -165,6 +245,37 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
       Object.prototype.hasOwnProperty.call(serviceOfferUpdate, "bookingDraft"),
     ).toBe(false);
     expect(reply.yieldToSupervisor).toBe(false);
+  });
+
+  it("AI unique open_catalog renders informational highlight not a picker", async () => {
+    const { reply, serviceOfferUpdate } = await applyFaqCatalogAiFinalize(
+      supervisorState({
+        pendingInteraction: null,
+        bookingDraft: null,
+        servicesContext: {
+          list: [
+            { id: "svc-mid", name: "Пілінг серединний", duration: 45 },
+          ],
+          fetchedAt: Date.now(),
+        },
+      }),
+      emptyFinalizeReply("ok"),
+      [
+        "Ось про пілінг",
+        '<faq_catalog_action action="open_catalog" query="Пілінг серединний"/>',
+      ].join("\n"),
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(serviceOfferUpdate, "bookingDraft"),
+    ).toBe(false);
+    expect(serviceOfferUpdate.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      choices: [{ id: "svc-mid", serviceIds: ["svc-mid"] }],
+    });
+    expect(reply.replyText).toContain("Пілінг серединний");
+    expect(reply.replyText).not.toMatch(/Який варіант вам підходить/);
+    expect(reply.replyButtons).toEqual(["Записатись", "Послуги"]);
   });
 });
 

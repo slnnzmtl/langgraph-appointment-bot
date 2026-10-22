@@ -6,6 +6,7 @@ import {
 } from "../../booking-entry-policy.js";
 import {
   faqHighlightChoice,
+  faqHighlightedService,
 } from "../../faq-highlight.js";
 import {
   interpretInteractionReply,
@@ -90,6 +91,16 @@ export const prepareFaqTurn = async (
         : [match.choiceId];
       const services = state.servicesContext?.list ?? [];
       if (remainingIds.length === 1) {
+        const alreadyHighlighted = faqHighlightedService(interaction);
+        // Re-tapping the unique highlight chip must not re-open a one-item picker.
+        if (
+          alreadyHighlighted != null
+          && alreadyHighlighted.serviceId === remainingIds[0]
+        ) {
+          update.pendingInteraction = interaction;
+          update.faqSkipLlm = true;
+          return update;
+        }
         const row = services.find((service) => service.id === remainingIds[0]);
         if (row == null) {
           update.pendingInteraction = null;
