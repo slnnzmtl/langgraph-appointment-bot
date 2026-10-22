@@ -32,7 +32,7 @@ import { replyChoicesFromCard } from "./booking-card-choices.js";
 import {
   bookingResponseFallback,
   bookingSuccessText,
-  clarificationCopyUk,
+  clarificationCopy,
 } from "./booking-response-fallback.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
 
@@ -201,21 +201,28 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           replyText = listed;
         }
       }
-      const clarificationPrefix = clarificationCopyUk(decision.facts?.clarificationReason);
-      if (clarificationPrefix != null) {
+      // Verified facts and failure/open-step copy both prefix the listed card —
+      // do not drop price when clarificationReason is set (availability errors).
+      const factPrefix = sideQuestionFactPrefix(decision.facts, locale);
+      const clarificationPrefix = clarificationCopy(
+        decision.facts?.clarificationReason,
+        locale,
+      );
+      const grounded: string[] = [];
+      if (factPrefix != null) {
+        grounded.push(factPrefix);
+      }
+      if (
+        clarificationPrefix != null
+        && clarificationPrefix !== replyText
+      ) {
+        grounded.push(clarificationPrefix);
+      }
+      if (grounded.length > 0) {
         replyText = replyText.trim().length > 0
-          && replyText !== clarificationPrefix
-          ? `${clarificationPrefix}\n\n${replyText}`
-          : clarificationPrefix;
-      } else {
-        // Verified price/hours/address prefix whenever the final card carries them —
-        // not only answer_side_question (deferred price rides on present_dates/etc.).
-        const prefix = sideQuestionFactPrefix(decision.facts, locale);
-        if (prefix != null) {
-          replyText = replyText.trim().length > 0
-            ? `${prefix}\n\n${replyText}`
-            : prefix;
-        }
+          && !grounded.includes(replyText)
+          ? `${grounded.join("\n\n")}\n\n${replyText}`
+          : grounded.join("\n\n");
       }
       // REPLACE cancel continue: composer owns the cancel ack (not FAQ tool-tape scan).
       const replaceCancelAck = state.bookingDraft?.replaceCancelAck === true

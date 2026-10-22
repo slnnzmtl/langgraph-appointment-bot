@@ -325,6 +325,67 @@ describe("deferred turn across catalog + service confirm", () => {
     expect(switched?.serviceAcceptance?.service.id).toBe("svc-other");
     expect(switched?.note.status).toBe("unasked");
 
+    // Compound switch: this-turn note/schedule/price survive unique catalog select.
+    draft = reduceBookingDraft(draft, {
+      type: "reply_facts_set",
+      facts: { servicePrice: "999", serviceName: "Old" },
+    });
+    const compoundSwitch = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: { kind: "named_procedure", query: "Botox" },
+          scheduleIntent: {
+            kind: "date_and_time",
+            date: "2026-10-24",
+            time: "13:00",
+          },
+          note: { kind: "answer", value: "switch note" },
+          informationalQuestion: "price",
+          faqTopic: "price",
+        },
+      },
+      emptyReads,
+    );
+    for (const event of compoundSwitch.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(compoundSwitch.events.some((e) => e.type === "service_invalidated")).toBe(true);
+    expect(draft?.pendingReplyFacts ?? null).toBeNull();
+    expect(draft?.note).toEqual({ status: "answered", value: "switch note" });
+    expect(draft?.deferredTurn?.schedule).toEqual({
+      date: "2026-10-24",
+      preferredTime: "13:00",
+    });
+    expect(draft?.deferredTurn?.informational?.topic).toBe("price");
+    expect(draft?.serviceAcceptance).toBeNull();
+
+    const afterSwitchCatalog = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: draft!.pendingEffect!.id,
+          kind: "catalog",
+          outcome: "ok",
+          services: [{ id: "svc-botox", name: "Botox" }],
+        },
+      },
+      emptyReads,
+    );
+    for (const event of afterSwitchCatalog.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(draft?.serviceAcceptance?.service.id).toBe("svc-botox");
+    expect(draft?.note).toEqual({ status: "answered", value: "switch note" });
+    expect(draft?.deferredTurn?.schedule).toEqual({
+      date: "2026-10-24",
+      preferredTime: "13:00",
+    });
+    expect(draft?.deferredTurn?.informational?.topic).toBe("price");
+    expect(draft?.pendingReplyFacts ?? null).toBeNull();
+
     // Resume original catalog path: note survives accept + slot.
     draft = null;
     for (const event of start.events) {

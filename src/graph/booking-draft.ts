@@ -194,6 +194,11 @@ export type BookingDraft = {
 export type BookingEvent =
   | { type: "service_selected"; service: BookingService; accepted?: boolean; turn?: number }
   | { type: "service_accepted"; turn?: number }
+  /**
+   * Drop the current service ladder (date/slot/note/deferred/reply facts) without
+   * abandoning the booking attempt — used before applying this-turn switch facts.
+   */
+  | { type: "service_invalidated" }
   | { type: "date_selected"; date: string }
   | { type: "schedule_requested"; date: string; preferredTime?: string }
   | {
@@ -677,9 +682,12 @@ const clearDownstream = (
   pendingDecision: null,
   rescheduleTarget: draft.rescheduleTarget ?? null,
   replacement: null,
-  // Explicit replacement of an accepted/pending service clears deferred requests.
+  // Explicit replacement of an accepted/pending service clears deferred requests
+  // and one-shot reply facts from the previous service.
   // First catalog selection keeps them for the same bookingAttemptId.
-  ...(options?.clearDeferred === true ? { deferredTurn: null } : {}),
+  ...(options?.clearDeferred === true
+    ? { deferredTurn: null, pendingReplyFacts: null }
+    : {}),
 });
 
 const slotDate = (slot: SelectedBookingSlot): string => slot.dateStart.slice(0, 10);
@@ -832,6 +840,22 @@ export const reduceBookingDraft = (
         },
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
+    case "service_invalidated": {
+      // Keep bookingAttemptId / contact; drop service ladder + deferred + reply facts.
+      const reset = clearDownstream(draft, {
+        clearDeferred: true,
+        preserveNote: false,
+      });
+      return withVersion(draft, {
+        ...reset,
+        serviceAcceptance: null,
+        phase: bookingDraftPhase({
+          ...reset,
+          serviceAcceptance: null,
+          version: draft.version,
+        }),
+      });
     }
     case "date_selected": {
       if (

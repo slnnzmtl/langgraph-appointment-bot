@@ -1523,8 +1523,11 @@ export const decideBooking = (
       }
     };
 
-    // Compound facts must land before list_services / catalog early returns.
-    emitNoteAndContactFromPatch();
+    /** Note/contact + deferred schedule/price after resetting the service ladder. */
+    const applyCompoundFactsAfterServiceSwitch = (): void => {
+      emitNoteAndContactFromPatch();
+      storeDeferredFromPatch(null);
+    };
 
     // REPLACE chip: cancel current visit, then HITL.
     if (
@@ -1541,6 +1544,34 @@ export const decideBooking = (
     }
 
     const service = patch.serviceIntent;
+    // Catalog chip switch: select first so clearDownstream drops the old ladder,
+    // then apply this-turn note/contact/deferred onto the new service.
+    if (service?.kind === "catalog_service") {
+      emit({
+        type: "service_selected",
+        service: {
+          id: service.serviceId,
+          ...(service.serviceName != null ? { name: service.serviceName } : {}),
+          source: "catalog",
+        },
+        accepted: false,
+      });
+      applyCompoundFactsAfterServiceSwitch();
+      return decideFromRequirement();
+    }
+
+    // Named-procedure switch: invalidate old service before this-turn facts so
+    // unique catalog selection is a first selection (keeps new note/deferred).
+    if (
+      service?.kind === "named_procedure"
+      && ctx.working?.serviceAcceptance != null
+    ) {
+      emit({ type: "service_invalidated" });
+    }
+
+    // Compound facts must land before list_services / other early returns.
+    emitNoteAndContactFromPatch();
+
     if (service?.kind === "confirm_pending_service") {
       if (ctx.working?.serviceAcceptance?.status === "pending") {
         emit({ type: "service_accepted" });
@@ -1596,19 +1627,6 @@ export const decideBooking = (
           }),
         );
       }
-    } else if (service?.kind === "catalog_service") {
-      // Only catalog-resolved ids may write service_selected.
-      // accepted:false — patient still confirms on the BOOKING OFFER card.
-      emit({
-        type: "service_selected",
-        service: {
-          id: service.serviceId,
-          ...(service.serviceName != null ? { name: service.serviceName } : {}),
-          source: "catalog",
-        },
-        accepted: false,
-      });
-      return decideFromRequirement();
     } else if (service?.kind === "named_procedure") {
       // Book-with-visit: REPLACE before catalog resolve — not while already
       // browsing a choose-other / catalog page (narrow the open picker instead).
@@ -1670,6 +1688,11 @@ export const decideBooking = (
         },
         accepted: false,
       });
+    } else if (service?.kind === "book_highlighted") {
+      // Supervisor must rewrite to catalog_service; this branch is fail-closed only.
+      // Never select consultation from a leaked book_highlighted.
+      emitDecision({ kind: "clarification", reason: "need_service" });
+      return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
     } else if (service?.kind === "decline_pending_service") {
       // Same as catalog_browse: wipe the pending offer, then list services.
       // Do not emit need_service clarification (projects to a null keyboard).

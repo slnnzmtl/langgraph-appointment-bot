@@ -380,15 +380,21 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       kind: "service_confirm",
       serviceId: CONSULTATION_SERVICE_ID,
       choiceIds: ["offer_accept", "offer_choose_other"],
-      labels: {
-        offer_accept: "Так",
-        offer_choose_other: "Обрати іншу процедуру",
-      },
     });
+    // Kernel cards stay language-neutral; labels live on the projected interaction.
+    expect(
+      update.bookingDecision?.card != null
+        && "labels" in update.bookingDecision.card
+        ? update.bookingDecision.card.labels
+        : undefined,
+    ).toBeUndefined();
     expect(update.pendingInteraction?.kind).toBe("service_confirm");
     expect(update.pendingInteraction?.kind === "service_confirm"
       ? update.pendingInteraction.choices.map((c) => c.id)
       : []).toEqual(["offer_accept", "offer_choose_other"]);
+    expect(update.pendingInteraction?.kind === "service_confirm"
+      ? update.pendingInteraction.choices.map((c) => c.label)
+      : []).toEqual(["Так", "Обрати іншу процедуру"]);
   });
 
   it("submits firstName from ingress understoodTurn contactFacts", async () => {

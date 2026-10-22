@@ -5,9 +5,11 @@ import {
   openRootFaqCatalog,
 } from "../../booking-entry-policy.js";
 import {
+  faqHighlightChoice,
+} from "../../faq-highlight.js";
+import {
   interpretInteractionReply,
   reduceBookingSession,
-  type InteractionChoice,
   type PendingInteraction,
 } from "../../booking-session.js";
 import { resolveFaqCatalogChoices } from "../../faq-catalog.js";
@@ -36,48 +38,6 @@ const faqUiProduced = (pendingInteraction: PendingInteraction | null | undefined
 
 const faqCatalogAlreadyOpen = (interaction: PendingInteraction | null | undefined): boolean =>
   interaction?.kind === "service_candidate" && interaction.owner === "faq";
-
-/**
- * Keep a unique CRM row on the FAQ interaction as an informational highlight.
- * Does not open a booking draft or hand off to booking.
- */
-export const faqHighlightChoice = (
-  serviceId: string,
-  serviceName?: string,
-): InteractionChoice => ({
-  id: serviceId,
-  label: (serviceName ?? serviceId).trim() || serviceId,
-  serviceIds: [serviceId],
-});
-
-/**
- * Allowlisted single CRM id highlighted on an idle FAQ catalog, if any.
- * Used to promote «book this» without inventing a second UnderstoodBookingTurn kind.
- */
-export const faqHighlightedService = (
-  interaction: PendingInteraction | null | undefined,
-): { serviceId: string; serviceName?: string } | null => {
-  if (interaction?.kind !== "service_candidate" || interaction.owner !== "faq") {
-    return null;
-  }
-  if (interaction.choices.length !== 1) {
-    return null;
-  }
-  const choice = interaction.choices[0]!;
-  const remaining =
-    choice.serviceIds != null && choice.serviceIds.length > 0
-      ? choice.serviceIds
-      : [choice.id];
-  if (remaining.length !== 1) {
-    return null;
-  }
-  const serviceId = remaining[0]!;
-  const label = (choice.displayLabel ?? choice.label).trim();
-  return {
-    serviceId,
-    ...(label.length > 0 ? { serviceName: label } : {}),
-  };
-};
 
 const openFaqHighlight = (
   interaction: PendingInteraction & { kind: "service_candidate" },

@@ -27,12 +27,45 @@ export type InterpretBookingTurnInput = {
   awaitingNote?: boolean;
   awaitingContactField?: "phoneNumber" | "firstName" | "lastName";
   awaitingServiceConfirm?: boolean;
+  /**
+   * Idle FAQ unique catalog highlight is open — «Записатись» / book-this maps to
+   * book_highlighted (never consultation).
+   */
+  faqHighlightOpen?: boolean;
   /** Active booking requirement for structured context (not used deterministically). */
   activeRequirement?: string;
   /** Patient locale hint (uk / en). */
   locale?: "uk" | "en";
   /** Kyiv calendar date YYYY-MM-DD. */
   kyivDate?: string;
+};
+
+/** Explicit book-this prose while an idle FAQ highlight is open. */
+const isBookHighlightedPhrase = (raw: string): boolean => {
+  const normalized = normalizeReplyLabel(raw);
+  if (normalized.length === 0) {
+    return false;
+  }
+  return (
+    /^(?:book\s+this(?:\s+one)?|book\s+it)$/iu.test(normalized)
+    || /^(?:записатись|записатися|запишіть|запиши)\s+(?:на\s+)?(?:цю|цю\s+послугу|цей|неї)$/iu.test(
+      normalized,
+    )
+    || /^(?:хочу\s+)?(?:записатись|записатися)\s+(?:на\s+)?(?:цю|неї)$/iu.test(normalized)
+  );
+};
+
+const asBookHighlightedIfOpen = (
+  patch: UnderstoodBookingTurn,
+  faqHighlightOpen: boolean | undefined,
+): UnderstoodBookingTurn => {
+  if (!faqHighlightOpen) {
+    return patch;
+  }
+  if (patch.serviceIntent?.kind === "consultation") {
+    return { ...patch, serviceIntent: { kind: "book_highlighted" } };
+  }
+  return patch;
 };
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -217,7 +250,7 @@ export const interpretBookingTurnDeterministic = (
   // Global menu / visit labels win over open contact fields (no routing LLM).
   const globalWhileContact = interpretGlobalKeyboardLabel(raw);
   if (globalWhileContact != null) {
-    return globalWhileContact;
+    return asBookHighlightedIfOpen(globalWhileContact, input.faqHighlightOpen);
   }
 
   // Strict structural: valid phone only. Non-phone prose → {} so the structured
@@ -252,7 +285,12 @@ export const interpretBookingTurnDeterministic = (
 
   const globalLabelPatch = interpretGlobalKeyboardLabel(raw);
   if (globalLabelPatch != null) {
-    return globalLabelPatch;
+    return asBookHighlightedIfOpen(globalLabelPatch, input.faqHighlightOpen);
+  }
+
+  // Idle FAQ highlight: explicit book-this prose (not confirm_pending_service).
+  if (input.faqHighlightOpen === true && isBookHighlightedPhrase(raw)) {
+    return { serviceIntent: { kind: "book_highlighted" } };
   }
 
   // Free prose is not classified here — caller must use the structured LLM.
@@ -362,6 +400,7 @@ Rules:
 - visit_cancel = cancel an existing planned visit. visit_reschedule = move an existing visit. Ambiguous "I can't make it" without choosing cancel vs reschedule → visit_cancel so the bot can clarify.
 - visit_status = read-only "what is booked".
 - Ukrainian, English, and mixed language are valid.
+- When an idle FAQ unique service highlight is open, booking that highlighted row is not consultation and not confirm_pending_service — omit serviceIntentKind so the deterministic path can map book-this / «Записатись».
 - Do not use keyword lists; decide from meaning and the open-field context provided.`;
 
 /** Normalize a structured LLM classification into an UnderstoodBookingTurn. */
@@ -377,7 +416,9 @@ export const normalizeBookingTurnClassification = (
 
   switch (raw.serviceIntentKind) {
     case "consultation":
-      patch.serviceIntent = { kind: "consultation" };
+      patch.serviceIntent = input.faqHighlightOpen === true
+        ? { kind: "book_highlighted" }
+        : { kind: "consultation" };
       break;
     case "named_procedure":
       if (raw.serviceQuery != null) {
@@ -395,7 +436,10 @@ export const normalizeBookingTurnClassification = (
       };
       break;
     case "confirm_pending_service":
-      patch.serviceIntent = { kind: "confirm_pending_service" };
+      // Idle FAQ highlight: confirm_pending_service is not a valid book signal.
+      patch.serviceIntent = input.faqHighlightOpen === true
+        ? { kind: "book_highlighted" }
+        : { kind: "confirm_pending_service" };
       break;
     case "decline_pending_service":
       patch.serviceIntent = { kind: "decline_pending_service" };

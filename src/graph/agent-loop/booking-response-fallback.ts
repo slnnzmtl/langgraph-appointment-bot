@@ -73,9 +73,40 @@ const CLARIFICATION_UK: Record<string, string> = {
     "Зараз немає запланованого візиту для перенесення.",
 };
 
+const CLARIFICATION_EN: Partial<Record<string, string>> = {
+  availability_failed:
+    "I could not check available times. Please try again in a moment.",
+  need_service:
+    "Please clarify the service — type a name or say “consultation”.",
+  unknown_faq:
+    "I do not have that information. I can help with booking or other clinic questions.",
+  invalid_phone:
+    "I could not recognize the number. Please send +380XXXXXXXXX or 0XXXXXXXXX.",
+  invalid_firstName:
+    "Please share your first name as one word (letters; hyphen or apostrophe is fine).",
+  invalid_lastName:
+    "Please share your last name as one word (letters; hyphen or apostrophe is fine).",
+  contact_lookup_failed:
+    "I could not verify the number. Please send your phone again.",
+  contact_write_failed:
+    "I could not save your contact details. Please try again in a moment.",
+  phone_occupied:
+    "This number is linked to another account. Please send a different number.",
+};
+
 /** Patient prose for a clarification reason, or null when unknown. */
-export const clarificationCopyUk = (reason: string | undefined): string | null =>
-  reason != null && CLARIFICATION_UK[reason] != null ? CLARIFICATION_UK[reason]! : null;
+export const clarificationCopy = (
+  reason: string | undefined,
+  locale: ConversationLocale = "uk",
+): string | null => {
+  if (reason == null) {
+    return null;
+  }
+  if (locale === "en" && CLARIFICATION_EN[reason] != null) {
+    return CLARIFICATION_EN[reason]!;
+  }
+  return CLARIFICATION_UK[reason] ?? null;
+};
 
 /**
  * Shared create/reschedule confirmation (booking__respond + mutation-finalize).
@@ -165,7 +196,7 @@ const cardSpecificFallback = (
       }
       return SAFETY_UK.confirm_create ?? "Підтвердіть, будь ласка, запис.";
     case "clarification":
-      return CLARIFICATION_UK[card.reason] ?? PATIENT_FALLBACK_MESSAGE;
+      return clarificationCopy(card.reason, locale) ?? PATIENT_FALLBACK_MESSAGE;
     default: {
       const _exhaustive: never = card;
       return _exhaustive;
@@ -185,8 +216,9 @@ export const bookingResponseFallback = (input: {
   }
   const reason = input.facts?.clarificationReason ?? input.facts?.failureCode;
   // Prefer specialized reason copy over generic contact_field / ask_* prompts.
-  if (reason != null && CLARIFICATION_UK[reason] != null) {
-    return CLARIFICATION_UK[reason]!;
+  const clarified = clarificationCopy(reason, locale);
+  if (clarified != null) {
+    return clarified;
   }
   if (input.intent === "mutation_failed" && input.facts?.failureCode === "phone_occupied") {
     return BOOKING_PHONE_OCCUPIED_UK;

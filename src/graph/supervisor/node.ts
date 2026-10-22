@@ -1,5 +1,8 @@
 import type { InterpretBookingTurn } from "../agent-loop/booking-turn-interpreter.js";
-import { faqHighlightedService } from "../agent-loop/prepare/faq.js";
+import {
+  faqHighlightedService,
+  promoteBookHighlightedRoute,
+} from "../faq-highlight.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import { askDecisionFromPendingView } from "../booking-domain/decide.js";
@@ -125,6 +128,11 @@ export const createClinicSupervisorNode = (
     const openContact =
       interaction?.kind === "contact_field" ? interaction.field : undefined;
 
+    const faqHighlighted = !hasOpenBookingSession(ctx.workingDraft)
+      ? faqHighlightedService(interaction)
+      : null;
+    const faqHighlightOpen = faqHighlighted != null;
+
     const interpretInput = {
       rawText: ctx.lastHumanText,
       ...(ctx.state.inboundChoiceId != null
@@ -136,6 +144,7 @@ export const createClinicSupervisorNode = (
         || ctx.workingDraft?.phase === "note",
       ...(openContact != null ? { awaitingContactField: openContact } : {}),
       awaitingServiceConfirm: activeView?.card?.kind === "service_confirm",
+      ...(faqHighlightOpen ? { faqHighlightOpen: true } : {}),
       activeRequirement: nextBookingRequirement(ctx.workingDraft, {
         contactContextDirty: false,
         bookingContextDirty: false,
@@ -232,35 +241,18 @@ export const createClinicSupervisorNode = (
       }
     }
 
-    // Explicit book («Записатись» / consultation) while FAQ holds one allowlisted
-    // highlighted row → promote that row to catalog_service. confirm_pending_service
-    // is not a valid idle booking signal.
     if (
       !hasOpenBookingSession(ctx.workingDraft)
       && interaction?.kind === "service_candidate"
       && interaction.owner === "faq"
-      && patch.serviceIntent?.kind === "consultation"
     ) {
-      const highlighted = faqHighlightedService(interaction);
-      if (highlighted != null) {
-        const row = (state.servicesContext?.list ?? []).find(
-          (service) => service.id === highlighted.serviceId,
-        );
-        route = {
-          kind: "booking",
-          patch: {
-            ...patch,
-            serviceIntent: {
-              kind: "catalog_service",
-              serviceId: highlighted.serviceId,
-              ...(row?.name != null
-                ? { serviceName: row.name }
-                : highlighted.serviceName != null
-                  ? { serviceName: highlighted.serviceName }
-                  : {}),
-            },
-          },
-        };
+      const promoted = promoteBookHighlightedRoute(
+        patch,
+        faqHighlighted,
+        state.servicesContext?.list ?? [],
+      );
+      if (promoted != null) {
+        route = promoted;
       }
     }
 

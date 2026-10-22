@@ -30,7 +30,7 @@ import {
   classifyMeetingMutationToolMessage,
   ensureServicesContext,
 } from "../protocol/index.js";
-import { faqHighlightChoice } from "../prepare/faq.js";
+import { faqHighlightChoice } from "../../faq-highlight.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,

@@ -162,6 +162,14 @@ describe("text while HITL pending", () => {
         payload: { ...createCrmPayload },
       },
     },
+    pendingEffect: {
+      id: "eff_create_1",
+      status: "prepared",
+      effect: {
+        kind: "create_meeting",
+        payload: { ...createCrmPayload },
+      },
+    },
     replacement: null,
   };
 
@@ -771,7 +779,9 @@ describe("booking schema upgrade on text turn", () => {
     }
   });
 
-  it("upgrades a version-0 interrupt via Command.update and still resumes confirm", async () => {
+  it("upgrades a version-0 interrupt but declines confirm without pendingEffect", async () => {
+    // Legacy upgrader rebuilds without pendingEffect / pendingDecision / frozenCommand.
+    // Stuffing those fields into a v0 fixture cannot produce a valid positive confirm.
     const graph = buildPendingConfirmBookingGraph();
     const threadId = "booking-schema-v0-resume";
     const first = await graph.invoke(
@@ -835,7 +845,8 @@ describe("booking schema upgrade on text turn", () => {
 
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
-    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
+    // Fail closed: no CRM write resume after v0 upgrade drops HITL correlation.
+    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
     expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingNoteStatus).toBe("unasked");
     expect(snap.values.selectedSlot).toBeNull();

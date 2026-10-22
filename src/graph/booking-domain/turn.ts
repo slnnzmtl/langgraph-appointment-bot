@@ -9,6 +9,12 @@ export type ServiceIntent =
   | { kind: "catalog_browse"; query?: string }
   | { kind: "confirm_pending_service" }
   | { kind: "decline_pending_service" }
+  /**
+   * Idle FAQ unique highlight: book that CRM row. Supervisor rewrites to
+   * catalog_service only when the id is on the current allowlisted list.
+   * Never selects consultation in the kernel.
+   */
+  | { kind: "book_highlighted" }
   /** Resolved from catalog evidence only (never model-minted CRM ids). */
   | { kind: "catalog_service"; serviceId: string; serviceName?: string };
 

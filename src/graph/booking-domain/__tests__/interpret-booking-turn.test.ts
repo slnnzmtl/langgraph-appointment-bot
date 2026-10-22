@@ -195,6 +195,50 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
     ).toEqual({ kind: "decline_pending_service" });
   });
 
+  it("maps book this one to book_highlighted only when FAQ highlight is open", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "book this one",
+        faqHighlightOpen: true,
+      }),
+    ).toEqual({ serviceIntent: { kind: "book_highlighted" } });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "book this one",
+      }),
+    ).toEqual({});
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Записатись",
+        faqHighlightOpen: true,
+      }),
+    ).toEqual({ serviceIntent: { kind: "book_highlighted" } });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Записатись",
+      }),
+    ).toEqual({ serviceIntent: { kind: "consultation" } });
+  });
+
+  it("rewrites LLM consultation to book_highlighted when FAQ highlight is open", () => {
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "consultation" },
+        { rawText: "book this", faqHighlightOpen: true },
+      ).serviceIntent,
+    ).toEqual({ kind: "book_highlighted" });
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "confirm_pending_service" },
+        { rawText: "yes", faqHighlightOpen: true },
+      ).serviceIntent,
+    ).toEqual({ kind: "book_highlighted" });
+  });
+
   it("rejects unoffered accept callback even while awaitingServiceConfirm", () => {
     expect(
       interpretBookingTurnDeterministic({
