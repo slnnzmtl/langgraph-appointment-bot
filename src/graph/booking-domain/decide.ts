@@ -151,6 +151,16 @@ const viewCardFromPendingDecision = (
       labels: { ...pending.labels },
     };
   }
+  if (pending?.kind === "visit_select") {
+    return { kind: "visit_select", stage: pending.stage };
+  }
+  if (pending?.kind === "mutation_confirm") {
+    return {
+      kind: "mutation_confirm",
+      action: pending.action,
+      effectId: pending.effectId,
+    };
+  }
   // Derived waits — only when pendingDecision is not an open card.
   if (draft.serviceAcceptance?.status === "pending") {
     const service = draft.serviceAcceptance.service;
@@ -196,6 +206,29 @@ export const askDecisionFromPendingView = (
   }
   if (card.kind === "service_candidate") {
     return { tag: "ask", intent: "ask_service", facts: {}, card };
+  }
+  if (card.kind === "visit_select") {
+    return {
+      tag: "ask",
+      intent: "clarification",
+      facts: {},
+      card,
+      ...(card.stage === "replacement" ? { reason: "replacement_offer" } : {}),
+    };
+  }
+  if (card.kind === "mutation_confirm") {
+    const intent =
+      card.action === "create"
+        ? "confirm_create"
+        : card.action === "reschedule"
+          ? "confirm_reschedule"
+          : "confirm_cancel";
+    return {
+      tag: "mutation_confirm",
+      intent,
+      facts: { action: card.action, effectId: card.effectId },
+      card,
+    };
   }
   return null;
 };

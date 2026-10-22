@@ -11,7 +11,8 @@ import {
   type BookingDraft,
   type BookingEvent,
 } from "../../booking-draft.js";
-import { decideBooking } from "../decide.js";
+import { choiceIdsFromCard } from "../../agent-loop/booking-card-choices.js";
+import { askDecisionFromPendingView, decideBooking } from "../decide.js";
 import type { BookingInput, BookingReadModels } from "../decision.js";
 
 const READ_MODELS: BookingReadModels = {
@@ -316,6 +317,60 @@ describe("decideBooking atomic contract", () => {
       stage: "replacement",
     });
     expect(result.decision.pendingEffect).toBeUndefined();
+  });
+
+  it("active view projects REPLACE visit_select with cancel_existing offered ids", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "existing_booking_detected",
+      meeting: {
+        id: "meeting-1",
+        name: "Консультація",
+        dateStart: "2026-10-21T10:00:00",
+        dateEnd: "2026-10-21T10:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: { kind: "visit_select", stage: "replacement" },
+    });
+    const view = askDecisionFromPendingView(draft);
+    expect(view?.card).toMatchObject({ kind: "visit_select", stage: "replacement" });
+    expect(choiceIdsFromCard(view?.card ?? null)).toEqual(["cancel_existing", "decline"]);
+  });
+
+  it("cancel_existing choice emits cancel_existing_requested (cancelling), not visit_cancel", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "existing_booking_detected",
+      meeting: {
+        id: "meeting-1",
+        name: "Консультація",
+        dateStart: "2026-10-21T10:00:00",
+        dateEnd: "2026-10-21T10:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: { kind: "visit_select", stage: "replacement" },
+    });
+    expect(draft?.replacement?.status).toBe("offered");
+
+    const result = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { choice: { choiceId: "cancel_existing" } },
+      },
+      READ_MODELS,
+    );
+
+    expect(result.events.some((e) => e.type === "cancel_existing_requested")).toBe(true);
+    const after = apply(draft, result.events);
+    expect(after?.replacement?.status).toBe("cancelling");
+    expect(result.decision.tag).toBe("mutation_confirm");
+    expect(result.decision.card).toMatchObject({
+      kind: "mutation_confirm",
+      action: "cancel",
+    });
   });
 
   it("present_availability includes excludeMeetingIds while rescheduling", () => {
