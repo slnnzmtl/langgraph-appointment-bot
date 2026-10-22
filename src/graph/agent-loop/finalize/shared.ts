@@ -7,7 +7,6 @@ import {
 
 import { trackEvent } from "../../../analytics/track.js";
 import {
-  CONSULTATION_SERVICE_ID,
   MAIN_MENU_GREETING_UK,
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
@@ -43,7 +42,7 @@ import {
   type ClinicHandoff,
   type ClinicHandoffStatus,
 } from "../../types.js";
-import { lastPatientText, toolRanThisTurn } from "../protocol/index.js";
+import { toolRanThisTurn } from "../protocol/index.js";
 
 export type FinalizeReply = {
   status: ClinicHandoffStatus;
@@ -80,7 +79,6 @@ export const lastHandoffFromReply = (
   status: reply.status,
   ...(reply.replyText.length > 0 ? { replyText: reply.replyText } : {}),
   ...(reply.replyButtons.length > 0 ? { replyButtons: reply.replyButtons } : {}),
-  ...(reply.yieldToSupervisor ? { yieldToSupervisor: true } : {}),
 });
 
 export const resolveHandoffStatus = (
@@ -239,6 +237,11 @@ export const applyServiceOfferSynthesis = (
     detailsStepActive: boolean;
   },
 ): { reply: FinalizeReply; serviceOfferUpdate: ClinicStateUpdate } => {
+  // FAQ never writes bookingDraft — catalog / consultation hand off at prepare.
+  if (agentId === FAQ_AGENT_ID) {
+    return { reply, serviceOfferUpdate: {} };
+  }
+
   let serviceOfferUpdate: ClinicStateUpdate = {};
   let next = reply;
 
@@ -262,20 +265,7 @@ export const applyServiceOfferSynthesis = (
         pendingInteraction: session.pendingInteraction,
       };
       if (session.pendingInteraction?.kind === "service_confirm") {
-        const servicesGuide = isFaqServicesGuideLabel(lastPatientText(state));
-        if (
-          agentId === FAQ_AGENT_ID
-          && servicesGuide
-          && offeredService.id === CONSULTATION_SERVICE_ID
-        ) {
-          next = {
-            ...next,
-            replyText: withServiceConfirmQuestion(
-              next.replyText,
-              session.pendingInteraction,
-            ),
-          };
-        } else if (next.replyText.length === 0) {
+        if (next.replyText.length === 0) {
           next = {
             ...next,
             replyText: String(
@@ -288,9 +278,6 @@ export const applyServiceOfferSynthesis = (
             ...next,
             replyButtons: replyButtonsForInteraction(session.pendingInteraction),
           };
-        }
-        if (agentId === FAQ_AGENT_ID) {
-          next = { ...next, yieldToSupervisor: true };
         }
         trackEvent("reply_menu_filled", {
           menu: "service_confirm",
@@ -317,9 +304,6 @@ export const applyServiceOfferSynthesis = (
       ...next,
       replyButtons: replyButtonsForInteraction(state.pendingInteraction),
     };
-    if (agentId === FAQ_AGENT_ID) {
-      next = { ...next, yieldToSupervisor: true };
-    }
     trackEvent("reply_menu_filled", {
       menu: "service_confirm",
       reason: "pending_interaction",

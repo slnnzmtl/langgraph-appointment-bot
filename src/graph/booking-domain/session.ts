@@ -36,6 +36,16 @@ export type CatalogChip = {
 };
 
 /**
+ * A frozen create/reschedule/cancel write correlated to a prepared effect id.
+ * Re-entry with the same frozen write reuses the existing effect id (emit-once).
+ */
+export type FrozenMutationCommand = {
+  action: "create" | "reschedule" | "cancel";
+  effectId: string;
+  payload: Readonly<Record<string, unknown>>;
+};
+
+/**
  * Irreducible waits owned by the aggregate. Ordinary DATE/TIME/contact cards
  * are projections — not independently authoritative.
  */
@@ -59,6 +69,11 @@ export type PendingDecision =
       kind: "mutation_confirm";
       action: "create" | "reschedule" | "cancel";
       effectId: string;
+      /**
+       * Full CRM command the paused interrupt will execute.
+       * Compared at resume — missing or mismatched payload declines without a write.
+       */
+      frozenCommand?: FrozenMutationCommand;
     }
   | {
       kind: "date_select";
@@ -76,13 +91,3 @@ export type PendingDecision =
       labels: Record<string, string>;
     }
   | { kind: "clarification"; reason: string };
-
-/**
- * A frozen create/reschedule/cancel write correlated to a prepared effect id.
- * Re-entry with the same frozen write reuses the existing effect id (emit-once).
- */
-export type FrozenMutationCommand = {
-  action: "create" | "reschedule" | "cancel";
-  effectId: string;
-  payload: Readonly<Record<string, unknown>>;
-};

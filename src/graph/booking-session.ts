@@ -25,6 +25,7 @@ import {
   type BookingCheckpointUpgradeResult,
   upgradeBookingDraftCheckpoint,
 } from "./booking-checkpoint-upgrade.js";
+import { CHOICE_ID_ALIASES } from "./booking-domain/interpret.js";
 import { cancelCommandFromMeeting } from "./cancel-command.js";
 
 export const consultationService = (source: "catalog" | "direct"): {
@@ -221,7 +222,7 @@ export const openVisitNoteInteraction = (
   skipLabel: string = INTENT_SKIP_LABEL,
 ): VisitNoteInteraction => ({
   kind: "visit_note",
-  choices: [{ id: "skip", label: skipLabel }],
+  choices: [{ id: "note_skip", label: skipLabel }],
 });
 
 export const openCatalogDetourInteraction = (
@@ -239,9 +240,9 @@ export const openServiceConfirmInteraction = (
   kind: "service_confirm",
   service,
   choices: [
-    { id: "accept", label: acceptLabel },
+    { id: "offer_accept", label: acceptLabel },
     {
-      id: "choose_other",
+      id: "offer_choose_other",
       label: chooseOtherLabel,
       aliases: [...SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES],
     },
@@ -474,25 +475,13 @@ const choiceById = (
   interaction: PendingInteraction | null,
   choiceId: string,
 ): InteractionChoice | null =>
-  interaction?.choices.find((choice) => choice.id === choiceId) ?? null;
+  interaction?.choices.find((choice) =>
+    choice.id === choiceId || interactionChoiceEquals(choice.id, choiceId)
+  ) ?? null;
 
 export type InteractionReplyMatch =
   | { kind: "choice"; choiceId: string }
   | { kind: "unmatched" };
-
-/**
- * Kernel cards use offer_accept / offer_choose_other / note_skip.
- * Session builders still emit accept / choose_other / skip.
- * Sticky routing and session reducers must treat each pair as one choice.
- */
-const INTERACTION_CHOICE_EQUIVALENTS: Readonly<Record<string, readonly string[]>> = {
-  accept: ["accept", "offer_accept"],
-  offer_accept: ["accept", "offer_accept"],
-  choose_other: ["choose_other", "offer_choose_other"],
-  offer_choose_other: ["choose_other", "offer_choose_other"],
-  skip: ["skip", "note_skip"],
-  note_skip: ["skip", "note_skip"],
-};
 
 export const interactionChoiceEquals = (
   actual: string | null | undefined,
@@ -501,7 +490,7 @@ export const interactionChoiceEquals = (
   if (actual == null) {
     return false;
   }
-  const aliases = INTERACTION_CHOICE_EQUIVALENTS[expected] ?? [expected];
+  const aliases = CHOICE_ID_ALIASES[expected] ?? [expected];
   return aliases.includes(actual);
 };
 

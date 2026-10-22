@@ -57,7 +57,7 @@ describe("reduceBookingSession", () => {
     expect(result.bookingDraft?.phase).toBe("note");
     expect(result.pendingInteraction).toEqual({
       kind: "visit_note",
-      choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+      choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
     });
     expect(result.clearAvailability).toBe(false);
     expect(result.effect).toBeNull();
@@ -89,7 +89,7 @@ describe("reduceBookingSession", () => {
     expect(result.bookingDraft?.note.status).toBe("awaiting");
     expect(result.pendingInteraction).toEqual({
       kind: "visit_note",
-      choices: [{ id: "skip", label: INTENT_SKIP_LABEL }],
+      choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
     });
   });
 
@@ -427,7 +427,7 @@ describe("reduceBookingSession", () => {
     expect(result.bookingDraft?.serviceAcceptance?.service.id).toBe("svc-botox");
   });
 
-  it("service_offered opens service_confirm with accept/choose_other choice ids", () => {
+  it("service_offered opens service_confirm with kernel offer choice ids", () => {
     const result = reduceBookingSession(
       { bookingDraft: null, pendingInteraction: null },
       {
@@ -441,11 +441,11 @@ describe("reduceBookingSession", () => {
     });
     expect(result.pendingInteraction?.kind).toBe("service_confirm");
     expect(result.pendingInteraction?.choices.map((c) => c.id)).toEqual([
-      "accept",
-      "choose_other",
+      "offer_accept",
+      "offer_choose_other",
     ]);
     const chooseOther = result.pendingInteraction?.choices.find(
-      (choice) => choice.id === "choose_other",
+      (choice) => choice.id === "offer_choose_other",
     );
     expect(chooseOther?.aliases).toEqual(
       expect.arrayContaining(["ні", "no", "не треба"]),
@@ -482,15 +482,31 @@ describe("reduceBookingSession", () => {
     );
     const accepted = reduceBookingSession(offered, {
       type: "interaction_choice",
-      choiceId: "accept",
+      choiceId: "offer_accept",
     });
     expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
     expect(accepted.pendingInteraction).toBeNull();
     expect(accepted.clearAvailability).toBe(true);
 
+    // Legacy session id still works via alias on a fresh offer.
+    const offeredAgain = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+        acceptLabel: "Yes",
+        chooseOtherLabel: "Other",
+      },
+    );
+    const acceptedLegacy = reduceBookingSession(offeredAgain, {
+      type: "interaction_choice",
+      choiceId: "accept",
+    });
+    expect(acceptedLegacy.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+
     const other = reduceBookingSession(offered, {
       type: "interaction_choice",
-      choiceId: "choose_other",
+      choiceId: "offer_choose_other",
     });
     expect(other.bookingDraft).toBeNull();
     expect(other.pendingInteraction).toBeNull();
@@ -498,57 +514,25 @@ describe("reduceBookingSession", () => {
     expect(other.effect).toEqual({ type: "open_faq_catalog" });
   });
 
-  it("treats kernel offer_accept / offer_choose_other / note_skip as session aliases", () => {
-    const offered = reduceBookingSession(
-      { bookingDraft: null, pendingInteraction: null },
-      {
-        type: "service_offered",
-        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
-        acceptLabel: "Так",
-        chooseOtherLabel: "Обрати іншу процедуру",
-      },
-    );
-    const kernelOffer = {
-      ...offered,
-      pendingInteraction: offered.pendingInteraction == null
-        ? null
-        : {
-          ...offered.pendingInteraction,
-          choices: [
-            { id: "offer_accept", label: "Так" },
-            { id: "offer_choose_other", label: "Обрати іншу процедуру" },
-          ],
-        },
-    };
-    const accepted = reduceBookingSession(kernelOffer, {
-      type: "interaction_choice",
-      choiceId: "offer_accept",
-    });
-    expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
-
-    const other = reduceBookingSession(kernelOffer, {
-      type: "interaction_choice",
-      choiceId: "offer_choose_other",
-    });
-    expect(other.bookingDraft).toBeNull();
-    expect(other.effect).toEqual({ type: "open_faq_catalog" });
-
+  it("treats legacy skip as an alias of note_skip on visit_note", () => {
     const awaitingNote = reduceBookingSession(
       { bookingDraft: acceptedWithDate(), pendingInteraction: null },
       { type: "slot_selected", slot: selectedSlot },
     );
-    const kernelNote = {
-      ...awaitingNote,
-      pendingInteraction: {
-        kind: "visit_note" as const,
-        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
-      },
-    };
-    const skipped = reduceBookingSession(kernelNote, {
+    expect(awaitingNote.pendingInteraction?.choices.map((choice) => choice.id)).toEqual([
+      "note_skip",
+    ]);
+    const skippedKernel = reduceBookingSession(awaitingNote, {
       type: "interaction_choice",
       choiceId: "note_skip",
     });
-    expect(skipped.bookingDraft?.note.status).toBe("skipped");
+    expect(skippedKernel.bookingDraft?.note.status).toBe("skipped");
+
+    const skippedLegacy = reduceBookingSession(awaitingNote, {
+      type: "interaction_choice",
+      choiceId: "skip",
+    });
+    expect(skippedLegacy.bookingDraft?.note.status).toBe("skipped");
   });
 
   it("service_confirm_schedule accepts the service and applies the date atomically", () => {

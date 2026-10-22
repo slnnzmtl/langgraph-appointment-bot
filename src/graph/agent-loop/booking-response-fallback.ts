@@ -59,6 +59,14 @@ const CLARIFICATION_UK: Record<string, string> = {
   invalid_lastName: BOOKING_LAST_NAME_INVALID_UK,
   need_service:
     "Уточніть, будь ласка, послугу — напишіть назву або скажіть «консультація».",
+  unknown_faq:
+    "На жаль, я не маю цієї інформації. Можу допомогти із записом або іншими питаннями про клініку.",
+  visit_cancel_ambiguous:
+    "Уточніть, будь ласка: скасувати візит чи перенести на інший час?",
+  visit_reschedule_ambiguous:
+    "Уточніть, будь ласка, який візит перенести.",
+  no_visit_to_reschedule:
+    "Зараз немає запланованого візиту для перенесення.",
 };
 
 /** Patient prose for a clarification reason, or null when unknown. */

@@ -119,11 +119,22 @@ describe("text while HITL pending", () => {
     }),
   });
 
+  const createCrmPayload = {
+    name: "Процедура - Test",
+    dateStart: "2026-10-27T11:00:00",
+    dateEnd: "2026-10-27T11:30:00",
+    assignedUserId: "user-1",
+    parentType: "Contact",
+    parentId: "c-1",
+    contactsIds: ["c-1"],
+    cServicesIds: ["svc-1"],
+    status: "Planned",
+  };
+
   const liveConfirmDraft = {
     version: 1,
     mode: "create",
     phase: "confirming",
-    pendingDecision: { kind: "mutation_confirm", action: "create", effectId: "eff_1" },
     serviceAcceptance: {
       status: "accepted",
       service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -139,11 +150,16 @@ describe("text while HITL pending", () => {
     contactId: "c-1",
     pendingCommand: {
       action: "create",
-      payload: {
-        serviceId: "svc-1",
-        contactId: "c-1",
-        dateStart: "2026-10-27T11:00:00",
-        dateEnd: "2026-10-27T11:30:00",
+      payload: { ...createCrmPayload },
+    },
+    pendingDecision: {
+      kind: "mutation_confirm",
+      action: "create",
+      effectId: "eff_create_1",
+      frozenCommand: {
+        action: "create",
+        effectId: "eff_create_1",
+        payload: { ...createCrmPayload },
       },
     },
     replacement: null,
@@ -160,10 +176,26 @@ describe("text while HITL pending", () => {
 
   const buildPendingConfirmGraph = () =>
     new StateGraph(InterruptState)
-      .addNode("ask", async () => {
+      .addNode("ask", async (state: {
+        bookingDraft?: {
+          pendingCommand?: { action?: string; payload?: Record<string, unknown> };
+          pendingDecision?: { effectId?: string };
+        } | null;
+      }) => {
+        const command = state.bookingDraft?.pendingCommand;
         const decision = interrupt({
           type: "confirm_booking",
-          draft: { confirmMessage: "Confirm?" },
+          draft: {
+            confirmMessage: "Confirm?",
+            ...(command != null
+              ? {
+                command: {
+                  action: command.action,
+                  payload: { ...(command.payload ?? {}) },
+                },
+              }
+              : {}),
+          },
         });
         return { result: JSON.stringify(decision) };
       })
@@ -573,6 +605,18 @@ describe("text while HITL pending", () => {
 });
 
 describe("booking schema upgrade on text turn", () => {
+  const createCrmPayload = {
+    name: "Процедура - Test",
+    dateStart: "2026-10-27T11:00:00",
+    dateEnd: "2026-10-27T11:30:00",
+    assignedUserId: "user-1",
+    parentType: "Contact",
+    parentId: "c-1",
+    contactsIds: ["c-1"],
+    cServicesIds: ["svc-1"],
+    status: "Planned",
+  };
+
   const BookingState = Annotation.Root({
     result: Annotation<string>({
       reducer: (_left, right) => right,
@@ -617,9 +661,24 @@ describe("booking schema upgrade on text turn", () => {
   const buildPendingConfirmBookingGraph = () =>
     new StateGraph(BookingState)
       .addNode("ask", async (state) => {
+        const command = (
+          state.bookingDraft as {
+            pendingCommand?: { action?: string; payload?: Record<string, unknown> };
+          } | null
+        )?.pendingCommand;
         const decision = interrupt({
           type: "confirm_booking",
-          draft: { confirmMessage: "Confirm?" },
+          draft: {
+            confirmMessage: "Confirm?",
+            ...(command != null
+              ? {
+                command: {
+                  action: command.action,
+                  payload: { ...(command.payload ?? {}) },
+                },
+              }
+              : {}),
+          },
         });
         return {
           result: JSON.stringify(decision),
@@ -728,6 +787,15 @@ describe("booking schema upgrade on text turn", () => {
             kind: "mutation_confirm",
             action: "create",
             effectId: "eff_create",
+            frozenCommand: {
+              action: "create",
+              effectId: "eff_create",
+              payload: {
+                ...createCrmPayload,
+                dateStart: "2026-10-17T11:00:00",
+                dateEnd: "2026-10-17T11:30:00",
+              },
+            },
           },
 
           serviceAcceptance: {
@@ -746,8 +814,7 @@ describe("booking schema upgrade on text turn", () => {
           pendingCommand: {
             action: "create",
             payload: {
-              serviceId: "svc-1",
-              contactId: "c-1",
+              ...createCrmPayload,
               dateStart: "2026-10-17T11:00:00",
               dateEnd: "2026-10-17T11:30:00",
             },

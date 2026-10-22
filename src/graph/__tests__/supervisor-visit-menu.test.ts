@@ -20,12 +20,13 @@ import {
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
 import type { ILLMConnector } from "../types.js";
+import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
+import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
 import {
   specialists,
   createClinicSupervisorNode,
   isVisitStatusSignal,
   serviceConfirmPending,
-  stickyContinueAgentId,
   supervisorState,
 } from "./supervisor-fixtures.js";
 
@@ -35,6 +36,63 @@ const unwrapCommandUpdate = <T extends Record<string, unknown>>(result: unknown)
   }
   return result as T;
 };
+
+/** Map legacy supervisor-LLM intent mocks onto UnderstoodBookingTurn. */
+const patchFromLegacyIntent = (
+  intent: string | undefined,
+  text: string,
+): UnderstoodBookingTurn => {
+  switch (intent) {
+    case "visit_status":
+      return { controlIntent: { kind: "visit_status" } };
+    case "visit_cancel":
+      return { controlIntent: { kind: "visit_cancel" } };
+    case "visit_reschedule":
+      return { controlIntent: { kind: "visit_reschedule" } };
+    case "book":
+    case "consultation_request":
+      return { serviceIntent: { kind: "consultation" } };
+    case "named_procedure":
+      return { serviceIntent: { kind: "named_procedure", query: text } };
+    case "faq":
+      return { idleFaq: { question: text, topic: "other" } };
+    case "abandon_booking":
+      return { controlIntent: { kind: "abandon" } };
+    default:
+      return {};
+  }
+};
+
+const interpretWithLegacyInvoke = (
+  invoke: {
+    (): Promise<{
+      intent?: string;
+      next?: string;
+      reply?: string;
+      menu?: string;
+      choiceId?: string;
+    } | undefined>;
+  },
+) =>
+  async (input: {
+    rawText: string;
+    offeredChoiceIds?: readonly string[];
+  }): Promise<UnderstoodBookingTurn> => {
+    const deterministic = interpretBookingTurnDeterministic(input);
+    if (Object.keys(deterministic).length > 0) {
+      return deterministic;
+    }
+    const mocked = await invoke();
+    if (mocked?.choiceId != null
+      && (input.offeredChoiceIds?.includes(mocked.choiceId) === true)
+    ) {
+      return { choice: { choiceId: mocked.choiceId } };
+    }
+    if (mocked?.intent != null) {
+      return patchFromLegacyIntent(mocked.intent, input.rawText);
+    }
+    return {};
+  };
 
 
 describe("createClinicSupervisorNode visit-change sticky", () => {
@@ -171,16 +229,12 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
     );
 
     expect(invoke).not.toHaveBeenCalled();
-    expect(update).toMatchObject({
-      next: "booking",
-      availabilityContext: null,
-      availabilityCursor: null,
-      bookingDraft: {
-        mode: "reschedule",
-        rescheduleTarget: { id: "m-1" },
-      },
+    expect(update.next).toBe("booking");
+    expect(update.bookingDraft).toMatchObject({
+      mode: "reschedule",
+      rescheduleTarget: { id: "m-1" },
     });
-    expect(update.lastHandoff).toBeUndefined();
+    expect(update.lastHandoff == null).toBe(true);
   });
 });
 
@@ -245,6 +299,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
+      interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch: async () => ({
         contactContext: { contacts: [] },
         bookingContext: { meetings: [], dateFrom: "2026-08-11" },
@@ -270,6 +325,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
+      interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch,
     });
 
@@ -318,6 +374,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
+      interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch: async () => ({
         contactContext: {
           ownership: "telegram",
@@ -656,18 +713,15 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
-  it("attaches DEFAULT has-visits for menu=default when visits exist", async () => {
-    invoke.mockResolvedValue({
-      next: "FINISH",
-      reply: "Будь ласка! Чим ще можу допомогти?",
-      menu: "default",
-    });
+  it("attaches DEFAULT has-visits for idle greeting when visits exist", async () => {
+    invoke.mockResolvedValue({});
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({ messages: [new HumanMessage("дякую")] }),
     );
 
+    expect(update.next).toBe("FINISH");
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_HAS_VISITS]);
-    expect(update.lastHandoff?.replyText).toBe("Будь ласка! Чим ще можу допомогти?");
+    expect(update.lastHandoff?.replyText).toContain("Чим ще можу допомогти?");
     expect(update.lastHandoff?.replyText).not.toContain("Заплановані візити:");
   });
 
@@ -730,20 +784,20 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
   });
 
-  it("delivers routing failure via handoff only", async () => {
-    const { PATIENT_FALLBACK_MESSAGE } = await import("../../shared/clinic-constants.js");
-    invoke.mockResolvedValue({ next: "FINISH" });
+  it("idle unknown prose finishes with greeting (no routing LLM failure)", async () => {
+    invoke.mockResolvedValue({});
     const update = await nodeWithPrefetch(null)(
       supervisorState({ messages: [new HumanMessage("???")] }),
     );
 
     expect(update.messages).toBeUndefined();
+    expect(update.next).toBe("FINISH");
     expect(update.lastHandoff).toMatchObject({
       agentId: "FINISH",
-      status: "error",
-      replyText: PATIENT_FALLBACK_MESSAGE,
+      status: "ok",
       replyButtons: [...DEFAULT_MENU_NO_VISITS],
     });
+    expect(update.lastHandoff?.replyText).toContain("Чим ще можу допомогти?");
   });
 
   it("fail-closes FINISH without reply on Головне меню instead of PATIENT_FALLBACK", async () => {
@@ -867,7 +921,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
     expect(update.next).toBe("FINISH");
-    expect(update.lastHandoff?.replyText).toBe("Чим можу допомогти?");
+    expect(update.lastHandoff?.replyText).toContain("Чим ще можу допомогти?");
     expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
@@ -929,18 +983,16 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(unwrapCommandUpdate(update).bookingDraft?.mode).not.toBe("reschedule");
   });
 
-  it("opens the meeting picker for visit_cancel intent with 2+ visits", async () => {
+  it("routes visit_cancel with 2+ visits to booking (kernel opens meeting picker)", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "visit_cancel" });
     const update = await nodeWithPrefetch(twoMeetings)(
       supervisorState({ messages: [new HumanMessage("хочу скасувати візит")] }),
     );
-    expect(update.next).toBe("FINISH");
-    expect(unwrapCommandUpdate(update).pendingInteraction).toMatchObject({
-      kind: "visit_select",
-      stage: "meeting",
-      action: "cancel",
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toMatchObject({
+      controlIntent: { kind: "visit_cancel" },
     });
-    expect(update.lastHandoff?.replyText).toBe("Який візит скасувати?");
+    // No single-meeting seed when 2+ visits — kernel presents the picker.
     expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand ?? null).toBeNull();
   });
 
@@ -1008,8 +1060,8 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     expect(unwrapCommandUpdate(update).pendingInteraction?.kind).not.toBe("service_confirm");
   });
 
-  it("routes named-procedure booking with no visit to faq without seeding consultation", async () => {
-    invoke.mockResolvedValue({ next: "booking", intent: "book" });
+  it("routes named-procedure booking with no visit to booking (not FAQ)", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "named_procedure" });
     const update = await nodeWithPrefetch({ meetings: [], dateFrom: "2026-10-11" })(
       supervisorState({
         messages: [new HumanMessage("запиши на ботокс")],
@@ -1022,14 +1074,16 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       }),
     );
     expect(invoke).toHaveBeenCalledOnce();
-    expect(update.next).toBe("faq");
-    expect(update.supervisorIntent).toBe("named_procedure");
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toMatchObject({
+      serviceIntent: { kind: "named_procedure" },
+    });
     expect(unwrapCommandUpdate(update).bookingDraft?.serviceAcceptance ?? null).toBeNull();
     expect(unwrapCommandUpdate(update).pendingInteraction?.kind ?? null).not.toBe("service_confirm");
   });
 
-  it("routes named-procedure booking with a planned visit to booking without seeding consultation", async () => {
-    invoke.mockResolvedValue({ next: "faq", intent: "named_procedure" });
+  it("routes named-procedure booking with a planned visit to booking (REPLACE via kernel)", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "named_procedure" });
     const update = await nodeWithPrefetch(meetings)(
       supervisorState({
         messages: [new HumanMessage("запиши на ботокс")],
@@ -1123,18 +1177,19 @@ describe("supervisor_routing_decision telemetry", () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(routingEvents()).toHaveLength(1);
     expect(routingEvents()[0]?.props).toMatchObject({
-      path: "status_pre_llm",
+      path: "llm_status",
       regexStatusSignal: true,
       next: "FINISH",
     });
   });
 
-  it("emits exactly one event on a post-LLM path", async () => {
+  it("emits exactly one event on an interpret→faq path", async () => {
     invoke.mockResolvedValue({ next: "faq", intent: "faq", reply: "Ось відповідь" });
     const node = createClinicSupervisorNode({
       specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
+      interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch: async () => ({
         contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
         bookingContext: { meetings: [], dateFrom: "2026-08-11" },
@@ -1145,7 +1200,6 @@ describe("supervisor_routing_decision telemetry", () => {
     expect(routingEvents()).toHaveLength(1);
     expect(routingEvents()[0]?.props).toMatchObject({
       path: "llm",
-      intent: "faq",
       next: "faq",
     });
   });

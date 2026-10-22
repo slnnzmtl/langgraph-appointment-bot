@@ -22,6 +22,11 @@ import {
   type ConfirmDraft,
   type ConfirmFingerprint,
 } from "./meeting-confirm.js";
+import {
+  buildCancelMeetingCrmPayload,
+  buildCreateMeetingCrmPayload,
+  buildRescheduleMeetingCrmPayload,
+} from "./meeting-crm-command.js";
 import { createListPlannedMeetingsTool, lookupPlannedMeetings } from "./planned-meetings.js";
 import { getTelegramUserId } from "./telegram-user-context.js";
 
@@ -324,21 +329,18 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         });
       }
 
-      const dateStart = normalizeLocalIsoDatetime(input.dateStart);
-      const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
-      const command = {
+      const command = buildCreateMeetingCrmPayload({
         name: input.name,
-        dateStart,
-        dateEnd,
+        dateStart: input.dateStart,
+        dateEnd: input.dateEnd,
+        contactId: input.contactId,
+        serviceId: input.serviceId,
         assignedUserId,
-        parentType: "Contact" as const,
-        parentId: input.contactId,
-        contactsIds: [input.contactId],
-        cServicesIds: [input.serviceId],
         ...(input.description ? { description: input.description } : {}),
         ...(input.location ? { location: input.location } : {}),
-        status: "Planned" as const,
-      };
+      });
+      const dateStart = String(command.dateStart);
+      const dateEnd = String(command.dateEnd);
       const draft = {
         name: input.name,
         dateStart,
@@ -433,10 +435,7 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         return owned.errorJson;
       }
       const draft = confirmDraftFromMeeting(input, owned.meeting);
-      const command = {
-        meetingId: input.meetingId,
-        status: "Not Held" as const,
-      };
+      const command = buildCancelMeetingCrmPayload(input.meetingId);
       const pendingDraft = {
         ...draft,
         command: {
@@ -508,8 +507,13 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
       if ("errorJson" in owned) {
         return owned.errorJson;
       }
-      const dateStart = normalizeLocalIsoDatetime(input.dateStart);
-      const dateEnd = normalizeLocalIsoDatetime(input.dateEnd);
+      const command = buildRescheduleMeetingCrmPayload({
+        meetingId: input.meetingId,
+        dateStart: input.dateStart,
+        dateEnd: input.dateEnd,
+      });
+      const dateStart = String(command.dateStart);
+      const dateEnd = String(command.dateEnd);
       const draft = confirmDraftFromMeeting(
         {
           confirmMessage: input.confirmMessage,
@@ -519,11 +523,6 @@ export const createMeetingTools = (options: MeetingToolsOptions): StructuredTool
         },
         owned.meeting,
       );
-      const command = {
-        meetingId: input.meetingId,
-        dateStart,
-        dateEnd,
-      };
       const pendingDraft = {
         ...draft,
         command: {

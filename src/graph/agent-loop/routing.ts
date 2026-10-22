@@ -6,7 +6,6 @@ import {
 import type { ClinicState } from "../state.js";
 import {
   interpretInteractionReply,
-  interactionChoiceEquals,
 } from "../booking-session.js";
 import {
   lastPatientText,
@@ -53,8 +52,7 @@ export const routeAfterAgentPrepare = (
   void _commandPrepareName;
   void _noteOrchestratorName;
   const isFaqPrepare = agentId === FAQ_AGENT_ID;
-  // FAQ chips: exact chip taps skip LLM. Newly produced chips/confirm from prepare
-  // set faqSkipLlm — do not infer from utterance equality or CRM stems.
+  // FAQ chips: exact chip taps / newly produced chips skip LLM.
   if (
     finalizeName
     && state.pendingInteraction?.kind === "service_candidate"
@@ -69,25 +67,7 @@ export const routeAfterAgentPrepare = (
       return finalizeName;
     }
   }
-  // Graph-owned service_confirm from FAQ prepare. Do not skip when accepting («Так»).
-  if (
-    finalizeName
-    && isFaqPrepare
-    && state.pendingInteraction?.kind === "service_confirm"
-    && state.bookingDraft?.serviceAcceptance?.status === "pending"
-    && state.bookingDraft.replacement == null
-  ) {
-    const bookText = lastPatientText(state);
-    const offerMatch = interpretInteractionReply(
-      state.pendingInteraction,
-      bookText,
-    );
-    if (!(offerMatch.kind === "choice" && interactionChoiceEquals(offerMatch.choiceId, "accept"))) {
-      if (state.faqSkipLlm) {
-        return finalizeName;
-      }
-    }
-  }
+  void isFaqPrepare;
 
   return llmName;
 };

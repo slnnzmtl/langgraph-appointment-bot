@@ -56,6 +56,7 @@ import {
   expectFamilyCatalogTurn,
   loadCatalogServiceRows,
   openBookingOffer,
+  openReplaceOffer,
   pickFamilyFreeText,
   pickUniqueNamedProcedure,
   selectUniqueProcedureAfterRootCatalog,
@@ -281,9 +282,8 @@ export const doubleBookGuardScenario: SmokeScenario = {
         ...VISIT_CHANGE_MENU,
       ]);
 
-      // A new-booking request must supersede the visit action menu and enter
-      // the same deterministic REPLACE flow as a direct «Записатись» turn.
-      const second = await bundle.session.say("Записатись");
+      // A new-booking request must enter REPLACE (catalog/offer may precede).
+      const second = await openReplaceOffer(bundle.session, "double-book-guard");
       if (
         second.state.pendingInteraction?.kind !== "visit_select"
         || second.state.pendingInteraction.stage !== "replacement"
@@ -328,7 +328,7 @@ export const replaceRebookScenario: SmokeScenario = {
       });
       const oldId = await resolveCreatedMeetingId(ctx, contactId, first.allCalls);
 
-      const replaceTurn = await bundle.session.say("Записатись");
+      const replaceTurn = await openReplaceOffer(bundle.session, "replace-rebook");
       if (
         replaceTurn.state.pendingInteraction?.kind !== "visit_select"
         || replaceTurn.state.pendingInteraction.stage !== "replacement"
@@ -700,11 +700,10 @@ export const replaceNamedProcedureScenario: SmokeScenario = {
       const pending = cancelConfirmed.state.pendingInteraction;
       if (
         pending?.kind !== "service_candidate"
-        || pending.owner !== "faq"
-        || pending.consultationDeclined !== true
+        || (pending.owner !== "faq" && pending.owner !== "booking")
       ) {
         throw new SmokeAssertError(
-          `replace-named-procedure: expected faq service_candidate catalog after cancel, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
+          `replace-named-procedure: expected faq|booking service_candidate catalog after cancel, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
         );
       }
       if (pending.choices.length === 0) {

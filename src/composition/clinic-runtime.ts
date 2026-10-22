@@ -58,6 +58,7 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     contextCache,
     bookingPrefetchCallTool: (name, args) => adapters.callTool(name, args),
     checkpointer,
+    assignedUserId: config.assignedUserId,
   });
 
   const bootstrap: ClinicBootstrap = {

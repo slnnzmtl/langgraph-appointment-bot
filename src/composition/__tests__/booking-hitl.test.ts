@@ -6,6 +6,18 @@ import {
 } from "../booking-hitl.js";
 import { createEmptyBookingDraft, reduceBookingDraft } from "../../graph/booking-draft.js";
 
+const createCrmPayload = {
+  name: "Консультація - Smoke Tester",
+  dateStart: "2026-10-24T13:00:00",
+  dateEnd: "2026-10-24T13:30:00",
+  assignedUserId: "user-1",
+  parentType: "Contact",
+  parentId: "c-1",
+  contactsIds: ["c-1"],
+  cServicesIds: ["svc-1"],
+  status: "Planned",
+};
+
 const liveDraft = () => {
   let draft = reduceBookingDraft(createEmptyBookingDraft(), {
     type: "service_selected",
@@ -14,17 +26,37 @@ const liveDraft = () => {
   });
   draft = reduceBookingDraft(draft, {
     type: "command_prepared",
-    command: { action: "create", payload: { serviceId: "svc-1" } },
+    command: { action: "create", payload: { ...createCrmPayload } },
   });
   draft = reduceBookingDraft(draft, {
     type: "decision_set",
-    decision: { kind: "mutation_confirm", action: "create", effectId: "eff_1" },
+    decision: {
+      kind: "mutation_confirm",
+      action: "create",
+      effectId: "eff_1",
+      frozenCommand: {
+        action: "create",
+        effectId: "eff_1",
+        payload: { ...createCrmPayload },
+      },
+    },
   });
   draft = reduceBookingDraft(draft, {
     type: "choices_offered",
     choiceIds: ["confirm", "decline", "menu"],
   });
   return draft;
+};
+
+const matchingInterrupt = {
+  type: "confirm_booking",
+  draft: {
+    confirmMessage: "Confirm?",
+    command: {
+      action: "create",
+      payload: { ...createCrmPayload },
+    },
+  },
 };
 
 describe("resumeConfirmBookingHitl", () => {
@@ -70,8 +102,33 @@ describe("resumeConfirmBookingHitl", () => {
         action: "create",
         choices: [{ id: "confirm", label: "✅" }],
       },
+      interruptValue: matchingInterrupt,
     });
     expect(result.resume).toEqual({ confirmed: true });
+  });
+
+  it("declines confirm when interrupt payload is tampered", () => {
+    const draft = liveDraft();
+    const result = resumeConfirmBookingHitl({
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
+      interruptValue: {
+        type: "confirm_booking",
+        draft: {
+          command: {
+            action: "create",
+            payload: { ...createCrmPayload, assignedUserId: "OTHER" },
+          },
+        },
+      },
+    });
+    expect(result.resume).toEqual({ confirmed: false });
   });
 
   it("ignores typed emoji when live confirm requires callback or exact tap with live card", () => {
@@ -92,6 +149,7 @@ describe("resumeConfirmBookingHitl", () => {
         action: "create",
         choices: [],
       },
+      interruptValue: matchingInterrupt,
     });
     expect(result.resume).toEqual({ confirmed: true });
   });

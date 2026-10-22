@@ -67,13 +67,16 @@ const defaultLabelForChoiceId = (
     case "hitl_no":
       return CONFIRM_NO_LABEL;
     case "offer_accept":
+    case "accept":
       return BOOKING_OFFER_MENU[0];
     case "offer_choose_other":
+    case "choose_other":
       return BOOKING_OFFER_MENU[1];
     case "menu":
     case "main_menu":
       return MAIN_MENU_LABEL;
     case "note_skip":
+    case "skip":
       return INTENT_SKIP_LABEL;
     default:
       return id;

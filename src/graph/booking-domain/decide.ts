@@ -19,6 +19,9 @@ import {
   type BookingContactDetails,
   type BookingDraft,
   type BookingEvent,
+  type DeferredBookingTurn,
+  type DeferredInformationalRequest,
+  type DeferredScheduleRequest,
   type ReplacementMeeting,
 } from "../booking-draft.js";
 import type {
@@ -31,6 +34,11 @@ import type {
   DecideBookingResult,
 } from "./decision.js";
 import { kyivToday } from "../../tools/availability-slots.js";
+import {
+  buildCancelMeetingCrmPayload,
+  buildCreateMeetingCrmPayload,
+  buildRescheduleMeetingCrmPayload,
+} from "../../tools/meeting-crm-command.js";
 import {
   labelsFromPresentation,
   projectAvailabilityPresentation,
@@ -94,6 +102,63 @@ const dateFromSchedule = (
     return schedule.anchor;
   }
   return working?.selectedDate ?? undefined;
+};
+
+const newBookingAttemptId = (version: number): string =>
+  `attempt_v${version}_${kyivToday().replace(/-/g, "")}`;
+
+const deferredScheduleFromPatch = (
+  patch: UnderstoodBookingTurn,
+): DeferredScheduleRequest | undefined => {
+  const schedule = patch.scheduleIntent;
+  if (schedule == null) {
+    return undefined;
+  }
+  if (schedule.kind === "date") {
+    return { date: schedule.date };
+  }
+  if (schedule.kind === "time") {
+    return { preferredTime: schedule.time };
+  }
+  if (schedule.kind === "date_and_time") {
+    return { date: schedule.date, preferredTime: schedule.time };
+  }
+  if (schedule.kind === "relative") {
+    return {
+      relative: schedule.queryKind,
+      ...(schedule.anchor != null ? { date: schedule.anchor } : {}),
+    };
+  }
+  return undefined;
+};
+
+const deferredInformationalFromPatch = (
+  patch: UnderstoodBookingTurn,
+): DeferredInformationalRequest | undefined => {
+  const question = patch.informationalQuestion?.trim();
+  if (question == null || question.length === 0) {
+    return undefined;
+  }
+  const topic = patch.faqTopic
+    ?? (question === "hours" || question.includes("hour") || question.includes("годин")
+      ? "hours"
+      : question === "address" || question.includes("address") || question.includes("адрес")
+        ? "address"
+        : question === "price" || question.includes("price") || question.includes("цін")
+          ? "price"
+          : "other");
+  return { question, topic };
+};
+
+const isExplicitBookingStart = (patch: UnderstoodBookingTurn): boolean => {
+  const service = patch.serviceIntent?.kind;
+  return (
+    service === "named_procedure"
+    || service === "consultation"
+    || service === "catalog_service"
+    || (service === "catalog_browse" && patch.scheduleIntent != null)
+    || (patch.scheduleIntent != null && service != null)
+  );
 };
 
 /**
@@ -445,7 +510,57 @@ export const decideBooking = (
         "effect_already_completed",
       );
     }
-    emitDecision({ kind: "mutation_confirm", action, effectId: pending.id });
+    // Freeze the CRM write the interrupt will execute — not tool args.
+    let frozenPayload: Readonly<Record<string, unknown>> | null = null;
+    if (effect.kind === "create_meeting") {
+      const assignedUserId = readModels.assignedUserId?.trim();
+      if (assignedUserId == null || assignedUserId.length === 0) {
+        emitDecision({ kind: "clarification", reason: "missing_assigned_user" });
+        return ask(
+          "clarification",
+          { kind: "clarification", reason: "missing_assigned_user" },
+          "missing_assigned_user",
+        );
+      }
+      frozenPayload = buildCreateMeetingCrmPayload({
+        name: effect.payload.name,
+        dateStart: effect.payload.dateStart,
+        dateEnd: effect.payload.dateEnd,
+        contactId: effect.payload.contactId,
+        serviceId: effect.payload.serviceId,
+        assignedUserId,
+        ...(effect.payload.description != null
+          ? { description: effect.payload.description }
+          : {}),
+      });
+    } else if (effect.kind === "reschedule_meeting") {
+      frozenPayload = buildRescheduleMeetingCrmPayload({
+        meetingId: effect.payload.meetingId,
+        dateStart: effect.payload.dateStart,
+        dateEnd: effect.payload.dateEnd,
+      });
+    } else {
+      const meetingId = effect.payload.meetingId;
+      if (typeof meetingId !== "string" || meetingId.trim().length === 0) {
+        emitDecision({ kind: "clarification", reason: "missing_cancel_meeting_id" });
+        return ask(
+          "clarification",
+          { kind: "clarification", reason: "missing_cancel_meeting_id" },
+          "missing_cancel_meeting_id",
+        );
+      }
+      frozenPayload = buildCancelMeetingCrmPayload(meetingId.trim());
+    }
+    emitDecision({
+      kind: "mutation_confirm",
+      action,
+      effectId: pending.id,
+      frozenCommand: {
+        action,
+        effectId: pending.id,
+        payload: frozenPayload,
+      },
+    });
     const w2 = ctx.working ?? w;
     return mutationConfirmDecision(w2, action, pending.id, pending);
   };
@@ -775,6 +890,44 @@ export const decideBooking = (
       if (f?.servicePrice != null) facts.servicePrice = f.servicePrice;
       if (f?.serviceId != null) facts.serviceId = f.serviceId;
       if (f?.serviceName != null) facts.serviceName = f.serviceName;
+      // After a deferred price lookup, continue into availability when schedule remains.
+      const deferred = ctx.working?.deferredTurn;
+      if (
+        deferred?.schedule != null
+        && ctx.working?.serviceAcceptance?.status === "accepted"
+        && pending?.effect.kind === "get_service"
+      ) {
+        const sched = deferred.schedule;
+        if (sched.date != null) {
+          emit({
+            type: "schedule_requested",
+            date: sched.date,
+            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
+          });
+        }
+        emit({ type: "deferred_turn_cleared", reason: "consumed" });
+        const queryKind = sched.relative ?? "exact";
+        // Surface price in facts; availability effect follows on the next decide loop.
+        const nextReq = nextBookingRequirement(ctx.working, readModels);
+        if (nextReq !== "none") facts.nextStep = nextReq;
+        const avail = preparePendingEffect(
+          presentAvailabilityEffect(ctx.working, {
+            queryKind: queryKind === "exact" ? "exact" : queryKind,
+            ...(sched.date != null ? { date: sched.date } : {}),
+            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
+          }),
+        );
+        return {
+          tag: "effect",
+          intent: "answer_side_question",
+          facts,
+          card: null,
+          pendingEffect: avail,
+        };
+      }
+      if (deferred?.informational != null && pending?.effect.kind === "get_service") {
+        emit({ type: "deferred_informational_consumed" });
+      }
       const nextReq = nextBookingRequirement(ctx.working, readModels);
       if (nextReq !== "none") facts.nextStep = nextReq;
       return sideQuestionReply(facts, ctx.working);
@@ -782,12 +935,19 @@ export const decideBooking = (
 
     if (result.kind === "catalog") {
       emit({ type: "effect_cleared" });
+      // Keep deferred requests across catalog pages; unbind the finished effect.
+      if (ctx.working?.deferredTurn != null) {
+        emit({ type: "deferred_turn_bound", boundEffectId: null });
+      }
       // Node already narrowed via family selector when list_services had a query.
       // Kernel only consumes the allowlisted rows (never re-stems the utterance).
       const services = result.services ?? [];
       const query =
         pending?.effect.kind === "list_services" ? pending.effect.query : undefined;
       if (result.outcome === "error" || result.outcome === "empty" || services.length === 0) {
+        if (ctx.working?.deferredTurn != null) {
+          emit({ type: "deferred_turn_cleared", reason: "incompatible" });
+        }
         // Keep the open wait on the draft; need_service lives in facts/reason only.
         const captured = askDecisionFromPendingView(ctx.working);
         if (captured != null) {
@@ -801,6 +961,7 @@ export const decideBooking = (
         return ask("ask_service", { kind: "clarification", reason: "need_service" }, "need_service");
       }
       if (services.length === 1) {
+        // Selection is accepted:false — deferred schedule stays until confirm.
         return selectCatalogRow(services[0]!);
       }
       const chips = (result.choices != null && result.choices.length > 0)
@@ -894,14 +1055,8 @@ export const decideBooking = (
           if (ctx.working?.serviceAcceptance?.status === "accepted") {
             return decideFromRequirement();
           }
-          // No accepted service — FAQ prepare opens root catalog (owner=faq).
-          return {
-            tag: "reply",
-            intent: "clarification",
-            facts: {},
-            card: null,
-            reason: "replacement_cancel_catalog",
-          };
+          // No accepted service — kernel opens catalog (no FAQ ownership handoff).
+          return runEffect("run_effect", { kind: "list_services" });
         }
         const facts: BookingVerifiedFacts = { action: result.action };
         if (w != null && result.action !== "cancel") {
@@ -1247,6 +1402,34 @@ export const decideBooking = (
             "visit_cancel_ambiguous",
           );
         }
+        case "visit_reschedule": {
+          const meetings = readModels.plannedMeetings ?? [];
+          if (meetings.length === 1) {
+            const meeting = firstPlannedMeeting();
+            if (meeting != null) {
+              emit({ type: "reschedule_started", meeting });
+              return decideFromRequirement();
+            }
+          }
+          if (meetings.length === 0) {
+            emitDecision({ kind: "clarification", reason: "no_visit_to_reschedule" });
+            return ask(
+              "clarification",
+              { kind: "clarification", reason: "no_visit_to_reschedule" },
+              "no_visit_to_reschedule",
+            );
+          }
+          emitDecision({ kind: "clarification", reason: "visit_reschedule_ambiguous" });
+          return ask(
+            "clarification",
+            { kind: "clarification", reason: "visit_reschedule_ambiguous" },
+            "visit_reschedule_ambiguous",
+          );
+        }
+        case "greeting":
+        case "help":
+          // Do not abandon; resume the derived next requirement.
+          return decideFromRequirement();
         case "return_to_booking":
           if (ctx.working?.pendingDecision != null) {
             emit({ type: "decision_cleared" });
@@ -1256,6 +1439,56 @@ export const decideBooking = (
           break;
       }
     }
+
+    // Explicit book with no session yet: open the attempt before deferring facts.
+    if (ctx.working == null && isExplicitBookingStart(patch)) {
+      emit({
+        type: "booking_started",
+        bookingAttemptId: newBookingAttemptId(0),
+      });
+    } else if (
+      ctx.working != null
+      && (ctx.working.bookingAttemptId == null || ctx.working.bookingAttemptId.length === 0)
+      && isExplicitBookingStart(patch)
+    ) {
+      emit({
+        type: "booking_started",
+        bookingAttemptId: newBookingAttemptId(ctx.working.version),
+      });
+    }
+
+    const storeDeferredFromPatch = (boundEffectId: string | null): void => {
+      const schedule = deferredScheduleFromPatch(patch);
+      const informational = deferredInformationalFromPatch(patch);
+      if (schedule == null && informational == null) {
+        return;
+      }
+      const attemptId =
+        ctx.working?.bookingAttemptId
+        ?? ctx.working?.deferredTurn?.bookingAttemptId
+        ?? newBookingAttemptId(ctx.working?.version ?? 0);
+      const deferred: DeferredBookingTurn = {
+        bookingAttemptId: attemptId,
+        boundEffectId,
+        ...(schedule != null ? { schedule } : {}),
+        ...(informational != null ? { informational } : {}),
+      };
+      // Merge with existing deferred schedule when only informational is new.
+      const existing = ctx.working?.deferredTurn;
+      if (existing != null && existing.bookingAttemptId === attemptId) {
+        const mergedSchedule = schedule ?? existing.schedule;
+        const mergedInfo = informational ?? existing.informational;
+        const merged: DeferredBookingTurn = {
+          bookingAttemptId: attemptId,
+          boundEffectId,
+          ...(mergedSchedule != null ? { schedule: mergedSchedule } : {}),
+          ...(mergedInfo != null ? { informational: mergedInfo } : {}),
+        };
+        emit({ type: "deferred_turn_set", deferred: merged });
+        return;
+      }
+      emit({ type: "deferred_turn_set", deferred });
+    };
 
     // REPLACE chip: cancel current visit, then HITL.
     if (
@@ -1276,8 +1509,60 @@ export const decideBooking = (
       if (ctx.working?.serviceAcceptance?.status === "pending") {
         emit({ type: "service_accepted" });
       }
+      // After acceptance, apply deferred schedule (requestedTime pending) and price.
+      const deferred = ctx.working?.deferredTurn;
+      if (
+        ctx.working?.serviceAcceptance?.status === "accepted"
+        && deferred?.schedule != null
+      ) {
+        const sched = deferred.schedule;
+        if (sched.date != null) {
+          emit({
+            type: "schedule_requested",
+            date: sched.date,
+            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
+          });
+        }
+      }
+      if (
+        deferred?.informational?.topic === "price"
+        && ctx.working?.serviceAcceptance?.service.id != null
+      ) {
+        const serviceId = ctx.working.serviceAcceptance.service.id;
+        emit({ type: "deferred_informational_consumed" });
+        const pending = preparePendingEffect({ kind: "get_service", serviceId });
+        if (ctx.working?.deferredTurn?.schedule != null) {
+          emit({ type: "deferred_turn_bound", boundEffectId: pending.id });
+        } else if (ctx.working?.deferredTurn != null) {
+          emit({ type: "deferred_turn_cleared", reason: "consumed" });
+        }
+        return {
+          tag: "effect",
+          intent: "answer_side_question",
+          facts: {},
+          card: null,
+          pendingEffect: pending,
+        };
+      }
+      if (
+        deferred?.schedule != null
+        && ctx.working?.serviceAcceptance?.status === "accepted"
+      ) {
+        const sched = deferred.schedule;
+        emit({ type: "deferred_turn_cleared", reason: "consumed" });
+        const queryKind = sched.relative ?? "exact";
+        return runEffect(
+          "present_dates",
+          presentAvailabilityEffect(ctx.working, {
+            queryKind: queryKind === "exact" ? "exact" : queryKind,
+            ...(sched.date != null ? { date: sched.date } : {}),
+            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
+          }),
+        );
+      }
     } else if (service?.kind === "catalog_service") {
       // Only catalog-resolved ids may write service_selected.
+      // accepted:false — patient still confirms on the BOOKING OFFER card.
       emit({
         type: "service_selected",
         service: {
@@ -1285,26 +1570,53 @@ export const decideBooking = (
           ...(service.serviceName != null ? { name: service.serviceName } : {}),
           source: "catalog",
         },
-        accepted: true,
+        accepted: false,
       });
+      return decideFromRequirement();
     } else if (service?.kind === "named_procedure") {
-      // Book-with-visit: REPLACE before catalog resolve.
-      if (ctx.working?.replacement == null) {
+      // Book-with-visit: REPLACE before catalog resolve — not while already
+      // browsing a choose-other / catalog page (narrow the open picker instead).
+      const browsingCatalog =
+        ctx.working?.pendingDecision?.kind === "service_candidate";
+      if (!browsingCatalog && ctx.working?.replacement == null) {
         const existing = firstPlannedMeeting();
         if (existing != null) {
           return askReplacementOffer(existing);
         }
       }
       // Never trust a model CRM id — resolve via list_services catalog evidence.
-      return runEffect("run_effect", {
+      // Defer schedule/price before the effect so they survive catalog + confirm.
+      storeDeferredFromPatch(null);
+      const pending = preparePendingEffect({
         kind: "list_services",
         query: service.query,
       });
+      emit({ type: "deferred_turn_bound", boundEffectId: pending.id });
+      return {
+        tag: "effect",
+        intent: "run_effect",
+        facts: {},
+        card: null,
+        pendingEffect: pending,
+      };
     } else if (service?.kind === "catalog_browse") {
-      return runEffect("run_effect", {
+      // Idle browse without booking_started is routed away from the kernel.
+      // In-session browse may still list services; keep deferred schedule.
+      storeDeferredFromPatch(null);
+      const pending = preparePendingEffect({
         kind: "list_services",
         ...(service.query != null ? { query: service.query } : {}),
       });
+      if (ctx.working?.deferredTurn != null) {
+        emit({ type: "deferred_turn_bound", boundEffectId: pending.id });
+      }
+      return {
+        tag: "effect",
+        intent: "run_effect",
+        facts: {},
+        card: null,
+        pendingEffect: pending,
+      };
     } else if (service?.kind === "consultation") {
       // Book-with-visit: REPLACE before consultation offer.
       if (ctx.working?.replacement == null) {
@@ -1448,12 +1760,15 @@ export const decideBooking = (
     }
 
     // Side question may coexist with booking facts — apply facts first, then read effect.
+    // Never map unrecognized questions to get_working_time.
     if (patch.informationalQuestion != null) {
-      const kind = patch.informationalQuestion.trim().toLowerCase();
-      if (kind === "hours" || kind.includes("hour") || kind.includes("годин")) {
+      const topic = patch.faqTopic
+        ?? deferredInformationalFromPatch(patch)?.topic
+        ?? "other";
+      if (topic === "hours") {
         return runEffect("answer_side_question", { kind: "get_working_time" });
       }
-      if (kind === "address" || kind.includes("address") || kind.includes("адрес")) {
+      if (topic === "address") {
         const nextReq = nextBookingRequirement(ctx.working, readModels);
         return sideQuestionReply(
           {
@@ -1463,15 +1778,38 @@ export const decideBooking = (
           ctx.working,
         );
       }
-      if (kind === "price" || kind.includes("price") || kind.includes("цін")) {
+      if (topic === "price") {
         const serviceId = ctx.working?.serviceAcceptance?.service.id;
         if (serviceId != null) {
           return runEffect("answer_side_question", { kind: "get_service", serviceId });
         }
         // Defer price until a verified service is on the draft.
+        storeDeferredFromPatch(null);
         return decideFromRequirement();
       }
-      return runEffect("answer_side_question", { kind: "get_working_time" });
+      // Parking / policy / unknown: honest unknown, preserve session + open card.
+      const nextReq = nextBookingRequirement(ctx.working, readModels);
+      return sideQuestionReply(
+        {
+          clarificationReason: "unknown_faq",
+          ...(nextReq !== "none" ? { nextStep: nextReq } : {}),
+        },
+        ctx.working,
+      );
+    }
+
+    // Apply deferred schedule when acceptance happened earlier in this patch path
+    // without an informational diversion.
+    if (
+      patch.scheduleIntent != null
+      && ctx.working?.serviceAcceptance?.status === "accepted"
+    ) {
+      // schedule applied above in the normal schedule block when legal.
+    } else if (
+      patch.scheduleIntent != null
+      && ctx.working?.serviceAcceptance?.status !== "accepted"
+    ) {
+      storeDeferredFromPatch(ctx.working?.pendingEffect?.id ?? null);
     }
 
     return decideFromRequirement();

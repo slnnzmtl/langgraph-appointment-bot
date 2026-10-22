@@ -7,7 +7,8 @@ import { VOICE_SHORTCUTS } from "../voice.js";
 const MUTATION_TOOLS = ["create_meeting", "cancel_meeting", "reschedule_meeting"] as const;
 
 describe("DDD-257 prompt contracts", () => {
-  it("booking and FAQ prompts keep runtime-ownership boundaries", () => {
+  it("archival booking prompt keeps runtime-ownership boundaries; FAQ stays live", () => {
+    // Booking LLM prompt is archival (no live agent bind after DDD-281).
     expect(BOOKING_SYSTEM_PROMPT).not.toContain("confirmationGiven");
     for (const tool of MUTATION_TOOLS) {
       expect(BOOKING_SYSTEM_PROMPT).not.toContain(tool);

@@ -228,9 +228,12 @@ const isEmptyCheckpointSnapshot = (values: unknown): values is Record<string, ne
 /** True when the thread is paused on create/cancel/reschedule HITL Yes/No. */
 export const hasPendingConfirmBooking = (
   tasks: unknown,
-): boolean => {
+): boolean => confirmBookingInterruptValue(tasks) != null;
+
+/** Paused confirm_booking interrupt value, or null when none. */
+export const confirmBookingInterruptValue = (tasks: unknown): unknown => {
   if (!Array.isArray(tasks)) {
-    return false;
+    return null;
   }
   for (const task of tasks) {
     const interrupts = (task as { interrupts?: InterruptItem[] }).interrupts;
@@ -239,11 +242,11 @@ export const hasPendingConfirmBooking = (
     }
     for (const item of interrupts) {
       if (isConfirmBookingInterrupt(item?.value)) {
-        return true;
+        return item?.value;
       }
     }
   }
-  return false;
+  return null;
 };
 
 export type GraphTextTurnOptions = {
@@ -380,12 +383,14 @@ export const handleGraphTextTurn = async (
             pendingInteraction?: unknown;
           } | undefined
         ) ?? {};
+        const interruptValue = confirmBookingInterruptValue(snapshot.tasks);
         const hitl = resumeConfirmBookingHitl({
           text,
           bookingDraft: channelValues.bookingDraft,
           pendingInteraction: channelValues.pendingInteraction,
           bookingUpdate,
           ...(callbackChoiceId != null ? { callbackChoiceId } : {}),
+          ...(interruptValue != null ? { interruptValue } : {}),
         });
         return graph.invoke(
           new Command({

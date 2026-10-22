@@ -22,11 +22,12 @@ import {
   kyivToday,
   shortDayMonthLabel,
 } from "../tools/availability-slots.js";
-import type {
-  AvailabilityRenderSnapshot,
-  DateSelectInteraction,
-  PendingInteraction,
-  TimeSelectInteraction,
+import {
+  interactionChoiceEquals,
+  type AvailabilityRenderSnapshot,
+  type DateSelectInteraction,
+  type PendingInteraction,
+  type TimeSelectInteraction,
 } from "./booking-session.js";
 import {
   presentationSnapshotId,
@@ -35,44 +36,78 @@ import {
 } from "./booking-domain/availability-presentation.js";
 import { catalogChoiceBulletBlock } from "./faq-catalog.js";
 
-const AVAILABILITY_DATE_HEADING = "Найближчі вільні дні";
-const AVAILABILITY_GENERIC_DATE_HEADING = "Доступні дні";
-const AVAILABILITY_TIME_HEADING = "Вільні години на ";
+export type InteractionLocale = "uk" | "en";
+
+const AVAILABILITY_DATE_HEADING = {
+  uk: "Найближчі вільні дні",
+  en: "Nearest available days",
+} as const;
+const AVAILABILITY_GENERIC_DATE_HEADING = {
+  uk: "Доступні дні",
+  en: "Available days",
+} as const;
+const AVAILABILITY_TIME_HEADING = {
+  uk: "Вільні години на ",
+  en: "Available times on ",
+} as const;
 
 /** Shared DATE-page heading from a search query kind + optional anchor. */
 export const availabilityDateHeading = (
   queryKind: AvailabilityRenderSnapshot["queryKind"],
   queryAnchor?: string,
+  locale: InteractionLocale = "uk",
 ): string => {
   if (queryKind === "nearest") {
-    return AVAILABILITY_DATE_HEADING;
+    return AVAILABILITY_DATE_HEADING[locale];
   }
+  const anchor = queryAnchor
+    ? shortDayMonthLabel(formatKyivDayLabel(queryAnchor, kyivToday()))
+    : "";
   if (queryKind === "later" && queryAnchor) {
-    return `Вільні дні після ${shortDayMonthLabel(formatKyivDayLabel(queryAnchor, kyivToday()))}`;
+    return locale === "en"
+      ? `Available days after ${anchor}`
+      : `Вільні дні після ${anchor}`;
   }
   if (queryKind === "earlier" && queryAnchor) {
-    return `Вільні дні до ${shortDayMonthLabel(formatKyivDayLabel(queryAnchor, kyivToday()))}`;
+    return locale === "en"
+      ? `Available days before ${anchor}`
+      : `Вільні дні до ${anchor}`;
   }
-  return AVAILABILITY_GENERIC_DATE_HEADING;
+  return AVAILABILITY_GENERIC_DATE_HEADING[locale];
 };
 
-const headingForSnapshot = (snapshot: AvailabilityRenderSnapshot): string =>
-  availabilityDateHeading(snapshot.queryKind, snapshot.queryAnchor);
+const headingForSnapshot = (
+  snapshot: AvailabilityRenderSnapshot,
+  locale: InteractionLocale = "uk",
+): string =>
+  availabilityDateHeading(snapshot.queryKind, snapshot.queryAnchor, locale);
 
-const emptyBody = (snapshot: AvailabilityRenderSnapshot): string => {
+const emptyBody = (
+  snapshot: AvailabilityRenderSnapshot,
+  locale: InteractionLocale = "uk",
+): string => {
   if (snapshot.emptyMode === "earlier") {
-    return "Раніших вільних дат не знайшли. Пошукати пізніші дати?";
+    return locale === "en"
+      ? "No earlier free dates found. Look for later dates?"
+      : "Раніших вільних дат не знайшли. Пошукати пізніші дати?";
   }
   if (snapshot.emptyMode === "exact") {
-    return "На цю дату вільного часу немає. Пошукати іншу дату?";
+    return locale === "en"
+      ? "No free time on that date. Look for another day?"
+      : "На цю дату вільного часу немає. Пошукати іншу дату?";
   }
-  return "У цьому періоді вільного часу немає. Пошукати інші дати?";
+  return locale === "en"
+    ? "No free time in this period. Look for other dates?"
+    : "У цьому періоді вільного часу немає. Пошукати інші дати?";
 };
 
-const dateSelectBody = (interaction: DateSelectInteraction): string => {
+const dateSelectBody = (
+  interaction: DateSelectInteraction,
+  locale: InteractionLocale = "uk",
+): string => {
   const { snapshot } = interaction;
   if (snapshot.emptyMode != null) {
-    return emptyBody(snapshot);
+    return emptyBody(snapshot, locale);
   }
   const bullets = snapshot.days
     .map((day) => {
@@ -80,20 +115,27 @@ const dateSelectBody = (interaction: DateSelectInteraction): string => {
       return `  - ${day.displayLabel}: ${hours}`;
     })
     .join("\n");
-  return `${headingForSnapshot(snapshot)} 🗓️\n\n${bullets}\n\nЯкий день вам зручний?`;
+  const ask = locale === "en" ? "Which day works for you?" : "Який день вам зручний?";
+  return `${headingForSnapshot(snapshot, locale)} 🗓️\n\n${bullets}\n\n${ask}`;
 };
 
-const timeSelectBody = (interaction: TimeSelectInteraction): string => {
+const timeSelectBody = (
+  interaction: TimeSelectInteraction,
+  locale: InteractionLocale = "uk",
+): string => {
   const day = interaction.snapshot.days.find((entry) => entry.date === interaction.date)
     ?? interaction.snapshot.days[0];
   const dayLabel = day?.displayLabel ?? interaction.date;
   const labels = day?.slotSummaries ?? [];
   const bullets = labels.map((label) => `  - ${label}`).join("\n");
-  return `${AVAILABILITY_TIME_HEADING}${dayLabel} 🗓️\n\n${bullets}\n\nЯкий час вам зручний?`;
+  const ask = locale === "en" ? "Which time works for you?" : "Який час вам зручний?";
+  return `${AVAILABILITY_TIME_HEADING[locale]}${dayLabel} 🗓️\n\n${bullets}\n\n${ask}`;
 };
 
 const serviceConfirmBody = (interaction: PendingInteraction & { kind: "service_confirm" }): string => {
-  const acceptLabel = interaction.choices.find((choice) => choice.id === "accept")?.label;
+  const acceptLabel = interaction.choices.find((choice) =>
+    interactionChoiceEquals(choice.id, "offer_accept")
+  )?.label;
   const english = acceptLabel === BOOKING_OFFER_MENU_EN[0];
   if (interaction.service.id === CONSULTATION_SERVICE_ID) {
     return english ? SERVICE_CONFIRM_CONSULTATION_EN : SERVICE_CONFIRM_CONSULTATION_UK;
@@ -104,45 +146,59 @@ const serviceConfirmBody = (interaction: PendingInteraction & { kind: "service_c
     : SERVICE_CONFIRM_PROCEDURE_UK(name);
 };
 
-const clarificationBody = (interaction: PendingInteraction): string => {
+const clarificationBody = (
+  interaction: PendingInteraction,
+  locale: InteractionLocale = "uk",
+): string => {
   // Skip stays on the reply keyboard only — in-message bullets make free-text notes look like a picker.
   if (interaction.kind === "visit_note") {
-    return BOOKING_NOTE_QUESTION_UK;
+    return locale === "en"
+      ? "Any note for the visit? You can skip."
+      : BOOKING_NOTE_QUESTION_UK;
   }
   if (interaction.kind === "service_confirm") {
     return serviceConfirmBody(interaction);
   }
   if (interaction.kind === "date_select") {
-    return dateSelectBody(interaction);
+    return dateSelectBody(interaction, locale);
   }
   if (interaction.kind === "time_select") {
-    return timeSelectBody(interaction);
+    return timeSelectBody(interaction, locale);
   }
   if (interaction.kind === "visit_select") {
     if (interaction.stage === "replacement") {
-      return "У вас уже є запланований візит. Скасувати його й записати новий?";
+      return locale === "en"
+        ? "You already have a planned visit. Cancel it and book a new one?"
+        : "У вас уже є запланований візит. Скасувати його й записати новий?";
     }
     if (interaction.stage === "meeting") {
-      return interaction.action === "cancel"
-        ? "Який візит скасувати?"
-        : "Який візит перенести?";
+      if (interaction.action === "cancel") {
+        return locale === "en" ? "Which visit should I cancel?" : "Який візит скасувати?";
+      }
+      return locale === "en" ? "Which visit should I reschedule?" : "Який візит перенести?";
     }
-    return "Чим можу допомогти з вашим записом?";
+    return locale === "en"
+      ? "How can I help with your visit?"
+      : "Чим можу допомогти з вашим записом?";
   }
   if (interaction.kind === "contact_field") {
     if (interaction.occupied) {
       return BOOKING_PHONE_OCCUPIED_UK;
     }
     if (interaction.field === "firstName") {
-      return "Підкажіть, будь ласка, ваше ім’я.";
+      return locale === "en"
+        ? "Please share your first name."
+        : "Підкажіть, будь ласка, ваше ім’я.";
     }
     if (interaction.field === "lastName") {
-      return "Підкажіть, будь ласка, ваше прізвище.";
+      return locale === "en"
+        ? "Please share your last name."
+        : "Підкажіть, будь ласка, ваше прізвище.";
     }
     return BOOKING_PHONE_QUESTION_UK;
   }
   if (interaction.kind === "mutation_confirm") {
-    return "Підтвердити цю дію?";
+    return locale === "en" ? "Confirm this action?" : "Підтвердити цю дію?";
   }
   const options = catalogChoiceBulletBlock(interaction.choices);
   if (interaction.kind === "service_or_note") {
@@ -166,8 +222,9 @@ const clarificationBody = (interaction: PendingInteraction): string => {
 /** Build a fresh AIMessage from the open interaction. Never reuse stale agentMessages. */
 export const renderBookingInteractionMessage = (
   interaction: PendingInteraction,
+  locale: InteractionLocale = "uk",
 ): AIMessage =>
-  new AIMessage(clarificationBody(interaction));
+  new AIMessage(clarificationBody(interaction, locale));
 
 export const replyButtonsForInteraction = (
   interaction: PendingInteraction,

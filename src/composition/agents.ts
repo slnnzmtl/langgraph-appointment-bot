@@ -1,4 +1,3 @@
-import { BOOKING_SYSTEM_PROMPT } from "../prompts/booking.js";
 import { FAQ_SYSTEM_PROMPT } from "../prompts/faq.js";
 import {
   BOOKING_AGENT_ID,
@@ -15,11 +14,16 @@ export const faqAgent: ClinicAgentDefinition = {
   maxSteps: 4,
 };
 
+/**
+ * Booking has no LLM node — decide/effect/respond owns the path.
+ * Keep the specialist id for tools allowlist and route targets.
+ * systemPrompt is intentionally empty (archival copy lives in prompts/booking.ts).
+ */
 export const bookingAgent: ClinicAgentDefinition = {
   id: BOOKING_AGENT_ID,
   name: "Booking",
   description: "Books clinic appointments: identify patient, collect details, schedule meetings.",
-  systemPrompt: BOOKING_SYSTEM_PROMPT,
+  systemPrompt: "",
   maxSteps: 10,
 };
 

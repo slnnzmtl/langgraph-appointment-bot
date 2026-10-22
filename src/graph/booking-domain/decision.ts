@@ -57,6 +57,8 @@ export type BookingVerifiedFacts = {
   action?: "create" | "reschedule" | "cancel";
   clarificationReason?: string;
   nextStep?: string;
+  /** Composer prefixes «Запис скасовано.» before the next open step (REPLACE continue). */
+  cancelAcknowledged?: boolean;
 };
 
 /**
@@ -164,6 +166,11 @@ export type BookingReadModels = {
    * Used for create_meeting titles after contactDetails were cleared.
    */
   ownedContact?: { firstName?: string; lastName?: string };
+  /**
+   * Espo assigned user for create_meeting CRM writes.
+   * Required to freeze the interrupt command before HITL.
+   */
+  assignedUserId?: string;
 };
 
 /**

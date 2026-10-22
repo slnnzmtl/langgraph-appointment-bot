@@ -7,9 +7,7 @@
  */
 import type { BaseMessage } from "@langchain/core/messages";
 import { Overwrite } from "@langchain/langgraph";
-import { FAQ_AGENT_ID } from "../types.js";
-
-import { extractMessageTextContent, labelIdFor } from "../../shared/message-content.js";
+import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   bookingAvailabilityScope,
   reduceBookingDraft,
@@ -18,7 +16,6 @@ import {
   type BookingEvent,
 } from "../booking-draft.js";
 import {
-  askDecisionFromPendingView,
   decideBooking,
 } from "../booking-domain/decide.js";
 import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
@@ -44,8 +41,6 @@ import {
   interpretInteractionReply,
 } from "../booking-session.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
-import type { InterpretBookingTurn } from "./booking-turn-interpreter.js";
-import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import {
   effectResultFromToolMessages,
   failClosedForPending,
@@ -67,34 +62,6 @@ export {
 export const BOOKING_DECIDE_NODE = "booking__decide" as const;
 /** Keep legacy name as the ToolNode / HITL resume target. */
 export const BOOKING_EFFECTS_NODE = "booking__tools" as const;
-
-const CONTACT_FIELD_SET = new Set<BookingContactField>([
-  "phoneNumber",
-  "firstName",
-  "lastName",
-]);
-
-
-/** Open contact field from the card the patient was shown; else need_* on pendingDecision. */
-const awaitingContactField = (
-  draft: BookingDraft | null | undefined,
-  pendingInteraction: ClinicState["pendingInteraction"],
-): BookingContactField | undefined => {
-  if (pendingInteraction?.kind === "contact_field") {
-    return pendingInteraction.field;
-  }
-  const pending = draft?.pendingDecision;
-  if (pending?.kind === "clarification" && typeof pending.reason === "string") {
-    const prefix = "need_";
-    if (pending.reason.startsWith(prefix)) {
-      const field = pending.reason.slice(prefix.length);
-      if (CONTACT_FIELD_SET.has(field as BookingContactField)) {
-        return field as BookingContactField;
-      }
-    }
-  }
-  return undefined;
-};
 
 const bookingContextWithoutMeeting = (
   bookingContext: ClinicState["bookingContext"],
@@ -148,7 +115,10 @@ const ownedContactFromState = (
   };
 };
 
-export const readModelsFromClinicState = (state: ClinicState): BookingReadModels => {
+export const readModelsFromClinicState = (
+  state: ClinicState,
+  options?: { assignedUserId?: string },
+): BookingReadModels => {
   const availability = state.availabilityContext;
   const query = availability != null ? availabilityQueryFromContext(availability) : null;
   const snapshotId = availability != null
@@ -176,6 +146,7 @@ export const readModelsFromClinicState = (state: ClinicState): BookingReadModels
     }];
   });
   const ownedContact = ownedContactFromState(state);
+  const assignedUserId = options?.assignedUserId?.trim();
   return {
     contactContextDirty: state.prefetchDirty === true,
     bookingContextDirty: state.prefetchDirty === true,
@@ -197,6 +168,9 @@ export const readModelsFromClinicState = (state: ClinicState): BookingReadModels
     ...(snapshotId != null ? { availabilitySnapshotId: snapshotId } : {}),
     ...(plannedMeetings.length > 0 ? { plannedMeetings } : {}),
     ...(ownedContact != null ? { ownedContact } : {}),
+    ...(assignedUserId != null && assignedUserId.length > 0
+      ? { assignedUserId }
+      : {}),
   };
 };
 
@@ -275,11 +249,14 @@ const withOfferedChoices = (
 };
 
 export type CreateBookingDecideNodeOptions = {
-  interpretTurn?: InterpretBookingTurn;
+  /** @deprecated Ingress owns interpret; kept for call-site compat. */
+  interpretTurn?: unknown;
   /** Family selector — narrows list_services rows after named_procedure (no stem parsing). */
   selectCandidates?: SelectServiceCandidates;
   /** One-level partitioner for family pages when selector groups are missing. */
   partitionCandidates?: PartitionServiceCandidates;
+  /** Espo assigned user — frozen into create_meeting HITL CRM commands. */
+  assignedUserId?: string;
 };
 
 /** Resolve remaining CRM ids from the active chip page only — not catalogRows. */
@@ -518,14 +495,17 @@ const catalogChoiceIdFromState = (
 export const createBookingDecideNode = (
   options: CreateBookingDecideNodeOptions = {},
 ) => {
-  const interpretTurn = options.interpretTurn;
+  void options.interpretTurn;
   const selectCandidates = options.selectCandidates;
   const partitionCandidates = options.partitionCandidates;
+  const assignedUserId = options.assignedUserId;
 
   return async (
     state: ClinicState,
   ): Promise<ClinicStateUpdate> => {
-    const readModels = readModelsFromClinicState(state);
+    const readModels = readModelsFromClinicState(state, {
+      ...(assignedUserId != null ? { assignedUserId } : {}),
+    });
     const seeded = seedDraftFromTelegramPrefetch(
       state.bookingDraft ?? null,
       state.contactContext,
@@ -601,70 +581,25 @@ export const createBookingDecideNode = (
         { source: "semantic_patch", patch: {} },
         readModels,
       );
+    } else if (state.understoodTurn != null) {
+      // Ingress already classified this utterance — do not interpret again.
+      const patch = enrichPatchWithReadModels(state.understoodTurn, {
+        ...state,
+        bookingDraft: workingDraft,
+      }, readModels);
+      result = decideBooking(
+        workingDraft,
+        { source: "semantic_patch", patch },
+        readModels,
+      );
     } else {
-      const rawText = lastHumanText(state.messages);
-      // Exact main-menu «Записатись» bypasses the structured interpreter.
-      if (labelIdFor(rawText) === "mainBook") {
-        result = decideBooking(
-          workingDraft,
-          {
-            source: "semantic_patch",
-            patch: { serviceIntent: { kind: "consultation" } },
-          },
-          readModels,
-        );
-      } else {
-        const openContactField = awaitingContactField(
-          workingDraft,
-          state.pendingInteraction,
-        );
-        const fromInbound = state.inboundChoiceId;
-        const fromChip = fromInbound == null
-          ? interpretInteractionReply(state.pendingInteraction, rawText)
-          : null;
-        const callbackChoiceId = fromInbound
-          ?? (fromChip?.kind === "choice" ? fromChip.choiceId : undefined);
-        // Offered ids for this hop come from the active card, not a second authority.
-        const activeView = askDecisionFromPendingView(workingDraft);
-        const offeredFromCard = choiceIdsFromCard(activeView?.card ?? null);
-        const interpretInput = {
-          rawText,
-          ...(callbackChoiceId != null ? { callbackChoiceId } : {}),
-          ...(offeredFromCard.length > 0
-            ? { offeredChoiceIds: offeredFromCard }
-            : {}),
-          awaitingNote: workingDraft?.note.status === "awaiting"
-            || workingDraft?.phase === "note",
-          ...(openContactField != null ? { awaitingContactField: openContactField } : {}),
-          awaitingServiceConfirm: activeView?.card?.kind === "service_confirm",
-        };
-        const rawPatch = interpretTurn != null
-          ? await interpretTurn(interpretInput)
-          : interpretBookingTurnDeterministic(interpretInput);
-        const patch = enrichPatchWithReadModels(rawPatch, {
-          ...state,
-          bookingDraft: workingDraft,
-        }, readModels);
-        if (Object.keys(patch).length > 0) {
-          result = decideBooking(
-            workingDraft,
-            { source: "semantic_patch", patch },
-            readModels,
-          );
-        } else if (workingDraft != null) {
-          result = decideBooking(
-            workingDraft,
-            { source: "semantic_patch", patch: {} },
-            readModels,
-          );
-        } else {
-          result = decideBooking(
-            workingDraft,
-            { source: "patient_turn", rawText: interpretInput.rawText },
-            readModels,
-          );
-        }
-      }
+      // HITL resume / effect-only turns: no patient re-interpret at decide.
+      // Empty patch re-asks the open requirement when a session exists.
+      result = decideBooking(
+        workingDraft,
+        { source: "semantic_patch", patch: {} },
+        readModels,
+      );
     }
 
     // Unstamped present_availability: stamp only returns null for that effect.
@@ -722,26 +657,6 @@ export const createBookingDecideNode = (
         : undefined,
     );
 
-    // REPLACE cancel with no accepted service → FAQ root catalog via
-    // compile.ts conditional edges (next === FAQ_AGENT_ID). Keep cancel
-    // ToolMessage so FAQ prepare opens the catalog and finalize can prefix
-    // «Запис скасовано.» (Overwrite — do not append).
-    if (result.decision.reason === "replacement_cancel_catalog") {
-      return {
-        bookingDraft: draft,
-        bookingSchemaVersion: 2,
-        inboundChoiceId: null,
-        bookingDecision: null,
-        pendingInteraction: null,
-        next: FAQ_AGENT_ID,
-        lastHandoff: null,
-        ...(bookingContextAfterCancel != null
-          ? { bookingContext: bookingContextAfterCancel }
-          : {}),
-        agentMessages: new Overwrite(state.agentMessages ?? []),
-      };
-    }
-
     // Overwrite the tool tape. `agentMessages: []` is a no-op under the messages
     // reducer, so stale ToolMessages would keep recycled effect ids looking
     // fulfilled and skip booking__tools (date prompt with no chips).
@@ -751,6 +666,7 @@ export const createBookingDecideNode = (
       inboundChoiceId: null,
       bookingDecision: result.decision,
       pendingInteraction,
+      understoodTurn: null,
       agentMessages: new Overwrite([] as BaseMessage[]),
       ...(bookingContextAfterCancel != null
         ? { bookingContext: bookingContextAfterCancel }

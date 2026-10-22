@@ -33,6 +33,70 @@ const withDeterministicFirst = (
     return llm != null ? llm(input) : {};
   };
 
+/**
+ * Decide no longer re-interprets. Simulate supervisor ingress: interpret once,
+ * then call decide with understoodTurn (effect / catalog taps unchanged).
+ */
+const createDecideWithIngress = (
+  options: Parameters<typeof createBookingDecideNode>[0] = {},
+) => {
+  const interpret = (options.interpretTurn as
+    | ((input: InterpretBookingTurnInput) => Promise<UnderstoodBookingTurn>)
+    | undefined)
+    ?? withDeterministicFirst();
+  const decide = createBookingDecideNode(options);
+  return async (state: Record<string, unknown>) => {
+    if (
+      state.understoodTurn != null
+      || (state.bookingDraft as { pendingEffect?: unknown } | null)?.pendingEffect != null
+    ) {
+      return decide(state as never);
+    }
+    const messages = state.messages as { _getType?: () => string; content?: unknown }[] | undefined;
+    let rawText = "";
+    if (messages != null) {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i]?._getType?.() === "human") {
+          rawText = String(messages[i]?.content ?? "").trim();
+          break;
+        }
+      }
+    }
+    const draft = state.bookingDraft as {
+      pendingDecision?: { kind?: string; choices?: { id: string; label?: string }[] };
+      note?: { status?: string };
+      phase?: string;
+    } | null;
+    const pending = state.pendingInteraction as {
+      kind?: string;
+      field?: string;
+      choices?: { id: string; label: string }[];
+    } | null;
+    const offered = draft?.pendingDecision?.choices
+      ?? pending?.choices
+      ?? [];
+    const patch = await interpret({
+      rawText,
+      ...(typeof state.inboundChoiceId === "string"
+        ? { callbackChoiceId: state.inboundChoiceId }
+        : {}),
+      ...(offered.length > 0
+        ? {
+          offeredChoiceIds: offered.map((c) => c.id),
+          offeredChoiceLabels: offered.map((c) => c.label ?? c.id),
+        }
+        : {}),
+      awaitingNote: draft?.note?.status === "awaiting" || draft?.phase === "note",
+      ...(pending?.kind === "contact_field" && pending.field != null
+        ? { awaitingContactField: pending.field as "phoneNumber" | "firstName" | "lastName" }
+        : {}),
+      awaitingServiceConfirm: draft?.pendingDecision?.kind === "service_confirm"
+        || pending?.kind === "service_confirm",
+    });
+    return decide({ ...state, understoodTurn: patch } as never);
+  };
+};
+
 const SLOT_ID = "2026-10-20T1100";
 const DATE_ID = "2026-10-20";
 
@@ -119,7 +183,7 @@ describe("createBookingDecideNode chip label ingress", () => {
   });
 
   it("stamps list_services when named_procedure arrives on open time_select", async () => {
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => ({
         serviceIntent: { kind: "named_procedure", query: "ботокс" },
       })),
@@ -165,7 +229,7 @@ describe("createBookingDecideNode chip label ingress", () => {
 
   it("unstamped present_availability fails closed without re-offering DATE/TIME", async () => {
     vi.spyOn(stampBookingEffectMod, "stampBookingEffect").mockReturnValue(null);
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => ({
         scheduleIntent: { kind: "relative", queryKind: "nearest" },
       })),
@@ -198,7 +262,7 @@ describe("createBookingDecideNode chip label ingress", () => {
   });
 
   it("maps reply-keyboard 11:00 to the slot id when inboundChoiceId is null", async () => {
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => {
         throw new Error("LLM interpreter must not run for a matched chip");
       }),
@@ -228,7 +292,7 @@ describe("createBookingDecideNode chip label ingress", () => {
   });
 
   it("does not treat bare hour prose as a reply-keyboard match", async () => {
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => ({})),
     });
     const update = await node({
@@ -254,7 +318,7 @@ describe("createBookingDecideNode chip label ingress", () => {
   });
 
   it("maps a date label and Інша дата to their choice ids", async () => {
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => {
         throw new Error("LLM interpreter must not run for a matched chip");
       }),
@@ -301,7 +365,7 @@ describe("createBookingDecideNode chip label ingress", () => {
   });
 
   it("does not treat bare day prose as a reply-keyboard match", async () => {
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => ({})),
     });
     const update = await node({
@@ -326,7 +390,7 @@ describe("createBookingDecideNode chip label ingress", () => {
 
   it("does not invent a date when bare day is ambiguous across open choices", async () => {
     let sawCallback: string | undefined;
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async (input) => {
         sawCallback = input.callbackChoiceId;
         return {};
@@ -354,7 +418,7 @@ describe("createBookingDecideNode chip label ingress", () => {
 
   it("does not invent callbackChoiceId for unmatched prose on an open time card", async () => {
     let sawCallback: string | undefined;
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async (input) => {
         sawCallback = input.callbackChoiceId;
         return {};
@@ -381,7 +445,7 @@ describe("createBookingDecideNode chip label ingress", () => {
   });
 
   it("prefers inboundChoiceId over a conflicting label match", async () => {
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => {
         throw new Error("LLM interpreter must not run for an inbound choice id");
       }),
@@ -488,7 +552,7 @@ describe("createBookingDecideNode catalog family selector", () => {
         serviceIds: ["svc-latin", "svc-corr"],
       };
     });
-    const node = createBookingDecideNode({ selectCandidates });
+    const node = createDecideWithIngress({ selectCandidates });
     const update = await node({
       messages: [new HumanMessage("запиши на ботокс краще")],
       agentMessages: catalogToolTape(),
@@ -524,7 +588,7 @@ describe("createBookingDecideNode catalog family selector", () => {
 
   it("selector empty at visit_note resumes note with need_service (not PATIENT_FALLBACK)", async () => {
     const selectCandidates = vi.fn(async () => ({ serviceIds: [] as string[] }));
-    const node = createBookingDecideNode({ selectCandidates });
+    const node = createDecideWithIngress({ selectCandidates });
     const update = await node({
       messages: [new HumanMessage("запиши на ботокс краще")],
       agentMessages: catalogToolTape(),
@@ -564,7 +628,7 @@ describe("createBookingDecideNode catalog family selector", () => {
         { label: "Disport", serviceIds: ["svc-3", "svc-4", "svc-5"] },
       ],
     }));
-    const node = createBookingDecideNode({ selectCandidates });
+    const node = createDecideWithIngress({ selectCandidates });
     const update = await node({
       messages: [new HumanMessage("запиши на ботокс краще")],
       agentMessages: [
@@ -635,7 +699,7 @@ describe("createBookingDecideNode catalog family selector", () => {
       type: "choices_offered",
       choiceIds: ["g0"],
     });
-    const node = createBookingDecideNode();
+    const node = createDecideWithIngress();
     const update = await node({
       messages: [new HumanMessage("Botox")],
       agentMessages: [],
@@ -681,7 +745,7 @@ describe("createBookingDecideNode catalog family selector", () => {
         },
       ],
     }));
-    const node = createBookingDecideNode({ selectCandidates });
+    const node = createDecideWithIngress({ selectCandidates });
     const opened = await node({
       messages: [new HumanMessage("запиши на ботокс краще")],
       agentMessages: [
@@ -773,7 +837,7 @@ describe("createBookingDecideNode catalog family selector", () => {
         ],
       },
     });
-    const node = createBookingDecideNode();
+    const node = createDecideWithIngress();
     const update = await node({
       messages: [new HumanMessage("stale")],
       agentMessages: [],
@@ -812,7 +876,7 @@ describe("createBookingDecideNode catalog family selector", () => {
         ],
       },
     });
-    const node = createBookingDecideNode();
+    const node = createDecideWithIngress();
     const buried = await node({
       messages: [new HumanMessage("svc-0")],
       agentMessages: [],
@@ -868,7 +932,7 @@ describe("createBookingDecideNode catalog family selector", () => {
         { label: "Family", serviceIds: ["svc-a", "svc-b"] },
       ],
     }));
-    const node = createBookingDecideNode({ selectCandidates });
+    const node = createDecideWithIngress({ selectCandidates });
     const opened = await node({
       messages: [new HumanMessage("запиши на ботокс краще")],
       agentMessages: [
@@ -968,7 +1032,7 @@ describe("createBookingDecideNode unstamped effect next-turn tap", () => {
       ],
     };
 
-    const node = createBookingDecideNode({
+    const node = createDecideWithIngress({
       interpretTurn: withDeterministicFirst(async () => ({
         scheduleIntent: { kind: "relative", queryKind: "nearest" },
       })),

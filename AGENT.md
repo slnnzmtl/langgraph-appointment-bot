@@ -7,17 +7,19 @@ This file is the map for changing the product. Patient-facing copy lives in prom
 ## Topology
 
 ```
-Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HTTP
-                                         │
-                         ┌───────────────┼───────────────┐
-                         ▼               ▼               ▼
-                    Supervisor      FAQ agent      Booking agent
-                    (route /         (read)         (read + write
-                     FINISH)                         + HITL)
+Telegram  →  LangGraph clinic graph  →  EspoCRM MCP HTTP
+
+Normal turn:
+  prefetch → deterministic offered choice OR one structured interpretation
+          → booking kernel | FAQ/catalog capability → effects → one grounded reply
+
+Paused HITL resume:
+  confirmation gate → correlated mutation result → booking kernel → grounded reply
+  (does not re-enter ingress interpretation)
 ```
 
 - **Interface:** private chats only; exclusive per-`thread_id` invoke queue; 20 messages/user/minute; optional `POST /webhooks/tomorrow-reminder`.
-- **State:** file-backed SqliteSaver (`CHECKPOINT_DB_PATH`, default `data/checkpoints.sqlite`) keyed by Telegram `chat.id`; pending HITL chat-confirm + reminder maps stay in-process (single instance). Checkpointed: contact + planned-meetings prefetch (~5 min TTL, dirty after a successful write), `availabilityContext` / `servicesContext`, `lastHandoff`, trimmed history (`MESSAGE_HISTORY_MAX_TOKENS`, default 6000).
+- **State:** file-backed SqliteSaver (`CHECKPOINT_DB_PATH`, default `data/checkpoints.sqlite`) keyed by Telegram `chat.id`; pending HITL chat-confirm + reminder maps stay in-process (single instance). Checkpointed: contact + planned-meetings prefetch (~5 min TTL, dirty after a successful write), `availabilityContext` / `servicesContext`, `lastHandoff`, `bookingDraft` (incl. `deferredTurn` / `bookingAttemptId`), trimmed history (`MESSAGE_HISTORY_MAX_TOKENS`, default 6000).
 - **Identity:** Telegram user id from Telegraf ALS (`runWithTelegramUserId`) → CRM `cTelegram`. Never from the model. Meeting writes and `list_planned_meetings` require ownership for that user. `assignedUserId` is injected server-side.
 - **Models:** Gemini — chat/supervisor/agent default `gemini-3.1-flash-lite` (`GEMINI_MODEL` / `SUPERVISOR_MODEL` / `AGENT_MODEL`); voice `gemini-3.1-flash-lite` (`AUDIO_MODEL`). Context cache on by default (`GEMINI_CONTEXT_CACHE`).
 
@@ -25,46 +27,42 @@ Telegram (telegraf, long poll)  →  LangGraph clinic graph  →  EspoCRM MCP HT
 
 | Change | Edit |
 | --- | --- |
-| Greeting, routing ladder, FINISH menus | `src/prompts/supervisor.ts` |
-| Catalog / prices / location | `src/prompts/faq.ts` |
-| Booking ladder, HITL wording, slot UX | `src/prompts/booking.ts` |
-| Shared patient voice sections + graph-owned shortcut rules | `src/prompts/voice.ts` (composed per agent into the Gemini cache) |
-| Sticky continue, FINISH button attach, prefetch | `src/graph/` (`supervisor.ts`, `agent-loop.ts`, `state.ts`) |
+| Ingress turn contract + routing | `src/graph/booking-domain/turn.ts`, `interpret.ts`, `receptionist-route.ts`, `supervisor/` |
+| Booking decision kernel | `src/graph/booking-domain/decide.ts`, `booking-draft.ts` |
+| Catalog / prices / location (FAQ capability) | `src/prompts/faq.ts`, `src/graph/faq-catalog.ts` |
+| Card copy locale | `src/graph/booking-interaction-render.ts`, `booking__respond` |
+| Shared patient voice sections | `src/prompts/voice.ts` |
+| HITL resume identity | `src/graph/hitl-command-match.ts`, `src/composition/booking-hitl.ts` |
 | CRM tools, HITL pause, free/busy, E.164 | `src/tools/` |
 | Keyboards, `/start`, voice, rate limit, reminder | `src/adapter/` |
 | Address, consultation id, menu label lists | `src/shared/clinic-constants.ts` |
 | Wiring / agent defs (`maxSteps`) | `src/composition/` |
 
-Do not add a third specialist, a second booking path, or a parallel keyboard format. One graph, one HITL confirm map, one keyboard format. Markup is owned by `pendingInteraction` and rendered into `lastHandoff.replyButtons` for the adapter; `lastHandoff` is presentation/observability only.
+Do not add a third specialist, a second booking path, or a parallel keyboard format. One graph, one HITL confirm map, one keyboard format. Markup is owned by `pendingInteraction` (projection of the decision card) and rendered into `lastHandoff.replyButtons` for the adapter; `lastHandoff` is presentation/observability only.
 
 ## Agents
 
-### Supervisor (router + greeter)
+### Supervisor (ingress + greeter)
 
-Only agent that greets. Each turn: `faq` / `booking` (empty `reply`; specialist sees full history) or `FINISH` (answer itself). No CRM tools.
+Two paths only:
+
+1. **Normal turn:** prefetch → interpret once (deterministic offered labels first; structured LLM only if the patch is `{}`) → `routeUnderstoodTurn` → booking kernel | FAQ capability | FINISH. No pre-LLM sticky table and no supervisor routing LLM.
+2. **Paused HITL resume:** confirmation gate → correlated mutation → booking kernel. Does **not** re-enter ingress interpretation.
 
 - Prefetches contact + planned/confirmed meetings into checkpointed state.
-- On FINISH, the model sets `menu` (`default` or `visit_change`) and writes patient text only — **no** `<reply_buttons>` trailer. The graph attaches DEFAULT MENU or VISIT CHANGE from human intent + `bookingContext`, and attaches the prefetch visit list on «Мій запис», hello, and «Головне меню» (not on thanks). The adapter still appends «Головне меню». `/start` and reminders use `buildDefaultMenuKeyboard`.
+- `lastHandoff` is presentation/observability only (reply text + buttons for Telegram) — never a routing authority.
+- FINISH helpers attach DEFAULT MENU or VISIT CHANGE from intent + `bookingContext`, and the prefetch visit list on «Мій запис», hello, and «Головне меню». The adapter still appends «Головне меню». `/start` and reminders use `buildDefaultMenuKeyboard`.
 - `/start` stores `WELCOME_HISTORY_MARKER` in history, not the full welcome text (`src/adapter/welcome-message.ts`). Later hellos stay short.
-- Key labels: «Записатись» → booking; «Послуги» / «Обрати іншу процедуру» / «Адреса» → faq; «Мій запис» → FINISH (list visits, `menu=visit_change`); «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting.
-
-### Sticky routing
-
-After an FAQ/booking handoff, tapping a shortcut that matches the **current** `pendingInteraction` continues in that agent (skips the supervisor LLM). Labels absent from the current interaction are ignored. Supervisor-owned labels and free text with no open interaction still go through the LLM.
-
-- FAQ book-handoff offers open `service_confirm` and set `yieldToSupervisor` so «Так» is re-routed to booking.
-- FAQ catalog taps match FAQ-owned `service_candidate` choices (CRM ids on each choice); mid-browse free text stays in FAQ.
-- «Перенести» / «Скасувати» open `visit_select` stages and sticky-route to booking; date/time after a single-visit action menu still starts reschedule.
+- Key labels (exact `labelIdFor`): «Записатись» → booking (`consultation`); named procedure with no visit → booking (`list_services` / catalog); «Послуги» → FAQ catalog browse (no `bookingDraft`); unique catalog CRM id → booking `catalog_service`; «Адреса» → FAQ; «Мій запис» → FINISH visit menu; «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting. Empty `{}`: greeting if idle, booking re-ask if a session is open.
 
 ### FAQ (read-only, `maxSteps` 4)
 
-Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<list_services>` when present.
+Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<list_services>` when present. FAQ **does not write `bookingDraft`** — idle browse uses `pendingInteraction` only (`service_candidate` owner faq); unique CRM id and REPLACE post-cancel catalog go through the booking kernel.
 
-- Catalog: `list_services` opens an FAQ-owned `service_candidate` from CRM rows (remaining ids across levels). One remaining id opens `service_confirm`. Graph does **not** attach keyboards from catalog bullets.
-- After «Обрати іншу процедуру» (`choose_other`): FAQ catalog / `catalog_detour` while preserving the booking draft for return-to-booking.
-- Prices: `get_service` for the matched service only; USD→UAH only via tool FX (`priceUah`), never invented.
-- Address only when asked (`CLINIC_ADDRESS` + Maps constants).
-- Skin concerns → offer consultation unless they already chose another procedure.
+- Catalog: multi-id pages stay FAQ-owned chips. One remaining id hands off to booking with `catalog_service` (`accepted: false` confirm card in the kernel).
+- After «Обрати іншу процедуру» (`choose_other`): FAQ root chips / `catalog_detour` without writing a draft.
+- Prices / hours / address: FAQ **reads** only (`get_service` for the matched service; USD→UAH only via tool FX (`priceUah`); address from `CLINIC_ADDRESS` + Maps).
+- Accidental `<yield_to_supervisor/>` tags are stripped from model text; they are **not** a routing signal.
 
 ### Booking (read/write, `maxSteps` 10)
 
@@ -102,10 +100,10 @@ The graph renders reply keyboards from `pendingInteraction` into `lastHandoff.re
 
 - **DEFAULT MENU** (code-owned): no visit → «Записатись», «Послуги», «Адреса»; has visit → «Мій запис», «Послуги», «Адреса». Supervisor `menu=default`, or **booking** finalize after a committed create/cancel/reschedule or HITL decline. Mid-flow free-text (phone, name) and FAQ with no open interaction: adapter shows only «Головне меню» (no DEFAULT MENU).
 - **VISIT CHANGE** (`visit_select` stage `action` / `meeting`): «Перенести», «Скасувати», «Ні, дякую» — after «Мій запис» (unique labels when several meetings). Falls back to DEFAULT when the list is empty.
-- **REPLACE** (`visit_select` stage `replacement`): «Скасувати», «Ні, дякую» — when `create_meeting` returned `Already booked` (never «Перенести» here).
+- **REPLACE** (`visit_select` stage `replacement`): «Скасувати», «Ні, дякую» — when `create_meeting` returned `Already booked`, or from the preemptive date gate when a visit already exists (never «Перенести» here). Kernel continues into `list_services` after cancel completes.
 - **DATE / TIME** (`date_select` / `time_select` with availability render snapshot): short day labels + «Інша дата», then HH:mm — from `present_availability_slots` / `availabilityContext`.
-- **BOOKING OFFER** (`service_confirm`): «Так», «Обрати іншу процедуру» — explicit CRM service id; FAQ also sets `yieldToSupervisor` so «Так» routes to booking.
-- **INTENT skip** (`visit_note`): «Продовжити без коментаря» (choice id `skip`). Free-text skip synonyms classify through the note-turn boundary.
+- **BOOKING OFFER** (`service_confirm`): «Так», «Обрати іншу процедуру» — explicit CRM service id; owned by the booking kernel (not FAQ draft writes).
+- **INTENT skip** (`visit_note`): «Продовжити без коментаря» (choice id `note_skip`). Free-text skip synonyms classify through the note-turn boundary.
 - **Catalog drill-down** (FAQ-owned `service_candidate`): CRM-grounded choices with remaining `serviceIds`; not recovered from reply bullets.
 - **CONTACT FIELD** (`contact_field`): phone/name waits emit a contact effect; clear only after a successful CRM result.
 - **MUTATION CONFIRM** (`mutation_confirm`): opened only immediately before the mutation tool / interrupt.

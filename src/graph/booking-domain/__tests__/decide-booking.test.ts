@@ -16,6 +16,7 @@ import { askDecisionFromPendingView, decideBooking } from "../decide.js";
 import type { BookingInput, BookingReadModels } from "../decision.js";
 
 const READ_MODELS: BookingReadModels = {
+  assignedUserId: "assigned-user-1",
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: false,
@@ -244,6 +245,28 @@ describe("decideBooking atomic contract", () => {
       expect(effect.payload.confirmMessage).toBe(CREATE_CONFIRMATION_UK);
       expect(effect.payload.contactId).toBe("contact-1");
       expect(effect.payload.serviceId).toBe("svc-1");
+    }
+    const frozen = applied?.pendingDecision;
+    expect(frozen?.kind).toBe("mutation_confirm");
+    if (frozen?.kind === "mutation_confirm") {
+      expect(frozen.frozenCommand).toMatchObject({
+        action: "create",
+        effectId: firstId,
+        payload: {
+          name: "Botox - Іван Петренко",
+          assignedUserId: "assigned-user-1",
+          parentType: "Contact",
+          parentId: "contact-1",
+          contactsIds: ["contact-1"],
+          cServicesIds: ["svc-1"],
+          status: "Planned",
+          dateStart: SLOT.dateStart,
+          dateEnd: SLOT.dateEnd,
+        },
+      });
+      expect(frozen.frozenCommand?.payload).not.toHaveProperty("confirmMessage");
+      expect(frozen.frozenCommand?.payload).not.toHaveProperty("serviceId");
+      expect(frozen.frozenCommand?.payload).not.toHaveProperty("contactId");
     }
   });
 
@@ -622,7 +645,7 @@ describe("decideBooking atomic contract", () => {
     }
   });
 
-  it("REPLACE cancel without accepted service returns replacement_cancel_catalog", () => {
+  it("REPLACE cancel without accepted service opens list_services catalog effect", () => {
     let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "existing_booking_detected",
       meeting: {
@@ -669,8 +692,8 @@ describe("decideBooking atomic contract", () => {
       READ_MODELS,
     );
 
-    expect(result.decision.reason).toBe("replacement_cancel_catalog");
-    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.decision.tag).toBe("effect");
+    expect(result.decision.pendingEffect?.effect.kind).toBe("list_services");
     expect(result.events.some((e) => e.type === "cancel_existing_completed")).toBe(true);
   });
 

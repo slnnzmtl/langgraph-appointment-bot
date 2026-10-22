@@ -60,6 +60,11 @@ const runPrefetch = async (
 }> => {
   try {
     const prefetched = await prefetch();
+    // Contact/meeting prefetch must not wipe an open DATE/TIME snapshot — chip
+    // taps project times from availabilityContext. Only clear on menu/abandon
+    // (or other ladder resets). Mutation commits clear separately.
+    const clearAvailability =
+      flags.resetBookingLadder || flags.closeBookingSession;
     return {
       contactContext: prefetched.contactContext,
       bookingContext: prefetched.bookingContext,
@@ -68,10 +73,11 @@ const runPrefetch = async (
         ...prefetched,
         prefetchDirty: false,
         prefetchFetchedAt: Date.now(),
-        availabilityContext: null,
-        availabilityCursor: flags.resetBookingLadder
+        availabilityContext: clearAvailability ? null : (state.availabilityContext ?? null),
+        availabilityCursor: clearAvailability
           ? null
-          : state.availabilityCursor ?? availabilityCursorFromContext(state.availabilityContext),
+          : state.availabilityCursor
+            ?? availabilityCursorFromContext(state.availabilityContext),
         ...(flags.closeBookingSession ? closedBookingSessionUpdate() : {}),
       },
     };

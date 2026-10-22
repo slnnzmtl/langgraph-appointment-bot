@@ -57,6 +57,7 @@ export const clinicState = (overrides: Partial<ClinicState> = {}): ClinicState =
   bookingSchemaVersion: 1,
   bookingDecision: null,
   inboundChoiceId: null,
+  understoodTurn: null,
   ...overrides,
 });
 

@@ -18,7 +18,11 @@ import type {
   BookingDecision,
   BookingVerifiedFacts,
 } from "../booking-domain/decision.js";
-import { renderBookingInteractionMessage } from "../booking-interaction-render.js";
+import {
+  renderBookingInteractionMessage,
+  type InteractionLocale,
+} from "../booking-interaction-render.js";
+import { reduceBookingDraft } from "../booking-draft.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { BOOKING_AGENT_ID, type ILLMConnector } from "../types.js";
 import { replyChoicesFromCard } from "./booking-card-choices.js";
@@ -28,6 +32,28 @@ import {
   clarificationCopyUk,
 } from "./booking-response-fallback.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
+
+/** Prefer English when the latest human line is mostly Latin letters. */
+const detectPatientLocale = (state: ClinicState): InteractionLocale => {
+  const messages = state.messages ?? [];
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?._getType?.() !== "human") {
+      continue;
+    }
+    const text = extractMessageTextContent(message.content).trim();
+    if (text.length === 0) {
+      break;
+    }
+    const letters = text.replace(/[^A-Za-zА-Яа-яЁёІіЇїЄєҐґ]/gu, "");
+    if (letters.length === 0) {
+      return "uk";
+    }
+    const latin = (letters.match(/[A-Za-z]/g) ?? []).length;
+    return latin / letters.length >= 0.6 ? "en" : "uk";
+  }
+  return "uk";
+};
 
 /** Code-owned side-question sentence(s) from allowlisted facts only. */
 const sideQuestionFactPrefix = (facts: BookingVerifiedFacts): string | null => {
@@ -173,9 +199,10 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
     if (decision.card != null) {
       let replyText = fallback;
       const pending = state.pendingInteraction;
+      const locale: InteractionLocale = detectPatientLocale(state);
       if (pending != null && pending.kind === decision.card.kind) {
         const listed = extractMessageTextContent(
-          renderBookingInteractionMessage(pending).content,
+          renderBookingInteractionMessage(pending, locale).content,
         ).trim();
         if (listed.length > 0) {
           replyText = listed;
@@ -195,8 +222,24 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
             : prefix;
         }
       }
+      // REPLACE cancel continue: composer owns the cancel ack (not FAQ tool-tape scan).
+      const replaceCancelAck = state.bookingDraft?.replaceCancelAck === true
+        || decision.facts?.cancelAcknowledged === true;
+      let draftUpdate: ClinicStateUpdate["bookingDraft"];
+      if (replaceCancelAck) {
+        const cancelAck = "Запис скасовано.";
+        replyText = replyText.trim().length > 0
+          ? `${cancelAck}\n\n${replyText}`
+          : cancelAck;
+        if (state.bookingDraft?.replaceCancelAck === true) {
+          draftUpdate = reduceBookingDraft(state.bookingDraft, {
+            type: "replace_cancel_ack_cleared",
+          });
+        }
+      }
       return {
         bookingDecision: null,
+        ...(draftUpdate !== undefined ? { bookingDraft: draftUpdate } : {}),
         lastHandoff: {
           agentId: BOOKING_AGENT_ID,
           agentName,

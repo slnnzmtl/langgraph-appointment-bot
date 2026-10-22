@@ -80,19 +80,19 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
         awaitingContactField: "phoneNumber",
       }),
     ).toEqual({});
-    // Main-menu label is control, not a format error (phone or name).
+    // Main-menu label is control even on open contact fields (no routing LLM).
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Головне меню",
         awaitingContactField: "firstName",
       }),
-    ).toEqual({});
+    ).toEqual({ controlIntent: { kind: "main_menu" } });
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Головне меню",
         awaitingContactField: "phoneNumber",
       }),
-    ).toEqual({});
+    ).toEqual({ controlIntent: { kind: "main_menu" } });
     // Structured LLM applies a clear firstName; hedges yield no name patch.
     expect(
       normalizeBookingTurnClassification(
@@ -168,6 +168,27 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Обрати іншу процедуру",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+      }).serviceIntent,
+    ).toEqual({ kind: "decline_pending_service" });
+  });
+
+  it("resolves session accept callback against kernel offer_accept ids", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Так",
+        callbackChoiceId: "accept",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+        offeredChoiceLabels: ["Так", "Обрати іншу процедуру"],
+      }).serviceIntent,
+    ).toEqual({ kind: "confirm_pending_service" });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Обрати іншу процедуру",
+        callbackChoiceId: "choose_other",
         awaitingServiceConfirm: true,
         offeredChoiceIds: ["offer_accept", "offer_choose_other"],
       }).serviceIntent,

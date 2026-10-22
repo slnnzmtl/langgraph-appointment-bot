@@ -21,6 +21,7 @@ const READ: BookingReadModels = {
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: false,
+  assignedUserId: "assigned-user-1",
 };
 
 const apply = (draft: BookingDraft | null, events: BookingEvent[]): BookingDraft | null => {
@@ -360,9 +361,9 @@ describe("contact lookup consume-once (kernel)", () => {
 });
 
 describe("createBookingDecideNode mainBook + contact fail-closed", () => {
-  it("exact Записатись bypasses the interpreter and opens consultation confirm", async () => {
+  it("exact Записатись via understoodTurn opens consultation confirm", async () => {
     const interpretTurn = async () => {
-      throw new Error("interpreter must not run for mainBook");
+      throw new Error("interpreter must not run at decide");
     };
     const node = createBookingDecideNode({ interpretTurn });
     const update = await node({
@@ -371,6 +372,7 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       bookingDraft: null,
       pendingInteraction: null,
       availabilityContext: null,
+      understoodTurn: { serviceIntent: { kind: "consultation" } },
     } as never);
 
     expect(update.bookingDecision?.intent).toBe("confirm_service");
@@ -389,7 +391,7 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       : []).toEqual(["offer_accept", "offer_choose_other"]);
   });
 
-  it("submits firstName from pendingInteraction via the structured interpreter", async () => {
+  it("submits firstName from ingress understoodTurn contactFacts", async () => {
     const phone = "+380931233323";
     let draft: BookingDraft | null = draftAwaitingLookup(phone);
     // Consume the lookup as none so decide is on the name ladder.
@@ -407,7 +409,9 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
     expect(draft.phase).toBe("details");
 
     const node = createBookingDecideNode({
-      interpretTurn: async () => ({ contactFacts: { firstName: "Smoke" } }),
+      interpretTurn: async () => {
+        throw new Error("interpreter must not run at decide");
+      },
     });
     const update = await node({
       messages: [new HumanMessage("Smoke")],
@@ -419,6 +423,7 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
         choices: [],
       },
       availabilityContext: null,
+      understoodTurn: { contactFacts: { firstName: "Smoke" } },
     } as never);
 
     expect(update.bookingDraft?.contactDetails?.firstName).toBe("Smoke");
@@ -528,9 +533,10 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       availabilityContext: null,
     } as never);
 
-    // Exclusive routing: plain ClinicStateUpdate with next=faq for compile edges.
+    // Kernel opens list_services — no FAQ ownership handoff.
     expect(update).not.toHaveProperty("goto");
-    expect(update.next).toBe("faq");
-    expect(update.bookingDecision).toBeNull();
+    expect(update.next).toBeUndefined();
+    expect(update.bookingDecision?.tag).toBe("effect");
+    expect(update.bookingDecision?.pendingEffect?.effect.kind).toBe("list_services");
   });
 });

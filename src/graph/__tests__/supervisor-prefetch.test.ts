@@ -37,7 +37,7 @@ const unwrapCommandUpdate = <T extends Record<string, unknown>>(result: unknown)
 };
 
 
-describe("createClinicSupervisorNode context cache", () => {
+describe("createClinicSupervisorNode ingress (no routing LLM / context cache)", () => {
   const invoke = vi.fn();
   const bindRoutingTools = vi.fn(() => ({ invoke }));
   const supervisorLlm = { bindRoutingTools } as unknown as ILLMConnector;
@@ -47,15 +47,16 @@ describe("createClinicSupervisorNode context cache", () => {
     bindRoutingTools.mockClear();
     createCachedGeminiModel.mockClear();
     isCachedContentNotFoundError.mockClear();
-    invoke.mockResolvedValue({ next: "FINISH", reply: "Hi there" });
   });
 
-  it("uses SystemMessage with full static prompt when cache misses", async () => {
+  it("ignores supervisor contextCache options (no routing LLM)", async () => {
     const manager = {
-      getOrCreate: vi.fn(async () => null),
+      getOrCreate: vi.fn(async () => ({
+        cacheName: "caches/abc",
+        model: "models/gemini-3.1-flash-lite",
+      })),
       invalidate: vi.fn(),
     };
-
     const node = createClinicSupervisorNode({
       specialists,
       supervisorLlm,
@@ -67,137 +68,13 @@ describe("createClinicSupervisorNode context cache", () => {
         modelName: "gemini-3.1-flash-lite",
       },
     });
-
     const update = await node(
       supervisorState({ messages: [new HumanMessage("hello")] }),
     );
-
     expect(update.next).toBe("FINISH");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(manager.getOrCreate).not.toHaveBeenCalled();
     expect(createCachedGeminiModel).not.toHaveBeenCalled();
-    const messages = invoke.mock.calls[0]?.[0] as unknown[];
-    expect(messages[0]).toBeInstanceOf(SystemMessage);
-    expect((messages[0] as SystemMessage).content).toContain("STATIC PROMPT");
-    expect((messages[0] as SystemMessage).content).toContain("DYNAMIC");
-  });
-
-  it("uses HumanMessage for dynamic context on cache hit (not SystemMessage)", async () => {
-    const manager = {
-      getOrCreate: vi.fn(async () => ({
-        cacheName: "caches/abc",
-        model: "models/gemini-3.1-flash-lite",
-      })),
-      invalidate: vi.fn(),
-    };
-
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC PROMPT",
-      buildSupervisorDynamicContext: () => "DYNAMIC KYIV",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-3.1-flash-lite",
-      },
-    });
-
-    await node(
-      supervisorState({ messages: [new HumanMessage("hello")] }),
-    );
-
-    expect(createCachedGeminiModel).toHaveBeenCalledOnce();
-    expect(bindRoutingTools.mock.calls[0]?.[1]).toMatchObject({
-      model: { kind: "cached", cacheName: "caches/abc" },
-    });
-    const messages = invoke.mock.calls[0]?.[0] as unknown[];
-    expect(messages[0]).toBeInstanceOf(HumanMessage);
-    expect((messages[0] as HumanMessage).content).toContain("DYNAMIC KYIV");
-    expect((messages[0] as HumanMessage).content).toContain('"visits":"none"');
-    expect(messages.some((m) => m instanceof SystemMessage)).toBe(false);
-  });
-
-  it("invalidates and retries once on CachedContent not found", async () => {
-    const manager = {
-      getOrCreate: vi
-        .fn()
-        .mockResolvedValueOnce({
-          cacheName: "caches/stale",
-          model: "models/gemini-3.1-flash-lite",
-        })
-        .mockResolvedValueOnce({
-          cacheName: "caches/fresh",
-          model: "models/gemini-3.1-flash-lite",
-        }),
-      invalidate: vi.fn(),
-    };
-
-    invoke
-      .mockRejectedValueOnce(new Error("CachedContent not found"))
-      .mockResolvedValueOnce({ next: "faq" });
-
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-      buildSupervisorDynamicContext: () => "DYN",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-3.1-flash-lite",
-      },
-    });
-
-    const update = await node(
-      supervisorState({ messages: [new HumanMessage("hours?")] }),
-    );
-
-    expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
-    expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
-    expect(update).toMatchObject({ next: "faq", lastHandoff: null });
-  });
-
-  it("falls back to uncached when recreate returns null", async () => {
-    const manager = {
-      getOrCreate: vi
-        .fn()
-        .mockResolvedValueOnce({
-          cacheName: "caches/stale",
-          model: "models/gemini-3.1-flash-lite",
-        })
-        .mockResolvedValueOnce(null),
-      invalidate: vi.fn(),
-    };
-
-    invoke
-      .mockRejectedValueOnce(new Error("CachedContent not found"))
-      .mockResolvedValueOnce({ next: "FINISH", reply: "Uncached reply" });
-
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-      buildSupervisorDynamicContext: () => "DYN",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-3.1-flash-lite",
-      },
-    });
-
-    const update = await node(
-      supervisorState({ messages: [new HumanMessage("hours?")] }),
-    );
-
-    expect(manager.invalidate).toHaveBeenCalledWith("caches/stale");
-    expect(manager.getOrCreate).toHaveBeenCalledTimes(2);
-    expect(createCachedGeminiModel).toHaveBeenCalledTimes(1);
-    const messages = invoke.mock.calls[1]?.[0] as unknown[];
-    expect(messages[0]).toBeInstanceOf(SystemMessage);
-    expect((messages[0] as SystemMessage).content).toContain("STATIC");
-    expect((messages[0] as SystemMessage).content).toContain("DYN");
-    expect(update.next).toBe("FINISH");
-    expect(update.messages?.[0]).toBeInstanceOf(AIMessage);
-    expect((update.messages?.[0] as AIMessage).content).toBe("Uncached reply");
   });
 
   it("skips the LLM on Головне меню and attaches code-owned DEFAULT MENU", async () => {
@@ -222,26 +99,24 @@ describe("createClinicSupervisorNode context cache", () => {
     expect(reply).toContain("Чим можу допомогти?");
   });
 
-  it("routes to booking without rewriting a specialist prompt", async () => {
-    invoke.mockResolvedValue({ next: "booking", reply: "ignored when delegating" });
+  it("routes Book to booking without a specialist prompt rewrite", async () => {
     const node = createClinicSupervisorNode({
       specialists,
       supervisorLlm,
       loadSupervisorPrompt: () => "STATIC",
+      interpretTurn: async () => ({ serviceIntent: { kind: "consultation" } }),
     });
 
     const update = await node(
       supervisorState({ messages: [new HumanMessage("book")] }),
     );
 
-    expect(update).toEqual({
-      next: "booking",
-      lastHandoff: null,
-      supervisorIntent: null,
-      availabilityContext: null,
-      availabilityCursor: null,
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("booking");
+    expect(update.lastHandoff).toBeNull();
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: { kind: "consultation" },
     });
-    expect(update.messages).toBeUndefined();
   });
 });
 
@@ -271,7 +146,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     invoke.mockResolvedValue({ next: "FINISH", reply: "Привіт, Марія" });
   });
 
-  it("injects contact and planned meetings into dynamic context and state", async () => {
+  it("injects contact and planned meetings into state from prefetch", async () => {
     const node = createClinicSupervisorNode({
       specialists,
       supervisorLlm,
@@ -287,23 +162,14 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       supervisorState({ messages: [new HumanMessage("привіт")] }),
     );
 
-    const messages = invoke.mock.calls[0]?.[0] as unknown[];
-    expect(messages[0]).toBeInstanceOf(SystemMessage);
-    const system = String((messages[0] as SystemMessage).content);
-    expect(system).toContain("DYNAMIC");
-    expect(system).toContain("<contact_info>");
-    expect(system).toContain("Марія");
-    expect(system).toContain("<list_planned_meetings>");
-    expect(system).toContain('"visits":"has"');
-    expect(system).not.toContain("visitLabels");
-    expect(system).not.toContain('"id":"m-1"');
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("FINISH");
     expect(update.contactContext).toEqual(listedContact);
     expect(update.bookingContext).toEqual(listedMeetings);
     expect(update.prefetchDirty).toBe(false);
     expect(update.prefetchFetchedAt).toEqual(expect.any(Number));
     expect(update.availabilityContext).toBeNull();
     expect(update.servicesContext).toBeUndefined();
-    expect(update.supervisorIntent).toBeNull();
   });
 
   it("reuses checkpointed prefetch when fresh and not dirty", async () => {
@@ -331,10 +197,8 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(prefetch).not.toHaveBeenCalled();
     expect(update.contactContext).toBeUndefined();
     expect(update.bookingContext).toBeUndefined();
-    const messages = invoke.mock.calls[0]?.[0] as unknown[];
-    const system = String((messages[0] as SystemMessage).content);
-    expect(system).toContain("Марія");
-    expect(system).toContain("<list_planned_meetings>");
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("FINISH");
   });
 
   it("clears availabilityContext but keeps servicesContext when prefetch refetches", async () => {
@@ -445,9 +309,17 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       lastDate: "2026-10-05",
     };
 
+    const openDraft = createEmptyBookingDraft();
+    openDraft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    };
+    openDraft.selectedDate = "2026-10-01";
+    openDraft.phase = "time";
     const update = await node(
       supervisorState({
         messages: [new HumanMessage("другая дата")],
+        bookingDraft: openDraft,
         lastHandoff: {
           agentId: "booking",
           agentName: "Booking",
@@ -486,10 +358,19 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       prefetch,
       prefetchTtlMs: 1_000,
     });
+    const noteDraft = createEmptyBookingDraft();
+    noteDraft.serviceAcceptance = {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    };
+    noteDraft.selectedSlot = slot;
+    noteDraft.note = { status: "awaiting" };
+    noteDraft.phase = "note";
 
     const update = await node(
       supervisorState({
         messages: [new HumanMessage(INTENT_SKIP_LABEL)],
+        bookingDraft: noteDraft,
         pendingInteraction: openVisitNoteInteraction(),
         contactContext: { contacts: [{ id: "stale" }] },
         bookingContext: listedMeetings,
@@ -511,10 +392,15 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     );
 
     expect(prefetch).toHaveBeenCalledOnce();
-    expect(update.availabilityContext).toBeNull();
+    // Mid-booking TTL refresh keeps the slot snapshot so DATE/TIME chips stay grounded.
+    expect(update.availabilityContext).toEqual({
+      days: [{ date: "2026-09-29", slots: [] }],
+      stepMinutes: 30,
+    });
     expect(update.bookingNoteStatus).toBeUndefined();
     expect(update.selectedSlot).toBeUndefined();
     expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toMatchObject({ note: { kind: "skip" } });
   });
 
   it("refetches on Мій запис even when prefetch is fresh", async () => {
@@ -623,7 +509,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       contactContext: listedContact,
       bookingContext: { meetings: [], dateFrom: "2026-08-11" },
     }));
-    invoke.mockResolvedValue({ next: "FINISH", reply: "Записів немає." });
     const node = createClinicSupervisorNode({
       specialists,
       supervisorLlm,
@@ -649,8 +534,11 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
     expect(prefetch).toHaveBeenCalledOnce();
     expect(update.bookingContext?.meetings).toEqual([]);
-    // Empty CRM list after refetch: no sticky cancel seed; LLM finishes.
-    expect(update.next).toBe("FINISH");
+    // Empty CRM list after refetch: still routes visit_cancel to booking.
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toMatchObject({
+      controlIntent: { kind: "visit_cancel" },
+    });
   });
 
   it("keeps selectedSlot and note on Скасувати when a slot is already chosen (REPLACE)", async () => {
@@ -877,12 +765,9 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       supervisorState({ messages: [new HumanMessage("hello")] }),
     );
 
-    const messages = invoke.mock.calls[0]?.[0] as unknown[];
-    const system = String((messages[0] as SystemMessage).content);
-    expect(system).toContain("DYNAMIC");
-    expect(system).not.toContain("<contact_info>");
-    expect(system).toContain('"visits":"none"');
+    expect(invoke).not.toHaveBeenCalled();
     expect(update.next).toBe("FINISH");
+    expect(update.lastHandoff?.replyText).toContain("Чим ще можу допомогти?");
     expect(update.contactContext).toBeUndefined();
   });
 
@@ -932,7 +817,7 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("abandons a slotless booking on Скасувати with a code-owned FINISH ack", async () => {
+  it("routes Скасувати on a slotless open booking to booking (kernel abandon)", async () => {
     const activeDraft = createEmptyBookingDraft();
     activeDraft.serviceAcceptance = {
       status: "accepted",
@@ -960,10 +845,11 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       }),
     );
 
-    expect(update.next).toBe("FINISH");
-    expect(update.lastHandoff?.replyText).toBe(ABANDON_BOOKING_REPLY_UK);
-    expect(unwrapCommandUpdate(update).bookingDraft).toBeNull();
-    expect(update.bookingNoteStatus).toBeUndefined();
+    // Pre-LLM abandonBareCancel deleted — ingress routes visit_cancel to booking.
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toMatchObject({
+      controlIntent: { kind: "visit_cancel" },
+    });
     expect(invoke).not.toHaveBeenCalled();
   });
 
