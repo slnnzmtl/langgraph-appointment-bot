@@ -2,6 +2,7 @@ import {
   BOOKING_OFFER_MENU,
   BOOKING_REPLACE_MENU,
   CONSULTATION_SERVICE_ID,
+  DEFAULT_MENU_NO_VISITS,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import { matchingCatalogRows } from "../../graph/catalog-match.js";
@@ -30,6 +31,32 @@ const isRootCatalogPending = (
 ): pending is Extract<NonNullable<Pending>, { kind: "service_candidate" }> =>
   pending?.kind === "service_candidate"
   && (pending.owner === "faq" || pending.owner === "booking");
+
+/** Idle FAQ unique CRM row (informational highlight) — book via «Записатись». */
+const isFaqUniqueHighlight = (pending: Pending): boolean => {
+  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
+    return false;
+  }
+  if (pending.choices.length !== 1) {
+    return false;
+  }
+  const choice = pending.choices[0]!;
+  const remaining =
+    choice.serviceIds != null && choice.serviceIds.length > 0
+      ? choice.serviceIds
+      : [choice.id];
+  return remaining.length === 1;
+};
+
+const BOOK_LABEL = DEFAULT_MENU_NO_VISITS[0];
+
+const requestExplicitBook = async (
+  session: SmokeSession,
+  turn: TurnResult,
+): Promise<TurnResult> =>
+  turn.buttons.includes(BOOK_LABEL)
+    ? session.tap(BOOK_LABEL)
+    : session.say(BOOK_LABEL);
 
 export const isConsultationName = (name: string): boolean =>
   /консультац/i.test(name.trim());
@@ -203,6 +230,10 @@ export const selectUniqueProcedureAfterRootCatalog = async (
     const pending = turn.state.pendingInteraction;
     if (pending?.kind === "service_confirm" && pending.service.id === procedure.id) {
       return turn;
+    }
+    if (isFaqUniqueHighlight(pending)) {
+      turn = await requestExplicitBook(session, turn);
+      continue;
     }
     if (isRootCatalogPending(pending)) {
       const exact = pending.choices.find(
@@ -477,6 +508,11 @@ export const drillToProcedureOffer = async (
       }
     }
     if (interaction?.kind === "service_candidate") {
+      // Unique remaining CRM id stays FAQ-owned until an explicit book request.
+      if (isFaqUniqueHighlight(interaction) && !isConsultationName(interaction.choices[0]?.label ?? "")) {
+        turn = await requestExplicitBook(session, turn);
+        continue;
+      }
       if (turn.buttons.includes(SERVICE_CANDIDATE_OTHER_LABEL_UK) && i === maxTaps - 1) {
         turn = await session.tap(SERVICE_CANDIDATE_OTHER_LABEL_UK);
         continue;
