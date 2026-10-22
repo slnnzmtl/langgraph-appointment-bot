@@ -178,6 +178,17 @@ export type BookingDraft = {
    * before the next catalog / service step. Cleared when consumed.
    */
   replaceCancelAck?: boolean | null;
+  /**
+   * One-shot verified reply facts (e.g. deferred price) carried across an effect
+   * chain until booking__respond prefixes them and clears.
+   */
+  pendingReplyFacts?: {
+    servicePrice?: string;
+    serviceName?: string;
+    serviceId?: string;
+    hours?: string;
+    address?: string;
+  } | null;
 };
 
 export type BookingEvent =
@@ -242,7 +253,12 @@ export type BookingEvent =
       evidence?: SlotAvailabilityEvidence | null;
     }
   | { type: "choices_offered"; choiceIds: string[] }
-  | { type: "choices_cleared" };
+  | { type: "choices_cleared" }
+  | {
+      type: "reply_facts_set";
+      facts: NonNullable<BookingDraft["pendingReplyFacts"]>;
+    }
+  | { type: "reply_facts_cleared" };
 
 /**
  * Patient-submit name normalize: trim only. Preserve submitted casing.
@@ -636,6 +652,7 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   offeredChoiceIds: null,
   bookingAttemptId: null,
   deferredTurn: null,
+  pendingReplyFacts: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
@@ -645,7 +662,7 @@ const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">)
 
 const clearDownstream = (
   draft: BookingDraft,
-  options?: { clearDeferred?: boolean },
+  options?: { clearDeferred?: boolean; preserveNote?: boolean },
 ): Omit<BookingDraft, "version"> => ({
   ...draft,
   phase: "service",
@@ -654,7 +671,8 @@ const clearDownstream = (
   slotProvenance: null,
   slotEvidence: null,
   requestedTime: null,
-  note: { status: "unasked" },
+  // First catalog selection keeps a compound-turn note; explicit service switch resets it.
+  note: options?.preserveNote === true ? draft.note : { status: "unasked" },
   pendingCommand: null,
   pendingDecision: null,
   rescheduleTarget: draft.rescheduleTarget ?? null,
@@ -783,6 +801,8 @@ export const reduceBookingDraft = (
       // Replacing a different service clears deferred; first selection keeps it.
       const reset = clearDownstream(draft, {
         clearDeferred: existing != null,
+        // First selection (no prior service) keeps compound-turn note/contact facts.
+        preserveNote: existing == null,
       });
       const acceptance: ServiceAcceptance = {
         status: event.accepted ? "accepted" : "pending",
@@ -903,7 +923,9 @@ export const reduceBookingDraft = (
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
     }
     case "note_status": {
-      if (draft.mode === "reschedule" || draft.selectedSlot == null) {
+      // Reschedule never collects a visit note. Compound book turns may stash a
+      // note before a slot exists; the note ladder still asks after slot when unasked.
+      if (draft.mode === "reschedule") {
         return draft;
       }
       const next = {
@@ -1245,5 +1267,12 @@ export const reduceBookingDraft = (
       });
     case "choices_cleared":
       return withVersion(draft, { ...draft, offeredChoiceIds: null });
+    case "reply_facts_set":
+      return withVersion(draft, {
+        ...draft,
+        pendingReplyFacts: { ...event.facts },
+      });
+    case "reply_facts_cleared":
+      return withVersion(draft, { ...draft, pendingReplyFacts: null });
   }
 };

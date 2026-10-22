@@ -643,6 +643,7 @@ export const createBookingDecideNode = (
       draft,
       availabilityContext: state.availabilityContext ?? null,
       previousInteraction: state.pendingInteraction ?? null,
+      locale: state.patientLocale === "en" ? "en" : "uk",
     });
 
     // Drop the cancelled visit from bookingContext after REPLACE cancel so the
@@ -657,6 +658,24 @@ export const createBookingDecideNode = (
         : undefined,
     );
 
+    // Merge one-shot verified reply facts (deferred price) onto any patient-facing
+    // card so booking__respond can prefix them regardless of decision intent.
+    let bookingDecision = result.decision;
+    const replyFacts = draft?.pendingReplyFacts;
+    if (
+      replyFacts != null
+      && bookingDecision.card != null
+      && bookingDecision.tag !== "effect"
+    ) {
+      bookingDecision = {
+        ...bookingDecision,
+        facts: {
+          ...replyFacts,
+          ...bookingDecision.facts,
+        },
+      };
+    }
+
     // Overwrite the tool tape. `agentMessages: []` is a no-op under the messages
     // reducer, so stale ToolMessages would keep recycled effect ids looking
     // fulfilled and skip booking__tools (date prompt with no chips).
@@ -664,7 +683,7 @@ export const createBookingDecideNode = (
       bookingDraft: draft,
       bookingSchemaVersion: 2,
       inboundChoiceId: null,
-      bookingDecision: result.decision,
+      bookingDecision,
       pendingInteraction,
       understoodTurn: null,
       agentMessages: new Overwrite([] as BaseMessage[]),

@@ -12,6 +12,10 @@ import {
   PATIENT_FALLBACK_MESSAGE,
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
+import {
+  resolvePatientLocale,
+  type ConversationLocale,
+} from "../../shared/conversation-locale.js";
 import { extractMessageTextContent } from "../../shared/message-content.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import type {
@@ -20,7 +24,6 @@ import type {
 } from "../booking-domain/decision.js";
 import {
   renderBookingInteractionMessage,
-  type InteractionLocale,
 } from "../booking-interaction-render.js";
 import { reduceBookingDraft } from "../booking-draft.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
@@ -33,39 +36,28 @@ import {
 } from "./booking-response-fallback.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
 
-/** Prefer English when the latest human line is mostly Latin letters. */
-const detectPatientLocale = (state: ClinicState): InteractionLocale => {
-  const messages = state.messages ?? [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message?._getType?.() !== "human") {
-      continue;
-    }
-    const text = extractMessageTextContent(message.content).trim();
-    if (text.length === 0) {
-      break;
-    }
-    const letters = text.replace(/[^A-Za-zА-Яа-яЁёІіЇїЄєҐґ]/gu, "");
-    if (letters.length === 0) {
-      return "uk";
-    }
-    const latin = (letters.match(/[A-Za-z]/g) ?? []).length;
-    return latin / letters.length >= 0.6 ? "en" : "uk";
-  }
-  return "uk";
-};
-
 /** Code-owned side-question sentence(s) from allowlisted facts only. */
-const sideQuestionFactPrefix = (facts: BookingVerifiedFacts): string | null => {
+const sideQuestionFactPrefix = (
+  facts: BookingVerifiedFacts,
+  locale: ConversationLocale,
+): string | null => {
   const lines: string[] = [];
   const price = facts.servicePrice?.trim();
   if (price != null && price.length > 0) {
     const name = facts.serviceName?.trim();
-    const withCurrency = /грн|uah/i.test(price) ? price : `${price} грн`;
+    const withCurrency = /грн|uah|uah\b/i.test(price)
+      ? price
+      : locale === "en"
+        ? `${price} UAH`
+        : `${price} грн`;
     lines.push(
-      name != null && name.length > 0
-        ? `Вартість ${name} становить ${withCurrency}.`
-        : `Вартість становить ${withCurrency}.`,
+      locale === "en"
+        ? (name != null && name.length > 0
+          ? `The price of ${name} is ${withCurrency}.`
+          : `The price is ${withCurrency}.`)
+        : (name != null && name.length > 0
+          ? `Вартість ${name} становить ${withCurrency}.`
+          : `Вартість становить ${withCurrency}.`),
     );
   }
   const hours = facts.hours?.trim();
@@ -74,7 +66,7 @@ const sideQuestionFactPrefix = (facts: BookingVerifiedFacts): string | null => {
   }
   const address = facts.address?.trim();
   if (address != null && address.length > 0) {
-    lines.push(`Адреса: ${address}`);
+    lines.push(locale === "en" ? `Address: ${address}` : `Адреса: ${address}`);
   }
   if (lines.length === 0) {
     return null;
@@ -137,12 +129,14 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
       };
     }
 
-    const choices = replyChoicesFromCard(decision.card);
+    const locale = resolvePatientLocale(state);
+    const choices = replyChoicesFromCard(decision.card, undefined, locale);
     const replyButtons = choices.map((choice) => choice.label);
     const fallback = bookingResponseFallback({
       intent: decision.intent,
       facts: decision.facts,
       card: decision.card,
+      locale,
     });
 
     // Committed mutation only — code-owned success text, no model prose.
@@ -199,7 +193,6 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
     if (decision.card != null) {
       let replyText = fallback;
       const pending = state.pendingInteraction;
-      const locale: InteractionLocale = detectPatientLocale(state);
       if (pending != null && pending.kind === decision.card.kind) {
         const listed = extractMessageTextContent(
           renderBookingInteractionMessage(pending, locale).content,
@@ -214,8 +207,10 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           && replyText !== clarificationPrefix
           ? `${clarificationPrefix}\n\n${replyText}`
           : clarificationPrefix;
-      } else if (decision.intent === "answer_side_question") {
-        const prefix = sideQuestionFactPrefix(decision.facts);
+      } else {
+        // Verified price/hours/address prefix whenever the final card carries them —
+        // not only answer_side_question (deferred price rides on present_dates/etc.).
+        const prefix = sideQuestionFactPrefix(decision.facts, locale);
         if (prefix != null) {
           replyText = replyText.trim().length > 0
             ? `${prefix}\n\n${replyText}`
@@ -225,21 +220,29 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
       // REPLACE cancel continue: composer owns the cancel ack (not FAQ tool-tape scan).
       const replaceCancelAck = state.bookingDraft?.replaceCancelAck === true
         || decision.facts?.cancelAcknowledged === true;
-      let draftUpdate: ClinicStateUpdate["bookingDraft"];
+      let draftWorking = state.bookingDraft;
       if (replaceCancelAck) {
         const cancelAck = "Запис скасовано.";
         replyText = replyText.trim().length > 0
           ? `${cancelAck}\n\n${replyText}`
           : cancelAck;
-        if (state.bookingDraft?.replaceCancelAck === true) {
-          draftUpdate = reduceBookingDraft(state.bookingDraft, {
+        if (draftWorking?.replaceCancelAck === true) {
+          draftWorking = reduceBookingDraft(draftWorking, {
             type: "replace_cancel_ack_cleared",
           });
         }
       }
+      // One-shot reply facts: clear after the composer prefixes them.
+      if (draftWorking?.pendingReplyFacts != null) {
+        draftWorking = reduceBookingDraft(draftWorking, {
+          type: "reply_facts_cleared",
+        });
+      }
       return {
         bookingDecision: null,
-        ...(draftUpdate !== undefined ? { bookingDraft: draftUpdate } : {}),
+        ...(draftWorking !== state.bookingDraft
+          ? { bookingDraft: draftWorking }
+          : {}),
         lastHandoff: {
           agentId: BOOKING_AGENT_ID,
           agentName,

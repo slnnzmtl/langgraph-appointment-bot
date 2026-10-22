@@ -236,6 +236,61 @@ describe("booking__respond card copy + markup", () => {
     ]);
   });
 
+  it("prefixes verified price on present_dates regardless of intent and clears stash", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const card = {
+      kind: "date_select" as const,
+      snapshotId: "snap-1",
+      choiceIds: ["2026-09-10", "other_date"],
+      labels: {
+        "2026-09-10": "10 вер",
+        other_date: OTHER_DATE_LABEL,
+      },
+    };
+    const pending: PendingInteraction = {
+      kind: "date_select",
+      snapshot: {
+        snapshotId: "snap-1",
+        days: [
+          {
+            date: "2026-09-10",
+            displayLabel: "10 вер",
+            slotSummaries: ["14:00"],
+            slots: [],
+          },
+        ],
+      },
+      choices: [
+        { id: "2026-09-10", label: "10 вер" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    const update = await node({
+      bookingDecision: {
+        tag: "ask",
+        intent: "present_dates",
+        facts: {
+          servicePrice: "1200",
+          serviceName: "Botox",
+        },
+        card,
+      },
+      pendingInteraction: pending,
+      bookingDraft: {
+        pendingReplyFacts: { servicePrice: "1200", serviceName: "Botox" },
+      },
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toMatch(/^Вартість Botox становить 1200 грн\./);
+    expect(update.bookingDraft?.pendingReplyFacts ?? null).toBeNull();
+  });
+
   it("prefixes price facts then listed TIME copy and keeps hour chips", async () => {
     const invoke = vi.fn(async () => ({ text: "should not be used" }));
     const node = createBookingRespondNode({

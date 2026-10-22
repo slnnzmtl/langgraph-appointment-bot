@@ -4,6 +4,7 @@ import {
   BOOKING_NOTE_QUESTION_UK,
   BOOKING_OFFER_MENU_EN,
   BOOKING_PHONE_OCCUPIED_UK,
+  BOOKING_PHONE_QUESTION_EN,
   BOOKING_PHONE_QUESTION_UK,
   CONSULTATION_SERVICE_ID,
   SERVICE_CHANGE_ACK_UK,
@@ -195,7 +196,9 @@ const clarificationBody = (
         ? "Please share your last name."
         : "Підкажіть, будь ласка, ваше прізвище.";
     }
-    return BOOKING_PHONE_QUESTION_UK;
+    return locale === "en"
+      ? BOOKING_PHONE_QUESTION_EN
+      : BOOKING_PHONE_QUESTION_UK;
   }
   if (interaction.kind === "mutation_confirm") {
     return locale === "en" ? "Confirm this action?" : "Підтвердити цю дію?";

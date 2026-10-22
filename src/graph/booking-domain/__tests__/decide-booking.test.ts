@@ -91,11 +91,14 @@ describe("decideBooking atomic contract", () => {
       kind: "service_confirm",
       serviceId: CONSULTATION_SERVICE_ID,
       choiceIds: ["offer_accept", "offer_choose_other"],
-      labels: {
-        offer_accept: "Так",
-        offer_choose_other: "Обрати іншу процедуру",
-      },
     });
+    // Labels are projection/composer-owned — kernel cards stay language-neutral.
+    expect(
+      result.decision.card != null
+      && "labels" in result.decision.card
+        ? result.decision.card.labels
+        : undefined,
+    ).toBeUndefined();
   });
 
   it("looks up the contact by phone before asking for names", () => {

@@ -7,6 +7,8 @@ import {
 import {
   interpretInteractionReply,
   reduceBookingSession,
+  type InteractionChoice,
+  type PendingInteraction,
 } from "../../booking-session.js";
 import { resolveFaqCatalogChoices } from "../../faq-catalog.js";
 import {
@@ -14,10 +16,8 @@ import {
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
 } from "../../service-resolution.js";
-import type { PendingInteraction } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
-import { BOOKING_AGENT_ID } from "../../types.js";
 import {
   ensureServicesContext,
   lastPatientText,
@@ -29,15 +29,6 @@ export type PrepareFaqOptions = {
   loadServices?: () => Promise<ServicesContext | null>;
 };
 
-export type FaqPrepareHandoff = {
-  kind: "booking_catalog_service";
-  serviceId: string;
-  serviceName?: string;
-  update: ClinicStateUpdate;
-};
-
-export type FaqPrepareResult = ClinicStateUpdate | FaqPrepareHandoff;
-
 /** True when prepare opened or narrowed FAQ catalog chips. */
 const faqUiProduced = (pendingInteraction: PendingInteraction | null | undefined): boolean =>
   pendingInteraction?.kind === "service_candidate"
@@ -46,38 +37,84 @@ const faqUiProduced = (pendingInteraction: PendingInteraction | null | undefined
 const faqCatalogAlreadyOpen = (interaction: PendingInteraction | null | undefined): boolean =>
   interaction?.kind === "service_candidate" && interaction.owner === "faq";
 
-/** Hand unique CRM id to booking kernel — FAQ never writes bookingDraft. */
-const handoffCatalogService = (
-  base: ClinicStateUpdate,
+/**
+ * Keep a unique CRM row on the FAQ interaction as an informational highlight.
+ * Does not open a booking draft or hand off to booking.
+ */
+export const faqHighlightChoice = (
   serviceId: string,
   serviceName?: string,
-): FaqPrepareHandoff => ({
-  kind: "booking_catalog_service",
-  serviceId,
-  ...(serviceName != null ? { serviceName } : {}),
-  update: {
-    ...base,
-    next: BOOKING_AGENT_ID,
-    pendingInteraction: null,
-    understoodTurn: {
-      serviceIntent: {
-        kind: "catalog_service",
-        serviceId,
-        ...(serviceName != null ? { serviceName } : {}),
-      },
-    },
-    faqSkipLlm: true,
-  },
+): InteractionChoice => ({
+  id: serviceId,
+  label: (serviceName ?? serviceId).trim() || serviceId,
+  serviceIds: [serviceId],
 });
 
 /**
+ * Allowlisted single CRM id highlighted on an idle FAQ catalog, if any.
+ * Used to promote «book this» without inventing a second UnderstoodBookingTurn kind.
+ */
+export const faqHighlightedService = (
+  interaction: PendingInteraction | null | undefined,
+): { serviceId: string; serviceName?: string } | null => {
+  if (interaction?.kind !== "service_candidate" || interaction.owner !== "faq") {
+    return null;
+  }
+  if (interaction.choices.length !== 1) {
+    return null;
+  }
+  const choice = interaction.choices[0]!;
+  const remaining =
+    choice.serviceIds != null && choice.serviceIds.length > 0
+      ? choice.serviceIds
+      : [choice.id];
+  if (remaining.length !== 1) {
+    return null;
+  }
+  const serviceId = remaining[0]!;
+  const label = (choice.displayLabel ?? choice.label).trim();
+  return {
+    serviceId,
+    ...(label.length > 0 ? { serviceName: label } : {}),
+  };
+};
+
+const openFaqHighlight = (
+  interaction: PendingInteraction & { kind: "service_candidate" },
+  serviceId: string,
+  serviceName: string | undefined,
+  update: ClinicStateUpdate,
+): ClinicStateUpdate => {
+  const session = reduceBookingSession(
+    {
+      bookingDraft: null,
+      pendingInteraction: interaction,
+    },
+    {
+      type: "service_candidates_opened",
+      utterance: interaction.utterance,
+      owner: "faq",
+      ...(interaction.consultationDeclined === true
+        ? { consultationDeclined: true }
+        : {}),
+      choices: [faqHighlightChoice(serviceId, serviceName)],
+    },
+  );
+  update.pendingInteraction = session.pendingInteraction;
+  if (faqUiProduced(session.pendingInteraction)) {
+    update.faqSkipLlm = true;
+  }
+  return update;
+};
+
+/**
  * FAQ prepare: catalog chips and browse only. Never assigns bookingDraft.
- * Unique CRM id → Command handoff to booking decide with catalog_service.
+ * Unique CRM id stays FAQ-owned (informational highlight) until an explicit book.
  */
 export const prepareFaqTurn = async (
   state: ClinicState,
   options?: PrepareFaqOptions,
-): Promise<FaqPrepareResult> => {
+): Promise<ClinicStateUpdate> => {
   const update: ClinicStateUpdate = { faqSkipLlm: false };
   const interaction = state.pendingInteraction;
   const patientText = lastPatientText(state).trim();
@@ -94,10 +131,11 @@ export const prepareFaqTurn = async (
       const services = state.servicesContext?.list ?? [];
       if (remainingIds.length === 1) {
         const row = services.find((service) => service.id === remainingIds[0]);
-        return handoffCatalogService(
-          update,
+        return openFaqHighlight(
+          interaction,
           remainingIds[0]!,
           row?.name,
+          update,
         );
       }
       const selectedLabel = choice != null
@@ -158,9 +196,15 @@ export const prepareFaqTurn = async (
             ? { selectCandidates: options.selectCandidates }
             : {}),
         });
+        // Singleton free-text used to open service_confirm (booking). Keep FAQ highlight.
         if (rematchSession?.pendingInteraction?.kind === "service_confirm") {
           const service = rematchSession.pendingInteraction.service;
-          return handoffCatalogService(update, service.id, service.name);
+          return openFaqHighlight(
+            interaction,
+            service.id,
+            service.name,
+            update,
+          );
         }
         if (rematchSession?.pendingInteraction != null) {
           handledCatalogChoice = true;

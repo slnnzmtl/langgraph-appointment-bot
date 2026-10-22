@@ -76,9 +76,6 @@ describe("interpret + routeUnderstoodTurn (ingress)", () => {
       }),
     );
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm: { invoke: vi.fn() } as unknown as ILLMConnector,
-      loadSupervisorPrompt: () => "",
       interpretTurn,
     });
     const draft = createEmptyBookingDraft();

@@ -122,9 +122,6 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       },
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -178,9 +175,6 @@ describe("createClinicSupervisorNode visit-change sticky", () => {
       },
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
     const update = await node(
@@ -296,14 +290,11 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       reply: "У вас точно є запис.",
     });
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch: async () => ({
         contactContext: { contacts: [] },
         bookingContext: { meetings: [], dateFrom: "2026-08-11" },
-      }),
+    }),
     });
 
     const update = await node(supervisorState({ messages: [new HumanMessage(text)] }));
@@ -322,9 +313,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
     }));
     invoke.mockResolvedValue({ next: "faq", intent: "visit_status", reply: "У вас точно є запис." });
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch,
     });
@@ -347,9 +335,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
   it("reports unverifiable status when the fresh prefetch fails on «Мій запис»", async () => {
     invoke.mockResolvedValue({ next: "faq", reply: "Так, ваш запис підтверджено." });
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => { throw new Error("CRM down"); },
     });
 
@@ -371,9 +356,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   const nodeWithPrefetch = (bookingContext: typeof meetings | null) =>
     createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch: async () => ({
         contactContext: {
@@ -381,7 +363,7 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
           contacts: [{ id: "c-1", firstName: "Ada" }],
         },
         bookingContext,
-      }),
+    }),
     });
 
   it("attaches VISIT_CHANGE after «Мій запис» when visits exist (ignores wrong menu=default)", async () => {
@@ -638,9 +620,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
 
   it("does not personalize Main menu from a phone-owned contact", async () => {
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
         throw new Error("CRM down");
       },
@@ -1155,9 +1134,6 @@ describe("supervisor_routing_decision telemetry", () => {
 
   it("emits exactly one event on a pre-LLM status path", async () => {
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => ({
         contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
         bookingContext: {
@@ -1171,7 +1147,7 @@ describe("supervisor_routing_decision telemetry", () => {
           ],
           dateFrom: "2026-08-11",
         },
-      }),
+    }),
     });
     await node(supervisorState({ messages: [new HumanMessage("Мій запис")] }));
     expect(invoke).not.toHaveBeenCalled();
@@ -1186,14 +1162,11 @@ describe("supervisor_routing_decision telemetry", () => {
   it("emits exactly one event on an interpret→faq path", async () => {
     invoke.mockResolvedValue({ next: "faq", intent: "faq", reply: "Ось відповідь" });
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       interpretTurn: interpretWithLegacyInvoke(invoke),
       prefetch: async () => ({
         contactContext: { contacts: [{ id: "c-1", firstName: "Ada" }] },
         bookingContext: { meetings: [], dateFrom: "2026-08-11" },
-      }),
+    }),
     });
     await node(supervisorState({ messages: [new HumanMessage("яка адреса?")] }));
     expect(invoke).toHaveBeenCalledOnce();

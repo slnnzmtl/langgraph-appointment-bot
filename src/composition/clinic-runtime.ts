@@ -8,12 +8,10 @@ import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import type { AppConfig } from "../config.js";
 import { compileClinicGraph } from "../graph/compile.js";
 import type { ClinicAgentId, ClinicSpecialists } from "../graph/types.js";
-import { SUPERVISOR_PROMPT } from "../prompts/supervisor.js";
 import { clinicSpecialists } from "./agents.js";
 import { buildClinicAgentTools } from "./clinic-agent-tools.js";
 import { setupClinicAdapters, type ClinicAdapters } from "./clinic-adapters.js";
 import {
-  buildClinicSupervisorDynamicContext,
   formatKyivSystemMetadata,
 } from "./clinic-datetime.js";
 import { createClinicLlmStack } from "./clinic-llm.js";
@@ -51,8 +49,6 @@ export const createClinicRuntime = async (config: AppConfig): Promise<ClinicRunt
     agentModel,
     agentModelName,
     supervisorLlm,
-    loadSupervisorPrompt: () => SUPERVISOR_PROMPT,
-    buildSupervisorDynamicContext: buildClinicSupervisorDynamicContext,
     formatSystemMetadata: formatKyivSystemMetadata,
     messageHistoryMaxTokens: config.messageHistoryMaxTokens,
     contextCache,

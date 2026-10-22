@@ -85,7 +85,7 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
     }
   });
 
-  it("prepare unique id hands off without bookingDraft", async () => {
+  it("prepare unique id stays FAQ highlight without bookingDraft", async () => {
     const catalog = faqCatalogPending(["Only"]);
     const state = supervisorState({
       messages: [new HumanMessage("Only")],
@@ -106,18 +106,15 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
       bookingDraft: null,
     });
     const result = await prepareFaqTurn(state);
-    expect(result).toMatchObject({
-      kind: "booking_catalog_service",
-      serviceId: "svc-only",
+    expect(result).not.toHaveProperty("kind");
+    expect(Object.prototype.hasOwnProperty.call(result, "bookingDraft")).toBe(false);
+    expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    expect(result.pendingInteraction).toMatchObject({
+      owner: "faq",
+      choices: [{ id: "svc-only", serviceIds: ["svc-only"] }],
     });
-    if ("kind" in result && result.kind === "booking_catalog_service") {
-      expect(
-        Object.prototype.hasOwnProperty.call(result.update, "bookingDraft"),
-      ).toBe(false);
-      expect(result.update.understoodTurn).toMatchObject({
-        serviceIntent: { kind: "catalog_service", serviceId: "svc-only" },
-      });
-    }
+    expect(result.understoodTurn).toBeUndefined();
+    expect(result.next).toBeUndefined();
   });
 
   it("no-AI finalize does not set bookingDraft", () => {

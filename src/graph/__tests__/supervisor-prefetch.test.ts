@@ -58,15 +58,7 @@ describe("createClinicSupervisorNode ingress (no routing LLM / context cache)", 
       invalidate: vi.fn(),
     };
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC PROMPT",
-      buildSupervisorDynamicContext: () => "DYNAMIC",
-      contextCache: {
-        manager,
-        apiKey: "key",
-        modelName: "gemini-3.1-flash-lite",
-      },
+      
     });
     const update = await node(
       supervisorState({ messages: [new HumanMessage("hello")] }),
@@ -79,9 +71,7 @@ describe("createClinicSupervisorNode ingress (no routing LLM / context cache)", 
 
   it("skips the LLM on Головне меню and attaches code-owned DEFAULT MENU", async () => {
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
+      
     });
 
     const update = await node(
@@ -101,9 +91,6 @@ describe("createClinicSupervisorNode ingress (no routing LLM / context cache)", 
 
   it("routes Book to booking without a specialist prompt rewrite", async () => {
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       interpretTurn: async () => ({ serviceIntent: { kind: "consultation" } }),
     });
 
@@ -148,14 +135,10 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
   it("injects contact and planned meetings into state from prefetch", async () => {
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-      buildSupervisorDynamicContext: () => "DYNAMIC",
       prefetch: async () => ({
         contactContext: listedContact,
         bookingContext: listedMeetings,
-      }),
+    }),
     });
 
     const update = await node(
@@ -178,10 +161,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-      buildSupervisorDynamicContext: () => "DYNAMIC",
       prefetch,
     });
 
@@ -207,9 +186,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
       prefetchTtlMs: 1_000,
     });
@@ -254,9 +230,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
       prefetchTtlMs: 1_000,
     });
@@ -296,9 +269,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
       prefetchTtlMs: 1_000,
     });
@@ -352,9 +322,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
       prefetchTtlMs: 1_000,
     });
@@ -409,9 +376,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -437,9 +401,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -461,9 +422,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -485,9 +443,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: { meetings: [], dateFrom: "2026-08-11" },
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -510,9 +465,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: { meetings: [], dateFrom: "2026-08-11" },
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -552,9 +504,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -593,9 +542,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -637,9 +583,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
     const staleCancelDraft = createEmptyBookingDraft();
@@ -674,9 +617,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -699,9 +639,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
       prefetchTtlMs: 1_000,
     });
@@ -727,9 +664,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
       bookingContext: listedMeetings,
     }));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch,
     });
 
@@ -752,10 +686,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
 
   it("still greets when prefetch throws", async () => {
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-      buildSupervisorDynamicContext: () => "DYNAMIC",
       prefetch: async () => {
         throw new Error("CRM down");
       },
@@ -785,9 +715,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     };
     activeDraft.phase = "note";
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
         throw new Error("CRM down");
       },
@@ -826,9 +753,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     activeDraft.selectedDate = "2026-10-17";
     activeDraft.phase = "time";
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
         throw new Error("CRM down");
       },
@@ -871,9 +795,6 @@ describe("createClinicSupervisorNode patient prefetch", () => {
     activeDraft.phase = "note";
     invoke.mockRejectedValue(new Error("LLM down"));
     const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
       prefetch: async () => {
         throw new Error("CRM down");
       },

@@ -1,4 +1,5 @@
 import type { InterpretBookingTurn } from "../agent-loop/booking-turn-interpreter.js";
+import { faqHighlightedService } from "../agent-loop/prepare/faq.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import { askDecisionFromPendingView } from "../booking-domain/decide.js";
@@ -13,12 +14,8 @@ import {
   FAQ_AGENT_ID,
   FINISH_ROUTE,
   type AgentPrefetchResult,
-  type ClinicSpecialists,
-  type ILLMConnector,
 } from "../types.js";
-import type { ServicesContext } from "../../tools/service-tools.js";
 import { kyivToday } from "../../tools/availability-slots.js";
-import { extractMessageTextContent } from "../../shared/message-content.js";
 import {
   buildSupervisorTurnContext,
   refetchForVisitStatus,
@@ -40,57 +37,32 @@ import {
   MAIN_MENU_GREETING_UK,
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
-import type { InteractionLocale } from "../booking-interaction-render.js";
-import type { ContextCacheManager } from "@personal-assistant/llm-gemini";
+import {
+  nextPatientLocale,
+  resolvePatientLocale,
+} from "../../shared/conversation-locale.js";
 
+export type CreateClinicSupervisorNodeOptions = {
+  prefetch?: () => Promise<AgentPrefetchResult>;
+  prefetchTtlMs?: number;
+  /** Ingress turn interpreter — one call per normal turn. */
+  interpretTurn?: InterpretBookingTurn;
+};
+
+/** FAQ LLM context-cache options (not used by the supervisor ingress node). */
 export type SupervisorContextCacheOptions = {
-  manager: ContextCacheManager;
+  manager: import("@personal-assistant/llm-gemini").ContextCacheManager;
   apiKey: string;
   modelName: string;
   displayName?: string;
 };
 
-export type CreateClinicSupervisorNodeOptions = {
-  specialists: ClinicSpecialists;
-  supervisorLlm: ILLMConnector;
-  loadSupervisorPrompt: () => string;
-  buildSupervisorDynamicContext?: () => string;
-  prefetch?: () => Promise<AgentPrefetchResult>;
-  prefetchTtlMs?: number;
-  /** Lazy CRM catalog (unused after ingress cutover; kept for call-site compat). */
-  loadServices?: () => Promise<ServicesContext | null>;
-  contextCache?: SupervisorContextCacheOptions;
-  /** Ingress turn interpreter — one call per normal turn. */
-  interpretTurn?: InterpretBookingTurn;
-};
-
 export { PREFETCH_TTL_MS };
-
-/** Prefer English when the latest human line is mostly Latin letters. */
-const detectPatientLocaleInline = (state: ClinicState): InteractionLocale => {
-  const messages = state.messages ?? [];
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message?._getType?.() !== "human") {
-      continue;
-    }
-    const text = extractMessageTextContent(message.content).trim();
-    if (text.length === 0) {
-      break;
-    }
-    const letters = text.replace(/[^A-Za-zА-Яа-яЁёІіЇїЄєҐґ]/gu, "");
-    if (letters.length === 0) {
-      return "uk";
-    }
-    const latin = (letters.match(/[A-Za-z]/g) ?? []).length;
-    return latin / letters.length >= 0.6 ? "en" : "uk";
-  }
-  return "uk";
-};
 
 const finalize = (
   ctx: SupervisorTurnContext,
   outcome: RouteOutcome,
+  patientLocale: ClinicStateUpdate["patientLocale"],
 ): ClinicStateUpdate => {
   emitSupervisorRoutingDecision({
     path: outcome.path,
@@ -99,29 +71,38 @@ const finalize = (
     ...(typeof outcome.update.next === "string" ? { next: outcome.update.next } : {}),
     ...(outcome.draftDiscarded != null ? { draftDiscarded: outcome.draftDiscarded } : {}),
   });
-  return outcome.update;
+  return {
+    ...outcome.update,
+    ...(patientLocale != null ? { patientLocale } : {}),
+  };
 };
 
 /**
  * Prefetch → interpret once → routeUnderstoodTurn → specialist or FINISH.
  * No pre-LLM sticky table and no supervisor routing LLM.
  */
-export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOptions) => {
-  void options.specialists;
-  void options.supervisorLlm;
-  void options.loadSupervisorPrompt;
-  void options.buildSupervisorDynamicContext;
-  void options.loadServices;
-  void options.contextCache;
-
-  return async (state: ClinicState): Promise<ClinicStateUpdate> => {
+export const createClinicSupervisorNode = (
+  options: CreateClinicSupervisorNodeOptions = {},
+) =>
+  async (state: ClinicState): Promise<ClinicStateUpdate> => {
     let ctx = await buildSupervisorTurnContext(state, {
       ...(options.prefetch != null ? { prefetch: options.prefetch } : {}),
       ...(options.prefetchTtlMs != null ? { prefetchTtlMs: options.prefetchTtlMs } : {}),
     });
 
+    const patientLocale = nextPatientLocale(
+      state.patientLocale,
+      ctx.lastHumanText,
+    );
+    const finish = (outcome: RouteOutcome): ClinicStateUpdate =>
+      finalize(ctx, outcome, patientLocale);
+
     const activeView = askDecisionFromPendingView(ctx.workingDraft);
-    const cardChoices = replyChoicesFromCard(activeView?.card ?? null);
+    const cardChoices = replyChoicesFromCard(
+      activeView?.card ?? null,
+      undefined,
+      patientLocale,
+    );
     // Visit-select and FAQ catalog chips are not on the kernel card — use the open interaction.
     const interaction = state.pendingInteraction;
     const interactionChoices =
@@ -161,7 +142,10 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         availabilityVerified: ctx.state.availabilityContext != null,
       }),
       kyivDate: kyivToday(),
-      locale: detectPatientLocaleInline(state),
+      locale: resolvePatientLocale({
+        patientLocale,
+        messages: state.messages,
+      }),
     };
 
     const interpretTurn = options.interpretTurn;
@@ -186,17 +170,16 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         ctx.workingDraft,
       );
       if (visitSelectUpdate != null) {
-        return finalize(ctx, {
+        return finish({
           path: "chip",
           update: { ...visitSelectUpdate, understoodTurn: null },
         });
       }
     }
 
-    // Single-visit action menu + calendar/clock free text → seed reschedule.
+    // Sticky reschedule: meeting chips stay on booking until a meeting is chosen.
     if (
-      interaction?.kind === "visit_select"
-      && isPendingRescheduleSelection(
+      isPendingRescheduleSelection(
         ctx.state,
         ctx.lastHumanText,
         ctx.bookingContext,
@@ -207,7 +190,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         ctx.bookingContext,
         ctx.workingDraft,
       );
-      return finalize(ctx, {
+      return finish({
         path: "chip",
         update: {
           next: BOOKING_AGENT_ID,
@@ -223,8 +206,8 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
 
     let route = routeUnderstoodTurn(patch, ctx.workingDraft);
 
-    // Open service_candidate picker: chips + free-text stay on catalog.
-    // Unique remaining CRM id → booking catalog_service; do not REPLACE mid-browse.
+    // Open FAQ/booking catalog picker: chips + free-text stay on catalog.
+    // Unique remaining CRM id is informational only — never auto-starts booking.
     if (
       interaction?.kind === "service_candidate"
       && (interaction.owner === "faq" || interaction.owner === "booking")
@@ -232,29 +215,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       && patch.controlIntent == null
     ) {
       if (patch.choice != null && patch.serviceIntent == null) {
-        const choice = interaction.choices.find(
-          (entry) => entry.id === patch.choice!.choiceId,
-        );
-        const remainingIds =
-          choice?.serviceIds != null && choice.serviceIds.length > 0
-            ? choice.serviceIds
-            : [patch.choice.choiceId];
-        if (remainingIds.length === 1) {
-          const serviceId = remainingIds[0]!;
-          const row = (state.servicesContext?.list ?? []).find(
-            (service) => service.id === serviceId,
-          );
-          route = {
-            kind: "booking",
-            patch: {
-              serviceIntent: {
-                kind: "catalog_service",
-                serviceId,
-                ...(row?.name != null ? { serviceName: row.name } : {}),
-              },
-            },
-          };
-        } else if (!hasOpenBookingSession(ctx.workingDraft)) {
+        if (!hasOpenBookingSession(ctx.workingDraft)) {
           route = { kind: "faq_capability", patch };
         }
       } else if (
@@ -271,9 +232,41 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       }
     }
 
+    // Explicit book («Записатись» / consultation) while FAQ holds one allowlisted
+    // highlighted row → promote that row to catalog_service. confirm_pending_service
+    // is not a valid idle booking signal.
+    if (
+      !hasOpenBookingSession(ctx.workingDraft)
+      && interaction?.kind === "service_candidate"
+      && interaction.owner === "faq"
+      && patch.serviceIntent?.kind === "consultation"
+    ) {
+      const highlighted = faqHighlightedService(interaction);
+      if (highlighted != null) {
+        const row = (state.servicesContext?.list ?? []).find(
+          (service) => service.id === highlighted.serviceId,
+        );
+        route = {
+          kind: "booking",
+          patch: {
+            ...patch,
+            serviceIntent: {
+              kind: "catalog_service",
+              serviceId: highlighted.serviceId,
+              ...(row?.name != null
+                ? { serviceName: row.name }
+                : highlighted.serviceName != null
+                  ? { serviceName: highlighted.serviceName }
+                  : {}),
+            },
+          },
+        };
+      }
+    }
+
     if (route.kind === "visit_status") {
       ctx = await refetchForVisitStatus(ctx, options.prefetch);
-      return finalize(ctx, {
+      return finish({
         path: "llm_status",
         update: {
           ...buildVisitStatusMenuUpdate(
@@ -286,7 +279,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       });
     }
     if (route.kind === "main_menu") {
-      return finalize(ctx, {
+      return finish({
         path: "main_menu",
         update: mainMenuReply(
           ctx.prefetchUpdate,
@@ -297,7 +290,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
     }
     if (route.kind === "greeting" || route.kind === "help") {
       const hasVisit = (ctx.bookingContext?.meetings.length ?? 0) > 0;
-      return finalize(ctx, {
+      return finish({
         path: route.kind === "help" ? "llm" : "main_menu",
         update: {
           next: FINISH_ROUTE,
@@ -320,7 +313,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
         : control === "visit_cancel"
           ? seedVisitMutation("cancel", ctx.bookingContext, ctx.workingDraft)
           : { update: {}, draftDiscarded: false };
-      return finalize(ctx, {
+      return finish({
         path: "llm",
         update: {
           next: BOOKING_AGENT_ID,
@@ -334,7 +327,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       });
     }
     if (route.kind === "faq_capability") {
-      return finalize(ctx, {
+      return finish({
         path: "llm",
         update: {
           next: FAQ_AGENT_ID,
@@ -348,7 +341,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
 
     // clarification / empty — no routing LLM. Idle greeting; open session re-asks.
     if (hasOpenBookingSession(ctx.workingDraft)) {
-      return finalize(ctx, {
+      return finish({
         path: "llm",
         update: {
           next: BOOKING_AGENT_ID,
@@ -360,7 +353,7 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       });
     }
     const hasVisit = (ctx.bookingContext?.meetings.length ?? 0) > 0;
-    return finalize(ctx, {
+    return finish({
       path: "main_menu",
       update: {
         next: FINISH_ROUTE,
@@ -376,4 +369,3 @@ export const createClinicSupervisorNode = (options: CreateClinicSupervisorNodeOp
       },
     });
   };
-};

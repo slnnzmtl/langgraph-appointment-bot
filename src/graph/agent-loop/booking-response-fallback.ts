@@ -9,15 +9,19 @@ import {
   BOOKING_OFFER_MENU,
   BOOKING_PHONE_INVALID_UK,
   BOOKING_PHONE_OCCUPIED_UK,
+  BOOKING_PHONE_QUESTION_EN,
   BOOKING_PHONE_QUESTION_UK,
   CLINIC_ADDRESS,
   CLINIC_MAPS_MARKDOWN,
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,
   PATIENT_FALLBACK_MESSAGE,
+  SERVICE_CONFIRM_CONSULTATION_EN,
   SERVICE_CONFIRM_CONSULTATION_UK,
+  SERVICE_CONFIRM_PROCEDURE_EN,
   SERVICE_CONFIRM_PROCEDURE_UK,
 } from "../../shared/clinic-constants.js";
+import type { ConversationLocale } from "../../shared/conversation-locale.js";
 import { visitLabelFromCommand } from "../../tools/visit-label.js";
 import type {
   BookingSemanticIntent,
@@ -103,6 +107,7 @@ export const bookingSuccessText = (facts?: BookingVerifiedFacts): string => {
 const cardSpecificFallback = (
   card: BookingViewCard | null | undefined,
   facts?: BookingVerifiedFacts,
+  locale: ConversationLocale = "uk",
 ): string | null => {
   if (card == null) {
     return null;
@@ -115,12 +120,18 @@ const cardSpecificFallback = (
         || name == null
         || name.length === 0
       ) {
-        return SERVICE_CONFIRM_CONSULTATION_UK;
+        return locale === "en"
+          ? SERVICE_CONFIRM_CONSULTATION_EN
+          : SERVICE_CONFIRM_CONSULTATION_UK;
       }
-      return SERVICE_CONFIRM_PROCEDURE_UK(name);
+      return locale === "en"
+        ? SERVICE_CONFIRM_PROCEDURE_EN(name)
+        : SERVICE_CONFIRM_PROCEDURE_UK(name);
     }
     case "service_candidate":
-      return "Оберіть, будь ласка, послугу зі списку.";
+      return locale === "en"
+        ? "Please choose a service from the list."
+        : "Оберіть, будь ласка, послугу зі списку.";
     // DATE/TIME/visit_select listed copy lives in
     // renderBookingInteractionMessage — not a second fallback writer.
     case "date_select":
@@ -128,15 +139,23 @@ const cardSpecificFallback = (
     case "visit_select":
       return null;
     case "visit_note":
-      return `Можете коротко описати запит або натисніть «${INTENT_SKIP_LABEL}».`;
+      return locale === "en"
+        ? `You can briefly describe your request or tap «${INTENT_SKIP_LABEL}».`
+        : `Можете коротко описати запит або натисніть «${INTENT_SKIP_LABEL}».`;
     case "contact_field":
       if (card.field === "phoneNumber") {
-        return BOOKING_PHONE_QUESTION_UK;
+        return locale === "en"
+          ? BOOKING_PHONE_QUESTION_EN
+          : BOOKING_PHONE_QUESTION_UK;
       }
       if (card.field === "firstName") {
-        return "Як вас звати? Напишіть, будь ласка, ім'я.";
+        return locale === "en"
+          ? "Please share your first name."
+          : "Як вас звати? Напишіть, будь ласка, ім'я.";
       }
-      return "Напишіть, будь ласка, прізвище.";
+      return locale === "en"
+        ? "Please share your last name."
+        : "Напишіть, будь ласка, прізвище.";
     case "mutation_confirm":
       if (card.action === "reschedule") {
         return SAFETY_UK.confirm_reschedule ?? "Підтвердіть, будь ласка, перенесення.";
@@ -158,9 +177,9 @@ export const bookingResponseFallback = (input: {
   intent: BookingSemanticIntent;
   facts?: BookingVerifiedFacts;
   card?: BookingViewCard | null;
-  locale?: "uk" | "en";
+  locale?: ConversationLocale;
 }): string => {
-  void input.locale;
+  const locale = input.locale ?? "uk";
   if (input.intent === "success") {
     return bookingSuccessText(input.facts);
   }
@@ -172,7 +191,7 @@ export const bookingResponseFallback = (input: {
   if (input.intent === "mutation_failed" && input.facts?.failureCode === "phone_occupied") {
     return BOOKING_PHONE_OCCUPIED_UK;
   }
-  const fromCard = cardSpecificFallback(input.card, input.facts);
+  const fromCard = cardSpecificFallback(input.card, input.facts, locale);
   if (fromCard != null) {
     return fromCard;
   }
@@ -183,9 +202,13 @@ export const bookingResponseFallback = (input: {
       || name == null
       || name.length === 0
     ) {
-      return `${SERVICE_CONFIRM_CONSULTATION_UK} (${BOOKING_OFFER_MENU[0]} / ${BOOKING_OFFER_MENU[1]})`;
+      return locale === "en"
+        ? `${SERVICE_CONFIRM_CONSULTATION_EN} (${BOOKING_OFFER_MENU[0]} / ${BOOKING_OFFER_MENU[1]})`
+        : `${SERVICE_CONFIRM_CONSULTATION_UK} (${BOOKING_OFFER_MENU[0]} / ${BOOKING_OFFER_MENU[1]})`;
     }
-    return SERVICE_CONFIRM_PROCEDURE_UK(name);
+    return locale === "en"
+      ? SERVICE_CONFIRM_PROCEDURE_EN(name)
+      : SERVICE_CONFIRM_PROCEDURE_UK(name);
   }
   return SAFETY_UK[input.intent] ?? PATIENT_FALLBACK_MESSAGE;
 };

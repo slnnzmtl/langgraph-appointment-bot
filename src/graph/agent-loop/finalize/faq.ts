@@ -16,7 +16,10 @@ import {
   faqCatalogPreserveModelAnswer,
   renderFaqCatalogReply,
 } from "../../faq-catalog.js";
-import type { PendingInteraction } from "../../booking-session.js";
+import {
+  reduceBookingSession,
+  type PendingInteraction,
+} from "../../booking-session.js";
 import type {
   PartitionServiceCandidates,
   SelectServiceCandidates,
@@ -27,6 +30,7 @@ import {
   classifyMeetingMutationToolMessage,
   ensureServicesContext,
 } from "../protocol/index.js";
+import { faqHighlightChoice } from "../prepare/faq.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,
@@ -145,31 +149,43 @@ export const applyFaqCatalogAiFinalize = async (
             : {}),
         });
     if (session?.pendingInteraction?.kind === "service_confirm") {
-      // Unique match — hand booking kernel the CRM id; do not open FAQ confirm.
+      // Unique match — keep FAQ informational highlight; do not start booking.
       const service = session.pendingInteraction.service;
+      const highlighted = reduceBookingSession(
+        {
+          bookingDraft: null,
+          pendingInteraction: state.pendingInteraction ?? null,
+        },
+        {
+          type: "service_candidates_opened",
+          utterance: query.length > 0 ? query : "catalog",
+          owner: "faq",
+          consultationDeclined: true,
+          choices: [faqHighlightChoice(service.id, service.name)],
+        },
+      );
       serviceOfferUpdate = {
         ...servicesUpdate,
-        next: BOOKING_AGENT_ID,
-        pendingInteraction: null,
-        understoodTurn: {
-          serviceIntent: {
-            kind: "catalog_service",
-            serviceId: service.id,
-            ...(service.name != null ? { serviceName: service.name } : {}),
-          },
-        },
+        pendingInteraction: highlighted.pendingInteraction,
       };
+      const modelIntro = faqCatalogIntroFromModel(next.replyText);
       next = {
         ...next,
-        replyText: next.replyText.trim().length > 0
-          ? next.replyText
-          : `Записуємо на «${service.name}».`,
-        replyButtons: [],
+        replyText: renderFaqCatalogReply(
+          highlighted.pendingInteraction?.kind === "service_candidate"
+            ? highlighted.pendingInteraction.choices
+            : [],
+          services,
+          modelIntro,
+        ),
+        replyButtons: highlighted.pendingInteraction != null
+          ? replyButtonsForInteraction(highlighted.pendingInteraction)
+          : [],
         replySource: "runtime",
       };
       trackEvent("reply_menu_filled", {
-        menu: "service_confirm",
-        reason: "faq_open_catalog_handoff",
+        menu: "service_candidate",
+        reason: "faq_open_catalog_highlight",
       });
     } else if (session?.pendingInteraction != null) {
       serviceOfferUpdate = {

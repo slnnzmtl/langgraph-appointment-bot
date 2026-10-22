@@ -42,6 +42,17 @@ const liveDraft = () => {
     },
   });
   draft = reduceBookingDraft(draft, {
+    type: "effect_prepared",
+    effect: {
+      id: "eff_1",
+      status: "prepared",
+      effect: {
+        kind: "create_meeting",
+        payload: { ...createCrmPayload },
+      },
+    },
+  });
+  draft = reduceBookingDraft(draft, {
     type: "choices_offered",
     choiceIds: ["confirm", "decline", "menu"],
   });
@@ -129,6 +140,40 @@ describe("resumeConfirmBookingHitl", () => {
       },
     });
     expect(result.resume).toEqual({ confirmed: false });
+  });
+
+  it("declines confirm when pendingEffect is missing after serialized round-trip", () => {
+    // Simulate a paused checkpoint JSON round-trip where pendingEffect was dropped.
+    const serialized = JSON.parse(JSON.stringify(liveDraft())) as ReturnType<typeof liveDraft>;
+    const withoutEffect = { ...serialized, pendingEffect: null };
+    const result = resumeConfirmBookingHitl({
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: withoutEffect,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
+      interruptValue: matchingInterrupt,
+    });
+    expect(result.resume).toEqual({ confirmed: false });
+  });
+
+  it("confirms after serialized paused checkpoint when effect ids still agree", () => {
+    const serialized = JSON.parse(JSON.stringify(liveDraft())) as ReturnType<typeof liveDraft>;
+    const result = resumeConfirmBookingHitl({
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: serialized,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
+      interruptValue: matchingInterrupt,
+    });
+    expect(result.resume).toEqual({ confirmed: true });
   });
 
   it("ignores typed emoji when live confirm requires callback or exact tap with live card", () => {

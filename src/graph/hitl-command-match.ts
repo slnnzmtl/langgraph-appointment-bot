@@ -1,6 +1,6 @@
 /**
  * Resume-boundary identity for paused mutation confirms.
- * Compares the full normalized CRM command + effect id.
+ * Compares the full normalized CRM command + correlated effect ids.
  */
 
 import type { FrozenMutationCommand } from "./booking-domain/session.js";
@@ -73,11 +73,13 @@ export type ConfirmBookingInterruptDraft = {
   };
 };
 
-/** Extract a FrozenMutationCommand from a LangGraph confirm_booking interrupt value. */
-export const frozenCommandFromInterruptValue = (
+/**
+ * Extract action + payload from a LangGraph confirm_booking interrupt.
+ * The paused interrupt has no effect id — never fabricate one from the draft.
+ */
+export const interruptCommandFromValue = (
   value: unknown,
-  effectId: string | undefined,
-): FrozenMutationCommand | null => {
+): { action: "create" | "reschedule" | "cancel"; payload: Record<string, unknown> } | null => {
   if (value == null || typeof value !== "object") {
     return null;
   }
@@ -90,17 +92,32 @@ export const frozenCommandFromInterruptValue = (
   if (action !== "create" && action !== "reschedule" && action !== "cancel") {
     return null;
   }
-  if (effectId == null || effectId.length === 0) {
-    return null;
-  }
   return {
     action,
-    effectId,
     payload: { ...command.payload },
   };
 };
 
-/** Frozen command stored on the draft pendingDecision, if any. */
+/** @deprecated Prefer interruptCommandFromValue — interrupt has no effect id. */
+export const frozenCommandFromInterruptValue = (
+  value: unknown,
+  effectId: string | undefined,
+): FrozenMutationCommand | null => {
+  const cmd = interruptCommandFromValue(value);
+  if (cmd == null || effectId == null || effectId.length === 0) {
+    return null;
+  }
+  return {
+    action: cmd.action,
+    effectId,
+    payload: cmd.payload,
+  };
+};
+
+/**
+ * Stored frozen command only — fail closed when missing.
+ * Does not reconstruct from pendingCommand.
+ */
 export const frozenCommandFromDraft = (
   bookingDraft: BookingDraft | null | undefined,
 ): FrozenMutationCommand | null => {
@@ -108,42 +125,57 @@ export const frozenCommandFromDraft = (
   if (pending?.kind !== "mutation_confirm") {
     return null;
   }
-  if (pending.frozenCommand != null) {
-    return pending.frozenCommand;
-  }
-  // Legacy: reconstruct from pendingCommand + effectId when frozenCommand missing.
-  if (bookingDraft == null) {
+  if (pending.frozenCommand == null) {
     return null;
   }
-  if (bookingDraft.pendingCommand == null || pending.effectId.length === 0) {
-    return null;
-  }
-  const action = bookingDraft.pendingCommand.action;
-  if (action !== "create" && action !== "reschedule" && action !== "cancel") {
-    return null;
-  }
-  return {
-    action,
-    effectId: pending.effectId,
-    payload: { ...bookingDraft.pendingCommand.payload },
-  };
+  return pending.frozenCommand;
 };
 
 /**
- * True when the draft's frozen command matches the paused interrupt command.
- * Fail closed when either side is missing.
+ * True when the draft's frozen command matches the paused interrupt command
+ * and all three effect ids agree. Fail closed when any side is missing.
+ *
+ * Required:
+ * 1. stored pendingDecision.frozenCommand
+ * 2. pendingEffect present
+ * 3. frozenCommand.effectId === pendingDecision.effectId === pendingEffect.id
+ * 4. interrupt action + payload equal frozen (independently of effect id)
  */
 export const hitlCommandsMatch = (
   bookingDraft: BookingDraft | null | undefined,
   interruptValue: unknown,
 ): boolean => {
-  const fromDraft = frozenCommandFromDraft(bookingDraft);
-  if (fromDraft == null) {
+  const pending = bookingDraft?.pendingDecision;
+  if (pending?.kind !== "mutation_confirm") {
     return false;
   }
-  const fromInterrupt = frozenCommandFromInterruptValue(
-    interruptValue,
-    fromDraft.effectId,
+  const frozen = pending.frozenCommand;
+  if (frozen == null) {
+    return false;
+  }
+  const pendingEffect = bookingDraft?.pendingEffect;
+  if (pendingEffect == null || pendingEffect.id.length === 0) {
+    return false;
+  }
+  if (frozen.effectId.length === 0 || pending.effectId.length === 0) {
+    return false;
+  }
+  if (
+    frozen.effectId !== pending.effectId
+    || frozen.effectId !== pendingEffect.id
+  ) {
+    return false;
+  }
+
+  const fromInterrupt = interruptCommandFromValue(interruptValue);
+  if (fromInterrupt == null) {
+    return false;
+  }
+  if (fromInterrupt.action !== frozen.action) {
+    return false;
+  }
+  return (
+    JSON.stringify(normalizeCrmCommandPayload(fromInterrupt.payload))
+    === JSON.stringify(normalizeCrmCommandPayload(frozen.payload))
   );
-  return frozenCommandsEqual(fromDraft, fromInterrupt);
 };

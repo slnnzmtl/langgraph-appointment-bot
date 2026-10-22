@@ -87,6 +87,277 @@ describe("deferred turn across catalog + service confirm", () => {
     ).toBe(true);
   });
 
+  it("carries deferred price onto the final availability card facts", () => {
+    const start = decideBooking(
+      null,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: { kind: "named_procedure", query: "Botox" },
+          scheduleIntent: {
+            kind: "date_and_time",
+            date: "2026-10-24",
+            time: "13:00",
+          },
+          informationalQuestion: "price",
+          faqTopic: "price",
+        },
+      },
+      emptyReads,
+    );
+    let draft: BookingDraft | null = null;
+    for (const event of start.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    const afterCatalog = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: draft!.pendingEffect!.id,
+          kind: "catalog",
+          outcome: "ok",
+          services: [{ id: "svc-botox", name: "Botox" }],
+        },
+      },
+      emptyReads,
+    );
+    for (const event of afterCatalog.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    const afterAccept = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { serviceIntent: { kind: "confirm_pending_service" } },
+      },
+      emptyReads,
+    );
+    for (const event of afterAccept.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(afterAccept.decision.pendingEffect?.effect.kind).toBe("get_service");
+
+    const afterPrice = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: draft!.pendingEffect!.id,
+          kind: "informational",
+          outcome: "ok",
+          facts: {
+            servicePrice: "1200",
+            serviceName: "Botox",
+            serviceId: "svc-botox",
+          },
+        },
+      },
+      emptyReads,
+    );
+    for (const event of afterPrice.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(afterPrice.decision.tag).toBe("effect");
+    expect(afterPrice.decision.pendingEffect?.effect.kind).toBe("present_availability");
+    expect(draft?.pendingReplyFacts?.servicePrice).toBe("1200");
+
+    const afterAvail = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: draft!.pendingEffect!.id,
+          kind: "availability",
+          outcome: "ok",
+          snapshotId: "snap-price",
+          presentationMode: "date_select",
+          presentationChoices: [
+            { id: "2026-10-24", label: "24 жов" },
+          ],
+        },
+      },
+      {
+        ...emptyReads,
+        availabilitySnapshotId: "snap-price",
+        availabilityDays: [
+          {
+            date: "2026-10-24",
+            slots: [
+              {
+                id: "s1",
+                label: "13:00",
+                dateStart: "2026-10-24T13:00:00",
+                dateEnd: "2026-10-24T13:30:00",
+              },
+            ],
+          },
+        ],
+      },
+    );
+    for (const event of afterAvail.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(afterAvail.decision.card?.kind).toMatch(/date_select|time_select/);
+    expect(draft?.pendingReplyFacts?.servicePrice).toBe("1200");
+
+    const afterAvailError = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_missing",
+          kind: "availability",
+          outcome: "error",
+        },
+      },
+      emptyReads,
+    );
+    // Stash survives an unrelated effect-id mismatch / prior clear; re-set for error path.
+    draft = reduceBookingDraft(draft, {
+      type: "reply_facts_set",
+      facts: { servicePrice: "1200", serviceName: "Botox" },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_avail_err",
+        status: "prepared",
+        effect: { kind: "present_availability", queryKind: "exact", date: "2026-10-24" },
+      },
+    });
+    const errorDecision = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: "eff_avail_err",
+          kind: "availability",
+          outcome: "error",
+        },
+      },
+      emptyReads,
+    );
+    for (const event of errorDecision.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(draft?.pendingReplyFacts?.servicePrice).toBe("1200");
+    expect(
+      errorDecision.decision.facts.clarificationReason === "availability_failed"
+      || errorDecision.decision.card != null
+      || errorDecision.decision.tag === "ask",
+    ).toBe(true);
+    void afterAvailError;
+  });
+
+  it("keeps compound note and firstName through catalog then slot selection", () => {
+    const start = decideBooking(
+      null,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: { kind: "named_procedure", query: "Botox" },
+          scheduleIntent: {
+            kind: "date_and_time",
+            date: "2026-10-24",
+            time: "13:00",
+          },
+          note: { kind: "answer", value: "for forehead" },
+          contactFacts: { firstName: "Olena" },
+        },
+      },
+      emptyReads,
+    );
+
+    let draft: BookingDraft | null = null;
+    for (const event of start.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(start.events.some((e) => e.type === "booking_started")).toBe(true);
+    expect(start.events.some((e) => e.type === "note_status")).toBe(true);
+    expect(start.events.some((e) => e.type === "contact_field_submitted")).toBe(true);
+    expect(draft?.note).toEqual({ status: "answered", value: "for forehead" });
+    expect(draft?.contactDetails?.firstName).toBe("Olena");
+    expect(draft?.deferredTurn?.schedule).toEqual({
+      date: "2026-10-24",
+      preferredTime: "13:00",
+    });
+
+    const afterCatalog = decideBooking(
+      draft,
+      {
+        source: "effect_result",
+        result: {
+          effectId: draft!.pendingEffect!.id,
+          kind: "catalog",
+          outcome: "ok",
+          services: [{ id: "svc-botox", name: "Botox" }],
+        },
+      },
+      emptyReads,
+    );
+    for (const event of afterCatalog.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    expect(draft?.serviceAcceptance?.service.id).toBe("svc-botox");
+    expect(draft?.note).toEqual({ status: "answered", value: "for forehead" });
+    expect(draft?.contactDetails?.firstName).toBe("Olena");
+
+    // Explicit switch to a different service clears the compound note.
+    const afterSwitch = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: {
+            kind: "catalog_service",
+            serviceId: "svc-other",
+            serviceName: "Other",
+          },
+        },
+      },
+      emptyReads,
+    );
+    let switched: BookingDraft | null = draft;
+    for (const event of afterSwitch.events) {
+      switched = reduceBookingDraft(switched, event);
+    }
+    expect(switched?.serviceAcceptance?.service.id).toBe("svc-other");
+    expect(switched?.note.status).toBe("unasked");
+
+    // Resume original catalog path: note survives accept + slot.
+    draft = null;
+    for (const event of start.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    for (const event of afterCatalog.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    const afterAccept = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: { serviceIntent: { kind: "confirm_pending_service" } },
+      },
+      emptyReads,
+    );
+    for (const event of afterAccept.events) {
+      draft = reduceBookingDraft(draft, event);
+    }
+    draft = reduceBookingDraft(draft, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-10-24T13:00:00",
+        dateEnd: "2026-10-24T13:30:00",
+        label: "13:00",
+      },
+      snapshotId: "snap-1",
+    });
+    expect(draft?.note).toEqual({ status: "answered", value: "for forehead" });
+    expect(draft?.contactDetails?.firstName).toBe("Olena");
+    expect(draft?.selectedSlot?.dateStart).toBe("2026-10-24T13:00:00");
+  });
+
   it("parking side question does not call get_working_time", () => {
     let draft = reduceBookingDraft(null, {
       type: "booking_started",

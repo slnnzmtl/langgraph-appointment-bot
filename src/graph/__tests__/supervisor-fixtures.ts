@@ -59,6 +59,7 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   bookingDecision: null,
   inboundChoiceId: null,
   understoodTurn: null,
+  patientLocale: null,
   ...overrides,
 });
 

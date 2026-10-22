@@ -1,4 +1,4 @@
-import { Command, Overwrite } from "@langchain/langgraph";
+import { Overwrite } from "@langchain/langgraph";
 import type { ServicesContext } from "../../../tools/service-tools.js";
 import type {
   PartitionServiceCandidates,
@@ -6,7 +6,6 @@ import type {
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
-import { BOOKING_DECIDE_NODE } from "../booking-decide-nodes.js";
 import { prepareFaqTurn } from "./faq.js";
 
 export type CreateFaqPrepareOptions = {
@@ -23,23 +22,18 @@ const wipeAgentTape = (state: ClinicState): ClinicStateUpdate => ({
   stepCount: 0,
 });
 
+/**
+ * FAQ prepare node. Always returns a state update; routing to llm / finalize /
+ * booking is owned solely by routeAfterAgentPrepare (no Command dual-route).
+ */
 export const createFaqPrepareNode = (
   options?: CreateFaqPrepareOptions,
 ) =>
-  async (state: ClinicState): Promise<ClinicStateUpdate | Command> => {
+  async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const faqUpdate = await prepareFaqTurn(state, options);
-    const wipe = wipeAgentTape(state);
-    if ("kind" in faqUpdate && faqUpdate.kind === "booking_catalog_service") {
-      return new Command({
-        goto: BOOKING_DECIDE_NODE,
-        update: {
-          ...wipe,
-          ...faqUpdate.update,
-        },
-      });
-    }
     return {
-      ...wipe,
+      ...wipeAgentTape(state),
       ...faqUpdate,
     };
   };
+

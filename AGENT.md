@@ -53,13 +53,13 @@ Two paths only:
 - `lastHandoff` is presentation/observability only (reply text + buttons for Telegram) — never a routing authority.
 - FINISH helpers attach DEFAULT MENU or VISIT CHANGE from intent + `bookingContext`, and the prefetch visit list on «Мій запис», hello, and «Головне меню». The adapter still appends «Головне меню». `/start` and reminders use `buildDefaultMenuKeyboard`.
 - `/start` stores `WELCOME_HISTORY_MARKER` in history, not the full welcome text (`src/adapter/welcome-message.ts`). Later hellos stay short.
-- Key labels (exact `labelIdFor`): «Записатись» → booking (`consultation`); named procedure with no visit → booking (`list_services` / catalog); «Послуги» → FAQ catalog browse (no `bookingDraft`); unique catalog CRM id → booking `catalog_service`; «Адреса» → FAQ; «Мій запис» → FINISH visit menu; «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting. Empty `{}`: greeting if idle, booking re-ask if a session is open.
+- Key labels (exact `labelIdFor`): «Записатись» → booking (`consultation`); named procedure with no visit → booking (`list_services` / catalog); «Послуги» → FAQ catalog browse (no `bookingDraft`); unique catalog CRM id → FAQ informational highlight (no draft); «Записатись» while that highlight is open → booking `catalog_service` for the allowlisted row; «Адреса» → FAQ; «Мій запис» → FINISH visit menu; «Перенести» / «Скасувати» → booking; «Головне меню» → FINISH greeting. Empty `{}`: greeting if idle, booking re-ask if a session is open.
 
 ### FAQ (read-only, `maxSteps` 4)
 
-Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<list_services>` when present. FAQ **does not write `bookingDraft`** — idle browse uses `pendingInteraction` only (`service_candidate` owner faq); unique CRM id and REPLACE post-cancel catalog go through the booking kernel.
+Tools: `list_services`, `get_service`, `get_working_time`. Reuse checkpointed `<list_services>` when present. FAQ **does not write `bookingDraft`** — idle browse uses `pendingInteraction` only (`service_candidate` owner faq); unique CRM id stays FAQ-owned until an explicit book; REPLACE post-cancel catalog goes through the booking kernel.
 
-- Catalog: multi-id pages stay FAQ-owned chips. One remaining id hands off to booking with `catalog_service` (`accepted: false` confirm card in the kernel).
+- Catalog: multi-id pages stay FAQ-owned chips. One remaining id stays FAQ-owned as an informational highlight until an explicit book request promotes that allowlisted row to booking `catalog_service`.
 - After «Обрати іншу процедуру» (`choose_other`): FAQ root chips / `catalog_detour` without writing a draft.
 - Prices / hours / address: FAQ **reads** only (`get_service` for the matched service; USD→UAH only via tool FX (`priceUah`); address from `CLINIC_ADDRESS` + Maps).
 - Accidental `<yield_to_supervisor/>` tags are stripped from model text; they are **not** a routing signal.

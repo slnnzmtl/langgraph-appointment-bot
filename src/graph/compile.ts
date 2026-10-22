@@ -41,7 +41,6 @@ import {
   createBookingRespondNode,
 } from "./agent-loop/booking-respond.js";
 import { createBookingTurnInterpreter } from "./agent-loop/booking-turn-interpreter.js";
-import { createNoteTurnClassifier } from "./booking-note-classifier.js";
 import {
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
@@ -81,18 +80,15 @@ export type CompileClinicGraphOptions = {
   agentModel: BaseChatModel;
   agentModelName?: string;
   supervisorLlm: ILLMConnector;
-  loadSupervisorPrompt: () => string;
-  buildSupervisorDynamicContext?: () => string;
   formatSystemMetadata: (date: Date, options?: { runtimeAgent?: string }) => string;
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
+  /** Optional Gemini context cache for the FAQ LLM only (not supervisor). */
   contextCache?: SupervisorContextCacheOptions;
   /** When set, supervisor prefetches Telegram contact and planned meetings. */
   bookingPrefetchCallTool?: McpCallTool;
   /** Override checkpoint prefetch TTL (default PREFETCH_TTL_MS). */
   prefetchTtlMs?: number;
-  /** Injected note-turn classifier (tests / legacy FAQ helpers). */
-  classifyNoteTurn?: ReturnType<typeof createNoteTurnClassifier>;
   /** Injected booking turn interpreter (tests). */
   interpretBookingTurn?: ReturnType<typeof createBookingTurnInterpreter>;
   /** Espo assigned user for create_meeting HITL CRM command freeze. */
@@ -183,16 +179,8 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ?? createBookingTurnInterpreter(options.supervisorLlm);
 
   const supervisorNodeWithIngress = createClinicSupervisorNode({
-    specialists: options.specialists,
-    supervisorLlm: options.supervisorLlm,
-    loadSupervisorPrompt: options.loadSupervisorPrompt,
-    ...(options.buildSupervisorDynamicContext
-      ? { buildSupervisorDynamicContext: options.buildSupervisorDynamicContext }
-      : {}),
     ...(prefetch ? { prefetch } : {}),
     prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
-    ...(options.contextCache ? { contextCache: options.contextCache } : {}),
-    ...(loadServices != null ? { loadServices } : {}),
     interpretTurn: interpretBookingTurn,
   });
 
@@ -210,7 +198,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addNode(
       faqPrepare,
       createFaqPrepareNode(faqCatalogOptions),
-      { ends: [faqLlm, faqFinalize, bookingDecide] },
     )
     .addNode(
       faqLlm,
@@ -231,12 +218,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addConditionalEdges(
       faqPrepare,
       (state: ClinicState) =>
+        // Idle unique chips no longer hand off here; explicit book promotes in supervisor.
         routeAfterAgentPrepare(
           state,
           faqLlm,
-          undefined,
-          undefined,
           faqFinalize,
+          undefined,
           FAQ_AGENT_ID,
         ),
       {

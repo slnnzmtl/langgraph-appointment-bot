@@ -29,6 +29,35 @@ const frozen = (overrides?: Partial<FrozenMutationCommand>): FrozenMutationComma
   ...overrides,
 });
 
+const matchingDraft = (overrides?: Partial<BookingDraft>): BookingDraft =>
+  ({
+    pendingDecision: {
+      kind: "mutation_confirm" as const,
+      action: "create" as const,
+      effectId: "eff_create_1",
+      frozenCommand: frozen(),
+    },
+    pendingEffect: {
+      id: "eff_create_1",
+      status: "prepared" as const,
+      effect: {
+        kind: "create_meeting" as const,
+        payload: { ...createPayload },
+      },
+    },
+    ...overrides,
+  }) as BookingDraft;
+
+const matchingInterrupt = {
+  type: "confirm_booking",
+  draft: {
+    command: {
+      action: "create",
+      payload: { ...createPayload },
+    },
+  },
+};
+
 describe("HITL full CRM command match", () => {
   it("normalizes local ISO times without seconds", () => {
     expect(normalizeCrmCommandPayload({ dateStart: "2026-10-24T13:00" })).toEqual({
@@ -58,46 +87,90 @@ describe("HITL full CRM command match", () => {
   });
 
   it("hitlCommandsMatch declines when interrupt payload is tampered", () => {
-    const draft = {
-      pendingDecision: {
-        kind: "mutation_confirm" as const,
-        action: "create" as const,
-        effectId: "eff_create_1",
-        frozenCommand: frozen(),
-      },
-    } as BookingDraft;
-
-    const interrupt = {
-      type: "confirm_booking",
-      draft: {
-        command: {
-          action: "create",
-          payload: { ...createPayload, description: "TAMPERED" },
+    expect(
+      hitlCommandsMatch(matchingDraft(), {
+        type: "confirm_booking",
+        draft: {
+          command: {
+            action: "create",
+            payload: { ...createPayload, description: "TAMPERED" },
+          },
         },
-      },
-    };
-    expect(hitlCommandsMatch(draft, interrupt)).toBe(false);
+      }),
+    ).toBe(false);
   });
 
-  it("hitlCommandsMatch accepts a matching interrupt", () => {
-    const draft = {
-      pendingDecision: {
-        kind: "mutation_confirm" as const,
-        action: "create" as const,
-        effectId: "eff_create_1",
-        frozenCommand: frozen(),
-      },
-    } as BookingDraft;
+  it("hitlCommandsMatch accepts a matching interrupt with correlated effect ids", () => {
+    expect(hitlCommandsMatch(matchingDraft(), matchingInterrupt)).toBe(true);
+  });
 
-    const interrupt = {
-      type: "confirm_booking",
-      draft: {
-        command: {
-          action: "create",
-          payload: { ...createPayload },
+  it("declines when pendingEffect is missing", () => {
+    expect(
+      hitlCommandsMatch(
+        matchingDraft({ pendingEffect: null }),
+        matchingInterrupt,
+      ),
+    ).toBe(false);
+  });
+
+  it("declines when frozenCommand is missing (no reconstruct)", () => {
+    const draft = matchingDraft();
+    const pending = draft.pendingDecision;
+    expect(
+      hitlCommandsMatch(
+        {
+          ...draft,
+          pendingDecision:
+            pending?.kind === "mutation_confirm"
+              ? {
+                  kind: "mutation_confirm",
+                  action: pending.action,
+                  effectId: pending.effectId,
+                }
+              : pending,
+          pendingCommand: {
+            action: "create",
+            payload: { ...createPayload },
+          },
+        } as BookingDraft,
+        matchingInterrupt,
+      ),
+    ).toBe(false);
+  });
+
+  it("declines when frozen cancel id disagrees with current pendingEffect", () => {
+    expect(
+      hitlCommandsMatch(
+        matchingDraft({
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "cancel",
+            effectId: "eff_old_cancel",
+            frozenCommand: frozen({
+              action: "cancel",
+              effectId: "eff_old_cancel",
+              payload: { id: "m-1" },
+            }),
+          },
+          pendingEffect: {
+            id: "eff_new_create",
+            status: "prepared",
+            effect: {
+              kind: "create_meeting",
+              payload: { ...createPayload },
+            },
+          },
+        }),
+        {
+          type: "confirm_booking",
+          draft: {
+            command: {
+              action: "create",
+              payload: { ...createPayload },
+            },
+          },
         },
-      },
-    };
-    expect(hitlCommandsMatch(draft, interrupt)).toBe(true);
+      ),
+    ).toBe(false);
   });
 });

@@ -31,7 +31,6 @@ const minimalCompileOptions = {
       invoke: async () => ({ next: "booking" }),
     }),
   } as ILLMConnector,
-  loadSupervisorPrompt: () => "STATIC",
   formatSystemMetadata: () => "META",
   messageHistoryMaxTokens: 6_000,
   agentTools: { faq: [], booking: [] },

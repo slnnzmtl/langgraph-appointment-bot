@@ -1,5 +1,4 @@
 import {
-  BOOKING_OFFER_MENU,
   CLINIC_ADDRESS,
   CONSULTATION_SERVICE_ID,
   CONSULTATION_SERVICE_NAME_UK,
@@ -206,14 +205,11 @@ const viewCardFromPendingDecision = (
   // Derived waits — only when pendingDecision is not an open card.
   if (draft.serviceAcceptance?.status === "pending") {
     const service = draft.serviceAcceptance.service;
+    // Choice ids only — localized labels belong in projection/composer.
     return {
       kind: "service_confirm",
       serviceId: service.id,
       choiceIds: ["offer_accept", "offer_choose_other"],
-      labels: {
-        offer_accept: BOOKING_OFFER_MENU[0],
-        offer_choose_other: BOOKING_OFFER_MENU[1],
-      },
     };
   }
   // Note step may store pendingDecision as clarification/need_note; ask card is visit_note.
@@ -906,8 +902,23 @@ export const decideBooking = (
           });
         }
         emit({ type: "deferred_turn_cleared", reason: "consumed" });
+        // Carry verified price across the availability effect; composer consumes it
+        // on the final card (including unavailable/error outcomes).
+        if (
+          facts.servicePrice != null
+          || facts.serviceName != null
+          || facts.serviceId != null
+        ) {
+          emit({
+            type: "reply_facts_set",
+            facts: {
+              ...(facts.servicePrice != null ? { servicePrice: facts.servicePrice } : {}),
+              ...(facts.serviceName != null ? { serviceName: facts.serviceName } : {}),
+              ...(facts.serviceId != null ? { serviceId: facts.serviceId } : {}),
+            },
+          });
+        }
         const queryKind = sched.relative ?? "exact";
-        // Surface price in facts; availability effect follows on the next decide loop.
         const nextReq = nextBookingRequirement(ctx.working, readModels);
         if (nextReq !== "none") facts.nextStep = nextReq;
         const avail = preparePendingEffect(
@@ -919,7 +930,7 @@ export const decideBooking = (
         );
         return {
           tag: "effect",
-          intent: "answer_side_question",
+          intent: "run_effect",
           facts,
           card: null,
           pendingEffect: avail,
@@ -1490,6 +1501,31 @@ export const decideBooking = (
       emit({ type: "deferred_turn_set", deferred });
     };
 
+    /** Apply note/contact before any service-path early return (compound turns). */
+    const emitNoteAndContactFromPatch = (): void => {
+      if (patch.note?.kind === "skip") {
+        emit({ type: "note_status", status: "skipped" });
+      } else if (patch.note?.kind === "answer") {
+        emit({ type: "note_status", status: "answered", value: patch.note.value });
+      }
+
+      if (patch.contactFacts != null) {
+        const cf = patch.contactFacts;
+        if (cf.phoneNumber != null) {
+          emit({ type: "contact_field_submitted", field: "phoneNumber", value: cf.phoneNumber });
+        }
+        if (cf.firstName != null) {
+          emit({ type: "contact_field_submitted", field: "firstName", value: cf.firstName });
+        }
+        if (cf.lastName != null) {
+          emit({ type: "contact_field_submitted", field: "lastName", value: cf.lastName });
+        }
+      }
+    };
+
+    // Compound facts must land before list_services / catalog early returns.
+    emitNoteAndContactFromPatch();
+
     // REPLACE chip: cancel current visit, then HITL.
     if (
       patch.choice?.choiceId === "cancel_existing"
@@ -1740,24 +1776,7 @@ export const decideBooking = (
       );
     }
 
-    if (patch.note?.kind === "skip") {
-      emit({ type: "note_status", status: "skipped" });
-    } else if (patch.note?.kind === "answer") {
-      emit({ type: "note_status", status: "answered", value: patch.note.value });
-    }
-
-    if (patch.contactFacts != null) {
-      const cf = patch.contactFacts;
-      if (cf.phoneNumber != null) {
-        emit({ type: "contact_field_submitted", field: "phoneNumber", value: cf.phoneNumber });
-      }
-      if (cf.firstName != null) {
-        emit({ type: "contact_field_submitted", field: "firstName", value: cf.firstName });
-      }
-      if (cf.lastName != null) {
-        emit({ type: "contact_field_submitted", field: "lastName", value: cf.lastName });
-      }
-    }
+    // Note/contact already applied via emitNoteAndContactFromPatch above.
 
     // Side question may coexist with booking facts — apply facts first, then read effect.
     // Never map unrecognized questions to get_working_time.

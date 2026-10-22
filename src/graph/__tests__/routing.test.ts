@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   routeAfterAgentLlm,
+  routeAfterAgentPrepare,
   routeAfterAgentTools,
   routeAfterBookingTools,
 } from "../agent-loop/index.js";
@@ -62,6 +63,66 @@ describe("clinic routing schema", () => {
 });
 
 describe("agent loop routing", () => {
+  it("routes FAQ prepare chips to finalize and booking handoff to decide", () => {
+    expect(
+      routeAfterAgentPrepare(
+        {
+          pendingInteraction: {
+            kind: "service_candidate",
+            owner: "faq",
+            utterance: "catalog",
+            choices: [{ id: "svc-only", label: "Only", serviceIds: ["svc-only"] }],
+          },
+          faqSkipLlm: true,
+          messages: [],
+        } as never,
+        "faq__llm",
+        "faq__finalize",
+        "booking__decide",
+        "faq",
+      ),
+    ).toBe("faq__finalize");
+
+    expect(
+      routeAfterAgentPrepare(
+        {
+          next: "booking",
+          understoodTurn: {
+            serviceIntent: { kind: "catalog_service", serviceId: "svc-1" },
+          },
+          pendingInteraction: null,
+          faqSkipLlm: true,
+          messages: [],
+        } as never,
+        "faq__llm",
+        "faq__finalize",
+        "booking__decide",
+        "faq",
+      ),
+    ).toBe("booking__decide");
+
+    // Idle unique chip without booking handoff must not fall through to llm
+    // when faqSkipLlm is set, and must not invent a booking route.
+    expect(
+      routeAfterAgentPrepare(
+        {
+          pendingInteraction: {
+            kind: "service_candidate",
+            owner: "faq",
+            utterance: "catalog",
+            choices: [{ id: "svc-only", label: "Only", serviceIds: ["svc-only"] }],
+          },
+          faqSkipLlm: true,
+          messages: [],
+        } as never,
+        "faq__llm",
+        "faq__finalize",
+        "booking__decide",
+        "faq",
+      ),
+    ).not.toBe("booking__decide");
+  });
+
   it("routes to tools when AI requests tools under maxSteps", () => {
     const state = {
       stepCount: 1,

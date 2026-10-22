@@ -188,13 +188,8 @@ export const interpretBookingTurnDeterministic = (
     if (resolved != null) {
       return interpretExactChoiceId(resolved, input);
     }
-    const aliases = CHOICE_ID_ALIASES[callbackId];
-    if (
-      input.awaitingServiceConfirm === true
-      && (aliases?.includes("offer_accept") || aliases?.includes("offer_choose_other"))
-    ) {
-      return interpretExactChoiceId(callbackId, input);
-    }
+    // Fail closed: unoffered callbacks never bypass the live offered set,
+    // even while awaitingServiceConfirm is open.
     return {};
   }
 
@@ -438,7 +433,14 @@ export const normalizeBookingTurnClassification = (
       break;
   }
 
-  // Names/notes only when the open field matches — never from free guessing.
+  // Explicit booking start may carry compound name/note facts in the same turn.
+  const explicitBookingStart =
+    raw.serviceIntentKind === "consultation"
+    || raw.serviceIntentKind === "named_procedure"
+    || (raw.serviceIntentKind === "catalog_browse" && raw.scheduleKind != null
+      && raw.scheduleKind !== "none");
+
+  // Names/notes only when the open field matches — or on an explicit book start.
   if (input.awaitingContactField === "firstName" && raw.firstName != null) {
     patch.contactFacts = { ...(patch.contactFacts ?? {}), firstName: raw.firstName };
   } else if (input.awaitingContactField === "lastName" && raw.lastName != null) {
@@ -453,9 +455,19 @@ export const normalizeBookingTurnClassification = (
     if (phone != null) {
       patch.contactFacts = { ...(patch.contactFacts ?? {}), phoneNumber: phone };
     }
+  } else if (
+    explicitBookingStart
+    && input.awaitingContactField == null
+    && (raw.firstName != null || raw.lastName != null)
+  ) {
+    patch.contactFacts = {
+      ...(patch.contactFacts ?? {}),
+      ...(raw.firstName != null ? { firstName: raw.firstName } : {}),
+      ...(raw.lastName != null ? { lastName: raw.lastName } : {}),
+    };
   }
 
-  if (input.awaitingNote === true) {
+  if (input.awaitingNote === true || explicitBookingStart) {
     if (raw.noteKind === "skip") {
       patch.note = { kind: "skip" };
     } else if (raw.noteKind === "answer" && raw.noteValue != null) {

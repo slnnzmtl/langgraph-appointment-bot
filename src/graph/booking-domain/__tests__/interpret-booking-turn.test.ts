@@ -195,6 +195,26 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
     ).toEqual({ kind: "decline_pending_service" });
   });
 
+  it("rejects unoffered accept callback even while awaitingServiceConfirm", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "",
+        callbackChoiceId: "accept",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: [],
+      }),
+    ).toEqual({});
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "",
+        callbackChoiceId: "offer_accept",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: [],
+      }),
+    ).toEqual({});
+  });
+
   it("keeps an open offer when free text invents catalog/decline", () => {
     expect(
       normalizeBookingTurnClassification(

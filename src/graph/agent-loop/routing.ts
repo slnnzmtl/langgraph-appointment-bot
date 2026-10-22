@@ -1,4 +1,4 @@
-import { FAQ_AGENT_ID } from "../types.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
 import {
   hasPendingToolCalls,
   lastMessageRequestsTools,
@@ -23,9 +23,7 @@ export const routeAfterAgentLlm = (
   maxSteps: number,
   toolsName: string,
   finalizeName: string,
-  _commandPrepareName?: string,
 ): string => {
-  void _commandPrepareName;
   if (state.stepCount >= maxSteps) {
     return finalizeName;
   }
@@ -37,24 +35,37 @@ export const routeAfterAgentLlm = (
   return finalizeName;
 };
 
+export type RouteAfterAgentPrepareOptions = {
+  llmName: string;
+  finalizeName: string;
+  /** Optional booking decide node for explicit-book handoffs from FAQ prepare. */
+  bookingDecideName?: string;
+  agentId?: string;
+};
+
 /**
- * FAQ prepare → llm or finalize. Booking prepare was deleted; booking-only
- * planner projection branches are gone.
+ * FAQ prepare → booking (explicit handoff only), finalize (chips), or llm.
+ * One routing mechanism — callers must not also return Command(goto).
  */
 export const routeAfterAgentPrepare = (
   state: ClinicState,
   llmName: string,
-  _commandPrepareName?: string,
-  _noteOrchestratorName?: string,
-  finalizeName?: string,
+  finalizeName: string,
+  bookingDecideName?: string,
   agentId?: string,
 ): string => {
-  void _commandPrepareName;
-  void _noteOrchestratorName;
-  const isFaqPrepare = agentId === FAQ_AGENT_ID;
+  // Explicit book handoff set by prepare (next + understoodTurn).
+  if (
+    bookingDecideName != null
+    && state.next === BOOKING_AGENT_ID
+    && state.understoodTurn != null
+  ) {
+    return bookingDecideName;
+  }
+
   // FAQ chips: exact chip taps / newly produced chips skip LLM.
   if (
-    finalizeName
+    agentId === FAQ_AGENT_ID
     && state.pendingInteraction?.kind === "service_candidate"
     && state.pendingInteraction.owner === "faq"
   ) {
@@ -67,7 +78,6 @@ export const routeAfterAgentPrepare = (
       return finalizeName;
     }
   }
-  void isFaqPrepare;
 
   return llmName;
 };
