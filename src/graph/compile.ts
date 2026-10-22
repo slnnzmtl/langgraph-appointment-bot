@@ -182,6 +182,7 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(prefetch ? { prefetch } : {}),
     prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
     interpretTurn: interpretBookingTurn,
+    ...(loadServices != null ? { loadServices } : {}),
   });
 
   const supervisorRoutes: Record<

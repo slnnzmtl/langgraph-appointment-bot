@@ -4,6 +4,8 @@ import {
   resolveBookHighlightedPromotion,
 } from "../faq-highlight.js";
 import { clarificationCopy } from "../agent-loop/booking-response-fallback.js";
+import { ensureServicesContext } from "../agent-loop/protocol/service.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import { askDecisionFromPendingView } from "../booking-domain/decide.js";
@@ -51,6 +53,7 @@ export type CreateClinicSupervisorNodeOptions = {
   prefetchTtlMs?: number;
   /** Ingress turn interpreter — one call per normal turn. */
   interpretTurn?: InterpretBookingTurn;
+  loadServices?: () => Promise<ServicesContext | null>;
 };
 
 /** FAQ LLM context-cache options (not used by the supervisor ingress node). */
@@ -247,19 +250,37 @@ export const createClinicSupervisorNode = (
       && interaction?.kind === "service_candidate"
       && interaction.owner === "faq"
     ) {
+      const ensured = await ensureServicesContext(
+        state.servicesContext,
+        options.loadServices,
+      );
+      const servicesContextPatch =
+        ensured.loaded != null ? { servicesContext: ensured.loaded } : {};
+      const catalogReady = ensured.list.length > 0;
       const promotion = resolveBookHighlightedPromotion(
         patch,
         faqHighlighted,
-        state.servicesContext?.list ?? [],
+        ensured.list,
+        { catalogReady },
       );
       if (promotion.status === "promoted") {
         route = promotion.route;
-      } else if (promotion.status === "stale_highlight") {
+        ctx = {
+          ...ctx,
+          prefetchUpdate: { ...ctx.prefetchUpdate, ...servicesContextPatch },
+        };
+      } else if (
+        promotion.status === "stale_highlight"
+        || promotion.status === "highlight_unverified"
+      ) {
         const locale = resolvePatientLocale({
           patientLocale,
           messages: state.messages,
         });
-        const staleCopy = clarificationCopy("highlight_stale", locale)
+        const reason = promotion.status === "stale_highlight"
+          ? "highlight_stale"
+          : "highlight_unverified";
+        const replyCopy = clarificationCopy(reason, locale)
           ?? clarificationCopy("need_service", locale)
           ?? "";
         const hasVisit = (ctx.bookingContext?.meetings.length ?? 0) > 0;
@@ -269,11 +290,12 @@ export const createClinicSupervisorNode = (
             next: FINISH_ROUTE,
             pendingInteraction: null,
             ...ctx.prefetchUpdate,
+            ...servicesContextPatch,
             lastHandoff: {
               agentId: FINISH_ROUTE,
               agentName: "supervisor",
               status: "ok",
-              replyText: staleCopy,
+              replyText: replyCopy,
               replyButtons: [...defaultMenuLabels(hasVisit)],
             },
             understoodTurn: null,

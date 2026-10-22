@@ -52,7 +52,15 @@ export const faqHighlightedService = (
 export type BookHighlightedPromotion =
   | { status: "not_requested" }
   | { status: "promoted"; route: ReceptionistRoute }
-  | { status: "stale_highlight" };
+  /** Fresh non-empty catalog loaded but the highlighted id is not on it. */
+  | { status: "stale_highlight" }
+  /** No catalog rows to check membership (missing context, not refetched yet). */
+  | { status: "highlight_unverified" };
+
+export type ResolveBookHighlightedOptions = {
+  /** True when a non-empty services list is available for id lookup. */
+  catalogReady: boolean;
+};
 
 /**
  * Promote book_highlighted → catalog_service when the id is on the current list.
@@ -62,6 +70,7 @@ export const resolveBookHighlightedPromotion = (
   patch: UnderstoodBookingTurn,
   highlighted: FaqHighlightedService | null,
   servicesList: ServicesContext["list"] | readonly ServicesContext["list"][number][],
+  options: ResolveBookHighlightedOptions,
 ): BookHighlightedPromotion => {
   if (patch.serviceIntent?.kind !== "book_highlighted") {
     return { status: "not_requested" };
@@ -84,6 +93,9 @@ export const resolveBookHighlightedPromotion = (
         },
       },
     };
+  }
+  if (!options.catalogReady) {
+    return { status: "highlight_unverified" };
   }
   return { status: "stale_highlight" };
 };

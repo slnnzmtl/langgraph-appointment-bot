@@ -228,9 +228,37 @@ describe("FAQ highlight book_highlighted promotion", () => {
     expect(update.understoodTurn).toBeNull();
   });
 
-  it("clears stale highlight when servicesContext is empty", async () => {
+  it("refetches catalog and promotes book_highlighted when servicesContext was absent", async () => {
     const node = createClinicSupervisorNode({
       interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
+      loadServices: async () => ({
+        list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+        fetchedAt: Date.now(),
+      }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Записатись")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: null,
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: {
+        kind: "catalog_service",
+        serviceId: "svc-botox",
+        serviceName: "Botox CRM",
+      },
+    });
+    expect(update.servicesContext?.list).toHaveLength(1);
+  });
+
+  it("does not claim catalog removal when servicesContext is absent and refetch fails", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
+      loadServices: async () => null,
     });
     const update = await node(
       supervisorState({
@@ -242,7 +270,8 @@ describe("FAQ highlight book_highlighted promotion", () => {
     );
     expect(update.next).toBe("FINISH");
     expect(update.pendingInteraction).toBeNull();
-    expect(update.lastHandoff?.replyText).toMatch(/каталозі|catalog/i);
+    expect(update.lastHandoff?.replyText).toMatch(/перевірити|verify/i);
+    expect(update.lastHandoff?.replyText).not.toMatch(/більше не|no longer/i);
   });
 
   it("routes consultation to booking without promoting Botox on FAQ highlight", async () => {
