@@ -1,3 +1,5 @@
+import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
+
 import { trackEvent } from "../../../analytics/track.js";
 import { extractFaqCatalogAction } from "../../../shared/message-content.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
@@ -24,7 +26,10 @@ import type {
   SelectServiceCandidates,
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { ensureServicesContext } from "../protocol/index.js";
+import {
+  classifyMeetingMutationToolMessage,
+  ensureServicesContext,
+} from "../protocol/index.js";
 import {
   emptyFinalizeReply,
   faqCatalogChipReply,
@@ -32,13 +37,21 @@ import {
   type FinalizeReply,
 } from "./shared.js";
 
+const classifyMeetingMutationCommittedCancel = (
+  messages: BaseMessage[] | undefined,
+): boolean =>
+  (messages ?? []).some(
+    (message) =>
+      message instanceof ToolMessage
+      && message.name === "cancel_meeting"
+      && classifyMeetingMutationToolMessage(message) === "committed",
+  );
+
 export type FinalizeFaqOptions = {
   partitionCandidates?: PartitionServiceCandidates;
   selectCandidates?: SelectServiceCandidates;
   loadServices?: () => Promise<ServicesContext | null>;
 };
-
-const REPLACEMENT_CANCELLED_CONTINUE_PREFIX = "Запис скасовано.";
 
 /** No-AI FAQ: prepare opened catalog or service_confirm without an LLM turn. */
 export const tryFaqNoAiFinalize = (
@@ -48,7 +61,6 @@ export const tryFaqNoAiFinalize = (
     return null;
   }
   const interaction = state.pendingInteraction;
-  const fromReplacementCancel = state.pendingCancellationPurpose === "replacement";
   if (
     interaction.kind === "service_candidate"
     && interaction.owner === "faq"
@@ -57,37 +69,35 @@ export const tryFaqNoAiFinalize = (
       interaction,
       state.servicesContext?.list ?? [],
     );
-    const replyText = fromReplacementCancel
-      ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${chips.replyText}`
-      : chips.replyText;
+    // REPLACE cancel continue: acknowledge cancel then show the catalog.
+    const replaceCancelAck =
+      interaction.consultationDeclined === true
+      && classifyMeetingMutationCommittedCancel(state.agentMessages)
+        ? "Запис скасовано.\n\n"
+        : "";
     return {
       ...emptyFinalizeReply("ok"),
-      replyText,
+      replyText: `${replaceCancelAck}${chips.replyText}`,
       replyButtons: chips.replyButtons,
       replySource: "runtime",
       patch: {
         supervisorIntent: null,
         pendingInteraction: interaction,
-        ...(fromReplacementCancel ? { pendingCancellationPurpose: null } : {}),
       },
     };
   }
   if (interaction.kind === "service_confirm") {
     const baseText = String(renderBookingInteractionMessage(interaction).content);
-    const replyText = fromReplacementCancel
-      ? `${REPLACEMENT_CANCELLED_CONTINUE_PREFIX}\n\n${baseText}`
-      : baseText;
     const replyButtons = replyButtonsForInteraction(interaction);
     return {
       ...emptyFinalizeReply("ok"),
-      replyText,
+      replyText: baseText,
       replyButtons,
       replySource: "runtime",
       yieldToSupervisor: true,
       patch: {
         supervisorIntent: null,
         pendingInteraction: interaction,
-        ...(fromReplacementCancel ? { pendingCancellationPurpose: null } : {}),
       },
     };
   }

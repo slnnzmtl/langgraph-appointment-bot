@@ -4,6 +4,7 @@ import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingDraft, BookingService } from "./booking-draft.js";
 import {
   interpretInteractionReply,
+  interactionChoiceEquals,
   reduceBookingSession,
   type PendingInteraction,
 } from "./booking-session.js";
@@ -58,7 +59,7 @@ export const isFaqCatalogBrowseShortcut = (
     return false;
   }
   const match = interpretInteractionReply(interaction, text);
-  return match.kind === "choice" && match.choiceId === "choose_other";
+  return match.kind === "choice" && interactionChoiceEquals(match.choiceId, "choose_other");
 };
 
 /** Apply resolveCatalogFreeText output to booking session (offer or FAQ chips). */

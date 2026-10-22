@@ -68,7 +68,7 @@ export const crmWriteDirtiesPrefetch = (messages: BaseMessage[]): boolean =>
     if (!name || !PREFETCH_INVALIDATING_TOOLS.has(name)) {
       return false;
     }
-    const body = extractMessageTextContent(message.content).trim();
+    const body = extractRawMessageText(message.content).trim();
     if (body.startsWith("Error:")) {
       return false;
     }

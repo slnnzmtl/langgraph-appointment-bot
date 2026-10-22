@@ -71,4 +71,90 @@ describe("buildAvailabilitySlotsArgs", () => {
       durationMinutes: 30,
     });
   });
+
+  it("grounds earlier beforeDate on the first offered snapshot day", () => {
+    const args = buildAvailabilitySlotsArgs({
+      direction: "earlier",
+      availabilityContext: {
+        days: [
+          {
+            date: "2026-10-22",
+            dayLabel: "22 жовт",
+            slots: [{
+              id: "s1",
+              label: "11:00",
+              dateStart: "2026-10-22T11:00:00",
+              dateEnd: "2026-10-22T11:30:00",
+            }],
+          },
+          {
+            date: "2026-10-23",
+            dayLabel: "23 жовт",
+            slots: [{
+              id: "s2",
+              label: "12:00",
+              dateStart: "2026-10-23T12:00:00",
+              dateEnd: "2026-10-23T12:30:00",
+            }],
+          },
+          {
+            date: "2026-10-24",
+            dayLabel: "24 жовт",
+            slots: [{
+              id: "s3",
+              label: "13:00",
+              dateStart: "2026-10-24T13:00:00",
+              dateEnd: "2026-10-24T13:30:00",
+            }],
+          },
+        ],
+        stepMinutes: 30,
+      },
+      scope: { durationMinutes: 30 },
+      availabilityPagedThisTurn: false,
+    });
+
+    expect(args).toEqual({
+      direction: "earlier",
+      beforeDate: "2026-10-22",
+      durationMinutes: 30,
+    });
+  });
+
+  it("grounds later afterDate on the last open snapshot day", () => {
+    const args = buildAvailabilitySlotsArgs({
+      direction: "later",
+      availabilityContext: {
+        days: [
+          {
+            date: "2026-10-22",
+            slots: [{
+              id: "s1",
+              label: "11:00",
+              dateStart: "2026-10-22T11:00:00",
+              dateEnd: "2026-10-22T11:30:00",
+            }],
+          },
+          {
+            date: "2026-10-24",
+            slots: [{
+              id: "s2",
+              label: "13:00",
+              dateStart: "2026-10-24T13:00:00",
+              dateEnd: "2026-10-24T13:30:00",
+            }],
+          },
+        ],
+        stepMinutes: 30,
+      },
+      scope: { durationMinutes: 30 },
+      availabilityPagedThisTurn: false,
+    });
+
+    expect(args).toEqual({
+      direction: "later",
+      afterDate: "2026-10-24",
+      durationMinutes: 30,
+    });
+  });
 });

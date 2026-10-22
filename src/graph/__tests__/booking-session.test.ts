@@ -11,12 +11,17 @@ import {
   clearBookingOwnedInteraction,
   closedBookingSessionUpdate,
   interpretInteractionReply,
+  interactionChoiceEquals,
   isBookingOwnedInteraction,
   reduceBookingSession,
   repairInvalidScheduleInteraction,
   type PendingInteraction,
 } from "../booking-session.js";
-import { CONSULTATION_SERVICE_ID, INTENT_SKIP_LABEL } from "../../shared/clinic-constants.js";
+import {
+  CONSULTATION_SERVICE_ID,
+  INTENT_SKIP_LABEL,
+  OTHER_DATE_LABEL,
+} from "../../shared/clinic-constants.js";
 
 const selectedSlot = {
   dateStart: "2026-10-17T11:30:00",
@@ -493,6 +498,59 @@ describe("reduceBookingSession", () => {
     expect(other.effect).toEqual({ type: "open_faq_catalog" });
   });
 
+  it("treats kernel offer_accept / offer_choose_other / note_skip as session aliases", () => {
+    const offered = reduceBookingSession(
+      { bookingDraft: null, pendingInteraction: null },
+      {
+        type: "service_offered",
+        service: { id: "svc-consult", name: "Консультація", source: "catalog" },
+        acceptLabel: "Так",
+        chooseOtherLabel: "Обрати іншу процедуру",
+      },
+    );
+    const kernelOffer = {
+      ...offered,
+      pendingInteraction: offered.pendingInteraction == null
+        ? null
+        : {
+          ...offered.pendingInteraction,
+          choices: [
+            { id: "offer_accept", label: "Так" },
+            { id: "offer_choose_other", label: "Обрати іншу процедуру" },
+          ],
+        },
+    };
+    const accepted = reduceBookingSession(kernelOffer, {
+      type: "interaction_choice",
+      choiceId: "offer_accept",
+    });
+    expect(accepted.bookingDraft?.serviceAcceptance?.status).toBe("accepted");
+
+    const other = reduceBookingSession(kernelOffer, {
+      type: "interaction_choice",
+      choiceId: "offer_choose_other",
+    });
+    expect(other.bookingDraft).toBeNull();
+    expect(other.effect).toEqual({ type: "open_faq_catalog" });
+
+    const awaitingNote = reduceBookingSession(
+      { bookingDraft: acceptedWithDate(), pendingInteraction: null },
+      { type: "slot_selected", slot: selectedSlot },
+    );
+    const kernelNote = {
+      ...awaitingNote,
+      pendingInteraction: {
+        kind: "visit_note" as const,
+        choices: [{ id: "note_skip", label: INTENT_SKIP_LABEL }],
+      },
+    };
+    const skipped = reduceBookingSession(kernelNote, {
+      type: "interaction_choice",
+      choiceId: "note_skip",
+    });
+    expect(skipped.bookingDraft?.note.status).toBe("skipped");
+  });
+
   it("service_confirm_schedule accepts the service and applies the date atomically", () => {
     const offered = reduceBookingSession(
       { bookingDraft: null, pendingInteraction: null },
@@ -856,7 +914,6 @@ describe("closedBookingSessionUpdate", () => {
     expect(update).toEqual({
       bookingDraft: null,
       pendingInteraction: null,
-      serviceChangeNotice: null,
     });
     expect(update).not.toHaveProperty("bookingNoteStatus");
     expect(update).not.toHaveProperty("selectedSlot");
@@ -992,6 +1049,17 @@ describe("availability and schedule fail-closed", () => {
   });
 });
 
+describe("interactionChoiceEquals", () => {
+  it("equates kernel and session builder ids", () => {
+    expect(interactionChoiceEquals("offer_accept", "accept")).toBe(true);
+    expect(interactionChoiceEquals("accept", "offer_accept")).toBe(true);
+    expect(interactionChoiceEquals("offer_choose_other", "choose_other")).toBe(true);
+    expect(interactionChoiceEquals("note_skip", "skip")).toBe(true);
+    expect(interactionChoiceEquals("accept", "choose_other")).toBe(false);
+    expect(interactionChoiceEquals(null, "accept")).toBe(false);
+  });
+});
+
 describe("interpretInteractionReply", () => {
   const visitNote: PendingInteraction = {
     kind: "visit_note",
@@ -1023,6 +1091,40 @@ describe("interpretInteractionReply", () => {
     expect(interpretInteractionReply(visitNote, "Так")).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(null, INTENT_SKIP_LABEL)).toEqual({ kind: "unmatched" });
     expect(interpretInteractionReply(visitNote, "  ")).toEqual({ kind: "unmatched" });
+  });
+
+  it("matches exact time labels only — bare hour prose is unmatched", () => {
+    const timeSelect: PendingInteraction = {
+      kind: "time_select",
+      date: "2026-10-20",
+      snapshot: { snapshotId: "snap-1", days: [] },
+      choices: [
+        { id: "2026-10-20T1100", label: "11:00" },
+        { id: "2026-10-20T1130", label: "11:30" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    expect(interpretInteractionReply(timeSelect, "11")).toEqual({ kind: "unmatched" });
+    expect(interpretInteractionReply(timeSelect, "11:30")).toEqual({
+      kind: "choice",
+      choiceId: "2026-10-20T1130",
+    });
+  });
+
+  it("matches exact date labels only — bare day prose is unmatched", () => {
+    const unique: PendingInteraction = {
+      kind: "date_select",
+      snapshot: { snapshotId: "snap-1", days: [] },
+      choices: [
+        { id: "2026-10-20", label: "20 жов" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    expect(interpretInteractionReply(unique, "20")).toEqual({ kind: "unmatched" });
+    expect(interpretInteractionReply(unique, "20 жов")).toEqual({
+      kind: "choice",
+      choiceId: "2026-10-20",
+    });
   });
 });
 

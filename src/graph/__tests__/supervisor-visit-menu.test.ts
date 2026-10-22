@@ -19,7 +19,6 @@ import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
-import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
   specialists,
@@ -473,30 +472,6 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       action: "cancel",
       payload: { meetingId: "m-2" },
     });
-
-    const commandPrepare = createAgentCommandPrepareNode();
-    const prepared = await commandPrepare(
-      supervisorState({
-        messages: [new HumanMessage(label)],
-        bookingDraft: afterPick.bookingDraft ?? null,
-        bookingContext: twoMeetings,
-        pendingInteraction: null,
-        agentMessages: [new HumanMessage(label)],
-      }),
-    );
-
-    expect(unwrapCommandUpdate(prepared).agentMessages).toBeInstanceOf(Overwrite);
-    const preparedMessages = (unwrapCommandUpdate(prepared).agentMessages as Overwrite<AIMessage[]>).value;
-    const ai = [...preparedMessages].reverse().find((m) => (m.tool_calls?.length ?? 0) > 0);
-    expect(ai).toMatchObject({
-      tool_calls: [
-        expect.objectContaining({
-          name: "cancel_meeting",
-          args: expect.objectContaining({ meetingId: "m-2" }),
-        }),
-      ],
-    });
-    expect(unwrapCommandUpdate(prepared).pendingInteraction?.kind).toBe("mutation_confirm");
   });
 
   it("clears a seeded cancel pendingCommand on a later free-text turn", async () => {
@@ -924,6 +899,34 @@ describe("createClinicSupervisorNode code-owned FINISH menus", () => {
       action: "cancel",
       payload: { meetingId: "m-1" },
     });
+  });
+
+  it("seeds cancel after a closed success handoff when model returns visit_cancel", async () => {
+    invoke.mockResolvedValue({ next: "booking", intent: "visit_cancel" });
+    const update = await nodeWithPrefetch(meetings)(
+      supervisorState({
+        messages: [
+          new AIMessage("Готово! Запис перенесено."),
+          new HumanMessage("скасувати запис"),
+        ],
+        bookingDraft: null,
+        pendingInteraction: null,
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyText: "Готово! Запис перенесено.",
+          replyButtons: ["Мій запис", "Послуги", "Адреса"],
+        },
+      }),
+    );
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(update.next).toBe("booking");
+    expect(unwrapCommandUpdate(update).bookingDraft?.pendingCommand).toMatchObject({
+      action: "cancel",
+      payload: { meetingId: "m-1" },
+    });
+    expect(unwrapCommandUpdate(update).bookingDraft?.mode).not.toBe("reschedule");
   });
 
   it("opens the meeting picker for visit_cancel intent with 2+ visits", async () => {

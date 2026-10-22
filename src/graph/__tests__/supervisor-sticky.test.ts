@@ -19,7 +19,6 @@ import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
 } from "../booking-session.js";
-import { createAgentCommandPrepareNode } from "../agent-loop/index.js";
 import type { ILLMConnector } from "../types.js";
 import {
   specialists,
@@ -64,6 +63,38 @@ describe("cancel-and-rebook routing", () => {
         name: "Колаген",
         source: "catalog",
       }),
+      lastHandoff: {
+        agentId: "faq",
+        agentName: "FAQ",
+        status: "ok",
+        replyText: "offer",
+      },
+    });
+
+    expect(stickyContinueAgentId(state)).toBe("booking");
+  });
+
+  it("routes Так on a kernel offer_accept card to booking", () => {
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "pending",
+      service: { id: CONSULTATION_SERVICE_ID, name: "Консультація", source: "catalog" },
+    };
+    const state = supervisorState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "service_confirm",
+        service: {
+          id: CONSULTATION_SERVICE_ID,
+          name: "Консультація",
+          source: "catalog",
+        },
+        choices: [
+          { id: "offer_accept", label: "Так" },
+          { id: "offer_choose_other", label: "Обрати іншу процедуру" },
+        ],
+      },
       lastHandoff: {
         agentId: "faq",
         agentName: "FAQ",
@@ -762,7 +793,7 @@ describe("createClinicSupervisorNode availability session reset", () => {
     bindRoutingTools.mockClear();
   });
 
-  it.each(["Записатись", "Послуги", "Обрати іншу процедуру"] as const)(
+  it.each(["Записатись", "Обрати іншу процедуру"] as const)(
     "nulls availabilityContext on owned label %s (prefetch reuse)",
     async (label) => {
       invoke.mockResolvedValue({ next: label === "Записатись" ? "booking" : "faq", reply: "ok" });
@@ -801,6 +832,52 @@ describe("createClinicSupervisorNode availability session reset", () => {
       expect(update.availabilityContext).toBeNull();
     },
   );
+
+  it("closes booking availability on «Послуги» without the supervisor LLM", async () => {
+    const prefetch = vi.fn(async () => ({
+      contactContext: listedContact,
+      bookingContext: listedMeetings,
+    }));
+    const node = createClinicSupervisorNode({
+      specialists,
+      supervisorLlm,
+      loadSupervisorPrompt: () => "STATIC",
+      prefetch,
+    });
+
+    const update = await node(
+      supervisorState({
+        lastHandoff: {
+          agentId: "booking",
+          agentName: "Booking",
+          status: "ok",
+          replyButtons: ["28 вересня", "Інша дата"],
+        },
+        messages: [
+          new AIMessage("Який день вам зручний?"),
+          new HumanMessage("Послуги"),
+        ],
+        contactContext: listedContact,
+        bookingContext: listedMeetings,
+        availabilityContext: pagedSnapshot,
+        bookingDraft: createEmptyBookingDraft(),
+        pendingInteraction: {
+          kind: "date_select",
+          snapshot: { snapshotId: "sticky-test", days: [] },
+          choices: [{ id: "2026-10-05", label: "5 жовтня" }],
+        },
+        prefetchFetchedAt: Date.now(),
+      }),
+    );
+
+    expect(prefetch).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.next).toBe("faq");
+    expect(update.availabilityContext).toBeNull();
+    expect(update.availabilityCursor).toBeNull();
+    expect(update.bookingDraft).toBeNull();
+    expect(update.pendingInteraction).toBeNull();
+  });
 
   it("nulls availabilityContext when FAQ routes to booking", async () => {
     invoke.mockResolvedValue({ next: "booking", intent: "consultation_request" });

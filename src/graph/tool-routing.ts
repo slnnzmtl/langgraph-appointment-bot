@@ -11,6 +11,22 @@ export const findLastAIMessage = (messages: BaseMessage[]): AIMessage | undefine
   return undefined;
 };
 
+export const findToolMessageByCallId = (
+  messages: BaseMessage[] | undefined,
+  toolCallId: string | null | undefined,
+): ToolMessage | null => {
+  if (messages == null || toolCallId == null) {
+    return null;
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message instanceof ToolMessage && message.tool_call_id === toolCallId) {
+      return message;
+    }
+  }
+  return null;
+};
+
 export const hasPendingToolCalls = (messages: BaseMessage[]): boolean => {
   const aiMessage = findLastAIMessage(messages);
   const toolCalls = aiMessage?.tool_calls;

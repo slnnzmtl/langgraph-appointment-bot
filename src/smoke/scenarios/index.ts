@@ -17,7 +17,6 @@ import {
   replaceRebookScenario,
   rescheduleScenario,
 } from "./booking-write.js";
-import { consultationSwitchScenario } from "./consultation-switch.js";
 import {
   faqCatalogCloseScenario,
   faqCatalogScenario,
@@ -33,7 +32,6 @@ import { supervisorMenuScenario } from "./supervisor-menu.js";
 
 export const ALL_SCENARIOS: SmokeScenario[] = [
   bootstrapScenario,
-  consultationSwitchScenario,
   faqHoursScenario,
   faqCatalogScenario,
   faqCatalogCloseScenario,

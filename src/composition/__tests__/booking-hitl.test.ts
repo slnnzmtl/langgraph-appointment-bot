@@ -1,150 +1,98 @@
-import { HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
-import { resumeConfirmBookingHitl } from "../booking-hitl.js";
+import {
+  hasLiveMutationConfirmHitl,
+  resumeConfirmBookingHitl,
+} from "../booking-hitl.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../../graph/booking-draft.js";
 
-const confirmingDraft = {
-  version: 1,
-  mode: "create" as const,
-  phase: "confirming" as const,
-  serviceAcceptance: {
-    status: "accepted" as const,
-    service: { id: "svc-1", name: "Процедура", source: "catalog" as const },
-  },
-  selectedDate: "2026-10-27",
-  selectedSlot: {
-    dateStart: "2026-10-27T11:00:00",
-    dateEnd: "2026-10-27T11:30:00",
-    label: "11:00",
-  },
-  requestedTime: null,
-  note: { status: "skipped" as const },
-  contactId: "c-1",
-  pendingCommand: {
-    action: "create" as const,
-    payload: {
-      serviceId: "svc-1",
-      contactId: "c-1",
-      dateStart: "2026-10-27T11:00:00",
-      dateEnd: "2026-10-27T11:30:00",
-    },
-  },
-  replacement: null,
-};
-
-const mutationConfirm = {
-  kind: "mutation_confirm" as const,
-  action: "create" as const,
-  choices: [
-    { id: "confirm", label: "✅" },
-    { id: "decline", label: "❌" },
-  ],
+const liveDraft = () => {
+  let draft = reduceBookingDraft(createEmptyBookingDraft(), {
+    type: "service_selected",
+    service: { id: "svc-1", source: "catalog" },
+    accepted: true,
+  });
+  draft = reduceBookingDraft(draft, {
+    type: "command_prepared",
+    command: { action: "create", payload: { serviceId: "svc-1" } },
+  });
+  draft = reduceBookingDraft(draft, {
+    type: "decision_set",
+    decision: { kind: "mutation_confirm", action: "create", effectId: "eff_1" },
+  });
+  draft = reduceBookingDraft(draft, {
+    type: "choices_offered",
+    choiceIds: ["confirm", "decline", "menu"],
+  });
+  return draft;
 };
 
 describe("resumeConfirmBookingHitl", () => {
-  it("maps ✅ / ❌ to confirmed resume without session patching", () => {
-    expect(
-      resumeConfirmBookingHitl({
-        text: "✅",
-        bookingDraft: confirmingDraft,
-        pendingInteraction: mutationConfirm,
-      }),
-    ).toEqual({
-      resume: { confirmed: true },
-      update: {},
+  it("treats schema-2 alone as not live when mutation_confirm is gone", () => {
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-1", source: "catalog" },
+      accepted: true,
     });
-
-    const declined = resumeConfirmBookingHitl({
-      text: "❌",
-      bookingDraft: confirmingDraft,
-      pendingInteraction: mutationConfirm,
-      bookingUpdate: { bookingSchemaVersion: 1 },
-    });
-    expect(declined.resume).toEqual({ confirmed: false });
-    expect(declined.update).toEqual({ bookingSchemaVersion: 1 });
-  });
-
-  it("maps Головне меню and typed variants to left with a HumanMessage", () => {
-    for (const text of ["Головне меню", "головне меню", "MAIN MENU", "main menu"]) {
-      const result = resumeConfirmBookingHitl({
-        text,
-        bookingDraft: confirmingDraft,
-        pendingInteraction: mutationConfirm,
-        bookingUpdate: { bookingSchemaVersion: 1 },
-      });
-      expect(result.resume).toEqual({ left: true });
-      expect(result.update.bookingSchemaVersion).toBe(1);
-      expect(result.update.bookingDraft).toBeUndefined();
-      expect(result.update.pendingInteraction).toBeUndefined();
-      expect(result.update.messages).toEqual([new HumanMessage(text)]);
-    }
-  });
-
-  it("resumes free text as userReply with a HumanMessage while mutation_confirm is open", () => {
-    const result = resumeConfirmBookingHitl({
-      text: "Яка адреса?",
-      bookingDraft: confirmingDraft,
-      pendingInteraction: mutationConfirm,
-      bookingUpdate: { bookingSchemaVersion: 1 },
-    });
-    expect(result.resume).toEqual({ userReply: "Яка адреса?" });
-    expect(result.update.bookingSchemaVersion).toBe(1);
-    expect(result.update.bookingDraft).toBeUndefined();
-    expect(result.update.pendingInteraction).toBeUndefined();
-    expect(result.update.messages).toEqual([new HumanMessage("Яка адреса?")]);
-  });
-
-  it("maps NL affirm / decline when mutation_confirm is open", () => {
     expect(
-      resumeConfirmBookingHitl({
-        text: "Так, підтверджую",
-        bookingDraft: confirmingDraft,
-        pendingInteraction: mutationConfirm,
-      }).resume,
-    ).toEqual({ confirmed: true });
-
-    expect(
-      resumeConfirmBookingHitl({
-        text: "Ні, не треба",
-        bookingDraft: confirmingDraft,
-        pendingInteraction: mutationConfirm,
-      }).resume,
-    ).toEqual({ confirmed: false });
-  });
-
-  it("maps ✅ / ❌ without mutation_confirm (version-0 interrupt path)", () => {
-    expect(
-      resumeConfirmBookingHitl({
-        text: "✅",
-        bookingDraft: confirmingDraft,
+      hasLiveMutationConfirmHitl({
+        bookingDraft: draft,
         pendingInteraction: null,
       }),
-    ).toEqual({
-      resume: { confirmed: true },
-      update: {},
+    ).toBe(false);
+  });
+
+  it("expires ✅ after pendingDecision is cleared (no CRM confirm)", () => {
+    const draft = reduceBookingDraft(liveDraft(), { type: "decision_cleared" });
+    const draftWithoutCommand = draft == null
+      ? null
+      : { ...draft, pendingCommand: null };
+    const result = resumeConfirmBookingHitl({
+      text: "✅",
+      bookingDraft: draftWithoutCommand,
+      pendingInteraction: { kind: "mutation_confirm", action: "create", choices: [] },
     });
-    expect(
-      resumeConfirmBookingHitl({
-        text: "❌",
-        bookingDraft: confirmingDraft,
-        pendingInteraction: null,
-        bookingUpdate: { bookingSchemaVersion: 1 },
-      }),
-    ).toEqual({
-      resume: { confirmed: false },
-      update: { bookingSchemaVersion: 1 },
+    expect(result.resume).toEqual({ confirmed: false });
+    expect(result.update.bookingDraft).toMatchObject({
+      pendingCommand: null,
+      pendingDecision: null,
     });
   });
 
-  it("keeps NL affirm as userReply when mutation_confirm is absent", () => {
+  it("confirms live mutation_confirm via callback choice id", () => {
+    const draft = liveDraft();
     const result = resumeConfirmBookingHitl({
-      text: "Так, підтверджую",
-      bookingDraft: confirmingDraft,
-      pendingInteraction: null,
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
     });
-    expect(result.resume).toEqual({ userReply: "Так, підтверджую" });
-    expect(result.update.messages).toEqual([
-      new HumanMessage("Так, підтверджую"),
-    ]);
+    expect(result.resume).toEqual({ confirmed: true });
+  });
+
+  it("ignores typed emoji when live confirm requires callback or exact tap with live card", () => {
+    const draft = liveDraft();
+    expect(hasLiveMutationConfirmHitl({
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [],
+      },
+    })).toBe(true);
+    const result = resumeConfirmBookingHitl({
+      text: "✅",
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [],
+      },
+    });
+    expect(result.resume).toEqual({ confirmed: true });
   });
 });

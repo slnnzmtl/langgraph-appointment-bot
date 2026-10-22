@@ -1,5 +1,8 @@
 import type { BaseMessage } from "@langchain/core/messages";
-import { availabilityCursorFromContext } from "../../../tools/availability-tools.js";
+import {
+  availabilityCursorFromContext,
+  type AvailabilityContext,
+} from "../../../tools/availability-tools.js";
 import {
   availabilityMatchesBooking,
   reduceBookingDraft,
@@ -9,24 +12,57 @@ import { reduceBookingSession } from "../../booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { captureAvailabilityFromMessages } from "../protocol/index.js";
 
-/** Capture / reconcile availability when mutation did not clear it. */
+const capturedAvailabilityForDraft = (
+  state: ClinicState,
+  resultMessages: BaseMessage[],
+): AvailabilityContext | null | undefined => {
+  const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
+  if (capturedAvailability === undefined) {
+    return undefined;
+  }
+  const acceptedService = state.bookingDraft?.serviceAcceptance;
+  return capturedAvailability != null
+    && acceptedService?.status === "accepted"
+    ? { ...capturedAvailability, serviceId: acceptedService.service.id }
+    : capturedAvailability;
+};
+
+/**
+ * Stamp availabilityContext/cursor for decide read models.
+ * Booking ToolNode uses this only — never reduceBookingSession.
+ */
+export const captureAvailabilityReadModel = (input: {
+  state: ClinicState;
+  resultMessages: BaseMessage[];
+}): ClinicStateUpdate => {
+  const bookingAvailability = capturedAvailabilityForDraft(
+    input.state,
+    input.resultMessages,
+  );
+  if (bookingAvailability === undefined) {
+    return {};
+  }
+  return {
+    availabilityContext: bookingAvailability,
+    availabilityCursor: availabilityCursorFromContext(bookingAvailability),
+  };
+};
+
+/** FAQ path: capture plus session/draft reconciliation. */
 export const projectAvailabilityEffects = (input: {
   state: ClinicState;
   resultMessages: BaseMessage[];
 }): ClinicStateUpdate => {
   const { state, resultMessages } = input;
-  const patch: ClinicStateUpdate = {};
-  const capturedAvailability = captureAvailabilityFromMessages(resultMessages);
-  if (capturedAvailability === undefined) {
-    return patch;
+  const bookingAvailability = capturedAvailabilityForDraft(state, resultMessages);
+  if (bookingAvailability === undefined) {
+    return {};
   }
-  const acceptedService = state.bookingDraft?.serviceAcceptance;
-  const bookingAvailability = capturedAvailability != null
-    && acceptedService?.status === "accepted"
-    ? { ...capturedAvailability, serviceId: acceptedService.service.id }
-    : capturedAvailability;
-  patch.availabilityContext = bookingAvailability;
-  patch.availabilityCursor = availabilityCursorFromContext(bookingAvailability);
+  const patch: ClinicStateUpdate = {
+    availabilityContext: bookingAvailability,
+    availabilityCursor: availabilityCursorFromContext(bookingAvailability),
+  };
+
   const reconciliation = reconcileRequestedTime(state.bookingDraft, bookingAvailability);
   let bookingDraft = state.bookingDraft;
   let pendingInteraction = state.pendingInteraction ?? null;

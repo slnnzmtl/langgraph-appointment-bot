@@ -52,3 +52,8 @@ export {
   humanProvidedName,
   normalizeNameForMatch,
 } from "./patient-evidence.js";
+export {
+  allowlistedInformationalFacts,
+  effectResultFromToolMessages,
+  failClosedForPending,
+} from "./effect-result.js";

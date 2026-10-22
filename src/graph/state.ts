@@ -7,11 +7,10 @@ import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
+import type { BookingDecision } from "./booking-domain/decision.js";
 import type { BookingDraft } from "./booking-draft.js";
 import type { PendingInteraction } from "./booking-session.js";
 import type { SupervisorIntent } from "./routing.js";
-
-export type CancellationPurpose = "direct" | "replacement";
 
 export type ClinicStateAnnotationOptions = {
   messageHistoryMaxTokens: number;
@@ -88,21 +87,21 @@ export const createClinicStateAnnotation = ({
       default: () => null,
     }),
     /**
-     * @deprecated Legacy checkpoint projection — read only in
-     * `upgradeBookingDraftCheckpoint` / adapter upgrade. Live graph code must use
-     * `bookingDraft`. Cleared on upgrade; remove these channels once production
-     * checkpoints no longer depend on them.
+     * @deprecated Legacy checkpoint projection — migration / upgrade boundary only.
+     * Live graph nodes must never write these; use `bookingDraft` instead.
+     * Cleared on upgrade. Keep channels until production rows are already_current
+     * (scanner) so versionless checkpoints can still be read and stamped.
      */
     bookingNoteStatus: Annotation<BookingNoteStatus>({
       reducer: (_left, right) => right,
       default: () => "unasked",
     }),
-    /** @deprecated Legacy checkpoint projection — migration boundary only (see bookingNoteStatus). */
+    /** @deprecated Migration boundary only — see bookingNoteStatus. */
     selectedSlot: Annotation<SelectedBookingSlot | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),
-    /** @deprecated Legacy checkpoint projection — migration boundary only (see bookingNoteStatus). */
+    /** @deprecated Migration boundary only — see bookingNoteStatus. */
     selectedAvailabilityDate: Annotation<string | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
@@ -114,21 +113,13 @@ export const createClinicStateAnnotation = ({
     }),
     /**
      * Explicit patient response the workflow is waiting for. Booking-owned kinds
-     * (visit_note, service_or_note, service_candidate) are opened only via
-     * reduceBookingSession. Missing on old checkpoints reads as null.
+     * are projected from BookingDecision.card via projectPendingInteraction in
+     * booking__decide (not reduceBookingSession). FAQ may still open
+     * service_candidate with owner=faq. Missing on old checkpoints reads as null.
      */
     pendingInteraction: Annotation<PendingInteraction | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
-    }),
-    /**
-     * Set by booking prepare from the inbound state when the note orchestrator
-     * owns this message. Cleared by the orchestrator. Prevents same-turn slot
-     * picks that open visit_note from immediately re-entering the orchestrator.
-     */
-    noteOrchQueued: Annotation<boolean>({
-      reducer: (_left, right) => right,
-      default: () => false,
     }),
     /**
      * One-turn FAQ prepare evidence: true when this prepare produced catalog chips
@@ -140,33 +131,26 @@ export const createClinicStateAnnotation = ({
       default: () => false,
     }),
     /**
-     * One-turn booking prepare evidence: true when this prepare created or restored
-     * UI that must render immediately (consultation / procedure confirm). Cleared
-     * next prepare. Unmatched prose on an already-open confirm must not skip the
-     * booking LLM — do not infer from contact ownership.
-     */
-    bookingSkipLlm: Annotation<boolean>({
-      reducer: (_left, right) => right,
-      default: () => false,
-    }),
-    /**
-     * One-turn notice after a mid-booking service change. Prefixed onto the next
-     * code-owned DATE card, then cleared. Missing on old checkpoints reads as null.
-     */
-    serviceChangeNotice: Annotation<string | null>({
-      reducer: (left, right) => (right === undefined ? left : right),
-      default: () => null,
-    }),
-    /**
      * Booking checkpoint schema. 0 = unversioned legacy row or brand-new thread;
-     * 1 = current. Missing channels read as 0 only when reducer + default are both set.
+     * 2 = current atomic cutover. Missing channels read as 0.
      */
     bookingSchemaVersion: Annotation<number>({
       reducer: (_left, right) => right,
       default: () => 0,
     }),
-    /** Purpose of the currently pending/just-completed cancellation command. */
-    pendingCancellationPurpose: Annotation<CancellationPurpose | null>({
+    /**
+     * Closed semantic decision for the non-authoritative booking__respond node.
+     * Cleared after respond. Never written by the response model.
+     */
+    bookingDecision: Annotation<BookingDecision | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /**
+     * Exact Telegram inline callback_data choice id for this turn.
+     * Set by the adapter; consumed and cleared by booking__decide.
+     */
+    inboundChoiceId: Annotation<string | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),

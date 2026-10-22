@@ -11,40 +11,38 @@ import {
 import type { McpCallTool } from "../shared/mcp.js";
 import {
   extractContactIdFromSearchResult,
-  filterBookingInformationalTools,
   lookupContactByTelegram,
   lookupPlannedMeetings,
   normalizeContactLookupResult,
 } from "../tools/index.js";
-import { kyivToday } from "../tools/availability-slots.js";
 import { lookupLatestHeldMeeting } from "../tools/planned-meetings.js";
 import { normalizeListServicesResult } from "../tools/service-tools.js";
-import { assertBoundAgentToolNames } from "./bound-tools.js";
-import { resolveBookingScheduleRequest } from "./booking-schedule.js";
 import {
-  createBookingFinalizeNode,
+  assertBoundAgentToolNames,
+  assertBookingRuntimeToolNames,
+} from "./bound-tools.js";
+import {
   createFaqFinalizeNode,
-  createAgentMutationFinalizeNode,
-  createAgentCommandPrepareNode,
   createAgentLlmNode,
-  createBookingPrepareNode,
   createFaqPrepareNode,
   createAgentToolsNode,
-  matchAvailabilityDay,
-  matchAvailabilitySlot,
   routeAfterAgentPrepare,
   routeAfterAgentLlm,
   routeAfterAgentTools,
+  routeAfterBookingTools,
 } from "./agent-loop/index.js";
+import {
+  BOOKING_DECIDE_NODE,
+  BOOKING_EFFECTS_NODE,
+  createBookingDecideNode,
+} from "./agent-loop/booking-decide-nodes.js";
+import {
+  BOOKING_RESPOND_NODE,
+  createBookingRespondNode,
+} from "./agent-loop/booking-respond.js";
+import { createBookingTurnInterpreter } from "./agent-loop/booking-turn-interpreter.js";
 import { createNoteTurnClassifier } from "./booking-note-classifier.js";
-import { createContactNameClassifier } from "./contact-name-classifier.js";
 import {
-  createBookingInteractionRenderNode,
-  createBookingNoteOrchestratorNode,
-  type ResolveServiceChange,
-} from "./booking-note-orchestrator.js";
-import {
-  createResolveServiceChange,
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
 } from "./service-resolution.js";
@@ -64,6 +62,7 @@ import {
   type ClinicSpecialists,
   type ILLMConnector,
 } from "./types.js";
+import { hasPendingToolCalls } from "./tool-routing.js";
 
 export { PREFETCH_TTL_MS };
 
@@ -72,19 +71,9 @@ const FAQ_LLM = "faq__llm" as const;
 const FAQ_TOOLS = "faq__tools" as const;
 const FAQ_FINALIZE = "faq__finalize" as const;
 
-const BOOKING_PREPARE = "booking__prepare" as const;
-const BOOKING_COMMAND_PREPARE = "booking__command_prepare" as const;
-const BOOKING_LLM = "booking__llm" as const;
-const BOOKING_TOOLS = "booking__tools" as const;
-const BOOKING_FINALIZE = "booking__finalize" as const;
-const BOOKING_MUTATION_FINALIZE = "booking__mutation_finalize" as const;
-const BOOKING_NOTE_ORCH = "booking__note_orchestrator" as const;
-const BOOKING_INTERACTION_RENDER = "booking__interaction_render" as const;
-
-/** Fallback when no MCP callTool is wired (unit graphs without CRM). */
-const unresolvedServiceChange: ResolveServiceChange = async () => ({
-  type: "service_unresolved",
-});
+const BOOKING_DECIDE = BOOKING_DECIDE_NODE;
+const BOOKING_TOOLS = BOOKING_EFFECTS_NODE;
+const BOOKING_RESPOND = BOOKING_RESPOND_NODE;
 
 export type CompileClinicGraphOptions = {
   specialists: ClinicSpecialists;
@@ -98,16 +87,14 @@ export type CompileClinicGraphOptions = {
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
   contextCache?: SupervisorContextCacheOptions;
-  /** When set, supervisor prefetches Telegram contact and planned meetings. Booking prepare reuses that state. */
+  /** When set, supervisor prefetches Telegram contact and planned meetings. */
   bookingPrefetchCallTool?: McpCallTool;
   /** Override checkpoint prefetch TTL (default PREFETCH_TTL_MS). */
   prefetchTtlMs?: number;
-  /** Injected note-turn classifier (tests). Defaults to Gemini structured output. */
+  /** Injected note-turn classifier (tests / legacy FAQ helpers). */
   classifyNoteTurn?: ReturnType<typeof createNoteTurnClassifier>;
-  /** Injected contact-name classifier (tests). Defaults to Gemini structured output. */
-  classifyContactName?: ReturnType<typeof createContactNameClassifier>;
-  /** Injected service resolver (tests). Defaults to unresolved until phase 4. */
-  resolveServiceChange?: ResolveServiceChange;
+  /** Injected booking turn interpreter (tests). */
+  interpretBookingTurn?: ReturnType<typeof createBookingTurnInterpreter>;
 };
 
 const assertClinicSpecialists = (specialists: ClinicSpecialists): void => {
@@ -183,23 +170,15 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const faqTools = FAQ_TOOLS;
   const faqFinalize = FAQ_FINALIZE;
 
-  const bookingPrepare = BOOKING_PREPARE;
-  const bookingCommandPrepare = BOOKING_COMMAND_PREPARE;
-  const bookingLlm = BOOKING_LLM;
+  const bookingDecide = BOOKING_DECIDE;
   const bookingTools = BOOKING_TOOLS;
-  const bookingFinalize = BOOKING_FINALIZE;
-  const bookingMutationFinalize = BOOKING_MUTATION_FINALIZE;
-  const bookingNoteOrch = BOOKING_NOTE_ORCH;
-  const bookingInteractionRender = BOOKING_INTERACTION_RENDER;
+  const bookingRespond = BOOKING_RESPOND;
 
   const faqToolList = options.agentTools[FAQ_AGENT_ID] ?? [];
   const bookingToolList = options.agentTools[BOOKING_AGENT_ID] ?? [];
-  const bookingLlmTools = filterBookingInformationalTools(bookingToolList);
+  // FAQ still has an LLM bind; booking ToolNode is runtime-only (no booking LLM).
   assertBoundAgentToolNames(FAQ_AGENT_ID, faqToolList);
-  assertBoundAgentToolNames(BOOKING_AGENT_ID, bookingLlmTools);
-
-  const classifyContactName = options.classifyContactName
-    ?? createContactNameClassifier(options.supervisorLlm);
+  assertBookingRuntimeToolNames(bookingToolList);
 
   const llmContextCache = options.contextCache && options.agentModelName
     ? {
@@ -211,20 +190,16 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
       }
     : {};
 
-  const classify = options.classifyNoteTurn
-    ?? createNoteTurnClassifier(options.supervisorLlm);
-  const resolve = options.resolveServiceChange
-    ?? (callTool != null
-      ? createResolveServiceChange(callTool, options.supervisorLlm)
-      : unresolvedServiceChange);
+  const interpretBookingTurn = options.interpretBookingTurn
+    ?? createBookingTurnInterpreter(options.supervisorLlm);
 
   const supervisorRoutes: Record<
     ClinicRouteId,
-    typeof END | typeof FAQ_PREPARE | typeof BOOKING_PREPARE
+    typeof END | typeof FAQ_PREPARE | typeof BOOKING_DECIDE
   > = {
     [FINISH_ROUTE]: END,
     [FAQ_AGENT_ID]: faqPrepare,
-    [BOOKING_AGENT_ID]: bookingPrepare,
+    [BOOKING_AGENT_ID]: bookingDecide,
   };
 
   const compiled = new StateGraph(stateAnnotation)
@@ -290,149 +265,54 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     )
     .addEdge(faqFinalize, END)
     .addNode(
-      bookingPrepare,
-      createBookingPrepareNode({ classifyContactName }),
-    )
-    .addNode(
-      bookingLlm,
-      createAgentLlmNode({
-        agent: bookingAgent,
-        model: options.agentModel,
-        tools: bookingLlmTools,
-        formatSystemMetadata: options.formatSystemMetadata,
-        ...llmContextCache,
+      bookingDecide,
+      createBookingDecideNode({
+        interpretTurn: interpretBookingTurn,
+        selectCandidates: faqSelectCandidates,
+        partitionCandidates: faqPartitionCandidates,
       }),
     )
     .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))
     .addNode(
-      bookingFinalize,
-      createBookingFinalizeNode(bookingAgent),
-      { ends: [END, "supervisor"] },
-    )
-    .addNode(
-      bookingCommandPrepare,
-      createAgentCommandPrepareNode({
-        tools: bookingTools,
-        interactionRender: bookingInteractionRender,
-        llm: bookingLlm,
-        finalize: bookingFinalize,
+      bookingRespond,
+      createBookingRespondNode({
+        llm: options.supervisorLlm,
+        agentName: bookingAgent.name,
       }),
-      { ends: [bookingTools, bookingInteractionRender, bookingLlm, bookingFinalize] },
-    )
-    .addNode(
-      bookingMutationFinalize,
-      createAgentMutationFinalizeNode(bookingAgent),
-      { ends: [END, "supervisor"] },
-    )
-    .addNode(
-      bookingNoteOrch,
-      createBookingNoteOrchestratorNode({
-        classify,
-        resolveServiceChange: resolve,
-        matchScheduleFromState: (text, state) => {
-          const days = state.availabilityContext?.days ?? [];
-          const day = matchAvailabilityDay(text, days);
-          if (day) {
-            return { type: "date_selected", date: day.date };
-          }
-          const slot = matchAvailabilitySlot(
-            text,
-            state.availabilityContext,
-            state.bookingDraft?.selectedDate,
-          );
-          if (slot != null) {
-            if (
-              state.pendingInteraction?.kind === "visit_note"
-              && state.bookingDraft?.selectedSlot?.dateStart === slot.dateStart
-            ) {
-              return { type: "same_slot_ignored" };
-            }
-            return { type: "slot_selected", slot };
-          }
-          const schedule = resolveBookingScheduleRequest(text, kyivToday(), {
-            availabilityContext: state.availabilityContext,
-            availabilityCursor: state.availabilityCursor,
-            selectedDate: state.bookingDraft?.selectedDate,
-          });
-          if (schedule?.kind === "exact" && schedule.date != null) {
-            return { type: "date_selected", date: schedule.date };
-          }
-          return null;
-        },
-        nodes: {
-          bookingLlm,
-          commandPrepare: bookingCommandPrepare,
-          interactionRender: bookingInteractionRender,
-          faqPrepare,
-        },
-      }),
-      {
-        ends: [bookingLlm, bookingCommandPrepare, bookingInteractionRender, faqPrepare],
-      },
-    )
-    .addNode(
-      bookingInteractionRender,
-      createBookingInteractionRenderNode(bookingAgent),
-    )
-    .addEdge(bookingInteractionRender, bookingFinalize)
-    .addEdge(bookingMutationFinalize, END)
-    .addConditionalEdges(
-      bookingPrepare,
-      (state: ClinicState) =>
-        routeAfterAgentPrepare(
-          state,
-          bookingLlm,
-          bookingCommandPrepare,
-          bookingNoteOrch,
-          bookingFinalize,
-          BOOKING_AGENT_ID,
-        ),
-      {
-        [bookingLlm]: bookingLlm,
-        [bookingFinalize]: bookingFinalize,
-        [bookingCommandPrepare]: bookingCommandPrepare,
-        [bookingNoteOrch]: bookingNoteOrch,
-      },
     )
     .addConditionalEdges(
-      bookingLlm,
-      (state: ClinicState) =>
-        routeAfterAgentLlm(
-          state,
-          bookingAgent.maxSteps,
-          bookingTools,
-          bookingFinalize,
-          bookingCommandPrepare,
-        ),
+      bookingDecide,
+      (state: ClinicState) => {
+        // REPLACE cancel with no accepted service: decide sets next=faq.
+        if (state.next === FAQ_AGENT_ID) {
+          return faqPrepare;
+        }
+        if (hasPendingToolCalls(state.agentMessages)) {
+          return bookingTools;
+        }
+        return bookingRespond;
+      },
       {
+        [faqPrepare]: faqPrepare,
         [bookingTools]: bookingTools,
-        [bookingFinalize]: bookingFinalize,
-        [bookingCommandPrepare]: bookingCommandPrepare,
+        [bookingRespond]: bookingRespond,
       },
     )
     .addConditionalEdges(
       bookingTools,
       (state: ClinicState) =>
-        routeAfterAgentTools(state, {
-          llmName: bookingLlm,
+        routeAfterBookingTools(state, {
+          decideName: bookingDecide,
           toolsName: bookingTools,
-          mutationFinalizeName: bookingMutationFinalize,
-          commandPrepareName: bookingCommandPrepare,
-          noteOrchestratorName: bookingNoteOrch,
-          finalizeName: bookingFinalize,
-          faqPrepareName: faqPrepare,
+          respondName: bookingRespond,
         }),
       {
-        [bookingLlm]: bookingLlm,
+        [bookingDecide]: bookingDecide,
         [bookingTools]: bookingTools,
-        [bookingMutationFinalize]: bookingMutationFinalize,
-        [bookingCommandPrepare]: bookingCommandPrepare,
-        [bookingNoteOrch]: bookingNoteOrch,
-        [bookingFinalize]: bookingFinalize,
-        [faqPrepare]: faqPrepare,
+        [bookingRespond]: bookingRespond,
       },
     )
-    .addEdge(bookingFinalize, END)
+    .addEdge(bookingRespond, END)
     .addEdge(START, "supervisor")
     .addConditionalEdges(
       "supervisor",

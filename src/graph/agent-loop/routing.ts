@@ -1,14 +1,13 @@
 import { FAQ_AGENT_ID } from "../types.js";
-import { hasPendingToolCalls, lastMessageRequestsTools } from "../tool-routing.js";
-import type { ClinicState } from "../state.js";
-import { interpretInteractionReply } from "../booking-session.js";
-import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
 import {
-  bookingOutcomeNeedsPrepare,
-  hasPendingConfirmationChatOther,
-  resolveBookingCommand,
-  type BookingCommandOutcome,
-} from "./booking-command.js";
+  hasPendingToolCalls,
+  lastMessageRequestsTools,
+} from "../tool-routing.js";
+import type { ClinicState } from "../state.js";
+import {
+  interpretInteractionReply,
+  interactionChoiceEquals,
+} from "../booking-session.js";
 import {
   lastPatientText,
   phoneLookupFailedThisTurn,
@@ -16,89 +15,44 @@ import {
   terminalMeetingMutationOutcome,
 } from "./protocol/index.js";
 
-const routeNeedsCommandPrepare = (state: ClinicState): boolean =>
-  bookingOutcomeNeedsPrepare(resolveBookingCommand(state));
-
 /**
- * Project a planner outcome onto a named graph node. FAQ prepare is graph
- * topology (catalog owner), not a second copy of booking policy.
+ * FAQ LLM → tools or finalize. Booking no longer uses this path
+ * (decide → tools → respond owns booking routing in compile.ts).
  */
-const routeFromBookingOutcome = (
-  outcome: BookingCommandOutcome,
-  options: {
-    commandPrepareName?: string;
-    finalizeName?: string;
-    faqPrepareName?: string;
-    llmName: string;
-  },
-): string | null => {
-  if (outcome.kind === "finalize") {
-    if (outcome.reason === "replacement_catalog" && options.faqPrepareName) {
-      return options.faqPrepareName;
-    }
-    if (options.finalizeName) {
-      return options.finalizeName;
-    }
-    return null;
-  }
-  if (options.commandPrepareName && bookingOutcomeNeedsPrepare(outcome)) {
-    return options.commandPrepareName;
-  }
-  return null;
-};
-
 export const routeAfterAgentLlm = (
   state: ClinicState,
   maxSteps: number,
   toolsName: string,
   finalizeName: string,
-  commandPrepareName?: string,
+  _commandPrepareName?: string,
 ): string => {
-  // Abort-mutation during unresolved HITL is planner-owned (continue_llm).
-  if (commandPrepareName && routeNeedsCommandPrepare(state)) {
-    return commandPrepareName;
-  }
-
+  void _commandPrepareName;
   if (state.stepCount >= maxSteps) {
     return finalizeName;
   }
-
-  // FAQ agents have no command_prepare; pending model tools go straight to ToolNode.
   if (
-    !commandPrepareName
-    && (hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages))
+    hasPendingToolCalls(state.agentMessages) || lastMessageRequestsTools(state.agentMessages)
   ) {
     return toolsName;
   }
-
   return finalizeName;
 };
 
+/**
+ * FAQ prepare → llm or finalize. Booking prepare was deleted; booking-only
+ * planner projection branches are gone.
+ */
 export const routeAfterAgentPrepare = (
   state: ClinicState,
   llmName: string,
-  commandPrepareName?: string,
-  noteOrchestratorName?: string,
+  _commandPrepareName?: string,
+  _noteOrchestratorName?: string,
   finalizeName?: string,
   agentId?: string,
 ): string => {
-  if (noteOrchestratorName && state.noteOrchQueued) {
-    return noteOrchestratorName;
-  }
+  void _commandPrepareName;
+  void _noteOrchestratorName;
   const isFaqPrepare = agentId === FAQ_AGENT_ID;
-  // Graph-owned REPLACE: skip the LLM and render visit_select / replacement.
-  // Booking agent only — FAQ prepare must not project booking replacement policy.
-  if (
-    !isFaqPrepare
-    && finalizeName
-    && state.bookingDraft?.replacement?.status === "offered"
-    && !(
-      state.pendingInteraction?.kind === "visit_select"
-      && state.pendingInteraction.stage === "replacement"
-    )
-  ) {
-    return finalizeName;
-  }
   // FAQ chips: exact chip taps skip LLM. Newly produced chips/confirm from prepare
   // set faqSkipLlm — do not infer from utterance equality or CRM stems.
   if (
@@ -115,12 +69,10 @@ export const routeAfterAgentPrepare = (
       return finalizeName;
     }
   }
-  // Graph-owned service_confirm from prepare. Do not skip when accepting («Так»).
-  // FAQ: skip LLM only when prepare set faqSkipLlm. Price / compare on an
-  // already-open confirm reach faq__llm. Booking: only when prepare set
-  // bookingSkipLlm (new/restored card) — never from contact ownership.
+  // Graph-owned service_confirm from FAQ prepare. Do not skip when accepting («Так»).
   if (
     finalizeName
+    && isFaqPrepare
     && state.pendingInteraction?.kind === "service_confirm"
     && state.bookingDraft?.serviceAcceptance?.status === "pending"
     && state.bookingDraft.replacement == null
@@ -130,28 +82,10 @@ export const routeAfterAgentPrepare = (
       state.pendingInteraction,
       bookText,
     );
-    if (!(offerMatch.kind === "choice" && offerMatch.choiceId === "accept")) {
-      if (isFaqPrepare) {
-        if (state.faqSkipLlm) {
-          return finalizeName;
-        }
-      } else if (state.bookingSkipLlm) {
+    if (!(offerMatch.kind === "choice" && interactionChoiceEquals(offerMatch.choiceId, "accept"))) {
+      if (state.faqSkipLlm) {
         return finalizeName;
       }
-    }
-  }
-
-  // Booking planner projection — booking agent only. FAQ prepare keeps catalog
-  // handling above and otherwise continues to faq__llm (e.g. contact_field detour).
-  if (!isFaqPrepare) {
-    const outcome = resolveBookingCommand(state);
-    const projected = routeFromBookingOutcome(outcome, {
-      llmName,
-      ...(commandPrepareName != null ? { commandPrepareName } : {}),
-      ...(finalizeName != null ? { finalizeName } : {}),
-    });
-    if (projected != null) {
-      return projected;
     }
   }
 
@@ -176,10 +110,7 @@ export const routeAfterAgentTools = (
     llmName,
     toolsName,
     mutationFinalizeName,
-    commandPrepareName,
-    noteOrchestratorName,
     finalizeName,
-    faqPrepareName,
   } = options;
 
   if (hasPendingToolCalls(state.agentMessages)) {
@@ -199,27 +130,29 @@ export const routeAfterAgentTools = (
     return mutationFinalizeName;
   }
 
-  // Booking planner projection — only when this agent loop owns prepare/finalize.
-  if (commandPrepareName || finalizeName || faqPrepareName) {
-    const outcome = resolveBookingCommand(state);
-    const projected = routeFromBookingOutcome(outcome, {
-      llmName,
-      ...(commandPrepareName != null ? { commandPrepareName } : {}),
-      ...(finalizeName != null ? { finalizeName } : {}),
-      ...(faqPrepareName != null ? { faqPrepareName } : {}),
-    });
-    if (projected != null) {
-      return projected;
-    }
-  }
-
-  if (
-    noteOrchestratorName
-    && hasPendingConfirmationChatOther(state)
-    && bookingTurnNeedsNoteOrchestrator(state)
-  ) {
-    return noteOrchestratorName;
-  }
-
   return llmName;
+};
+
+export type RouteAfterBookingToolsOptions = {
+  decideName: string;
+  toolsName: string;
+  respondName: string;
+};
+
+/**
+ * Booking tools → decide while an effect is open. Matching ToolMessage is
+ * consumed in decide; missing match fail-closes there. Never dump an open
+ * effect into respond (that shipped present_dates copy with an empty keyboard).
+ */
+export const routeAfterBookingTools = (
+  state: ClinicState,
+  options: RouteAfterBookingToolsOptions,
+): string => {
+  if (hasPendingToolCalls(state.agentMessages)) {
+    return options.toolsName;
+  }
+  if (state.bookingDraft?.pendingEffect?.id != null) {
+    return options.decideName;
+  }
+  return options.respondName;
 };

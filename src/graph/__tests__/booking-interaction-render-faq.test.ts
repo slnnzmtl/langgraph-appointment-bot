@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { renderFaqCatalogReply } from "../faq-catalog.js";
+import { SERVICE_CHANGE_ACK_UK } from "../../shared/clinic-constants.js";
+import {
+  renderBookingInteractionMessage,
+  replyButtonsForInteraction,
+} from "../booking-interaction-render.js";
+import { renderFaqCatalogReply, shortenFaqChoiceLabels } from "../faq-catalog.js";
+import type { PendingInteraction } from "../booking-session.js";
 
 describe("renderFaqCatalogReply", () => {
   it("renders intro plus one canonical block from interaction choices", () => {
@@ -20,5 +26,55 @@ describe("renderFaqCatalogReply", () => {
 
   it("returns the empty-catalog fallback when choices are empty", () => {
     expect(renderFaqCatalogReply([])).toBe("Оберіть, будь ласка, послугу зі списку.");
+  });
+});
+
+describe("renderBookingInteractionMessage service_candidate", () => {
+  it("matches FAQ catalog body (ack + bullet block); chips stay truncated", () => {
+    const choices = shortenFaqChoiceLabels([
+      {
+        id: "1",
+        label: "Ботулінотерапія Botox, Disport 1 зона (лоб)",
+        serviceIds: ["1"],
+      },
+      {
+        id: "2",
+        label: "Ботулінотерапія Botox, Disport 2 зони (лоб+міжбрів'я)",
+        serviceIds: ["2"],
+      },
+      {
+        id: "3",
+        label: "Ботулінотерапія Botox, Disport 3 зони",
+        serviceIds: ["3"],
+      },
+    ]);
+    const interaction: PendingInteraction = {
+      kind: "service_candidate",
+      utterance: "Botox, Disport",
+      owner: "booking",
+      choices,
+    };
+    const reply = String(renderBookingInteractionMessage(interaction).content);
+    // Same strings as FAQ finalize: shared catalogChoiceBulletBlock under the ack.
+    expect(reply).toBe(renderFaqCatalogReply(choices, [], SERVICE_CHANGE_ACK_UK));
+    for (const choice of choices) {
+      expect(choice.displayLabel).toBeTruthy();
+      expect(reply).not.toContain(`• ${choice.label}`);
+    }
+    expect(replyButtonsForInteraction(interaction)).toEqual(
+      choices.map((choice) => choice.label),
+    );
+  });
+
+  it("keeps ack-only copy when the catalog page has no listable choices", () => {
+    const interaction: PendingInteraction = {
+      kind: "service_candidate",
+      utterance: "",
+      owner: "booking",
+      choices: [],
+    };
+    expect(String(renderBookingInteractionMessage(interaction).content)).toBe(
+      SERVICE_CHANGE_ACK_UK,
+    );
   });
 });

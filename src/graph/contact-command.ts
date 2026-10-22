@@ -9,10 +9,8 @@ import {
   type BookingContactField,
   type PhoneLookupEvidence,
 } from "./booking-draft.js";
-import {
-  phoneLookupFailedThisTurn,
-  toolRanThisTurn,
-} from "./agent-loop/protocol/index.js";
+import { phoneLookupFailedThisTurn } from "./agent-loop/protocol/contact.js";
+import { toolRanThisTurn } from "./agent-loop/protocol/tape.js";
 
 export type ContactIdentityResolution =
   | { kind: "owned"; contactId: string; contact: Record<string, unknown> }

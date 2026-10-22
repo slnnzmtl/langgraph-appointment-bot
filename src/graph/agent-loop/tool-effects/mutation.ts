@@ -1,7 +1,7 @@
 import { ToolMessage, type BaseMessage } from "@langchain/core/messages";
 import { trackEvent } from "../../../analytics/track.js";
 import { asJsonRecord } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import { reduceBookingDraft } from "../../booking-draft.js";
 import {
   closedBookingSessionUpdate,
@@ -45,7 +45,7 @@ const normalizeMutationEvent = (
     if (outcome == null) {
       continue;
     }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const record = asJsonRecord(extractRawMessageText(message.content).trim());
     return {
       kind: "event",
       outcome,
@@ -133,19 +133,16 @@ export const projectMutationEffects = (input: {
   const cancelOnlyCommitted =
     committed.length > 0 && committed.every((entry) => entry.name === "cancel_meeting");
   const isCancel = message.name === "cancel_meeting";
-  const replacementCancelling = draft?.replacement?.status === "cancelling";
+  const replacement = draft?.replacement;
+  const replacementCancelling = replacement?.status === "cancelling";
 
   switch (outcome) {
     case "committed": {
-      if (isCancel && replacementCancelling && draft != null) {
-        // REPLACE continue: complete cancel. FAQ prepare opens the catalog when
-        // there is no accepted service — do not invoke list_services here.
-        const completed = reduceBookingDraft(draft, {
-          type: "cancel_existing_completed",
-        });
-        patch.bookingDraft = completed;
+      if (isCancel && replacementCancelling && replacement != null) {
+        // Leave replacement=cancelling for decide to emit cancel_existing_completed
+        // (atomic path). Only drop the confirm card and filter the cancelled visit.
         patch.pendingInteraction = null;
-        const cancelledId = draft.replacement!.meeting.id;
+        const cancelledId = replacement.meeting.id;
         if (state.bookingContext != null && cancelledId.length > 0) {
           patch.bookingContext = {
             ...state.bookingContext,

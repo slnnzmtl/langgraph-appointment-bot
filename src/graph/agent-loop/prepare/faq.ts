@@ -1,3 +1,4 @@
+import { isFaqServicesGuideLabel } from "../../../shared/message-content.js";
 import {
   isFaqCatalogBrowseShortcut,
   faqNamedProcedureEntryForTurn,
@@ -36,6 +37,19 @@ const faqUiProduced = (pendingInteraction: PendingInteraction | null | undefined
     pendingInteraction?.kind === "service_candidate"
     && pendingInteraction.owner === "faq"
   );
+
+/**
+ * Post-REPLACE-cancel create draft with cancel_meeting still on the agent tape.
+ * Shared by FAQ prepare (open catalog) and prepare wipe (keep tape for ack).
+ */
+export const isReplaceCancelCreateDraft = (state: ClinicState): boolean =>
+  state.bookingDraft?.mode === "create"
+  && state.bookingDraft.replacement == null
+  && state.bookingDraft.serviceAcceptance?.status !== "accepted"
+  && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting");
+
+const faqCatalogAlreadyOpen = (interaction: PendingInteraction | null | undefined): boolean =>
+  interaction?.kind === "service_candidate" && interaction.owner === "faq";
 
 /** FAQ prepare: catalog chips, rematch, browse shortcut, named-procedure entry. */
 export const prepareFaqTurn = async (
@@ -167,17 +181,18 @@ export const prepareFaqTurn = async (
   }
   // REPLACE cancel continue: booking tools completed cancel without opening
   // the catalog — load services if needed and open root FAQ chips here.
+  // After REPLACE cancel completes, draft is create with no accepted service —
+  // open the root FAQ catalog so the patient can pick the new visit type.
+  // «Послуги» tap: same root chips without waiting on the FAQ LLM.
+  const servicesGuideNeedsCatalog =
+    !handledCatalogChoice
+    && isFaqServicesGuideLabel(patientText)
+    && !faqCatalogAlreadyOpen(interaction);
   const replacementCancelNeedsCatalog =
     !handledCatalogChoice
-    && state.pendingCancellationPurpose === "replacement"
-    && state.bookingDraft?.mode === "create"
-    && state.bookingDraft.replacement == null
-    && state.bookingDraft.serviceAcceptance?.status !== "accepted"
-    && !(
-      interaction?.kind === "service_candidate" && interaction.owner === "faq"
-    )
-    && toolRanThisTurn(state.agentMessages ?? [], "cancel_meeting");
-  if (replacementCancelNeedsCatalog) {
+    && !faqCatalogAlreadyOpen(interaction)
+    && isReplaceCancelCreateDraft(state);
+  if (replacementCancelNeedsCatalog || servicesGuideNeedsCatalog) {
     const catalog = await ensureServicesContext(
       state.servicesContext,
       options?.loadServices,

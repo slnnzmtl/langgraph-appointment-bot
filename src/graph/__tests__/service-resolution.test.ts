@@ -13,7 +13,7 @@ import {
   type ServiceCatalogRow,
 } from "../service-resolution.js";
 import type { ILLMConnector } from "../types.js";
-import { buildFaqCatalogChoices } from "../faq-catalog.js";
+import { buildFaqCatalogChoices, mergeCatalogChoicesToPageCap } from "../faq-catalog.js";
 
 const rows: ServiceCatalogRow[] = [
   { id: "svc-consult", name: "Консультація", duration: 30, description: "Primary visit" },
@@ -365,7 +365,7 @@ describe("resolveServiceChange", () => {
         },
         { id: "svc-nabota", label: "Nabota Face", serviceIds: ["svc-nabota"] },
         {
-          id: "g2",
+          id: "g1",
           label: SERVICE_CANDIDATE_OTHER_LABEL_UK,
           serviceIds: ["svc-correction", "svc-meso"],
         },
@@ -609,7 +609,7 @@ describe("partitionRemainingServiceChoices", () => {
         serviceIds: ["svc-consult"],
       },
       {
-        id: "g1",
+        id: "g0",
         label: "Ботокс",
         serviceIds: ["svc-botox", "svc-botox-face", "svc-botox-neck"],
       },
@@ -659,13 +659,13 @@ describe("partitionRemainingServiceChoices", () => {
   });
 });
 
-describe("buildFaqCatalogChoices overflow", () => {
+describe("mergeCatalogChoicesToPageCap overflow", () => {
   it("parks services after the first page under Інші варіанти", () => {
     const services = Array.from({ length: 9 }, (_, index) => ({
       id: `svc-${index + 1}`,
       name: `Service ${index + 1}`,
     }));
-    const choices = buildFaqCatalogChoices(services);
+    const choices = mergeCatalogChoicesToPageCap(buildFaqCatalogChoices(services));
     expect(choices).toHaveLength(8);
     expect(choices.slice(0, 7).map((c) => c.id)).toEqual([
       "svc-1", "svc-2", "svc-3", "svc-4", "svc-5", "svc-6", "svc-7",
@@ -682,7 +682,7 @@ describe("buildFaqCatalogChoices overflow", () => {
       id: `svc-${index + 1}`,
       name: `Service ${index + 1}`,
     }));
-    const choices = buildFaqCatalogChoices(services);
+    const choices = mergeCatalogChoicesToPageCap(buildFaqCatalogChoices(services));
     expect(choices).toHaveLength(8);
     expect(choices.every((c) => c.serviceIds?.length === 1)).toBe(true);
     expect(choices.some((c) => c.label === SERVICE_CANDIDATE_OTHER_LABEL_UK)).toBe(false);

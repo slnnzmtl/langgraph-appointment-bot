@@ -1,4 +1,4 @@
-/** Agent-loop package: prepare / command / llm / tools / finalize nodes. */
+/** Agent-loop package: FAQ prepare / llm / tools / finalize + booking decide/respond. */
 
 export {
   type MeetingMutationOutcome,
@@ -15,26 +15,9 @@ export {
 } from "./protocol/index.js";
 
 export {
-  bookingOutcomeRiskState,
-} from "./booking-command.js";
-
-export {
-  advanceBookingNoteStep,
   authoritativeNoteStatus,
   authoritativeSelectedSlot,
-  noteStepBlocksCreate,
 } from "./booking-note-step.js";
-
-export {
-  availabilityOfferFromToolTurn,
-  formatAvailabilityDateOffer,
-  formatAvailabilityEmptyOffer,
-  formatAvailabilityHeading,
-  formatAvailabilityTimeOffer,
-  matchAvailabilityDay,
-  matchAvailabilitySlot,
-  resolveAvailabilityOffer,
-} from "../booking-interaction-render.js";
 
 export {
   createAgentMutationFinalizeNode,
@@ -42,11 +25,6 @@ export {
 } from "./mutation-finalize.js";
 
 export {
-  createAgentCommandPrepareNode,
-} from "./command-prepare.js";
-
-export {
-  createBookingFinalizeNode,
   createFaqFinalizeNode,
   offeredServiceForTurn,
 } from "./finalize/index.js";
@@ -57,9 +35,7 @@ export {
 } from "./llm.js";
 
 export {
-  type CreateBookingPrepareOptions,
   type CreateFaqPrepareOptions,
-  createBookingPrepareNode,
   createFaqPrepareNode,
 } from "./prepare/index.js";
 
@@ -69,19 +45,39 @@ export {
 
 export {
   type RouteAfterAgentToolsOptions,
+  type RouteAfterBookingToolsOptions,
   routeAfterAgentLlm,
   routeAfterAgentPrepare,
   routeAfterAgentTools,
+  routeAfterBookingTools,
 } from "./routing.js";
 
 export { rewriteAiMessage } from "./rewrite-ai-message.js";
 export { sanitizeBoundModelToolCalls } from "./tool-call-coercion.js";
 
 export {
-  commandPrepareNodeName,
+  applyMutationChatOtherCleanup,
+  hasMutationCallDuringUnresolvedConfirmation,
+  hasPendingConfirmationChatOther,
+} from "./mutation-chat-other.js";
+
+export {
   finalizeNodeName,
   llmNodeName,
   mutationFinalizeNodeName,
   prepareNodeName,
   toolsNodeName,
 } from "./nodes-names.js";
+
+export {
+  BOOKING_DECIDE_NODE,
+  BOOKING_EFFECTS_NODE,
+  createBookingDecideNode,
+  effectResultFromToolMessages,
+  readModelsFromClinicState,
+} from "./booking-decide-nodes.js";
+
+export {
+  BOOKING_RESPOND_NODE,
+  createBookingRespondNode,
+} from "./booking-respond.js";

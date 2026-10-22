@@ -5,12 +5,28 @@ import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js"
 import type { McpCallTool } from "../shared/mcp.js";
 import { asJsonRecord } from "../shared/json-record.js";
 import type { BookingService } from "./booking-draft.js";
-import type {
-  ResolveServiceChange,
-  ServiceResolutionResult,
-} from "./booking-note-orchestrator.js";
 import type { InteractionChoice, ResolveServiceEffect } from "./booking-session.js";
 import type { ILLMConnector } from "./types.js";
+
+export type ServiceResolutionResult =
+  | {
+      type: "service_changed";
+      service: BookingService;
+      accepted: boolean;
+      noteCandidate?: string;
+    }
+  | {
+      type: "service_candidates_opened";
+      utterance: string;
+      query?: string;
+      noteCandidate?: string;
+      choices: Array<{ id: string; label: string; serviceIds?: string[] }>;
+    }
+  | { type: "service_unresolved" };
+
+export type ResolveServiceChange = (
+  effect: ResolveServiceEffect,
+) => Promise<ServiceResolutionResult>;
 
 export type ServiceCatalogRow = {
   id: string;
@@ -346,10 +362,25 @@ const groupsStrictlyShrink = (
 const choicesFromGroups = (
   groups: Array<{ label: string; serviceIds: string[] }>,
   allowlist: Map<string, ServiceCatalogRow>,
-): InteractionChoice[] =>
-  groups.map((group, index) => {
+): InteractionChoice[] => {
+  // Never mint gN that collides with a CRM row id on this page.
+  const reserved = new Set(allowlist.keys());
+  let nextG = 0;
+  const allocGroupId = (): string => {
+    while (reserved.has(`g${nextG}`)) {
+      nextG += 1;
+    }
+    const id = `g${nextG}`;
+    nextG += 1;
+    reserved.add(id);
+    return id;
+  };
+  return groups.map((group) => {
     const serviceIds = group.serviceIds;
-    const id = serviceIds.length === 1 ? serviceIds[0]! : `g${index}`;
+    const id = serviceIds.length === 1 ? serviceIds[0]! : allocGroupId();
+    if (serviceIds.length === 1) {
+      reserved.add(id);
+    }
     // Singleton groups apply that CRM id immediately — show the real service name,
     // not an abstract partition label the patient never confirmed.
     const label = serviceIds.length === 1
@@ -361,6 +392,7 @@ const choicesFromGroups = (
       serviceIds,
     };
   });
+};
 
 /**
  * Sanitize selector/partition groups against selected ids. Returns the groups

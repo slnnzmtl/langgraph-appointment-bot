@@ -105,7 +105,58 @@ describe("text while HITL pending", () => {
       reducer: (left: unknown[], right: unknown[]) => left.concat(right),
       default: () => [],
     }),
+    bookingDraft: Annotation<unknown>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    pendingInteraction: Annotation<unknown>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    bookingSchemaVersion: Annotation<number>({
+      reducer: (_left, right) => right,
+      default: () => 2,
+    }),
   });
+
+  const liveConfirmDraft = {
+    version: 1,
+    mode: "create",
+    phase: "confirming",
+    pendingDecision: { kind: "mutation_confirm", action: "create", effectId: "eff_1" },
+    serviceAcceptance: {
+      status: "accepted",
+      service: { id: "svc-1", name: "Процедура", source: "catalog" },
+    },
+    selectedDate: "2026-10-27",
+    selectedSlot: {
+      dateStart: "2026-10-27T11:00:00",
+      dateEnd: "2026-10-27T11:30:00",
+      label: "11:00",
+    },
+    requestedTime: null,
+    note: { status: "skipped" },
+    contactId: "c-1",
+    pendingCommand: {
+      action: "create",
+      payload: {
+        serviceId: "svc-1",
+        contactId: "c-1",
+        dateStart: "2026-10-27T11:00:00",
+        dateEnd: "2026-10-27T11:30:00",
+      },
+    },
+    replacement: null,
+  };
+
+  const liveConfirmInteraction = {
+    kind: "mutation_confirm",
+    action: "create",
+    choices: [
+      { id: "confirm", label: "✅" },
+      { id: "decline", label: "❌" },
+    ],
+  };
 
   const buildPendingConfirmGraph = () =>
     new StateGraph(InterruptState)
@@ -129,7 +180,7 @@ describe("text while HITL pending", () => {
     );
     expect(first.__interrupt__).toBeDefined();
 
-    const outbound = await handleGraphTextTurn(graph, threadId, "tg-1", "так");
+    const outbound = await handleGraphTextTurn(graph, threadId, "tg-1", "а яка адреса?");
     expect(outbound.reply_markup).toEqual({
       keyboard: [[{ text: "Головне меню" }]],
       resize_keyboard: true,
@@ -138,11 +189,11 @@ describe("text while HITL pending", () => {
 
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(snap.next).toEqual([]);
-    expect(JSON.parse(String(snap.values.result))).toEqual({ userReply: "так" });
+    expect(JSON.parse(String(snap.values.result))).toEqual({ userReply: "а яка адреса?" });
     const texts = (snap.values.messages as Array<{ content?: unknown }>).map(
       (message) => message.content,
     );
-    expect(texts).toContain("так");
+    expect(texts).toContain("а яка адреса?");
     expect(
       (snap.tasks as Array<{ interrupts?: unknown[] }> | undefined)?.some(
         (task) => Array.isArray(task.interrupts) && task.interrupts.length > 0,
@@ -154,7 +205,13 @@ describe("text while HITL pending", () => {
     const yesGraph = buildPendingConfirmGraph();
     const yesThread = "text-hitl-confirm-yes";
     await yesGraph.invoke(
-      { result: "", messages: [] },
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 2,
+        bookingDraft: liveConfirmDraft,
+        pendingInteraction: liveConfirmInteraction,
+      },
       { configurable: { thread_id: yesThread } },
     );
     await handleGraphTextTurn(yesGraph, yesThread, "tg-1", "✅");
@@ -164,7 +221,13 @@ describe("text while HITL pending", () => {
     const noGraph = buildPendingConfirmGraph();
     const noThread = "text-hitl-confirm-no";
     await noGraph.invoke(
-      { result: "", messages: [] },
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 2,
+        bookingDraft: liveConfirmDraft,
+        pendingInteraction: liveConfirmInteraction,
+      },
       { configurable: { thread_id: noThread } },
     );
     await handleGraphTextTurn(noGraph, noThread, "tg-1", "❌");
@@ -174,7 +237,13 @@ describe("text while HITL pending", () => {
     const menuGraph = buildPendingConfirmGraph();
     const menuThread = "text-hitl-confirm-menu";
     await menuGraph.invoke(
-      { result: "", messages: [] },
+      {
+        result: "",
+        messages: [],
+        bookingSchemaVersion: 2,
+        bookingDraft: liveConfirmDraft,
+        pendingInteraction: liveConfirmInteraction,
+      },
       { configurable: { thread_id: menuThread } },
     );
     await handleGraphTextTurn(menuGraph, menuThread, "tg-1", "Головне меню");
@@ -186,7 +255,7 @@ describe("text while HITL pending", () => {
     expect(menuTexts).toContain("Головне меню");
   });
 
-  it("maps NL affirm against open mutation_confirm to confirmed resume", async () => {
+  it("treats NL affirm as chat-other userReply (only ✅/callback confirm)", async () => {
     const MutationState = Annotation.Root({
       result: Annotation<string>({
         reducer: (_left, right) => right,
@@ -207,7 +276,7 @@ describe("text while HITL pending", () => {
       }),
       bookingSchemaVersion: Annotation<number>({
         reducer: (_left, right) => right,
-        default: () => 1,
+        default: () => 2,
       }),
     });
     const graph = new StateGraph(MutationState)
@@ -227,7 +296,7 @@ describe("text while HITL pending", () => {
       {
         result: "",
         messages: [],
-        bookingSchemaVersion: 1,
+        bookingSchemaVersion: 2,
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "create",
@@ -240,6 +309,12 @@ describe("text while HITL pending", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -270,7 +345,9 @@ describe("text while HITL pending", () => {
 
     await handleGraphTextTurn(graph, threadId, "tg-1", "Так, підтверджую");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
-    expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
+    expect(JSON.parse(String(snap.values.result))).toEqual({
+      userReply: "Так, підтверджую",
+    });
   });
 
   it("resumes userReply with HumanMessage when mutation_confirm is open", async () => {
@@ -294,7 +371,7 @@ describe("text while HITL pending", () => {
       }),
       bookingSchemaVersion: Annotation<number>({
         reducer: (_left, right) => right,
-        default: () => 1,
+        default: () => 2,
       }),
     });
     const graph = new StateGraph(MutationState)
@@ -314,7 +391,7 @@ describe("text while HITL pending", () => {
       {
         result: "",
         messages: [],
-        bookingSchemaVersion: 1,
+        bookingSchemaVersion: 2,
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "create",
@@ -327,6 +404,12 @@ describe("text while HITL pending", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -399,7 +482,7 @@ describe("text while HITL pending", () => {
       }),
       bookingSchemaVersion: Annotation<number>({
         reducer: (_left, right) => right,
-        default: () => 1,
+        default: () => 2,
       }),
     });
     const graph = new StateGraph(MutationState)
@@ -419,7 +502,7 @@ describe("text while HITL pending", () => {
       {
         result: "",
         messages: [],
-        bookingSchemaVersion: 1,
+        bookingSchemaVersion: 2,
         pendingInteraction: {
           kind: "mutation_confirm",
           action: "create",
@@ -432,6 +515,12 @@ describe("text while HITL pending", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", name: "Процедура", source: "catalog" },
@@ -579,7 +668,7 @@ describe("booking schema upgrade on text turn", () => {
 
       await handleGraphTextTurn(graph, threadId, "tg-1", "Привіт");
       const first = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(first.values.bookingSchemaVersion).toBe(1);
+      expect(first.values.bookingSchemaVersion).toBe(2);
       expect(first.values.bookingNoteStatus).toBe("unasked");
       expect(first.values.selectedAvailabilityDate).toBeNull();
       expect(first.values.bookingDraft).toMatchObject({
@@ -590,7 +679,7 @@ describe("booking schema upgrade on text turn", () => {
       events.length = 0;
       await handleGraphTextTurn(graph, threadId, "tg-1", "Ще раз");
       const second = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(second.values.bookingSchemaVersion).toBe(1);
+      expect(second.values.bookingSchemaVersion).toBe(2);
       expect(second.values.bookingDraft).toEqual(first.values.bookingDraft);
       expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
     } finally {
@@ -610,13 +699,13 @@ describe("booking schema upgrade on text turn", () => {
 
       await handleGraphTextTurn(graph, threadId, "tg-1", "Привіт");
       const first = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(first.values.bookingSchemaVersion).toBe(1);
+      expect(first.values.bookingSchemaVersion).toBe(2);
       expect(first.values.bookingDraft).toBeNull();
       expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
 
       await handleGraphTextTurn(graph, threadId, "tg-1", "Ще раз");
       const second = await graph.getState({ configurable: { thread_id: threadId } });
-      expect(second.values.bookingSchemaVersion).toBe(1);
+      expect(second.values.bookingSchemaVersion).toBe(2);
       expect(events.filter((event) => event.name === "booking_checkpoint_migrated")).toHaveLength(0);
     } finally {
       setTrackEventForTests(null);
@@ -635,6 +724,12 @@ describe("booking schema upgrade on text turn", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", source: "catalog" },
@@ -674,7 +769,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: true });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingNoteStatus).toBe("unasked");
     expect(snap.values.selectedSlot).toBeNull();
     expect(snap.next).toEqual([]);
@@ -692,6 +787,12 @@ describe("booking schema upgrade on text turn", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", source: "catalog" },
@@ -731,7 +832,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingDraft).toMatchObject({
       serviceAcceptance: { service: { id: "svc-1" } },
       phase: "service",
@@ -753,6 +854,12 @@ describe("booking schema upgrade on text turn", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "  ", source: "catalog" },
@@ -784,7 +891,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingDraft).toBeNull();
     expect(snap.next).toEqual([]);
   });
@@ -801,6 +908,12 @@ describe("booking schema upgrade on text turn", () => {
           version: 1,
           mode: "create",
           phase: "confirming",
+          pendingDecision: {
+            kind: "mutation_confirm",
+            action: "create",
+            effectId: "eff_create",
+          },
+
           serviceAcceptance: {
             status: "accepted",
             service: { id: "svc-1", source: "catalog" },
@@ -839,7 +952,7 @@ describe("booking schema upgrade on text turn", () => {
     await handleGraphTextTurn(graph, threadId, "tg-1", "✅");
     const snap = await graph.getState({ configurable: { thread_id: threadId } });
     expect(JSON.parse(String(snap.values.result))).toEqual({ confirmed: false });
-    expect(snap.values.bookingSchemaVersion).toBe(1);
+    expect(snap.values.bookingSchemaVersion).toBe(2);
     expect(snap.values.bookingDraft).toMatchObject({
       serviceAcceptance: { service: { id: "svc-1" } },
       phase: "service",

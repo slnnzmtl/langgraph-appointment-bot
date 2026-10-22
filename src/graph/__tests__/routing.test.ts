@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { routeAfterAgentLlm, routeAfterAgentTools } from "../agent-loop/index.js";
+import {
+  routeAfterAgentLlm,
+  routeAfterAgentTools,
+  routeAfterBookingTools,
+} from "../agent-loop/index.js";
 import {
   buildClinicRoutingSchema,
   normalizeSupervisorReply,
@@ -99,5 +103,97 @@ describe("agent loop routing", () => {
           llmName: "faq__llm",
           toolsName: "faq__tools",
         })).toBe("faq__llm");
+  });
+
+  it("routes booking tools to decide while an effect is open", () => {
+    const names = {
+      decideName: "booking__decide",
+      toolsName: "booking__tools",
+      respondName: "booking__respond",
+    };
+    const pendingId = "eff_create_1";
+
+    expect(
+      routeAfterBookingTools(
+        {
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: pendingId, name: "create_meeting", args: {} }],
+            }),
+            new ToolMessage({
+              content: "{}",
+              tool_call_id: pendingId,
+              name: "create_meeting",
+            }),
+          ],
+          bookingDraft: { pendingEffect: { id: pendingId } },
+        } as never,
+        names,
+      ),
+    ).toBe("booking__decide");
+
+    expect(
+      routeAfterBookingTools(
+        {
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: pendingId, name: "create_meeting", args: {} }],
+            }),
+          ],
+          bookingDraft: { pendingEffect: { id: pendingId } },
+        } as never,
+        names,
+      ),
+    ).toBe("booking__tools");
+
+    // Missing ToolMessage still returns to decide (fail-closed), never respond.
+    expect(
+      routeAfterBookingTools(
+        {
+          agentMessages: [new AIMessage("confirm on the card")],
+          bookingDraft: { pendingEffect: { id: pendingId } },
+        } as never,
+        names,
+      ),
+    ).toBe("booking__decide");
+
+    expect(
+      routeAfterBookingTools(
+        {
+          agentMessages: [
+            new AIMessage({
+              content: "",
+              tool_calls: [{ id: "other", name: "list_services", args: {} }],
+            }),
+            new ToolMessage({
+              content: "{}",
+              tool_call_id: "other",
+              name: "list_services",
+            }),
+          ],
+          bookingDraft: { pendingEffect: { id: pendingId } },
+        } as never,
+        names,
+      ),
+    ).toBe("booking__decide");
+
+    // Effect cleared → respond.
+    expect(
+      routeAfterBookingTools(
+        {
+          agentMessages: [
+            new ToolMessage({
+              content: "{}",
+              tool_call_id: pendingId,
+              name: "create_meeting",
+            }),
+          ],
+          bookingDraft: { pendingEffect: null },
+        } as never,
+        names,
+      ),
+    ).toBe("booking__respond");
   });
 });

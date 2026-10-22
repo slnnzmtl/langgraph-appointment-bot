@@ -1,5 +1,6 @@
 import {
   BOOKING_OFFER_MENU,
+  BOOKING_REPLACE_MENU,
   CONSULTATION_SERVICE_ID,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
@@ -336,6 +337,9 @@ export const loadCatalogServiceRows = async (
 const hasBookingOfferKeyboard = (buttons: string[]): boolean =>
   buttons.includes(BOOKING_OFFER_MENU[0]) && buttons.includes(BOOKING_OFFER_MENU[1]);
 
+const hasReplaceKeyboard = (buttons: string[]): boolean =>
+  buttons.includes(BOOKING_REPLACE_MENU[0]) && buttons.includes(BOOKING_REPLACE_MENU[1]);
+
 /** Drive until the consultation / procedure BOOKING OFFER keyboard is visible. */
 export const openBookingOffer = async (
   session: SmokeSession,
@@ -357,13 +361,55 @@ export const openBookingOffer = async (
   );
 };
 
+/**
+ * Open «Послуги» with a visit already on file (not «Записатись» — that opens
+ * REPLACE before any service is chosen). Accepts consultation BOOKING OFFER or
+ * an FAQ catalog; declines a premature REPLACE and retries.
+ */
+export const openServicesEntryWithVisit = async (
+  session: SmokeSession,
+  label: string,
+  maxTurns = 6,
+): Promise<TurnResult> => {
+  let turn = await session.say("Послуги");
+  for (let i = 0; i < maxTurns; i += 1) {
+    if (hasReplaceKeyboard(turn.buttons)) {
+      await session.tap(BOOKING_REPLACE_MENU[1]);
+      turn = await session.say("Послуги");
+      continue;
+    }
+    if (hasBookingOfferKeyboard(turn.buttons)) {
+      return turn;
+    }
+    if (turn.state.pendingInteraction?.kind === "service_candidate") {
+      return turn;
+    }
+    if (i === maxTurns - 1) {
+      break;
+    }
+    turn = await session.say("Послуги");
+  }
+  throw new SmokeAssertError(
+    `${label}: expected BOOKING OFFER or FAQ catalog after Послуги, got [${turn.buttons.join(" | ") || "none"}] pending=${turn.state.pendingInteraction?.kind ?? "null"}`,
+  );
+};
+
 /** Drill FAQ catalog until a non-consultation service_confirm is open. */
 export const drillToProcedureOffer = async (
   session: SmokeSession,
   label: string,
   maxTaps = 8,
+  /** When set, resume from this turn (catalog or offer) instead of tapping «Обрати іншу». */
+  start?: TurnResult,
 ): Promise<TurnResult> => {
-  let turn = await session.tap(BOOKING_OFFER_MENU[1]);
+  let turn: TurnResult;
+  if (start != null) {
+    turn = hasBookingOfferKeyboard(start.buttons)
+      ? await session.tap(BOOKING_OFFER_MENU[1])
+      : start;
+  } else {
+    turn = await session.tap(BOOKING_OFFER_MENU[1]);
+  }
   for (let i = 0; i < maxTaps; i += 1) {
     const interaction = turn.state.pendingInteraction;
     if (interaction?.kind === "service_confirm") {

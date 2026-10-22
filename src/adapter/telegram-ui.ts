@@ -33,6 +33,17 @@ export type ReplyKeyboardMarkup = {
   one_time_keyboard?: boolean;
 };
 
+export type InlineKeyboardButton = {
+  text: string;
+  callback_data: string;
+};
+
+export type InlineKeyboardMarkup = {
+  inline_keyboard: InlineKeyboardButton[][];
+};
+
+export type TelegramReplyMarkup = ReplyKeyboardMarkup | InlineKeyboardMarkup;
+
 /** Append «Головне меню» last when missing (adapter-owned; the model need not emit it). */
 export const withMainMenu = (labels: string[]): string[] => {
   const next = labels.filter((label) => label !== MAIN_MENU_LABEL);

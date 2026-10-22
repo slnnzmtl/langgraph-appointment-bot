@@ -12,8 +12,11 @@ import { parseScheduleIntent } from "../../shared/booking-schedule.js";
 import { isOtherDateChip } from "../../shared/other-date-chip.js";
 import { resolveAvailabilityRequest } from "../../tools/availability-request.js";
 import { kyivToday } from "../../tools/availability-slots.js";
-import { bookingTurnNeedsNoteOrchestrator } from "../booking-note-orchestrator.js";
-import { interpretInteractionReply } from "../booking-session.js";
+import { bookingTurnNeedsDraftInteraction } from "../booking-interaction-policy.js";
+import {
+  interpretInteractionReply,
+  interactionChoiceEquals,
+} from "../booking-session.js";
 import type { ClinicState } from "../state.js";
 import { authoritativeSelectedSlot } from "../agent-loop/booking-note-step.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
@@ -51,7 +54,8 @@ const isCancelChip = (line: string): boolean =>
 
 /**
  * Classify a bare «Скасувати» / Cancel chip once for the turn.
- * null when the line is not a cancel chip.
+ * null when the line is not a cancel chip. Free-text cancel uses supervisor
+ * `intent: visit_cancel` — not patient-phrase matching.
  */
 export const classifyCancelTap = (
   state: ClinicState,
@@ -147,7 +151,7 @@ export const shouldContinueInSpecialist = (
     // «Обрати іншу процедуру» / bare «Ні» on service_confirm must reach
     // faqPredicates (closed session + FAQ catalog), not sticky booking.
     if (
-      interactionMatch.choiceId === "choose_other"
+      interactionChoiceEquals(interactionMatch.choiceId, "choose_other")
       && state.pendingInteraction?.kind === "service_confirm"
     ) {
       return false;
@@ -213,7 +217,7 @@ export const stickyContinueAgentId = (
   // when FAQ opened the card after a REPLACE cancel catalog pick.
   if (state.pendingInteraction?.kind === "service_confirm") {
     const offerMatch = interpretInteractionReply(state.pendingInteraction, human);
-    if (offerMatch.kind === "choice" && offerMatch.choiceId === "accept") {
+    if (offerMatch.kind === "choice" && interactionChoiceEquals(offerMatch.choiceId, "accept")) {
       return BOOKING_AGENT_ID;
     }
   }
@@ -241,7 +245,7 @@ export const stickyContinueAgentId = (
     return FAQ_AGENT_ID;
   }
   if (
-    bookingTurnNeedsNoteOrchestrator(state)
+    bookingTurnNeedsDraftInteraction(state)
     && human.length > 0
     && !isSupervisorOwnedLabel(human)
     && !isSupervisorOwnedLabel(humanLine)
@@ -294,7 +298,7 @@ export const shouldRouteProcedureBrowseToFaq = (state: ClinicState): boolean => 
   }
   const human = lastHumanTextFromMessages(state.messages);
   const match = interpretInteractionReply(state.pendingInteraction, human);
-  return match.kind === "choice" && match.choiceId === "choose_other";
+  return match.kind === "choice" && interactionChoiceEquals(match.choiceId, "choose_other");
 };
 
 export const shouldStayInFaqCatalog = (state: ClinicState): boolean => {

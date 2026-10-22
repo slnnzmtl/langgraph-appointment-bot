@@ -55,11 +55,9 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   bookingDraft: null,
   bookingSchemaVersion: 1,
   pendingInteraction: null,
-  noteOrchQueued: false,
   faqSkipLlm: false,
-  bookingSkipLlm: false,
-  serviceChangeNotice: null,
-  pendingCancellationPurpose: null,
+  bookingDecision: null,
+  inboundChoiceId: null,
   ...overrides,
 });
 

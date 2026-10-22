@@ -4,18 +4,18 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 import { asJsonRecord } from "../../../shared/json-record.js";
-import { extractMessageTextContent } from "../../../shared/message-content.js";
-import { normalizeClinicPhone } from "../../../shared/phone.js";
+import { extractRawMessageText } from "../../../shared/message-content.js";
 import { contactMissingFields, normalizeContactLookupResult } from "../../../tools/contact-tools.js";
-import { reduceBookingDraft, type BookingDraft } from "../../booking-draft.js";
-import { classifyPhoneLookupResult } from "../../contact-command.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import {
   captureLatestToolContext,
   meetingMutationUnauthorizedThisTurn,
 } from "../protocol/index.js";
 
-/** Phone lookup evidence + create/link/update CRM row projection. */
+/**
+ * CRM contactContext projection only.
+ * Draft events (phone_lookup_recorded / contact_resolved) belong to decide via EffectResult.
+ */
 export const projectContactEffects = (input: {
   state: ClinicState;
   resultMessages: BaseMessage[];
@@ -31,34 +31,9 @@ export const projectContactEffects = (input: {
     "find_contact_by_phone",
     normalizeContactLookupResult,
   );
-  let projectedBookingDraft: BookingDraft | null | undefined = state.bookingDraft;
 
-  if (found && !found.error) {
-    if (found.contacts.length > 0) {
-      patch.contactContext = { ...found, ownership: "phone" };
-    }
-    const lookupMessage = [...resultMessages]
-      .reverse()
-      .find((message) =>
-        message instanceof ToolMessage && message.name === "find_contact_by_phone",
-      );
-    const lookupCall = lookupMessage instanceof ToolMessage
-      ? agentMessages
-        .filter((candidate): candidate is AIMessage => candidate instanceof AIMessage)
-        .flatMap((candidate) => candidate.tool_calls ?? [])
-        .find((candidate) => candidate.id === lookupMessage.tool_call_id)
-      : undefined;
-    const queriedPhone = typeof lookupCall?.args?.phoneNumber === "string"
-      ? (normalizeClinicPhone(lookupCall.args.phoneNumber) ?? lookupCall.args.phoneNumber.trim())
-      : projectedBookingDraft?.contactDetails?.phoneNumber ?? null;
-    if (queriedPhone != null && queriedPhone.length > 0 && projectedBookingDraft != null) {
-      const evidence = classifyPhoneLookupResult(found.contacts, queriedPhone);
-      projectedBookingDraft = reduceBookingDraft(projectedBookingDraft, {
-        type: "phone_lookup_recorded",
-        evidence,
-      });
-      patch.bookingDraft = projectedBookingDraft;
-    }
+  if (found && !found.error && found.contacts.length > 0) {
+    patch.contactContext = { ...found, ownership: "phone" };
   }
 
   for (const message of resultMessages) {
@@ -75,7 +50,7 @@ export const projectContactEffects = (input: {
     if (authorizationFailure) {
       continue;
     }
-    const record = asJsonRecord(extractMessageTextContent(message.content).trim());
+    const record = asJsonRecord(extractRawMessageText(message.content).trim());
     if (!record || typeof record.error === "string") {
       continue;
     }
@@ -134,18 +109,6 @@ export const projectContactEffects = (input: {
       ...(ownership ? { ownership } : {}),
       contacts: [{ ...createdRow, missingFields: missing }],
     };
-    if (projectedBookingDraft) {
-      // Clear accepted details only once CRM is complete (create or finished update).
-      // Link keeps contactDetails so a follow-up update_contact can use them.
-      const clearDetails = message.name === "create_contact"
-        || (message.name === "update_contact" && missing.length === 0);
-      projectedBookingDraft = reduceBookingDraft(projectedBookingDraft, {
-        type: "contact_resolved",
-        contactId: resolvedContactId,
-        ...(clearDetails ? { clearDetails: true } : {}),
-      });
-      patch.bookingDraft = projectedBookingDraft;
-    }
   }
 
   return patch;

@@ -9,17 +9,16 @@ import { type ClinicAgentDefinition } from "../types.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
 import { trackEvent } from "../../analytics/track.js";
 import {
-  CLINIC_ADDRESS,
-  CLINIC_MAPS_MARKDOWN,
   VISIT_CHANGE_MENU,
   defaultMenuLabels,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
-import { extractMessageTextContent } from "../../shared/message-content.js";
+import { extractRawMessageText } from "../../shared/message-content.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { reduceBookingDraft } from "../booking-draft.js";
 import { closedBookingSessionUpdate } from "../booking-session.js";
 import { tagRuntimeAgentMessage } from "../sub-agent-messages.js";
+import { committedCreateOrRescheduleReply } from "./booking-response-fallback.js";
 
 import {
   classifyMeetingMutationToolMessage,
@@ -88,23 +87,9 @@ export const defaultMenuHasVisit = (
 };
 
 const visitLabelFromToolResult = (result: ToolMessage): string | undefined => {
-  const record = asJsonRecord(extractMessageTextContent(result.content).trim());
+  const record = asJsonRecord(extractRawMessageText(result.content).trim());
   const visitLabel = record?.visitLabel;
   return typeof visitLabel === "string" && visitLabel.length > 0 ? visitLabel : undefined;
-};
-
-const committedCreateOrRescheduleReply = (
-  verb: "створено" | "перенесено",
-  visitLabel: string | undefined,
-): string => {
-  const headline = visitLabel != null
-    ? `Готово! Запис ${verb}.\n\n${visitLabel} ✨`
-    : `Готово! Запис ${verb}.`;
-  return (
-    headline
-    + `\n\nАдреса: ${CLINIC_ADDRESS}\n${CLINIC_MAPS_MARKDOWN}`
-    + "\n\nПереглянути або змінити візит можна в «Мій запис»."
-  );
 };
 
 const MUTATION_REPLY_FALLBACK = "Не вдалося обробити запис. Спробуйте ще раз.";
@@ -196,14 +181,13 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
         update: {
           agentMessages: new Overwrite([] as BaseMessage[]),
           stepCount: 0,
-          pendingCancellationPurpose: null,
           lastHandoff: null,
           ...closedBookingSessionUpdate(),
         },
       });
     }
 
-    const replacementCancellation = state.pendingCancellationPurpose === "replacement";
+    const replacementCancellation = state.bookingDraft?.replacement != null;
     const committedVisitLabel =
       outcome === "committed" ? visitLabelFromToolResult(result) : undefined;
     const replyText = meetingMutationReplyText({
@@ -215,13 +199,18 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
 
     const committed = outcome === "committed";
     const declined = outcome === "declined";
-    const replyButtons = mutationName === "cancel_meeting" && !committed && !replacementCancellation
+    const showVisitChangeMenu =
+      mutationName === "cancel_meeting" && !committed && !replacementCancellation;
+    let hasVisit = defaultMenuHasVisit(
+      state.agentMessages ?? [],
+      state.bookingContext,
+    );
+    if (committed && mutationName === "create_meeting") {
+      hasVisit = true;
+    }
+    const replyButtons = showVisitChangeMenu
       ? [...VISIT_CHANGE_MENU]
-      : [...defaultMenuLabels(
-          committed && mutationName === "create_meeting"
-            ? true
-            : defaultMenuHasVisit(state.agentMessages ?? [], state.bookingContext),
-        )];
+      : [...defaultMenuLabels(hasVisit)];
     const message = tagRuntimeAgentMessage(new AIMessage(replyText), agent.id);
     trackEvent("meeting_mutation_outcome", {
       mutation: mutationName,
@@ -243,7 +232,6 @@ export const createAgentMutationFinalizeNode = (agent: ClinicAgentDefinition) =>
               ? reduceBookingDraft(state.bookingDraft, { type: "command_cleared" })
               : null,
           }),
-      pendingCancellationPurpose: null,
       messages: [message],
       lastHandoff: {
         agentId: agent.id,

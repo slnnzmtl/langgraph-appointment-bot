@@ -8,14 +8,14 @@ import {
   buildConfirmKeyboard,
   buildReplyKeyboard,
   withMainMenu,
-  type ReplyKeyboardMarkup,
+  type TelegramReplyMarkup,
 } from "./telegram-ui.js";
 
 const CONFIRM_BOOKING_INTERRUPT = "confirm_booking";
 
 export type OutboundReply = {
   text: string;
-  reply_markup?: ReplyKeyboardMarkup;
+  reply_markup?: TelegramReplyMarkup;
   /**
    * Optional first Telegram message before `text` (e.g. FAQ/price answer before
    * a re-armed cancel HITL card). Confirm interrupt alone would drop this.
@@ -221,7 +221,10 @@ const getConfirmBookingDraft = (result: Record<string, unknown>): ConfirmBooking
 export const interpretInvokeResult = (result: unknown): OutboundReply => {
   const record = (result && typeof result === "object" ? result : {}) as Record<string, unknown>;
   const handoff = record.lastHandoff as
-    | { replyButtons?: unknown; replyText?: unknown }
+    | {
+        replyButtons?: unknown;
+        replyText?: unknown;
+      }
     | undefined;
   const confirmDraft = getConfirmBookingDraft(record);
   const handoffText =
@@ -232,6 +235,7 @@ export const interpretInvokeResult = (result: unknown): OutboundReply => {
     const prefix = handoffText.length > 0
       ? extractReplyButtons(handoffText).text.trim()
       : "";
+    // HITL confirm is always ✅/❌ reply keyboard (ignore leftover card buttons).
     return {
       text: confirmText,
       reply_markup: buildConfirmKeyboard(),

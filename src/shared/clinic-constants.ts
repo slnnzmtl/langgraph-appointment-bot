@@ -27,6 +27,8 @@ export const CONSULTATION_SERVICE_ID = fromEnv(
   "CONSULTATION_SERVICE_ID",
   "demo-consultation-service-id",
 );
+/** Patient-facing / CRM meeting-title label for the consultation service. */
+export const CONSULTATION_SERVICE_NAME_UK = "Консультація";
 /** Supervisor greeting clinic identity (Ukrainian). */
 export const CLINIC_NAME_UK = fromEnv(
   "CLINIC_NAME_UK",
@@ -48,6 +50,15 @@ export const PATIENT_FALLBACK_MESSAGE =
 /** Code-owned first identity question once the booking choices are complete. */
 export const BOOKING_PHONE_QUESTION_UK =
   "Для завершення запису надішліть, будь ласка, ваш номер телефону.";
+/** Typed phone failed structural parse — format hint, not a repeated first ask. */
+export const BOOKING_PHONE_INVALID_UK =
+  "Не вдалося розпізнати номер. Надішліть у форматі +380XXXXXXXXX або 0XXXXXXXXX.";
+/** Typed first name failed structural token — format hint. */
+export const BOOKING_FIRST_NAME_INVALID_UK =
+  "Напишіть, будь ласка, ім'я одним словом (літери; можна дефіс чи апостроф, наприклад Дар'я).";
+/** Typed last name failed structural token — format hint. */
+export const BOOKING_LAST_NAME_INVALID_UK =
+  "Напишіть, будь ласка, прізвище одним словом (літери; можна дефіс чи апостроф).";
 /** Graph-owned reply when the typed phone matches a Contact linked to another Telegram user. */
 export const BOOKING_PHONE_OCCUPIED_UK =
   "Цей номер уже прив’язаний до іншого акаунта. Надішліть, будь ласка, інший номер.";
@@ -131,6 +142,10 @@ export const mainMenuFullGreetingUk = (firstName?: string | null): string => {
 /** Confirm copy before cancel_meeting HITL / CRM write. */
 export const CANCEL_CONFIRMATION_UK =
   "Скасувати цей візит? Після підтвердження запис буде скасовано.";
+
+/** Confirm copy before create_meeting / reschedule_meeting HITL. */
+export const CREATE_CONFIRMATION_UK = "Підтвердити запис?";
+export const RESCHEDULE_CONFIRMATION_UK = "Підтвердити перенесення?";
 
 /** Overflow chip when a service catalog level has more rows than Telegram can show. */
 export const SERVICE_CANDIDATE_OTHER_LABEL_UK = "Інші варіанти";
@@ -221,18 +236,3 @@ export const BOOKING_SCHEDULE_RESELECT_UK =
 
 /** Runtime-owned line while HITL ✅/❌ is open and model prose must not claim an outcome. */
 export const BOOKING_AWAITING_CONFIRM_UK = "Запис ще не підтверджено.";
-
-/**
- * Runtime-owned Already-booked backstop body (visit label optional).
- * Graph attaches REPLACE menu («Скасувати», «Ні, дякую»).
- */
-export const alreadyBookedReplaceReplyUk = (visitLabel?: string): string => {
-  const visitLine = visitLabel != null && visitLabel.length > 0
-    ? `У вас вже є запланований візит: ${visitLabel}.`
-    : "У вас вже є запланований візит.";
-  return (
-    `${visitLine}\n\n`
-    + "На жаль, ми не можемо забронювати нову процедуру, поки у вас є активний запис. "
-    + "Бажаєте скасувати поточний візит і записати нову?"
-  );
-};
