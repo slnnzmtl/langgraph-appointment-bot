@@ -216,6 +216,15 @@ export const selectUniqueProcedureAfterRootCatalog = async (
     if (pending?.kind === "service_confirm" && pending.service.id === procedure.id) {
       return turn;
     }
+    if (
+      pending?.kind === "date_select"
+      || pending?.kind === "time_select"
+      || (pending?.kind === "visit_select" && pending.stage === "replacement")
+    ) {
+      // Explicit Book on a verified FAQ highlight is already accepted; continue
+      // from the date/replacement card rather than expecting a second Yes.
+      return turn;
+    }
     if (faqHighlightedService(pending) != null) {
       turn = await requestExplicitBook(session, turn);
       continue;
@@ -464,13 +473,14 @@ export const openServicesEntryWithVisit = async (
   );
 };
 
-/** Drill FAQ catalog until a non-consultation service_confirm is open. */
-export const drillToProcedureOffer = async (
+/** Drill FAQ catalog to a unique non-consultation service. */
+const drillToProcedure = async (
   session: SmokeSession,
   label: string,
   maxTaps = 8,
   /** When set, resume from this turn (catalog or offer) instead of tapping «Обрати іншу». */
   start?: TurnResult,
+  stopAtHighlight = false,
 ): Promise<TurnResult> => {
   let turn: TurnResult;
   if (start != null) {
@@ -499,6 +509,9 @@ export const drillToProcedureOffer = async (
         highlighted != null
         && !isConsultationName(highlighted.serviceName ?? interaction.choices[0]?.label ?? "")
       ) {
+        if (stopAtHighlight) {
+          return turn;
+        }
         turn = await requestExplicitBook(session, turn);
         continue;
       }
@@ -531,3 +544,19 @@ export const drillToProcedureOffer = async (
     `${label}: never reached non-consultation service_confirm (pending=${turn.state.pendingInteraction?.kind ?? "null"})`,
   );
 };
+
+/** FAQ-origin flows inspect the unique highlight before the explicit Book tap. */
+export const drillToProcedureHighlight = (
+  session: SmokeSession,
+  label: string,
+  maxTaps = 8,
+  start?: TurnResult,
+): Promise<TurnResult> => drillToProcedure(session, label, maxTaps, start, true);
+
+/** Booking-owned offer path used when a real service-confirm wait is required. */
+export const drillToProcedureOffer = (
+  session: SmokeSession,
+  label: string,
+  maxTaps = 8,
+  start?: TurnResult,
+): Promise<TurnResult> => drillToProcedure(session, label, maxTaps, start, false);
