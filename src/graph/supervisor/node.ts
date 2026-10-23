@@ -23,6 +23,7 @@ import {
   type AgentPrefetchResult,
 } from "../types.js";
 import { kyivToday } from "../../tools/availability-slots.js";
+import { availabilityCoverageComplete } from "../../tools/availability-tools.js";
 import {
   buildSupervisorTurnContext,
   refetchForVisitStatus,
@@ -155,7 +156,7 @@ export const createClinicSupervisorNode = (
         clinicDay,
         contactContextDirty: false,
         bookingContextDirty: false,
-        availabilityVerified: ctx.state.availabilityContext != null,
+        availabilityVerified: availabilityCoverageComplete(ctx.state.availabilityContext),
       }),
       kyivDate: clinicDay,
       locale: resolvePatientLocale({

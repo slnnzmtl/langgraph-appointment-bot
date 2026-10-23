@@ -93,6 +93,13 @@ export const availabilityQueryFromContext = (
   };
 };
 
+export const availabilityCoverageComplete = (
+  context: AvailabilityContext | null | undefined,
+): boolean =>
+  context != null
+  && context.truncated !== true
+  && availabilityQueryFromContext(context)?.coverageComplete !== false;
+
 export const availabilityQueryFromCursor = (
   cursor: AvailabilityCursor | null | undefined,
 ): AvailabilityQuery | undefined => {
@@ -375,6 +382,9 @@ export const tryAvailabilityCacheHit = (
   now: Date = new Date(),
 ): { json: string; kind: "date_list" | "day_slots" } | null => {
   if (!ctx || (ctx.days.length === 0 && !availabilityQueryFromContext(ctx))) {
+    return null;
+  }
+  if (!availabilityCoverageComplete(ctx)) {
     return null;
   }
   if (input.forceRefresh) {

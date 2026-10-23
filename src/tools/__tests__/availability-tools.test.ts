@@ -963,6 +963,36 @@ describe("tryAvailabilityCacheHit", () => {
     expect(hit).toBeNull();
   });
 
+  it("does not reuse an explicitly incomplete persisted snapshot", () => {
+    const partial: AvailabilityContext = {
+      ...snapshot,
+      truncated: true,
+      query: {
+        kind: "nearest",
+        rangeFrom: "2026-09-10",
+        rangeThrough: "2026-09-11",
+        coverageComplete: false,
+      },
+    };
+
+    expect(tryAvailabilityCacheHit(partial, {
+      direction: "nearest",
+      durationMinutes: 30,
+    })).toBeNull();
+    expect(tryAvailabilityCacheHit(partial, {
+      date: "2026-09-10",
+      durationMinutes: 30,
+    })).toBeNull();
+    expect(tryAvailabilityCacheHit({
+      ...partial,
+      truncated: false,
+      query: { ...partial.query!, coverageComplete: false },
+    }, {
+      direction: "nearest",
+      durationMinutes: 30,
+    })).toBeNull();
+  });
+
   it("hits for an equivalent nearest DATE list when duration matches", () => {
     const hit = tryAvailabilityCacheHit(
       { ...snapshot, searchDirection: "nearest" },

@@ -35,7 +35,10 @@ import {
 import type { CatalogChip } from "../booking-domain/session.js";
 import type { InteractionChoice } from "../booking/booking-session.js";
 import { hasPendingToolCalls } from "../tool-routing.js";
-import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
+import {
+  availabilityCoverageComplete,
+  availabilityQueryFromContext,
+} from "../../tools/availability-tools.js";
 import { resolveContactIdentity } from "./contact-command.js";
 import {
   closedBookingSessionUpdate,
@@ -121,16 +124,21 @@ export const readModelsFromClinicState = (
   options?: { assignedUserId?: string },
 ): BookingReadModels => {
   const availability = state.availabilityContext;
-  const query = availability != null ? availabilityQueryFromContext(availability) : null;
-  const snapshotId = availability != null
+  const verifiedAvailability = availabilityCoverageComplete(availability)
+    ? availability
+    : null;
+  const query = verifiedAvailability != null
+    ? availabilityQueryFromContext(verifiedAvailability)
+    : null;
+  const snapshotId = verifiedAvailability != null
     ? presentationSnapshotId({
-      ...(availability.serviceId != null ? { serviceId: availability.serviceId } : {}),
+      ...(verifiedAvailability.serviceId != null ? { serviceId: verifiedAvailability.serviceId } : {}),
       ...(query?.kind != null ? { queryKind: query.kind } : {}),
       ...(query?.anchor ?? query?.date ?? query?.rangeFrom
         ? { queryAnchor: query.anchor ?? query.date ?? query.rangeFrom }
         : {}),
-      days: availability.days,
-      stepMinutes: availability.stepMinutes,
+      days: verifiedAvailability.days,
+      stepMinutes: verifiedAvailability.stepMinutes,
     })
     : undefined;
   const plannedMeetings = (state.bookingContext?.meetings ?? []).flatMap((meeting) => {
@@ -152,10 +160,10 @@ export const readModelsFromClinicState = (
     clinicDay: kyivToday(),
     contactContextDirty: state.prefetchDirty === true,
     bookingContextDirty: state.prefetchDirty === true,
-    availabilityVerified: availability != null,
-    ...(availability != null
+    availabilityVerified: verifiedAvailability != null,
+    ...(verifiedAvailability != null
       ? {
-        availabilityDays: availability.days.map((day) => ({
+        availabilityDays: verifiedAvailability.days.map((day) => ({
           date: day.date,
           ...(day.dayLabel != null ? { dayLabel: day.dayLabel } : {}),
           slots: day.slots.map((slot) => ({
