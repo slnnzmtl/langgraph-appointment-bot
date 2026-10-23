@@ -314,6 +314,31 @@ describe("FAQ highlight book_highlighted promotion", () => {
         kind: "catalog_service",
         serviceId: "svc-botox",
         serviceName: "Botox CRM",
+        accepted: true,
+      },
+    });
+  });
+
+  it("turns explicit book-this prose into accepted canonical catalog identity", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async (input) => interpretBookingTurnDeterministic(input),
+    });
+    const update = await node(supervisorState({
+      messages: [new HumanMessage("book this one")],
+      pendingInteraction: highlightInteraction,
+      servicesContext: {
+        list: [{ id: "svc-botox", name: "Botox CRM", duration: 60 }],
+        fetchedAt: Date.now(),
+      },
+      bookingDraft: null,
+    }));
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: {
+        kind: "catalog_service",
+        serviceId: "svc-botox",
+        serviceName: "Botox CRM",
+        accepted: true,
       },
     });
   });
@@ -361,6 +386,7 @@ describe("FAQ highlight book_highlighted promotion", () => {
         kind: "catalog_service",
         serviceId: "svc-botox",
         serviceName: "Botox CRM",
+        accepted: true,
       },
     });
     expect(update.servicesContext?.list).toHaveLength(1);

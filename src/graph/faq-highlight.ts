@@ -93,7 +93,7 @@ export type ResolveBookHighlightedOptions = {
 };
 
 /**
- * Promote book_highlighted → catalog_service when the id is on the current list.
+ * Promote explicit book_highlighted → accepted catalog_service only when the id is on the current list.
  * Missing/stale rows must clear the highlight (supervisor FINISH), not reopen FAQ chips.
  */
 export const resolveBookHighlightedPromotion = (
@@ -119,6 +119,7 @@ export const resolveBookHighlightedPromotion = (
             kind: "catalog_service",
             serviceId: row.id,
             ...(row.name != null ? { serviceName: row.name } : {}),
+            accepted: true,
           },
         },
       },

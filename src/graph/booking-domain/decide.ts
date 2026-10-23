@@ -1584,6 +1584,56 @@ export const decideBooking = (
       storeDeferredFromPatch(null);
     };
 
+    /** Continue after either explicit runtime acceptance or offer confirmation. */
+    const continueAfterServiceAcceptance = (): BookingDecision => {
+      const accepted = ctx.working?.serviceAcceptance?.status === "accepted";
+      const deferred = ctx.working?.deferredTurn;
+      if (accepted && deferred?.schedule?.date != null) {
+        emit({
+          type: "schedule_requested",
+          date: deferred.schedule.date,
+          ...(deferred.schedule.preferredTime != null
+            ? { preferredTime: deferred.schedule.preferredTime }
+            : {}),
+        });
+      }
+      if (
+        deferred?.informational?.topic === "price"
+        && accepted
+        && ctx.working?.serviceAcceptance?.service.id != null
+      ) {
+        const serviceId = ctx.working.serviceAcceptance.service.id;
+        emit({ type: "deferred_informational_consumed" });
+        const pending = preparePendingEffect({ kind: "get_service", serviceId });
+        if (ctx.working?.deferredTurn?.schedule != null) {
+          emit({ type: "deferred_turn_bound", boundEffectId: pending.id });
+        } else if (ctx.working?.deferredTurn != null) {
+          emit({ type: "deferred_turn_cleared", reason: "consumed" });
+        }
+        return {
+          tag: "effect",
+          intent: "answer_side_question",
+          facts: {},
+          card: null,
+          pendingEffect: pending,
+        };
+      }
+      if (deferred?.schedule != null && accepted) {
+        emit({ type: "deferred_turn_cleared", reason: "consumed" });
+        const sched = deferred.schedule;
+        const queryKind = sched.relative ?? "exact";
+        return runEffect(
+          "present_dates",
+          presentAvailabilityEffect(ctx.working, {
+            queryKind: queryKind === "exact" ? "exact" : queryKind,
+            ...(sched.date != null ? { date: sched.date } : {}),
+            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
+          }),
+        );
+      }
+      return decideFromRequirement();
+    };
+
     // REPLACE chip: cancel current visit, then HITL.
     if (
       patch.choice?.choiceId === "cancel_existing"
@@ -1610,10 +1660,12 @@ export const decideBooking = (
           source: "catalog",
           ...(service.durationMinutes != null ? { durationMinutes: service.durationMinutes } : {}),
         },
-        accepted: false,
+        accepted: service.accepted === true,
       });
       applyCompoundFactsAfterServiceSwitch();
-      return decideFromRequirement();
+      return service.accepted === true
+        ? continueAfterServiceAcceptance()
+        : decideFromRequirement();
     }
 
     // Named-procedure switch: invalidate old service before this-turn facts so
@@ -1632,57 +1684,7 @@ export const decideBooking = (
       if (ctx.working?.serviceAcceptance?.status === "pending") {
         emit({ type: "service_accepted" });
       }
-      // After acceptance, apply deferred schedule (requestedTime pending) and price.
-      const deferred = ctx.working?.deferredTurn;
-      if (
-        ctx.working?.serviceAcceptance?.status === "accepted"
-        && deferred?.schedule != null
-      ) {
-        const sched = deferred.schedule;
-        if (sched.date != null) {
-          emit({
-            type: "schedule_requested",
-            date: sched.date,
-            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
-          });
-        }
-      }
-      if (
-        deferred?.informational?.topic === "price"
-        && ctx.working?.serviceAcceptance?.service.id != null
-      ) {
-        const serviceId = ctx.working.serviceAcceptance.service.id;
-        emit({ type: "deferred_informational_consumed" });
-        const pending = preparePendingEffect({ kind: "get_service", serviceId });
-        if (ctx.working?.deferredTurn?.schedule != null) {
-          emit({ type: "deferred_turn_bound", boundEffectId: pending.id });
-        } else if (ctx.working?.deferredTurn != null) {
-          emit({ type: "deferred_turn_cleared", reason: "consumed" });
-        }
-        return {
-          tag: "effect",
-          intent: "answer_side_question",
-          facts: {},
-          card: null,
-          pendingEffect: pending,
-        };
-      }
-      if (
-        deferred?.schedule != null
-        && ctx.working?.serviceAcceptance?.status === "accepted"
-      ) {
-        const sched = deferred.schedule;
-        emit({ type: "deferred_turn_cleared", reason: "consumed" });
-        const queryKind = sched.relative ?? "exact";
-        return runEffect(
-          "present_dates",
-          presentAvailabilityEffect(ctx.working, {
-            queryKind: queryKind === "exact" ? "exact" : queryKind,
-            ...(sched.date != null ? { date: sched.date } : {}),
-            ...(sched.preferredTime != null ? { preferredTime: sched.preferredTime } : {}),
-          }),
-        );
-      }
+      return continueAfterServiceAcceptance();
     } else if (service?.kind === "named_procedure") {
       // Book-with-visit: REPLACE before catalog resolve — not while already
       // browsing a choose-other / catalog page (narrow the open picker instead).

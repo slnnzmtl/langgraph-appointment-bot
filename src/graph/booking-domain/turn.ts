@@ -15,8 +15,14 @@ export type ServiceIntent =
    * Never selects consultation in the kernel.
    */
   | { kind: "book_highlighted" }
-  /** Resolved from catalog evidence only (never model-minted CRM ids). */
-  | { kind: "catalog_service"; serviceId: string; serviceName?: string; durationMinutes?: number };
+  /** Resolved from catalog evidence only; accepted is reserved for explicit verified Book. */
+  | {
+      kind: "catalog_service";
+      serviceId: string;
+      serviceName?: string;
+      durationMinutes?: number;
+      accepted?: true;
+    };
 
 export type ScheduleIntent =
   | { kind: "date"; date: string }

@@ -438,6 +438,69 @@ describe("decideBooking atomic contract", () => {
     expect(failed.decision.reason).toBe("contact_write_failed");
   });
 
+  it("accepts only trusted explicit catalog booking and continues to requested dates", () => {
+    const result = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: {
+          kind: "catalog_service",
+          serviceId: "svc-peel",
+          serviceName: "Medium peel",
+          durationMinutes: 75,
+          accepted: true,
+        },
+        scheduleIntent: { kind: "date_and_time", date: "2026-10-24", time: "13:00" },
+        note: { kind: "answer", value: "forehead" },
+        contactFacts: { firstName: "Ada" },
+      },
+    }, READ_MODELS);
+    expect(result.events).toContainEqual(expect.objectContaining({
+      type: "service_selected",
+      accepted: true,
+      service: expect.objectContaining({ id: "svc-peel", durationMinutes: 75 }),
+    }));
+    expect(result.events).toContainEqual({ type: "note_status", status: "answered", value: "forehead" });
+    expect(result.events).toContainEqual({ type: "contact_field_submitted", field: "firstName", value: "Ada" });
+    expect(result.decision.pendingEffect?.effect).toMatchObject({
+      kind: "present_availability",
+      queryKind: "exact",
+      date: "2026-10-24",
+      preferredTime: "13:00",
+      durationMinutes: 75,
+    });
+  });
+
+  it("keeps ordinary catalog selections behind service confirmation", () => {
+    const result = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: { kind: "catalog_service", serviceId: "svc-peel", serviceName: "Medium peel" },
+      },
+    }, READ_MODELS);
+    expect(result.events).toContainEqual(expect.objectContaining({ type: "service_selected", accepted: false }));
+    expect(result.decision.card).toMatchObject({ kind: "service_confirm", serviceId: "svc-peel" });
+  });
+
+  it("keeps the replacement gate for an explicitly accepted FAQ service", () => {
+    const result = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: {
+          kind: "catalog_service",
+          serviceId: "svc-peel",
+          durationMinutes: 75,
+          accepted: true,
+        },
+      },
+    }, {
+      ...READ_MODELS,
+      plannedMeetings: [{ id: "existing-1", name: "Consultation" }],
+    });
+    expect(result.decision.card).toMatchObject({ kind: "visit_select", stage: "replacement" });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.events).toContainEqual(expect.objectContaining({ type: "service_selected", accepted: true }));
+  });
+
   it("book-with-visit offers REPLACE visit_select instead of consultation", () => {
     const meeting = {
       id: "meeting-1",
