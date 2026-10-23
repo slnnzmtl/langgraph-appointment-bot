@@ -369,6 +369,23 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("collects the remaining accepted name before repairing a nameless owned contact", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Ada",
+    });
+
+    const result = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: {},
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.decision.card).toMatchObject({ kind: "contact_field", field: "lastName" });
+  });
+
   it("updates all accepted names on an owned nameless contact before meeting confirmation", () => {
     let draft: BookingDraft | null = draftAtDetailsWithPhone();
     draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });

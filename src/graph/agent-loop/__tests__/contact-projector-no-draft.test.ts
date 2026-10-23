@@ -5,6 +5,46 @@ import { createEmptyBookingDraft, reduceBookingDraft } from "../../booking/booki
 import { projectContactEffects } from "../tool-effects/contact.js";
 
 describe("projectContactEffects CRM-only (no draft writes)", () => {
+  it("projects verified update fields instead of requested tool arguments", () => {
+    const callId = "call-update-verified";
+    const patch = projectContactEffects({
+      state: {
+        bookingDraft: createEmptyBookingDraft(),
+        contactContext: {
+          ownership: "telegram",
+          contacts: [{ id: "c-owned", firstName: "Existing", phoneNumber: "+380501234567" }],
+        },
+        agentMessages: [new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: callId,
+            name: "update_contact",
+            args: { contactId: "c-owned", firstName: "Unverified", lastName: "Requested" },
+          }],
+        })],
+      } as never,
+      resultMessages: [new ToolMessage({
+        content: JSON.stringify({
+          success: true,
+          id: "c-owned",
+          contactId: "c-owned",
+          firstName: "Existing",
+          lastName: "Verified",
+          phoneNumber: "+380501234567",
+          missingFields: [],
+        }),
+        tool_call_id: callId,
+        name: "update_contact",
+      })],
+    });
+
+    expect(patch.contactContext).toMatchObject({
+      ownership: "telegram",
+      contacts: [{ id: "c-owned", firstName: "Existing", lastName: "Verified" }],
+    });
+    expect(patch.contactContext?.contacts[0]).not.toHaveProperty("injected");
+  });
+
   it("updates contactContext on create_contact without setting bookingDraft", () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "contact_field_submitted",

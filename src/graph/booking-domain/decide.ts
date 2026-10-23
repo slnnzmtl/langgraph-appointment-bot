@@ -604,8 +604,6 @@ export const decideBooking = (
     // Owned / linked contact: save accepted details that repair CRM incompleteness
     // before booking. Draft details alone are not evidence that CRM was updated.
     if (w.contactId != null) {
-      const sync = acceptedContactRepairEffect(w.contactId, details);
-      if (sync != null) return sync;
       const missingOwned = nextMissingContactField(details);
       if (missingOwned != null) {
         emitDecision({ kind: "clarification", reason: `need_${missingOwned}` });
@@ -615,6 +613,8 @@ export const decideBooking = (
           `need_${missingOwned}`,
         );
       }
+      const sync = acceptedContactRepairEffect(w.contactId, details);
+      if (sync != null) return sync;
       return decideFromRequirement();
     }
 
@@ -1326,26 +1326,6 @@ export const decideBooking = (
 
     if (result.kind === "contact_write") {
       emit({ type: "effect_cleared" });
-      if (
-        result.outcome === "updated"
-        && result.crmComplete === true
-        && pending?.effect.kind === "update_contact"
-      ) {
-        // The write result is the fresh CRM evidence for this consume hop; the
-        // state prefetch is intentionally stale until the next turn.
-        readModels = {
-          ...readModels,
-          ownedContact: {
-            ...readModels.ownedContact,
-            ...(pending.effect.payload.firstName != null
-              ? { firstName: pending.effect.payload.firstName }
-              : {}),
-            ...(pending.effect.payload.lastName != null
-              ? { lastName: pending.effect.payload.lastName }
-              : {}),
-          },
-        };
-      }
       if (
         result.outcome === "updated"
         && result.crmComplete !== true

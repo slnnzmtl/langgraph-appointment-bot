@@ -130,6 +130,7 @@ describe("effectResultFromToolMessages list_services catalog", () => {
         {
           id: "svc-1",
           name: "Корекція ботокс",
+          duration: 60,
           description: "Line A\nLine B\nLine C",
         },
         {
@@ -161,7 +162,7 @@ describe("effectResultFromToolMessages list_services catalog", () => {
       kind: "catalog",
       outcome: "ok",
       services: [
-        { id: "svc-1", name: "Корекція ботокс" },
+        { id: "svc-1", name: "Корекція ботокс", durationMinutes: 60 },
         { id: "svc-2", name: "Мезоботокс" },
       ],
     });
@@ -222,5 +223,70 @@ describe("effectResultFromToolMessages list_services catalog", () => {
       kind: "catalog",
       outcome: "error",
     });
+  });
+});
+
+describe("effectResultFromToolMessages verified Contact update", () => {
+  it("derives completeness from the verified contact row, not missingFields metadata", () => {
+    const id = "eff_8_update_contact";
+    const result = effectResultFromToolMessages(
+      [new ToolMessage({
+        content: JSON.stringify({
+          success: true,
+          id: "c-owned",
+          contactId: "c-owned",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          phoneNumber: "+380501234567",
+          missingFields: ["lastName"],
+          injected: "discard",
+        }),
+        tool_call_id: id,
+        name: "update_contact",
+      })],
+      {
+        id,
+        expectedRevision: 8,
+        effect: { kind: "update_contact", payload: { contactId: "c-owned", lastName: "Lovelace" } },
+        status: "executing",
+      },
+    );
+    expect(result).toMatchObject({
+      kind: "contact_write",
+      outcome: "updated",
+      contactId: "c-owned",
+      crmComplete: true,
+      contact: {
+        id: "c-owned",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        phoneNumber: "+380501234567",
+      },
+    });
+    expect(result && "contact" in result ? result.contact : undefined).not.toHaveProperty("injected");
+  });
+
+  it("rejects explicit errors and incomplete verified rows", () => {
+    const id = "eff_9_update_contact";
+    const pending: PendingEffect = {
+      id,
+      expectedRevision: 9,
+      effect: { kind: "update_contact", payload: { contactId: "c-owned" } },
+      status: "executing",
+    };
+    const failed = effectResultFromToolMessages(
+      [new ToolMessage({ content: JSON.stringify({ success: true, id: "c-owned", error: "no" }), tool_call_id: id, name: "update_contact" })],
+      pending,
+    );
+    expect(failed).toMatchObject({ kind: "contact_write", outcome: "failed" });
+    const incomplete = effectResultFromToolMessages(
+      [new ToolMessage({
+        content: JSON.stringify({ success: true, id: "c-owned", contactId: "c-owned", firstName: "Ada", phoneNumber: "+380501234567" }),
+        tool_call_id: id,
+        name: "update_contact",
+      })],
+      pending,
+    );
+    expect(incomplete).toMatchObject({ kind: "contact_write", outcome: "updated", crmComplete: false });
   });
 });
