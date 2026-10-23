@@ -697,24 +697,29 @@ export const extractMeetingsFromSearchResult = (
     const meeting = item && typeof item === "object"
       ? item as Record<string, unknown>
       : null;
-    const dateStart = meeting?.dateStart;
-    const dateEnd = meeting?.dateEnd;
-    let valid = typeof dateStart === "string"
-      && typeof dateEnd === "string"
-      && dateStart.trim().length > 0
-      && dateEnd.trim().length > 0;
-    if (valid) {
-      try {
-        valid = kyivLocalIsoToUtcMs(normalizeLocalIsoDatetime(dateStart as string))
-          < kyivLocalIsoToUtcMs(normalizeLocalIsoDatetime(dateEnd as string));
-      } catch {
-        valid = false;
-      }
-    }
-    if (!valid) {
+    if (
+      meeting == null
+      || typeof meeting.dateStart !== "string"
+      || typeof meeting.dateEnd !== "string"
+      || meeting.dateStart.trim().length === 0
+      || meeting.dateEnd.trim().length === 0
+    ) {
       if (options.skipInvalidRows) continue;
       const kind = meeting == null ? "Malformed" : "Incomplete";
       throw new Error(`${kind} meeting-search row ${index}; occupancy is unknown`);
+    }
+    const { dateStart, dateEnd } = meeting;
+    let valid = false;
+    try {
+      const startMs = kyivLocalIsoToUtcMs(dateStart);
+      const endMs = kyivLocalIsoToUtcMs(dateEnd);
+      valid = Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs;
+    } catch {
+      valid = false;
+    }
+    if (!valid) {
+      if (options.skipInvalidRows) continue;
+      throw new Error(`Incomplete meeting-search row ${index}; occupancy is unknown`);
     }
     meetings.push({
       dateStart: dateStart as string,

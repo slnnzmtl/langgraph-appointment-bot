@@ -169,6 +169,35 @@ describe("meeting-tools availability", () => {
     expect(parsed.slots).toEqual([]);
   });
 
+  it("keeps date-only reserved ranges in exact and directional availability searches", async () => {
+    const callTool = async (name: string, args: Record<string, unknown>) => {
+      calls.push({ name, args });
+      if (name === "get_working_time") return crmCalendar;
+      if (name === "search_meetings") return { meetings: [] };
+      if (name === "search_entity") {
+        return {
+          list: [{ id: "reserved-all-day", dateStart: "2027-08-10", dateEnd: "2027-08-11" }],
+          total: 1,
+        };
+      }
+      return { ok: true };
+    };
+    const tool = presentAvailability(callTool);
+
+    const exact = JSON.parse(await tool.invoke({ date: "2027-08-10" }) as string) as {
+      slots: Array<{ label: string }>;
+    };
+    expect(exact.slots).toEqual([]);
+
+    calls.length = 0;
+    const directional = JSON.parse(await tool.invoke({
+      direction: "later",
+      startDate: "2027-08-10",
+      durationMinutes: 30,
+    }) as string) as { days: Array<{ date: string; slots: Array<unknown> }> };
+    expect(directional.days.some((day) => day.date === "2027-08-10" && day.slots.length > 0)).toBe(false);
+  });
+
   it("present_availability_slots uses Working reserved hours on a closed weekday", async () => {
     const callTool = async (name: string) => {
       if (name === "get_working_time") {

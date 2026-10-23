@@ -368,6 +368,12 @@ describe("extractMeetingsFromSearchResult", () => {
     ).toEqual([{ dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" }]);
   });
 
+  it("accepts date-only reservations through the established Kyiv datetime parser", () => {
+    expect(extractMeetingsFromSearchResult({
+      list: [{ dateStart: "2027-08-10", dateEnd: "2027-08-11" }],
+    })).toEqual([{ dateStart: "2027-08-10", dateEnd: "2027-08-11" }]);
+  });
+
   it.each([
     "{bad json",
     { error: "CRM search failed" },
