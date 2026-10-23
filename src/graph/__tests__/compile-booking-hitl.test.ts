@@ -8,6 +8,8 @@ import { z } from "zod";
 import { compileClinicGraph } from "../compile.js";
 import { acceptedCreateDraft, bookingIntegrationSnapshot } from "./agent-loop-booking-integration-harness.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+import { createContactTools } from "../../tools/contact-tools.js";
+import type { InterpretBookingTurn } from "../agent-loop/booking-turn-interpreter.js";
 
 const bookingAgent: ClinicAgentDefinition = {
   id: "booking",
@@ -24,7 +26,10 @@ const faqAgent: ClinicAgentDefinition = {
   maxSteps: 4,
 };
 
-const createGraph = (writeResult: (args: Record<string, unknown>) => Promise<string>) => {
+const createGraph = (
+  writeResult: (args: Record<string, unknown>) => Promise<string>,
+  options: { bookingTools?: ReturnType<typeof createContactTools>; interpretBookingTurn?: InterpretBookingTurn } = {},
+) => {
   const createMeeting = tool(async (args) => {
     const decision = interrupt({ type: "confirm_booking", draft: args }) as {
       confirmed?: boolean;
@@ -49,7 +54,7 @@ const createGraph = (writeResult: (args: Record<string, unknown>) => Promise<str
   const checkpointer = new MemorySaver();
   return compileClinicGraph({
     specialists: { faq: faqAgent, booking: bookingAgent },
-    agentTools: { faq: [], booking: [presentAvailability, createMeeting] },
+    agentTools: { faq: [], booking: [presentAvailability, createMeeting, ...(options.bookingTools ?? [])] },
     agentModel: {
       bindTools: () => ({ invoke: async () => new AIMessage("ok") }),
     } as unknown as BaseChatModel,
@@ -57,7 +62,7 @@ const createGraph = (writeResult: (args: Record<string, unknown>) => Promise<str
       bindRoutingTools: () => ({ invoke: async () => ({ next: "booking" }) }),
       withStructuredOutput: () => ({ invoke: async () => ({ text: "Your appointment was processed." }) }),
     } as unknown as ILLMConnector,
-    interpretBookingTurn: async () => ({}),
+    interpretBookingTurn: options.interpretBookingTurn ?? (async () => ({})),
     assignedUserId: "user-1",
     formatSystemMetadata: () => "META",
     messageHistoryMaxTokens: 6_000,
@@ -96,6 +101,60 @@ const initialState = () => ({
 });
 
 describe("compileClinicGraph booking HITL", () => {
+  it("collects both names, verifies the CRM repair, then opens meeting confirmation", async () => {
+    const contact = {
+      id: "contact-1",
+      phoneNumber: "+380501112233",
+      firstName: "",
+      lastName: "",
+    };
+    const crmCalls: string[] = [];
+    const contactTools = createContactTools({
+      callTool: async (name, args) => {
+        crmCalls.push(name);
+        if (name === "update_entity") {
+          Object.assign(contact, args.data);
+          return "Successfully updated Contact record with ID: contact-1";
+        }
+        if (name === "get_entity") return { ...contact };
+        return { ok: true };
+      },
+    });
+    const interpretBookingTurn: InterpretBookingTurn = async ({ rawText }) =>
+      rawText === "Ada"
+        ? { contactFacts: { firstName: "Ada" } }
+        : rawText === "Lovelace"
+          ? { contactFacts: { lastName: "Lovelace" } }
+          : {};
+    const graph = createGraph(async () => JSON.stringify({ id: "meeting-1", success: true }), {
+      bookingTools: contactTools,
+      interpretBookingTurn,
+    }).graph;
+    const config = { configurable: { thread_id: "compiled-contact-repair" } };
+    const draft = readyDraft();
+    draft.contactDetails = { phoneNumber: contact.phoneNumber };
+
+    const asked = await graph.invoke({
+      messages: [new HumanMessage("Ada")],
+      bookingDraft: draft,
+      bookingSchemaVersion: 2,
+      patientLocale: "en",
+      contactContext: { ownership: "telegram", contacts: [{ ...contact }] },
+      availabilityContext: { ...bookingIntegrationSnapshot, serviceId: "svc-1" },
+    } as never, config);
+    expect(asked.pendingInteraction).toMatchObject({ kind: "contact_field", field: "lastName" });
+    expect(crmCalls).toEqual([]);
+
+    await graph.invoke({ messages: [new HumanMessage("Lovelace")] } as never, config);
+    const checkpoint = await graph.getState(config);
+    expect(crmCalls).toEqual(["update_entity", "get_entity"]);
+    expect(checkpoint.values.contactContext).toMatchObject({
+      ownership: "telegram",
+      contacts: [{ id: "contact-1", firstName: "Ada", lastName: "Lovelace" }],
+    });
+    expect(checkpoint.values.bookingDraft?.pendingEffect?.effect.kind).toBe("create_meeting");
+  });
+
   it("pauses, resumes once on the same checkpoint, consumes the matching effect, and grounds success", async () => {
     const writes: Record<string, unknown>[] = [];
     const { graph } = createGraph(async (args) => {
