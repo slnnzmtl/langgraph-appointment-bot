@@ -12,8 +12,8 @@ import { fileURLToPath } from "node:url";
 
 import { GeminiConnector } from "@personal-assistant/llm-gemini";
 
-import { createNoteTurnClassifier } from "../graph/booking-note-classifier.js";
-import type { NoteTurnKind } from "../graph/booking-note-turn.js";
+import { createNoteTurnClassifier } from "../graph/booking/booking-note-classifier.js";
+import type { NoteTurnKind } from "../graph/booking/booking-note-turn.js";
 
 const FIXTURES: Array<{
   id: string;

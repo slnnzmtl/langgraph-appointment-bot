@@ -246,6 +246,33 @@ module.exports = {
       }
     },
     {
+      name: 'graph-feature-not-to-bootstrap',
+      comment:
+        'Graph feature modules must not depend on transport adapters or the composition root.',
+      severity: 'error',
+      from: {
+        path: '^src/graph/(booking|booking-domain|catalog|context|agent-loop|supervisor)/',
+        pathNot: '/__tests__/'
+      },
+      to: { path: '^src/(adapter|composition)/' }
+    },
+    {
+      name: 'booking-domain-not-to-graph-runtime',
+      comment:
+        'Booking decisions must not import LangGraph state, nodes, routing, or the supervisor.',
+      severity: 'error',
+      from: { path: '^src/graph/booking-domain/', pathNot: '/__tests__/' },
+      to: { path: '^src/graph/(agent-loop/|supervisor/|compile[.]ts$|state[.]ts$|routing[.]ts$)' }
+    },
+    {
+      name: 'booking-and-catalog-not-to-agent-loop',
+      comment:
+        'Booking and catalog policy must not depend on agent-loop adapters or protocol tape.',
+      severity: 'error',
+      from: { path: '^src/graph/(booking|catalog)/', pathNot: '/__tests__/' },
+      to: { path: '^src/graph/agent-loop/' }
+    },
+    {
       name: 'langfuse-sdk-only-in-analytics-langfuse',
       comment:
         'Only src/analytics/langfuse.ts may import @langfuse/* or @opentelemetry/*. '

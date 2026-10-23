@@ -1,4 +1,4 @@
-import type { PendingInteraction, VisitSelectInteraction } from "../booking-session.js";
+import type { PendingInteraction, VisitSelectInteraction } from "../booking/booking-session.js";
 
 /** Structured open interaction for the supervisor routing model. */
 export const formatOpenInteractionContext = (

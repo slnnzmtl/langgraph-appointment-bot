@@ -8,7 +8,7 @@ import {
   formatContactContext,
   formatMyVisitReply,
   formatPlannedVisitsFlag,
-} from "../context-blocks.js";
+} from "../context/context-blocks.js";
 
 const listedMeetings: BookingContext = {
   meetings: [

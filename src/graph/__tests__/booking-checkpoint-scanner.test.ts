@@ -6,7 +6,7 @@ import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { SqliteSaver } from "@langchain/langgraph-checkpoint-sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { BOOKING_SCHEMA_VERSION, createEmptyBookingDraft } from "../booking-draft.js";
+import { BOOKING_SCHEMA_VERSION, createEmptyBookingDraft } from "../booking/booking-draft.js";
 import {
   classifyUpgradeForScan,
   emptyBookingCheckpointScanCounts,
@@ -14,7 +14,7 @@ import {
   pendingWritesHaveConfirmBooking,
   scanBookingCheckpoints,
   schemaBeforeForScan,
-} from "../booking-checkpoint-scanner.js";
+} from "../booking/booking-checkpoint-scanner.js";
 
 describe("schemaBeforeForScan", () => {
   it("treats a missing bookingSchemaVersion as schema 0, never current", () => {

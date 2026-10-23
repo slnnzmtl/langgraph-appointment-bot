@@ -7,7 +7,7 @@ import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import { hasPendingToolCalls } from "../../tool-routing.js";
 import { createBookingDecideNode } from "../booking-decide-nodes.js";
 import { createBookingRespondNode } from "../booking-respond.js";

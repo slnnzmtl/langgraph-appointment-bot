@@ -7,19 +7,19 @@ import { trackEvent } from "../../../analytics/track.js";
 import {
   effectiveBookingContactDetails,
   nextMissingContactField,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import {
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
-} from "../../booking-interaction-render.js";
+} from "../../booking/booking-interaction-render.js";
 import {
   reduceBookingSession,
   type PendingInteraction,
-} from "../../booking-session.js";
+} from "../../booking/booking-session.js";
 import {
   phoneCandidateHasLinkableRow,
   resolveContactIdentity,
-} from "../../contact-command.js";
+} from "../contact-command.js";
 import type { ClinicState } from "../../state.js";
 import {
   CONTACT_LINK_CANDIDATE_REQUIRED_ERROR,

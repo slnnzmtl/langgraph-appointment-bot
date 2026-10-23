@@ -1,4 +1,4 @@
-import type { ILLMConnector } from "./types.js";
+import type { ILLMConnector } from "../types.js";
 import {
   noteTurnClassificationSchema,
   type ClassifyNoteTurn,

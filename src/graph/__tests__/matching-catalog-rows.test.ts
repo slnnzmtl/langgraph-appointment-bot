@@ -5,7 +5,7 @@ import {
   matchingCatalogRows,
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
-} from "../catalog-match.js";
+} from "../catalog/catalog-match.js";
 
 const catalog = [
   {

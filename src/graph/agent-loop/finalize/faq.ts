@@ -6,24 +6,24 @@ import type { ServicesContext } from "../../../tools/service-tools.js";
 import {
   openCatalogFromFreeText,
   openRootFaqCatalog,
-} from "../../booking-entry-policy.js";
+} from "../../booking/booking-entry-policy.js";
 import {
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
-} from "../../booking-interaction-render.js";
+} from "../../booking/booking-interaction-render.js";
 import {
   faqCatalogIntroFromModel,
   faqCatalogPreserveModelAnswer,
   renderFaqCatalogReply,
-} from "../../faq-catalog.js";
+} from "../../catalog/faq-catalog.js";
 import {
   reduceBookingSession,
   type PendingInteraction,
-} from "../../booking-session.js";
+} from "../../booking/booking-session.js";
 import type {
   PartitionServiceCandidates,
   SelectServiceCandidates,
-} from "../../service-resolution.js";
+} from "../../catalog/service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { BOOKING_AGENT_ID } from "../../types.js";
 import {

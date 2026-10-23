@@ -1,8 +1,8 @@
 import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
-import { stripToolNoiseFromMessages } from "../supervisor-history.js";
-import { tagRuntimeAgentMessage } from "../sub-agent-messages.js";
+import { stripToolNoiseFromMessages } from "../context/supervisor-history.js";
+import { tagRuntimeAgentMessage } from "../context/sub-agent-messages.js";
 
 describe("stripToolNoiseFromMessages", () => {
   it("drops ToolMessages", () => {

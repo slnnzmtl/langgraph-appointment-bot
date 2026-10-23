@@ -18,7 +18,7 @@ import {
 } from "../../../shared/message-content.js";
 import { clearPendingConfirmForRuntime } from "../../../tools/meeting-confirm.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { isModelFailureMessage, tagRuntimeAgentMessage } from "../../sub-agent-messages.js";
+import { isModelFailureMessage, tagRuntimeAgentMessage } from "../../context/sub-agent-messages.js";
 import {
   applyMutationChatOtherCleanup,
   hasMutationCallDuringUnresolvedConfirmation,

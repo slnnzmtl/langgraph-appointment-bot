@@ -8,7 +8,7 @@ import {
   reduceBookingDraft,
   type BookingDraft,
   type BookingEvent,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import { decideBooking } from "../../booking-domain/decide.js";
 import type { BookingReadModels } from "../../booking-domain/decision.js";
 import type { PendingEffect } from "../../booking-domain/effects.js";

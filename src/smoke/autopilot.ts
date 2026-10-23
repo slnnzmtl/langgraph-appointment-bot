@@ -10,7 +10,7 @@ import {
 import {
   interactionChoiceEquals,
   type PendingInteraction,
-} from "../graph/booking-session.js";
+} from "../graph/booking/booking-session.js";
 
 export type AutopilotDecision = "confirm" | "decline";
 

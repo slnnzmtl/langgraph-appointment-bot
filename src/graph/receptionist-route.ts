@@ -4,7 +4,7 @@
  */
 
 import type { UnderstoodBookingTurn } from "./booking-domain/turn.js";
-import type { BookingDraft } from "./booking-draft.js";
+import type { BookingDraft } from "./booking/booking-draft.js";
 import { BOOKING_AGENT_ID, FAQ_AGENT_ID, FINISH_ROUTE, type ClinicRouteId } from "./types.js";
 
 export type ReceptionistRoute =

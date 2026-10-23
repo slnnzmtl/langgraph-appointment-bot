@@ -9,8 +9,8 @@ import {
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
   VISIT_CHANGE_MENU,
   VISIT_CHANGE_MENU_EN,
-} from "../shared/clinic-constants.js";
-import { matchesReplyLabel } from "../shared/message-content.js";
+} from "../../shared/clinic-constants.js";
+import { matchesReplyLabel } from "../../shared/message-content.js";
 import {
   bookingDraftCanPresentAvailability,
   effectiveBookingContactDetails,
@@ -25,7 +25,7 @@ import {
   type BookingCheckpointUpgradeResult,
   upgradeBookingDraftCheckpoint,
 } from "./booking-checkpoint-upgrade.js";
-import { CHOICE_ID_ALIASES } from "./booking-domain/interpret.js";
+import { CHOICE_ID_ALIASES } from "../booking-domain/interpret.js";
 import { cancelCommandFromMeeting } from "./cancel-command.js";
 
 export const consultationService = (source: "catalog" | "direct"): {

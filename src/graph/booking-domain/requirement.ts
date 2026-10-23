@@ -1,4 +1,4 @@
-import { bookingDraftPhase, type BookingDraft } from "../booking-draft.js";
+import { bookingDraftPhase, type BookingDraft } from "../booking/booking-draft.js";
 import type { BookingReadModels } from "./decision.js";
 
 /**

@@ -4,7 +4,7 @@ import {
   hasLiveMutationConfirmHitl,
   resumeConfirmBookingHitl,
 } from "../booking-hitl.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../../graph/booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../../graph/booking/booking-draft.js";
 
 const createCrmPayload = {
   name: "Консультація - Smoke Tester",

@@ -1,5 +1,5 @@
-import type { InteractionChoice } from "./booking-session.js";
-import type { ServicesContext } from "../tools/service-tools.js";
+import type { InteractionChoice } from "../booking/booking-session.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import {
   interactionChoicesFromSelectorGroups,
   partitionRemainingServiceChoices,

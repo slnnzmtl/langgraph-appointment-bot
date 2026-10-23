@@ -15,7 +15,7 @@ import {
   type RequestedBookingTime,
   type ServiceAcceptance,
 } from "./booking-draft.js";
-import type { SelectedBookingSlot } from "./types.js";
+import type { SelectedBookingSlot } from "../types.js";
 
 /** Structured fields read from a version-0 booking checkpoint. */
 export type BookingCheckpointLegacyState = {

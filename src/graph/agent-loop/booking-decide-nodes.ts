@@ -14,7 +14,7 @@ import {
   type BookingContactField,
   type BookingDraft,
   type BookingEvent,
-} from "../booking-draft.js";
+} from "../booking/booking-draft.js";
 import {
   decideBooking,
 } from "../booking-domain/decide.js";
@@ -22,24 +22,24 @@ import type { BookingDecision, BookingReadModels } from "../booking-domain/decis
 import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
 import type { EffectResult } from "../booking-domain/effects.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
-import { CATALOG_FAMILY_SELECTOR_QUERY } from "../catalog-match.js";
-import { resolveFaqCatalogChoices } from "../faq-catalog.js";
+import { CATALOG_FAMILY_SELECTOR_QUERY } from "../catalog/catalog-match.js";
+import { resolveFaqCatalogChoices } from "../catalog/faq-catalog.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   safeSelect,
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
-} from "../service-resolution.js";
+} from "../catalog/service-resolution.js";
 import type { CatalogChip } from "../booking-domain/session.js";
-import type { InteractionChoice } from "../booking-session.js";
+import type { InteractionChoice } from "../booking/booking-session.js";
 import { hasPendingToolCalls } from "../tool-routing.js";
 import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
-import { resolveContactIdentity } from "../contact-command.js";
+import { resolveContactIdentity } from "./contact-command.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
 import {
   effectResultFromToolMessages,

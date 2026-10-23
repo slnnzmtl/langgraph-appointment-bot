@@ -23,10 +23,10 @@ import {
   formatFaqCatalogChoicesContext,
   formatPlannedVisitsFlag,
   formatServicesContext,
-} from "../context-blocks.js";
-import { buildCachedMessages, buildUncachedMessages } from "../gemini-cache-messages.js";
+} from "../context/context-blocks.js";
+import { buildCachedMessages, buildUncachedMessages } from "../context/gemini-cache-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { tagModelFailureMessage } from "../sub-agent-messages.js";
+import { tagModelFailureMessage } from "../context/sub-agent-messages.js";
 import { toolRanThisTurn } from "./protocol/index.js";
 import { sanitizeBoundModelToolCalls } from "./tool-call-coercion.js";
 

@@ -10,7 +10,7 @@ import {
   reduceBookingDraft,
   type BookingDraft,
   type BookingEvent,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import { choiceIdsFromCard } from "../../agent-loop/booking-card-choices.js";
 import { askDecisionFromPendingView, decideBooking } from "../decide.js";
 import type { BookingInput, BookingReadModels } from "../decision.js";

@@ -14,16 +14,16 @@ import {
   type ConversationLocale,
 } from "../../shared/conversation-locale.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
-import type { BookingDraft } from "../booking-draft.js";
+import type { BookingDraft } from "../booking/booking-draft.js";
 import type { BookingDecision, BookingViewCard } from "../booking-domain/decision.js";
-import { availabilityRenderSnapshotFromContext } from "../booking-interaction-render.js";
+import { availabilityRenderSnapshotFromContext } from "../booking/booking-interaction-render.js";
 import {
   isBookingOwnedInteraction,
   openVisitReplacementInteraction,
   type AvailabilityRenderSnapshot,
   type InteractionChoice,
   type PendingInteraction,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 
 const choicesFromIds = (
   choiceIds: readonly string[],

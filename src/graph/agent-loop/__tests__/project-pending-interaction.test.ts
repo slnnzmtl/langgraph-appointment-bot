@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { BOOKING_OFFER_MENU, CONSULTATION_SERVICE_ID } from "../../../shared/clinic-constants.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../../booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../../booking/booking-draft.js";
 import type { BookingDecision } from "../../booking-domain/decision.js";
 import { projectPendingInteraction } from "../project-pending-interaction.js";
 import { choiceIdsFromCard } from "../booking-card-choices.js";

@@ -11,7 +11,7 @@ import {
   renderFaqCatalogReply,
   resolveFaqCatalogChoices,
   shortenFaqChoiceLabels,
-} from "../faq-catalog.js";
+} from "../catalog/faq-catalog.js";
 
 const MAX_CHIP_LEN = 36;
 

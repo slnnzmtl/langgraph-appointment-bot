@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { NOTE_TURN_CLASSIFIER_INSTRUCTION } from "../booking-note-classifier.js";
+import { NOTE_TURN_CLASSIFIER_INSTRUCTION } from "../booking/booking-note-classifier.js";
 
 describe("NOTE_TURN_CLASSIFIER_INSTRUCTION", () => {
   it("teaches mixed vs replace vs note without command/phrase/catalog token lists", () => {

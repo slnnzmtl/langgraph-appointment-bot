@@ -2,7 +2,7 @@
 /**
  * CLI: pnpm scan:booking-checkpoints [-- --db /path/to/checkpoints.sqlite]
  */
-import { scanBookingCheckpoints } from "../graph/booking-checkpoint-scanner.js";
+import { scanBookingCheckpoints } from "../graph/booking/booking-checkpoint-scanner.js";
 
 const dbFlag = process.argv.indexOf("--db");
 const fromFlag = dbFlag >= 0 ? process.argv[dbFlag + 1] : undefined;

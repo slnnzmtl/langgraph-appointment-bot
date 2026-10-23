@@ -1,4 +1,4 @@
-import type { BookingEvent } from "../booking-draft.js";
+import type { BookingEvent } from "../booking/booking-draft.js";
 import type { CatalogChip } from "./session.js";
 import type { EffectResult, PendingEffect } from "./effects.js";
 import type { UnderstoodBookingTurn } from "./turn.js";

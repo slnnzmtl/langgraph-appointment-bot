@@ -19,7 +19,7 @@ import {
   formatBookingMeetingsContext,
   formatContactContext,
   formatPlannedVisitsFlag,
-} from "../context-blocks.js";
+} from "../context/context-blocks.js";
 import { type ClinicAgentDefinition } from "../types.js";
 
 import {

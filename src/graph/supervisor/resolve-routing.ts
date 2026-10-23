@@ -10,7 +10,7 @@ import { extractReplyButtons } from "../../shared/message-content.js";
 import {
   attachPrefetchVisits,
   type FinishVisitIntent,
-} from "../context-blocks.js";
+} from "../context/context-blocks.js";
 import {
   normalizeSupervisorReply,
   type ClinicRoutingDecision,

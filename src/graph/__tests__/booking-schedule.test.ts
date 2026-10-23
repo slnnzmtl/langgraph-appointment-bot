@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   reconcileRequestedTime,
   resolveBookingScheduleRequest,
-} from "../booking-schedule.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
+} from "../booking/booking-schedule.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../booking/booking-draft.js";
 
 describe("booking schedule resolver", () => {
   it("resolves a day-only phrase with a preferred time", () => {

@@ -5,6 +5,6 @@ export type {
   BookingCheckpointLegacyState,
   BookingCheckpointMigrationTelemetry,
   BookingCheckpointUpgradeResult,
-} from "../graph/booking-checkpoint-upgrade.js";
-export { upgradeBookingDraftCheckpoint } from "../graph/booking-checkpoint-upgrade.js";
-export { upgradeBookingCheckpoint } from "../graph/booking-session.js";
+} from "../graph/booking/booking-checkpoint-upgrade.js";
+export { upgradeBookingDraftCheckpoint } from "../graph/booking/booking-checkpoint-upgrade.js";
+export { upgradeBookingCheckpoint } from "../graph/booking/booking-session.js";

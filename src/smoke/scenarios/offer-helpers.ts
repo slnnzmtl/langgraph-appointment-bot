@@ -5,7 +5,7 @@ import {
   DEFAULT_MENU_NO_VISITS,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
-import { matchingCatalogRows } from "../../graph/catalog-match.js";
+import { matchingCatalogRows } from "../../graph/catalog/catalog-match.js";
 import { faqHighlightedService } from "../../graph/faq-highlight.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { normalizeReplyLabel } from "../../shared/message-content.js";

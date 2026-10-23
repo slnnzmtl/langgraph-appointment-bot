@@ -1,4 +1,4 @@
-import type { AvailabilityContext } from "../tools/availability-tools.js";
+import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
   bookingDraftCanPresentAvailability,
   effectiveBookingContactDetails,
@@ -19,7 +19,7 @@ import {
   type PendingInteraction,
   type VisitSelectMeeting,
 } from "./booking-session.js";
-import type { ClinicHandoff } from "./types.js";
+import type { ClinicHandoff } from "../types.js";
 
 export type RestorePendingInteractionInput = {
   bookingDraft: BookingDraft | null | undefined;

@@ -78,8 +78,8 @@ describe("agent loop routing", () => {
         } as never,
         "faq__llm",
         "faq__finalize",
-        "booking__decide",
         "faq",
+        "booking__decide",
       ),
     ).toBe("faq__finalize");
 
@@ -96,8 +96,8 @@ describe("agent loop routing", () => {
         } as never,
         "faq__llm",
         "faq__finalize",
-        "booking__decide",
         "faq",
+        "booking__decide",
       ),
     ).toBe("booking__decide");
 
@@ -117,8 +117,8 @@ describe("agent loop routing", () => {
         } as never,
         "faq__llm",
         "faq__finalize",
-        "booking__decide",
         "faq",
+        "booking__decide",
       ),
     ).not.toBe("booking__decide");
   });

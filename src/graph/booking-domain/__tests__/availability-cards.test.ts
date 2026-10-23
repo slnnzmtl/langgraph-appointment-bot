@@ -8,7 +8,7 @@ import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import { decideBooking } from "../decide.js";
 import type { BookingReadModels } from "../decision.js";
 import type { EffectResult } from "../effects.js";

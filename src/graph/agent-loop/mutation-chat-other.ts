@@ -7,11 +7,11 @@ import { AIMessage, ToolMessage } from "@langchain/core/messages";
 
 import {
   reduceBookingDraft,
-} from "../booking-draft.js";
+} from "../booking/booking-draft.js";
 import {
   closedBookingSessionUpdate,
   reduceBookingSession,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
   classifyMeetingMutationToolMessage,

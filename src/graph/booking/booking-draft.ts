@@ -1,15 +1,15 @@
-import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
-import { normalizeClinicPhone } from "../shared/phone.js";
-import { contactMissingFields } from "../tools/contact-tools.js";
-import { kyivLocalIsoToUtcMs } from "../tools/availability-slots.js";
-import type { SelectedBookingSlot } from "./types.js";
+import { CLINIC_SLOT_MINUTES } from "../../shared/clinic-constants.js";
+import { normalizeClinicPhone } from "../../shared/phone.js";
+import { contactMissingFields } from "../../tools/contact-tools.js";
+import { kyivLocalIsoToUtcMs } from "../../tools/availability-slots.js";
+import type { SelectedBookingSlot } from "../types.js";
 
-import type { PendingEffect, PendingEffectStatus } from "./booking-domain/effects.js";
+import type { PendingEffect, PendingEffectStatus } from "../booking-domain/effects.js";
 import type {
   PendingDecision,
   SlotAvailabilityEvidence,
   SlotProvenance,
-} from "./booking-domain/session.js";
+} from "../booking-domain/session.js";
 
 export type { SlotAvailabilityEvidence, SlotProvenance };
 
@@ -593,7 +593,7 @@ export const slotEvidenceForSelection = (
 
 /**
  * Derived workflow stage for the checkpointed draft projection. Prefer
- * {@link import("./booking-domain/requirement.js").nextBookingRequirement}.
+ * {@link import("../booking-domain/requirement.js").nextBookingRequirement}.
  */
 export const bookingDraftPhase = (draft: BookingDraft): BookingPhase => {
   if (

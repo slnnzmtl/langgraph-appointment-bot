@@ -8,7 +8,7 @@ import {
   isConfirmationAffirmation,
   isConfirmationDecline,
 } from "../../shared/message-content.js";
-import { cancelCommandFromMeeting } from "../cancel-command.js";
+import { cancelCommandFromMeeting } from "../booking/cancel-command.js";
 import {
   availabilityRequestFieldsFromDraft,
   effectiveBookingContactDetails,
@@ -22,7 +22,7 @@ import {
   type DeferredInformationalRequest,
   type DeferredScheduleRequest,
   type ReplacementMeeting,
-} from "../booking-draft.js";
+} from "../booking/booking-draft.js";
 import type {
   BookingDecision,
   BookingInput,
@@ -50,7 +50,7 @@ import type { ScheduleIntent, UnderstoodBookingTurn } from "./turn.js";
 import {
   catalogChipsFromInteractionChoices,
   fallbackCatalogPageChoices,
-} from "../catalog-page-choices.js";
+} from "../catalog/catalog-page-choices.js";
 
 const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSemanticIntent> = {
   phoneNumber: "ask_phone",

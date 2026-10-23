@@ -4,9 +4,9 @@ import { SERVICE_CHANGE_ACK_UK } from "../../shared/clinic-constants.js";
 import {
   renderBookingInteractionMessage,
   replyButtonsForInteraction,
-} from "../booking-interaction-render.js";
-import { renderFaqCatalogReply, shortenFaqChoiceLabels } from "../faq-catalog.js";
-import type { PendingInteraction } from "../booking-session.js";
+} from "../booking/booking-interaction-render.js";
+import { renderFaqCatalogReply, shortenFaqChoiceLabels } from "../catalog/faq-catalog.js";
+import type { PendingInteraction } from "../booking/booking-session.js";
 
 describe("renderFaqCatalogReply", () => {
   it("renders intro plus one canonical block from interaction choices", () => {

@@ -4,11 +4,11 @@ import {
   interpretInteractionReply,
   interactionChoiceEquals,
   openVisitMeetingInteraction,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import {
   renderBookingInteractionMessage,
   replyButtonsForInteraction,
-} from "../booking-interaction-render.js";
+} from "../booking/booking-interaction-render.js";
 import type { ClinicRoutingDecision } from "../routing.js";
 import { BOOKING_AGENT_ID, FINISH_ROUTE } from "../types.js";
 import type { SupervisorTurnContext } from "./context.js";

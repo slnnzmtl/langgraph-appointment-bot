@@ -6,9 +6,9 @@ import {
 import {
   availabilityMatchesBooking,
   reduceBookingDraft,
-} from "../../booking-draft.js";
-import { reconcileRequestedTime } from "../../booking-schedule.js";
-import { reduceBookingSession } from "../../booking-session.js";
+} from "../../booking/booking-draft.js";
+import { reconcileRequestedTime } from "../../booking/booking-schedule.js";
+import { reduceBookingSession } from "../../booking/booking-session.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { captureAvailabilityFromMessages } from "../protocol/index.js";
 
