@@ -368,6 +368,20 @@ describe("extractMeetingsFromSearchResult", () => {
     ).toEqual([{ dateStart: "a", dateEnd: "b" }]);
   });
 
+  it.each([
+    "{bad json",
+    { error: "CRM search failed" },
+    { rows: [] },
+    { meetings: [{ dateStart: "2026-08-10T09:00:00" }] },
+    { total: 2, meetings: [{ dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" }] },
+  ])("rejects malformed or incomplete occupancy: %o", (payload) => {
+    expect(() => extractMeetingsFromSearchResult(payload)).toThrow(/occupancy is unknown/);
+  });
+
+  it("accepts a valid empty occupancy result", () => {
+    expect(extractMeetingsFromSearchResult({ total: 0, meetings: [] })).toEqual([]);
+  });
+
   it("preserves meeting id when present", () => {
     expect(
       extractMeetingsFromSearchResult({

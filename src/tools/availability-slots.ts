@@ -649,44 +649,59 @@ export const findPreviousAvailableSlots = (
 };
 
 export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => {
-  if (typeof raw === "string") {
+  let value = raw;
+  if (typeof value === "string") {
     try {
-      return extractMeetingsFromSearchResult(JSON.parse(raw) as unknown);
+      value = JSON.parse(value) as unknown;
     } catch {
-      return [];
+      throw new Error("Malformed meeting-search JSON; occupancy is unknown");
     }
   }
-
-  if (!raw || typeof raw !== "object") {
-    return [];
+  if (!value || typeof value !== "object") {
+    throw new Error("Malformed meeting-search result; occupancy is unknown");
   }
 
-  const record = raw as Record<string, unknown>;
+  const record = value as Record<string, unknown>;
+  if (record.error != null) {
+    throw new Error("Meeting-search returned an error; occupancy is unknown");
+  }
   const list = Array.isArray(record.meetings)
     ? record.meetings
     : Array.isArray(record.list)
       ? record.list
-      : Array.isArray(raw)
-        ? raw
-        : [];
-
-  const out: BusyMeeting[] = [];
-  for (const item of list) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const m = item as Record<string, unknown>;
-    if (typeof m.dateStart !== "string" || typeof m.dateEnd !== "string") {
-      continue;
-    }
-    out.push({
-      dateStart: m.dateStart,
-      dateEnd: m.dateEnd,
-      ...(typeof m.id === "string" ? { id: m.id } : {}),
-      ...(typeof m.status === "string" ? { status: m.status } : {}),
-    });
+      : Array.isArray(value)
+        ? value
+        : null;
+  if (list == null) {
+    throw new Error("Unsupported meeting-search shape; occupancy is unknown");
   }
-  return out;
+  const reportedTotal = typeof record.total === "number"
+    ? record.total
+    : typeof record.totalCount === "number"
+      ? record.totalCount
+      : undefined;
+  if (reportedTotal != null && (!Number.isInteger(reportedTotal) || reportedTotal < list.length)) {
+    throw new Error("Invalid meeting-search total; occupancy is unknown");
+  }
+  if (reportedTotal != null && reportedTotal > list.length) {
+    throw new Error("Incomplete meeting-search result; occupancy is unknown");
+  }
+
+  return list.map((item, index) => {
+    if (!item || typeof item !== "object") {
+      throw new Error(`Malformed meeting-search row ${index}; occupancy is unknown`);
+    }
+    const meeting = item as Record<string, unknown>;
+    if (typeof meeting.dateStart !== "string" || typeof meeting.dateEnd !== "string") {
+      throw new Error(`Incomplete meeting-search row ${index}; occupancy is unknown`);
+    }
+    return {
+      dateStart: meeting.dateStart,
+      dateEnd: meeting.dateEnd,
+      ...(typeof meeting.id === "string" ? { id: meeting.id } : {}),
+      ...(typeof meeting.status === "string" ? { status: meeting.status } : {}),
+    };
+  });
 };
 
 /**
