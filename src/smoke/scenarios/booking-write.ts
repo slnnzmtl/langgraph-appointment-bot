@@ -11,7 +11,6 @@ import {
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { faqHighlightedService } from "../../graph/faq-highlight.js";
-import { kyivLocalIsoToUtcMs, normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import {
   expectButtons,
@@ -36,6 +35,7 @@ import {
 import type { SoftWarning, SmokeScenario } from "../types.js";
 import { installCallToolRecorder } from "../harness.js";
 import {
+  assertBookingInterval,
   assertCreateMeetingOnce,
   assertMeetingPlanned,
   assertNoCommittedOutcomeBeforeConfirm,
@@ -401,9 +401,30 @@ export const replaceRebookScenario: SmokeScenario = {
         expectAction: "create",
         maxTurns: 14,
       });
-      const selectedSlot = (await bundle.session.snapshot()).state.bookingDraft?.selectedSlot;
-      if (selectedSlot?.dateStart == null) {
-        throw new SmokeAssertError("replace-rebook: missing selectedSlot.dateStart before create");
+      const beforeCreate = await bundle.session.snapshot();
+      const draft = beforeCreate.state.bookingDraft;
+      const service = draft?.serviceAcceptance?.service;
+      if (draft?.serviceAcceptance?.status !== "accepted" || service?.id !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: selected procedure was not retained before create");
+      }
+      const expectedDuration = await assertServiceDurationOracle(ctx, "replace-rebook", service);
+      const selectedSlot = draft.selectedSlot;
+      if (selectedSlot == null) {
+        throw new SmokeAssertError("replace-rebook: missing selectedSlot before create");
+      }
+      assertBookingInterval("replace-rebook selected slot", selectedSlot, expectedDuration);
+      if (beforeCreate.state.availabilityContext?.stepMinutes !== expectedDuration) {
+        throw new SmokeAssertError("replace-rebook: availability duration differs from CRM oracle");
+      }
+      const pending = draft.pendingDecision;
+      const frozen = pending?.kind === "mutation_confirm" ? pending.frozenCommand : undefined;
+      if (frozen?.action !== "create") {
+        throw new SmokeAssertError("replace-rebook: missing frozen create command before confirm");
+      }
+      assertBookingInterval("replace-rebook frozen command", frozen.payload, expectedDuration, selectedSlot);
+      const frozenServices = frozen.payload.cServicesIds;
+      if (!Array.isArray(frozenServices) || frozenServices.length !== 1 || frozenServices[0] !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: frozen command has the wrong service");
       }
       const created = await confirmOpenHitl(bundle);
       const allPostReplace = [
@@ -414,6 +435,12 @@ export const replaceRebookScenario: SmokeScenario = {
         ...created.calls,
       ];
       assertCreateMeetingOnce("replace-rebook create", allPostReplace);
+      const createCall = allPostReplace.find((call) => call.name === "create_meeting")!;
+      assertBookingInterval("replace-rebook create payload", createCall.args, expectedDuration, selectedSlot);
+      const createServices = createCall.args.cServicesIds;
+      if (!Array.isArray(createServices) || createServices.length !== 1 || createServices[0] !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: create payload has the wrong service");
+      }
 
       const newId = await resolveCreatedMeetingId(ctx, contactId, allPostReplace);
       if (newId === oldId) {
@@ -427,13 +454,11 @@ export const replaceRebookScenario: SmokeScenario = {
           `replace-rebook: expected Planned=[${newId}], got [${planned.join(",")}]`,
         );
       }
-      const newMeeting = await getMeeting(ctx.callTool, newId);
-      const meetingStart = normalizeLocalIsoDatetime(String(newMeeting.dateStart));
-      const slotStart = normalizeLocalIsoDatetime(selectedSlot.dateStart);
-      if (meetingStart !== slotStart) {
-        throw new SmokeAssertError(
-          `replace-rebook: new dateStart ${meetingStart} !== slot ${slotStart}`,
-        );
+      const newMeeting = await assertMeetingPlanned(ctx, newId, contactId);
+      assertBookingInterval("replace-rebook stored meeting", newMeeting, expectedDuration, selectedSlot);
+      const crmServices = await getMeetingServiceIds(ctx.callTool, newId);
+      if (crmServices.length !== 1 || crmServices[0] !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: stored meeting has the wrong service");
       }
       expectButtons("replace-rebook post menu", created.buttons, [
         DEFAULT_MENU_HAS_VISITS[0],
@@ -1251,23 +1276,7 @@ export const bookProcedureScenario: SmokeScenario = {
           `book-procedure: CRM meeting services ${JSON.stringify(crmServices)} missing ${service.id}`,
         );
       }
-      const dateStart = String(meeting.dateStart ?? "");
-      const dateEnd = String(meeting.dateEnd ?? "");
-      const normalizedStart = normalizeLocalIsoDatetime(dateStart);
-      const normalizedEnd = normalizeLocalIsoDatetime(dateEnd);
-      const startMs = kyivLocalIsoToUtcMs(normalizedStart);
-      const endMs = kyivLocalIsoToUtcMs(normalizedEnd);
-      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
-        throw new SmokeAssertError(
-          `book-procedure: CRM meeting has invalid local datetimes ${dateStart} — ${dateEnd}`,
-        );
-      }
-      const actualDuration = Math.round((endMs - startMs) / 60_000);
-      if (actualDuration !== expectedDuration) {
-        throw new SmokeAssertError(
-          `book-procedure: CRM meeting span ${actualDuration}m, independently fetched service duration ${expectedDuration}m`,
-        );
-      }
+      assertBookingInterval("book-procedure stored meeting", meeting, expectedDuration);
       console.log("✓ book-procedure: service", service.id, "meeting", meetingId);
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
