@@ -14,6 +14,7 @@ import type { BookingReadModels } from "../decision.js";
 import type { EffectResult } from "../effects.js";
 
 const READ: BookingReadModels = {
+  clinicDay: "2026-09-01",
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: true,
@@ -66,6 +67,41 @@ const draftWithAcceptedService = (): BookingDraft => {
 };
 
 describe("availability cards from effect results", () => {
+  it("offers an earlier search only when the anchor is after the explicit clinic day", () => {
+    let draft = reduceBookingDraft(draftWithAcceptedService(), {
+      type: "date_selected",
+      date: "2026-09-10",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: "eff_anchor",
+        expectedRevision: draft.version,
+        effect: { kind: "present_availability", queryKind: "exact", date: "2026-09-10" },
+        status: "executing",
+      },
+    });
+    const result: EffectResult = {
+      effectId: "eff_anchor",
+      kind: "availability",
+      outcome: "empty",
+    };
+    const choicesForDay = (clinicDay: string) => {
+      const decision = decideBooking(
+        draft,
+        { source: "effect_result", result },
+        { ...READ, clinicDay, availabilityDays: [] },
+      );
+      return decision.decision.card?.kind === "date_select"
+        ? decision.decision.card.choiceIds
+        : [];
+    };
+
+    expect(choicesForDay("2026-09-09")).toContain("earlier");
+    expect(choicesForDay("2026-09-10")).not.toContain("earlier");
+    expect(choicesForDay("2026-09-11")).not.toContain("earlier");
+  });
+
   it("emits a date_select ask and does not re-mint present_availability", () => {
     const draft = reduceBookingDraft(draftWithAcceptedService(), {
       type: "effect_prepared",
@@ -133,6 +169,7 @@ describe("availability cards from effect results", () => {
       draft,
       { source: "effect_result", result },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: true,
@@ -269,6 +306,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -293,6 +331,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -327,6 +366,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -369,6 +409,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -408,6 +449,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -481,6 +523,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -522,6 +565,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -580,6 +624,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -636,6 +681,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -652,6 +698,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         choices: [],
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
@@ -707,6 +754,7 @@ describe("multi-fact side questions and catalog resolve", () => {
         },
       },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,

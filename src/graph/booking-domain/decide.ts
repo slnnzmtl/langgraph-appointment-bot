@@ -32,7 +32,6 @@ import type {
   BookingViewCard,
   DecideBookingResult,
 } from "./decision.js";
-import { kyivToday } from "../../tools/availability-slots.js";
 import {
   buildCancelMeetingCrmPayload,
   buildCreateMeetingCrmPayload,
@@ -103,8 +102,8 @@ const dateFromSchedule = (
   return working?.selectedDate ?? undefined;
 };
 
-const newBookingAttemptId = (version: number): string =>
-  `attempt_v${version}_${kyivToday().replace(/-/g, "")}`;
+const newBookingAttemptId = (version: number, clinicDay: string): string =>
+  `attempt_v${version}_${clinicDay.replace(/-/g, "")}`;
 
 const deferredScheduleFromPatch = (
   patch: UnderstoodBookingTurn,
@@ -1160,7 +1159,7 @@ export const decideBooking = (
         const canSearchEarlier =
           direction !== "earlier"
           && anchor != null
-          && anchor > kyivToday();
+          && anchor > readModels.clinicDay;
         const projected = projectEmptyAvailabilityPresentation(snapshotId, {
           direction,
           canSearchEarlier,
@@ -1455,7 +1454,7 @@ export const decideBooking = (
     if (ctx.working == null && isExplicitBookingStart(patch)) {
       emit({
         type: "booking_started",
-        bookingAttemptId: newBookingAttemptId(0),
+        bookingAttemptId: newBookingAttemptId(0, readModels.clinicDay),
       });
     } else if (
       ctx.working != null
@@ -1464,7 +1463,7 @@ export const decideBooking = (
     ) {
       emit({
         type: "booking_started",
-        bookingAttemptId: newBookingAttemptId(ctx.working.version),
+        bookingAttemptId: newBookingAttemptId(ctx.working.version, readModels.clinicDay),
       });
     }
 
@@ -1477,7 +1476,7 @@ export const decideBooking = (
       const attemptId =
         ctx.working?.bookingAttemptId
         ?? ctx.working?.deferredTurn?.bookingAttemptId
-        ?? newBookingAttemptId(ctx.working?.version ?? 0);
+        ?? newBookingAttemptId(ctx.working?.version ?? 0, readModels.clinicDay);
       const deferred: DeferredBookingTurn = {
         bookingAttemptId: attemptId,
         boundEffectId,

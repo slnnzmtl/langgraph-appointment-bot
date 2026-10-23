@@ -18,6 +18,7 @@ import {
 } from "../booking-decide-nodes.js";
 
 const READ: BookingReadModels = {
+  clinicDay: "2026-09-01",
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: false,

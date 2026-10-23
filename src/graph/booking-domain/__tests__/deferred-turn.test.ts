@@ -5,6 +5,7 @@ import { decideBooking } from "../decide.js";
 import type { BookingReadModels } from "../decision.js";
 
 const emptyReads: BookingReadModels = {
+  clinicDay: "2026-09-01",
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: false,

@@ -92,6 +92,7 @@ export const createClinicSupervisorNode = (
   options: CreateClinicSupervisorNodeOptions = {},
 ) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
+    const clinicDay = kyivToday();
     let ctx = await buildSupervisorTurnContext(state, {
       ...(options.prefetch != null ? { prefetch: options.prefetch } : {}),
       ...(options.prefetchTtlMs != null ? { prefetchTtlMs: options.prefetchTtlMs } : {}),
@@ -150,11 +151,12 @@ export const createClinicSupervisorNode = (
       awaitingServiceConfirm: activeView?.card?.kind === "service_confirm",
       ...(faqHighlightOpen ? { faqHighlightOpen: true } : {}),
       activeRequirement: nextBookingRequirement(ctx.workingDraft, {
+        clinicDay,
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: ctx.state.availabilityContext != null,
       }),
-      kyivDate: kyivToday(),
+      kyivDate: clinicDay,
       locale: resolvePatientLocale({
         patientLocale,
         messages: state.messages,

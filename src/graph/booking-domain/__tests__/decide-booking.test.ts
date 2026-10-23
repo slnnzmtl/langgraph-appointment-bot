@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CONSULTATION_SERVICE_ID,
@@ -16,6 +16,7 @@ import { askDecisionFromPendingView, decideBooking } from "../decide.js";
 import type { BookingInput, BookingReadModels } from "../decision.js";
 
 const READ_MODELS: BookingReadModels = {
+  clinicDay: "2026-09-01",
   assignedUserId: "assigned-user-1",
   contactContextDirty: false,
   bookingContextDirty: false,
@@ -58,6 +59,26 @@ const draftAtDetailsWithPhone = (): BookingDraft => {
 };
 
 describe("decideBooking atomic contract", () => {
+  it("is independent of the host clock when clinic day is explicit", () => {
+    const input: BookingInput = {
+      source: "semantic_patch",
+      patch: { serviceIntent: { kind: "consultation" } },
+    };
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:30:00Z"));
+      const winter = decideBooking(null, input, READ_MODELS);
+      vi.setSystemTime(new Date("2026-10-24T23:30:00Z"));
+      const autumn = decideBooking(null, input, READ_MODELS);
+      expect(autumn).toEqual(winter);
+      expect(winter.events.find((event) => event.type === "booking_started")).toMatchObject({
+        bookingAttemptId: expect.stringContaining("20260901"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns events and a decision, never a modified draft", () => {
     const input: BookingInput = { source: "control", intent: "menu" };
     const result = decideBooking(null, input, READ_MODELS);

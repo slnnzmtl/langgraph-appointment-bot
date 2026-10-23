@@ -149,6 +149,8 @@ export type PlannedMeetingReadModel = {
 
 /** CRM / availability read models passed into decideBooking (not a second aggregate). */
 export type BookingReadModels = {
+  /** Clinic-local day fixed once for this booking-node invocation. */
+  clinicDay: string;
   contactContextDirty: boolean;
   bookingContextDirty: boolean;
   availabilityVerified: boolean;

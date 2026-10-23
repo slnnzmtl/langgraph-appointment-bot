@@ -19,6 +19,7 @@ import {
   decideBooking,
 } from "../booking-domain/decide.js";
 import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
+import { kyivToday } from "../../tools/availability-slots.js";
 import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
 import type { EffectResult } from "../booking-domain/effects.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
@@ -148,6 +149,7 @@ export const readModelsFromClinicState = (
   const ownedContact = ownedContactFromState(state);
   const assignedUserId = options?.assignedUserId?.trim();
   return {
+    clinicDay: kyivToday(),
     contactContextDirty: state.prefetchDirty === true,
     bookingContextDirty: state.prefetchDirty === true,
     availabilityVerified: availability != null,

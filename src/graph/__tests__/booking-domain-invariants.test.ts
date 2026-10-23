@@ -23,6 +23,7 @@ describe("atomic booking-domain invariants", () => {
       null,
       { source: "semantic_patch", patch: { serviceIntent: { kind: "consultation" } } },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,
