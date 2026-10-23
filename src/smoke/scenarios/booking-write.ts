@@ -10,7 +10,7 @@ import {
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
+import { kyivLocalIsoToUtcMs, normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import {
   expectButtons,
@@ -464,6 +464,19 @@ export const replaceProcedureScenario: SmokeScenario = {
         );
       }
       const service = interaction.service;
+      const catalogRows = await loadCatalogServiceRows(ctx.callTool, "book-procedure duration oracle");
+      const catalogService = catalogRows.find((row) => row.id === service.id);
+      const expectedDuration = catalogService?.duration;
+      if (typeof expectedDuration !== "number" || !Number.isFinite(expectedDuration) || expectedDuration <= 0) {
+        throw new SmokeAssertError(
+          `book-procedure: independently fetched CRM service ${service.id} has invalid duration ${String(expectedDuration)}`,
+        );
+      }
+      if (service.durationMinutes !== expectedDuration) {
+        throw new SmokeAssertError(
+          `book-procedure: selected service duration ${String(service.durationMinutes)}m, CRM oracle says ${expectedDuration}m`,
+        );
+      }
       if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
         throw new SmokeAssertError(
           `replace-procedure: expected non-consultation service id, got ${service.id}`,
@@ -1174,6 +1187,19 @@ export const bookProcedureScenario: SmokeScenario = {
         );
       }
       const service = interaction.service;
+      const catalogRows = await loadCatalogServiceRows(ctx.callTool, "book-procedure duration oracle");
+      const catalogService = catalogRows.find((row) => row.id === service.id);
+      const expectedDuration = catalogService?.duration;
+      if (typeof expectedDuration !== "number" || !Number.isFinite(expectedDuration) || expectedDuration <= 0) {
+        throw new SmokeAssertError(
+          `book-procedure: independently fetched CRM service ${service.id} has invalid duration ${String(expectedDuration)}`,
+        );
+      }
+      if (service.durationMinutes !== expectedDuration) {
+        throw new SmokeAssertError(
+          `book-procedure: selected service duration ${String(service.durationMinutes)}m, CRM oracle says ${expectedDuration}m`,
+        );
+      }
       if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
         throw new SmokeAssertError(
           `book-procedure: expected non-consultation service id, got ${service.id}`,
@@ -1216,22 +1242,20 @@ export const bookProcedureScenario: SmokeScenario = {
       }
       const dateStart = String(meeting.dateStart ?? "");
       const dateEnd = String(meeting.dateEnd ?? "");
-      const durationMinutes =
-        typeof service.durationMinutes === "number"
-        && Number.isFinite(service.durationMinutes)
-          ? service.durationMinutes
-          : null;
-      if (durationMinutes != null && dateStart.includes("T") && dateEnd.includes("T")) {
-        const startMs = Date.parse(dateStart);
-        const endMs = Date.parse(dateEnd);
-        if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
-          soft(
-            bundle.warnings,
-            "book-procedure duration matches service",
-            Math.round((endMs - startMs) / 60_000) === durationMinutes,
-            `expected ${durationMinutes}m got ${Math.round((endMs - startMs) / 60_000)}m`,
-          );
-        }
+      const normalizedStart = normalizeLocalIsoDatetime(dateStart);
+      const normalizedEnd = normalizeLocalIsoDatetime(dateEnd);
+      const startMs = kyivLocalIsoToUtcMs(normalizedStart);
+      const endMs = kyivLocalIsoToUtcMs(normalizedEnd);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+        throw new SmokeAssertError(
+          `book-procedure: CRM meeting has invalid local datetimes ${dateStart} — ${dateEnd}`,
+        );
+      }
+      const actualDuration = Math.round((endMs - startMs) / 60_000);
+      if (actualDuration !== expectedDuration) {
+        throw new SmokeAssertError(
+          `book-procedure: CRM meeting span ${actualDuration}m, independently fetched service duration ${expectedDuration}m`,
+        );
       }
       console.log("✓ book-procedure: service", service.id, "meeting", meetingId);
       return { warnings: bundle.warnings, turns: bundle.session.turns };
