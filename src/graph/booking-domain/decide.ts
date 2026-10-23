@@ -480,6 +480,22 @@ export const decideBooking = (
     if (w == null) {
       return { tag: "reply", intent: "idle", facts: {}, card: null };
     }
+    if (
+      action === "reschedule"
+      && w.rescheduleTarget?.dateStart != null
+      && w.selectedSlot != null
+      && localDate(w.selectedSlot.dateStart) === localDate(w.rescheduleTarget.dateStart)
+      && localTime(w.selectedSlot.dateStart) === localTime(w.rescheduleTarget.dateStart)
+    ) {
+      const reason = "reschedule_same_slot";
+      emitDecision({ kind: "clarification", reason });
+      return ask(
+        "clarification",
+        { kind: "clarification", reason },
+        reason,
+        { clarificationReason: reason },
+      );
+    }
     // Exact-slot revalidate before freezing a create/reschedule write.
     if (
       (action === "create" || action === "reschedule")

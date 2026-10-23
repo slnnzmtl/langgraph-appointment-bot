@@ -451,6 +451,44 @@ describe("decideBooking atomic contract", () => {
     }
   });
 
+  it("refuses to confirm a reschedule to the visit's existing local date and time", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-rs",
+        name: "Консультація",
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox", source: "catalog", durationMinutes: 30 },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" });
+    draft = reduceBookingDraft(draft, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+        label: "10 вер · 14:00",
+      },
+      snapshotId: "snapshot-1",
+    });
+
+    const result = decideBooking(draft, { source: "semantic_patch", patch: {} }, READ_MODELS);
+
+    expect(result.decision).toMatchObject({
+      tag: "ask",
+      intent: "clarification",
+      facts: { clarificationReason: "reschedule_same_slot" },
+      card: { kind: "clarification", reason: "reschedule_same_slot" },
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.events.some((event) => event.type === "effect_prepared")).toBe(false);
+  });
+
   it("confirming with pendingCommand cancel emits cancel_meeting mutation_confirm", () => {
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "command_prepared",

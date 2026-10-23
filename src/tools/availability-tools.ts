@@ -768,6 +768,30 @@ export const createPresentAvailabilitySlotsTool = (options: {
           ),
           searchReservedTimes(callTool, assignedUserId, meetingFrom, meetingTo),
         ]);
+        if (busy.truncated) {
+          trackEvent("availability_presented", {
+            outcome: "truncated",
+            slot_count: 0,
+            duration_minutes: stepMinutes,
+            direction,
+          });
+          return JSON.stringify({
+            error: "Meeting search truncated",
+            days: [],
+            slots: [],
+            stepMinutes,
+            startIntervalMinutes: CLINIC_SLOT_MINUTES,
+            query: {
+              kind: direction,
+              anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,
+              rangeFrom: meetingFrom,
+              rangeThrough: meetingTo,
+              coverageComplete: false,
+            },
+            truncated: true,
+            ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
+          });
+        }
         const searchedMeetings = busy.meetings;
         const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
         const meetings = [
@@ -823,10 +847,9 @@ export const createPresentAvailabilitySlotsTool = (options: {
             anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,
             rangeFrom: searchedFrom,
             rangeThrough: searchedThrough,
-            coverageComplete: !busy.truncated,
+            coverageComplete: true,
           },
           ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
-          ...(busy.truncated ? { truncated: true } : {}),
         });
       } catch (error) {
         const message = errorMessage(error);
