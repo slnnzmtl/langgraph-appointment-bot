@@ -346,6 +346,29 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("saves an accepted missing name to an owned CRM contact before booking", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-1" });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Ada",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "Lovelace",
+    });
+    const result = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: { firstName: "Ada" },
+    });
+    expect(result.decision.pendingEffect?.effect).toEqual({
+      kind: "update_contact",
+      payload: { contactId: "owned-1", lastName: "Lovelace" },
+    });
+  });
+
   it("book-with-visit offers REPLACE visit_select instead of consultation", () => {
     const meeting = {
       id: "meeting-1",

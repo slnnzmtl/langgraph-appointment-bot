@@ -576,6 +576,23 @@ export const decideBooking = (
     return mutationConfirmDecision(w2, action, pending.id, pending);
   };
 
+  const acceptedContactRepairEffect = (
+    contactId: string,
+    details: BookingContactDetails,
+  ): BookingDecision | null => {
+    const crmNames = readModels.ownedContact;
+    const missingCrmName = crmNames != null
+      ? (crmNames.firstName == null ? "firstName" : crmNames.lastName == null ? "lastName" : null)
+      : null;
+    if (missingCrmName == null) return null;
+    const value = details[missingCrmName];
+    if (typeof value !== "string" || value.trim().length === 0) return null;
+    return runEffect("run_effect", {
+      kind: "update_contact",
+      payload: { contactId, [missingCrmName]: value.trim() },
+    });
+  };
+
   /** Contact identity ladder. Prefetch may already set contactId (adapter seed). */
   const decideContactDetails = (): BookingDecision => {
     const w = ctx.working;
@@ -584,8 +601,11 @@ export const decideBooking = (
     }
     const details: BookingContactDetails = w.contactDetails ?? {};
 
-    // Owned / linked contact: skip phone lookup; only ask for missing ladder fields.
+    // Owned / linked contact: save accepted details that repair CRM incompleteness
+    // before booking. Draft details alone are not evidence that CRM was updated.
     if (w.contactId != null) {
+      const sync = acceptedContactRepairEffect(w.contactId, details);
+      if (sync != null) return sync;
       const missingOwned = nextMissingContactField(details);
       if (missingOwned != null) {
         emitDecision({ kind: "clarification", reason: `need_${missingOwned}` });
@@ -758,6 +778,10 @@ export const decideBooking = (
       case "details":
         return decideContactDetails();
       case "ready": {
+        if (w.contactId != null) {
+          const sync = acceptedContactRepairEffect(w.contactId, w.contactDetails ?? {});
+          if (sync != null) return sync;
+        }
         if (w.mode === "reschedule" && w.rescheduleTarget != null && w.selectedSlot != null) {
           const slotTime = localTime(w.selectedSlot.dateStart);
           return emitMutationConfirm(
