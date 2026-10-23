@@ -25,6 +25,7 @@ export type SlotAvailabilityEvidence = {
 export type CatalogRow = {
   id: string;
   name: string;
+  durationMinutes?: number;
 };
 
 /** One keyboard chip on a catalog family page (group or singleton CRM id). */

@@ -75,6 +75,9 @@ const projectCard = (
         service: {
           id: card.serviceId,
           ...(service?.name != null ? { name: service.name } : {}),
+          ...(service?.durationMinutes != null
+            ? { durationMinutes: service.durationMinutes }
+            : {}),
           source: service?.source ?? "catalog",
         },
         choices: choicesFromIds(

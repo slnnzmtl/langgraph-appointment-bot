@@ -354,6 +354,9 @@ export const effectResultFromToolMessages = (
     const services = parsed.list.map((row) => ({
       id: row.id,
       name: row.name,
+      ...(row.duration != null && Number.isFinite(row.duration) && row.duration > 0
+        ? { durationMinutes: row.duration }
+        : {}),
     }));
     if (services.length === 0) {
       return { effectId: expectedEffectId, kind: "catalog", outcome: "empty" };

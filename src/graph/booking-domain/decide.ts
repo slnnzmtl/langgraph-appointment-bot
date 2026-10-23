@@ -380,7 +380,7 @@ export const decideBooking = (
     const probe = query ?? priorQuery;
     emitDecision({
       kind: "service_candidate",
-      catalogRows: catalogRows.map((row) => ({ id: row.id, name: row.name })),
+      catalogRows: catalogRows.map((row) => ({ ...row })),
       choices: chips.map((chip) => ({
         id: chip.id,
         label: chip.label,
@@ -830,7 +830,12 @@ export const decideBooking = (
   const selectCatalogRow = (row: CatalogRow): BookingDecision => {
     emit({
       type: "service_selected",
-      service: { id: row.id, name: row.name, source: "catalog" },
+      service: {
+        id: row.id,
+        name: row.name,
+        source: "catalog",
+        ...(row.durationMinutes != null ? { durationMinutes: row.durationMinutes } : {}),
+      },
       accepted: false,
     });
     return decideFromRequirement();
@@ -1568,6 +1573,7 @@ export const decideBooking = (
           id: service.serviceId,
           ...(service.serviceName != null ? { name: service.serviceName } : {}),
           source: "catalog",
+          ...(service.durationMinutes != null ? { durationMinutes: service.durationMinutes } : {}),
         },
         accepted: false,
       });

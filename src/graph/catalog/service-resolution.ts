@@ -146,7 +146,7 @@ const toBookingService = (row: ServiceCatalogRow): BookingService => ({
   id: row.id,
   name: row.name,
   source: "catalog",
-  ...(row.duration != null && Number.isFinite(row.duration)
+  ...(row.duration != null && Number.isFinite(row.duration) && row.duration > 0
     ? { durationMinutes: row.duration }
     : {}),
 });

@@ -16,7 +16,7 @@ export type ServiceIntent =
    */
   | { kind: "book_highlighted" }
   /** Resolved from catalog evidence only (never model-minted CRM ids). */
-  | { kind: "catalog_service"; serviceId: string; serviceName?: string };
+  | { kind: "catalog_service"; serviceId: string; serviceName?: string; durationMinutes?: number };
 
 export type ScheduleIntent =
   | { kind: "date"; date: string }

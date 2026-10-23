@@ -153,7 +153,7 @@ export type EffectResult =
       kind: "catalog";
       outcome: "ok" | "error" | "empty";
       /** Allowlisted catalog rows only (id + display name). */
-      services?: Array<{ id: string; name: string }>;
+      services?: Array<{ id: string; name: string; durationMinutes?: number }>;
       /**
        * Current keyboard page from the family selector / FAQ grouping helper.
        * Present only on a real list_services correlation — not a synthesized page.
