@@ -1,5 +1,6 @@
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import {
+  bookingDraftPhase,
   bookingDraftCanPresentAvailability,
   effectiveBookingContactDetails,
   nextMissingContactField,
@@ -52,6 +53,7 @@ export const restorePendingInteraction = (
   if (draft == null) {
     return null;
   }
+  const phase = bookingDraftPhase(draft);
 
   if (
     draft.replacement?.status === "offered"
@@ -69,7 +71,7 @@ export const restorePendingInteraction = (
   }
 
   if (
-    (draft.phase === "date" || draft.phase === "time")
+    (phase === "date" || phase === "time")
     && input.availabilityContext != null
     && bookingDraftCanPresentAvailability(draft)
   ) {
@@ -78,7 +80,7 @@ export const restorePendingInteraction = (
     if (open.length === 0) {
       return buildEmptyAvailabilityInteraction(availability);
     }
-    if (draft.phase === "time" && draft.selectedDate != null) {
+    if (phase === "time" && draft.selectedDate != null) {
       const day = availability.days.find((entry) => entry.date === draft.selectedDate);
       if (day != null && day.slots.length > 0) {
         const interaction = buildTimeSelectInteraction(availability, day);
@@ -91,6 +93,8 @@ export const restorePendingInteraction = (
   }
 
   if (
+    // Stored phase is still needed here: a fresh Telegram-owned CRM contact can
+    // have missing fields not yet copied into draft.contactDetails.
     draft.phase === "details"
     && input.prefetchFresh
     && draft.serviceAcceptance?.status === "accepted"

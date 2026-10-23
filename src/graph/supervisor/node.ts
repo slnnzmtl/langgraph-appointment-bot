@@ -9,6 +9,7 @@ import type { ServicesContext } from "../../tools/service-tools.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import { askDecisionFromPendingView } from "../booking-domain/decide.js";
+import { bookingDraftPhase } from "../booking/booking-draft.js";
 import { replyChoicesFromCard } from "../agent-loop/booking-card-choices.js";
 import {
   hasOpenBookingSession,
@@ -146,7 +147,7 @@ export const createClinicSupervisorNode = (
       ...(offeredFromCard.length > 0 ? { offeredChoiceIds: offeredFromCard } : {}),
       ...(offeredLabels.length > 0 ? { offeredChoiceLabels: offeredLabels } : {}),
       awaitingNote: ctx.workingDraft?.note.status === "awaiting"
-        || ctx.workingDraft?.phase === "note",
+        || (ctx.workingDraft != null && bookingDraftPhase(ctx.workingDraft) === "note"),
       ...(openContact != null ? { awaitingContactField: openContact } : {}),
       awaitingServiceConfirm: activeView?.card?.kind === "service_confirm",
       ...(faqHighlightOpen ? { faqHighlightOpen: true } : {}),
