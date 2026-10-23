@@ -270,6 +270,13 @@ export const effectResultFromToolMessages = (
     if (pendingKind !== expectedKind) {
       return failClosedForPending(pendingEffect);
     }
+    if (
+      body.startsWith("Error:")
+      || typeof record?.error === "string"
+      || record?.success === false
+    ) {
+      return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+    }
     const contactId = firstString(record?.id, record?.contactId);
     if (contactId == null) {
       return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
@@ -279,20 +286,39 @@ export const effectResultFromToolMessages = (
     }
     if (
       pendingKind === "update_contact"
-      && contactId !== pendingEffect.effect.payload.contactId
+      && (
+        contactId !== pendingEffect.effect.payload.contactId
+        || record?.id !== pendingEffect.effect.payload.contactId
+        || record?.contactId !== pendingEffect.effect.payload.contactId
+      )
     ) {
       return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
     }
-    const missingRaw = record?.missingFields;
-    const crmComplete = Array.isArray(missingRaw)
-      ? missingRaw.filter((entry): entry is string => typeof entry === "string").length === 0
-      : contactMissingFields(record ?? {}).length === 0;
+    if (pendingKind === "update_contact" && record?.success !== true) {
+      return { effectId: expectedEffectId, kind: "contact_write", outcome: "failed" };
+    }
+    const contact = pendingKind === "update_contact"
+      ? {
+          id: contactId,
+          ...Object.fromEntries(
+            ["firstName", "lastName", "phoneNumber", "cTelegram"].flatMap((field) =>
+              typeof record?.[field] === "string" ? [[field, record[field]]] : [],
+            ),
+          ),
+        }
+      : undefined;
+    const crmComplete = pendingKind === "update_contact"
+      ? contactMissingFields(contact ?? {}).length === 0
+      : Array.isArray(record?.missingFields)
+        ? record.missingFields.length === 0
+        : contactMissingFields(record ?? {}).length === 0;
     return {
       effectId: expectedEffectId,
       kind: "contact_write",
       outcome: contactWriteOutcome(name),
       contactId,
       crmComplete,
+      ...(contact ? { contact } : {}),
     };
   }
 
@@ -354,6 +380,9 @@ export const effectResultFromToolMessages = (
     const services = parsed.list.map((row) => ({
       id: row.id,
       name: row.name,
+      ...(row.duration != null && Number.isFinite(row.duration) && row.duration > 0
+        ? { durationMinutes: row.duration }
+        : {}),
     }));
     if (services.length === 0) {
       return { effectId: expectedEffectId, kind: "catalog", outcome: "empty" };

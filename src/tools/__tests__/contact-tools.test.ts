@@ -41,6 +41,14 @@ describe("contact-tools", () => {
     if (name === "update_entity") {
       return `Successfully updated Contact record with ID: ${args.entityId as string}`;
     }
+    if (name === "get_entity") {
+      return {
+        id: args.entityId,
+        firstName: "Ada",
+        lastName: "Lovelace",
+        phoneNumber: "+380501112233",
+      };
+    }
     if (name === "search_contacts") {
       return { contacts: [] };
     }
@@ -137,7 +145,7 @@ describe("contact-tools", () => {
       phoneNumber: "+380501112233",
     });
 
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(2);
     expect(calls[0]).toEqual({
       name: "update_entity",
       args: {
@@ -150,10 +158,18 @@ describe("contact-tools", () => {
         },
       },
     });
+    expect(calls[1]).toEqual({
+      name: "get_entity",
+      args: { entityType: "Contact", entityId: "c-99" },
+    });
     expect(JSON.parse(result as string)).toEqual({
       success: true,
       id: "c-99",
       contactId: "c-99",
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumber: "+380501112233",
+      missingFields: [],
     });
   });
 
@@ -180,6 +196,35 @@ describe("contact-tools", () => {
         id: "c-99",
         contactId: "c-99",
       });
+    });
+  });
+
+  it("keeps a committed update unverified when Contact readback fails or is foreign", async () => {
+    const callToolWithReadback = async (getEntity: () => unknown | Promise<unknown>) => {
+      const customCallTool = async (name: string, args: Record<string, unknown>) => {
+        if (name === "update_entity") {
+          return `Successfully updated Contact record with ID: ${args.entityId as string}`;
+        }
+        if (name === "get_entity") return getEntity();
+        return { ok: true };
+      };
+      const [update] = createContactTools({ callTool: customCallTool })
+        .filter((tool) => tool.name === "update_contact");
+      return update!.invoke({ contactId: "c-99", firstName: "Ada" });
+    };
+
+    const failedRead = await callToolWithReadback(() => { throw new Error("offline"); });
+    expect(JSON.parse(failedRead as string)).toMatchObject({
+      error: "Contact update committed but verification failed",
+    });
+    const foreignRead = await callToolWithReadback(() => ({
+      id: "c-other",
+      firstName: "Ada",
+      lastName: "Lovelace",
+      phoneNumber: "+380501112233",
+    }));
+    expect(JSON.parse(foreignRead as string)).toMatchObject({
+      error: "Contact update committed but verification failed",
     });
   });
 

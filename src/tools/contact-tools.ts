@@ -338,9 +338,31 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
             },
           }),
         );
-        return finishTrackedWrite(
+        const normalized = normalizeContactUpdateSuccess(result, input.contactId);
+        let acknowledgement: Record<string, unknown> | null = null;
+        try {
+          const parsed: unknown = JSON.parse(normalized);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            acknowledgement = parsed as Record<string, unknown>;
+          }
+        } catch {
+          // A non-JSON or malformed acknowledgement is not evidence to read back.
+        }
+        if (
+          acknowledgement?.success !== true
+          || acknowledgement.id !== input.contactId
+          || acknowledgement.contactId !== input.contactId
+          || typeof acknowledgement.error === "string"
+        ) {
+          trackToolError(
+            "update_contact",
+            "Update acknowledgement was malformed or did not match the requested Contact id",
+          );
+          return normalized;
+        }
+        finishTrackedWrite(
           "update_contact",
-          normalizeContactUpdateSuccess(result, input.contactId),
+          normalized,
           () => {
             trackEvent("contact_updated", {
               outcome: "success",
@@ -350,6 +372,50 @@ export const createContactTools = (options: ContactToolsOptions): StructuredTool
           },
           { requireEntityId: true },
         );
+        const verificationFailed = (): string => {
+          trackToolError("update_contact", "Contact update committed but verification failed");
+          return JSON.stringify({ error: "Contact update committed but verification failed" });
+        };
+
+        let verified: unknown;
+        try {
+          verified = await callTool("get_entity", {
+            entityType: "Contact",
+            entityId: input.contactId,
+          });
+        } catch {
+          return verificationFailed();
+        }
+        if (typeof verified === "string") {
+          try {
+            verified = JSON.parse(verified) as unknown;
+          } catch {
+            return verificationFailed();
+          }
+        }
+        if (
+          verified == null
+          || typeof verified !== "object"
+          || Array.isArray(verified)
+          || typeof (verified as Record<string, unknown>).error === "string"
+          || (verified as Record<string, unknown>).id !== input.contactId
+        ) {
+          return verificationFailed();
+        }
+        const row = verified as Record<string, unknown>;
+        const contact: Record<string, unknown> = { id: input.contactId };
+        for (const field of CONTACT_CONTEXT_FIELDS) {
+          if (field !== "id" && typeof row[field] === "string") {
+            contact[field] = row[field];
+          }
+        }
+        return JSON.stringify({
+          success: true,
+          id: input.contactId,
+          contactId: input.contactId,
+          ...contact,
+          missingFields: contactMissingFields(contact),
+        });
       } catch (error) {
         return toolErrorJson("update_contact", error);
       }

@@ -10,7 +10,6 @@ import {
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import {
   expectButtons,
@@ -35,6 +34,7 @@ import {
 import type { SoftWarning, SmokeScenario } from "../types.js";
 import { installCallToolRecorder } from "../harness.js";
 import {
+  assertBookingInterval,
   assertCreateMeetingOnce,
   assertMeetingPlanned,
   assertNoCommittedOutcomeBeforeConfirm,
@@ -51,6 +51,7 @@ import {
 } from "./booking-helpers.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import {
+  assertProcedureOffer,
   drillToProcedureOffer,
   openServicesEntryWithVisit,
   expectFamilyCatalogTurn,
@@ -64,6 +65,26 @@ import {
 
 const PRICE_HINT = /грн|\d/i;
 const VISIT_NOTE_TEXT = "Турбує сухість шкіри на обличчі";
+
+const assertServiceDurationOracle = async (
+  ctx: Parameters<SmokeScenario["run"]>[0],
+  scenarioName: string,
+  service: { id: string; durationMinutes?: number },
+): Promise<number> => {
+  const catalogRows = await loadCatalogServiceRows(ctx.callTool, `${scenarioName} duration oracle`);
+  const expectedDuration = catalogRows.find((row) => row.id === service.id)?.duration;
+  if (typeof expectedDuration !== "number" || !Number.isFinite(expectedDuration) || expectedDuration <= 0) {
+    throw new SmokeAssertError(
+      `${scenarioName}: independently fetched CRM service ${service.id} has invalid duration ${String(expectedDuration)}`,
+    );
+  }
+  if (service.durationMinutes !== expectedDuration) {
+    throw new SmokeAssertError(
+      `${scenarioName}: selected service duration ${String(service.durationMinutes)}m, CRM oracle says ${expectedDuration}m`,
+    );
+  }
+  return expectedDuration;
+};
 
 const hhmmFromLocalIso = (dateStart: string): string | null => {
   const match = /T(\d{2}:\d{2})/.exec(dateStart);
@@ -380,9 +401,30 @@ export const replaceRebookScenario: SmokeScenario = {
         expectAction: "create",
         maxTurns: 14,
       });
-      const selectedSlot = (await bundle.session.snapshot()).state.bookingDraft?.selectedSlot;
-      if (selectedSlot?.dateStart == null) {
-        throw new SmokeAssertError("replace-rebook: missing selectedSlot.dateStart before create");
+      const beforeCreate = await bundle.session.snapshot();
+      const draft = beforeCreate.state.bookingDraft;
+      const service = draft?.serviceAcceptance?.service;
+      if (draft?.serviceAcceptance?.status !== "accepted" || service?.id !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: selected procedure was not retained before create");
+      }
+      const expectedDuration = await assertServiceDurationOracle(ctx, "replace-rebook", service);
+      const selectedSlot = draft.selectedSlot;
+      if (selectedSlot == null) {
+        throw new SmokeAssertError("replace-rebook: missing selectedSlot before create");
+      }
+      assertBookingInterval("replace-rebook selected slot", selectedSlot, expectedDuration);
+      if (beforeCreate.state.availabilityContext?.stepMinutes !== expectedDuration) {
+        throw new SmokeAssertError("replace-rebook: availability duration differs from CRM oracle");
+      }
+      const pending = draft.pendingDecision;
+      const frozen = pending?.kind === "mutation_confirm" ? pending.frozenCommand : undefined;
+      if (frozen?.action !== "create") {
+        throw new SmokeAssertError("replace-rebook: missing frozen create command before confirm");
+      }
+      assertBookingInterval("replace-rebook frozen command", frozen.payload, expectedDuration, selectedSlot);
+      const frozenServices = frozen.payload.cServicesIds;
+      if (!Array.isArray(frozenServices) || frozenServices.length !== 1 || frozenServices[0] !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: frozen command has the wrong service");
       }
       const created = await confirmOpenHitl(bundle);
       const allPostReplace = [
@@ -393,6 +435,12 @@ export const replaceRebookScenario: SmokeScenario = {
         ...created.calls,
       ];
       assertCreateMeetingOnce("replace-rebook create", allPostReplace);
+      const createCall = allPostReplace.find((call) => call.name === "create_meeting")!;
+      assertBookingInterval("replace-rebook create payload", createCall.args, expectedDuration, selectedSlot);
+      const createServices = createCall.args.cServicesIds;
+      if (!Array.isArray(createServices) || createServices.length !== 1 || createServices[0] !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: create payload has the wrong service");
+      }
 
       const newId = await resolveCreatedMeetingId(ctx, contactId, allPostReplace);
       if (newId === oldId) {
@@ -406,13 +454,11 @@ export const replaceRebookScenario: SmokeScenario = {
           `replace-rebook: expected Planned=[${newId}], got [${planned.join(",")}]`,
         );
       }
-      const newMeeting = await getMeeting(ctx.callTool, newId);
-      const meetingStart = normalizeLocalIsoDatetime(String(newMeeting.dateStart));
-      const slotStart = normalizeLocalIsoDatetime(selectedSlot.dateStart);
-      if (meetingStart !== slotStart) {
-        throw new SmokeAssertError(
-          `replace-rebook: new dateStart ${meetingStart} !== slot ${slotStart}`,
-        );
+      const newMeeting = await assertMeetingPlanned(ctx, newId, contactId);
+      assertBookingInterval("replace-rebook stored meeting", newMeeting, expectedDuration, selectedSlot);
+      const crmServices = await getMeetingServiceIds(ctx.callTool, newId);
+      if (crmServices.length !== 1 || crmServices[0] !== procedure.id) {
+        throw new SmokeAssertError("replace-rebook: stored meeting has the wrong service");
       }
       expectButtons("replace-rebook post menu", created.buttons, [
         DEFAULT_MENU_HAS_VISITS[0],
@@ -451,36 +497,34 @@ export const replaceProcedureScenario: SmokeScenario = {
         bundle.session,
         "replace-procedure",
       );
-      const offer = await drillToProcedureOffer(
+      const highlightTurn = await drillToProcedureOffer(
         bundle.session,
         "replace-procedure",
         8,
         servicesTurn,
       );
-      const interaction = offer.state.pendingInteraction;
-      if (interaction?.kind !== "service_confirm") {
-        throw new SmokeAssertError(
-          `replace-procedure: expected service_confirm, got ${interaction?.kind ?? "null"}`,
-        );
-      }
-      const service = interaction.service;
-      if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
-        throw new SmokeAssertError(
-          `replace-procedure: expected non-consultation service id, got ${service.id}`,
-        );
-      }
-
-      const acceptTurn = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      const offeredServiceId = assertProcedureOffer("replace-procedure", highlightTurn);
+      const bookTurn = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      const service = bookTurn.state.bookingDraft?.serviceAcceptance?.service;
       if (
-        acceptTurn.state.pendingInteraction?.kind !== "visit_select"
-        || acceptTurn.state.pendingInteraction.stage !== "replacement"
+        bookTurn.state.bookingDraft?.serviceAcceptance?.status !== "accepted"
+        || service?.id !== offeredServiceId
       ) {
         throw new SmokeAssertError(
-          `replace-procedure: expected visit_select/replacement after Так, got ${acceptTurn.state.pendingInteraction?.kind ?? "null"}/${acceptTurn.state.pendingInteraction?.kind === "visit_select" ? acceptTurn.state.pendingInteraction.stage : "n/a"}`,
+          `replace-procedure: Так did not accept offered service ${offeredServiceId}`,
         );
       }
-      expectButtons("replace-procedure REPLACE", acceptTurn.buttons, [...BOOKING_REPLACE_MENU]);
-      assertNoCreateMeeting("replace-procedure REPLACE turn", acceptTurn.calls);
+      await assertServiceDurationOracle(ctx, "replace-procedure", service);
+      if (
+        bookTurn.state.pendingInteraction?.kind !== "visit_select"
+        || bookTurn.state.pendingInteraction.stage !== "replacement"
+      ) {
+        throw new SmokeAssertError(
+          `replace-procedure: expected visit_select/replacement after Так, got ${bookTurn.state.pendingInteraction?.kind ?? "null"}/${bookTurn.state.pendingInteraction?.kind === "visit_select" ? bookTurn.state.pendingInteraction.stage : "n/a"}`,
+        );
+      }
+      expectButtons("replace-procedure REPLACE", bookTurn.buttons, [...BOOKING_REPLACE_MENU]);
+      expectNotCalled("replace-procedure REPLACE turn", bookTurn.calls, ["create_meeting", "cancel_meeting", "reschedule_meeting"]);
 
       const cancelTap = await bundle.session.tap("Скасувати");
       if (!cancelTap.pendingConfirm) {
@@ -1166,21 +1210,29 @@ export const bookProcedureScenario: SmokeScenario = {
     const bundle = openBookingSession(ctx, "book-procedure", telegramId);
     try {
       await openBookingOffer(bundle.session, "book-procedure");
-      const offer = await drillToProcedureOffer(bundle.session, "book-procedure");
-      const interaction = offer.state.pendingInteraction;
-      if (interaction?.kind !== "service_confirm") {
+      const highlightTurn = await drillToProcedureOffer(bundle.session, "book-procedure");
+      const offeredServiceId = assertProcedureOffer("book-procedure", highlightTurn);
+      const booked = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      const service = booked.state.bookingDraft?.serviceAcceptance?.service;
+      if (
+        booked.state.bookingDraft?.serviceAcceptance?.status !== "accepted"
+        || service?.id !== offeredServiceId
+      ) {
         throw new SmokeAssertError(
-          `book-procedure: expected service_confirm, got ${interaction?.kind ?? "null"}`,
+          `book-procedure: Так did not accept offered service ${offeredServiceId}`,
         );
       }
-      const service = interaction.service;
-      if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
+      const expectedDuration = await assertServiceDurationOracle(ctx, "book-procedure", service);
+      if (
+        booked.state.pendingInteraction?.kind !== "date_select"
+        && booked.state.pendingInteraction?.kind !== "time_select"
+      ) {
         throw new SmokeAssertError(
-          `book-procedure: expected non-consultation service id, got ${service.id}`,
+          `book-procedure: expected date/time selection immediately after Так, got ${booked.state.pendingInteraction?.kind ?? "null"}`,
         );
       }
-
-      await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      expectNoButtons("book-procedure after Так", booked.buttons, [...BOOKING_OFFER_MENU]);
+      expectNotCalled("book-procedure before final confirmation", booked.calls, ["create_meeting", "cancel_meeting", "reschedule_meeting"]);
       await driveUntilMutationConfirm(bundle, {
         phone,
         ...SMOKE_CONTACT_NAME,
@@ -1214,25 +1266,7 @@ export const bookProcedureScenario: SmokeScenario = {
           `book-procedure: CRM meeting services ${JSON.stringify(crmServices)} missing ${service.id}`,
         );
       }
-      const dateStart = String(meeting.dateStart ?? "");
-      const dateEnd = String(meeting.dateEnd ?? "");
-      const durationMinutes =
-        typeof service.durationMinutes === "number"
-        && Number.isFinite(service.durationMinutes)
-          ? service.durationMinutes
-          : null;
-      if (durationMinutes != null && dateStart.includes("T") && dateEnd.includes("T")) {
-        const startMs = Date.parse(dateStart);
-        const endMs = Date.parse(dateEnd);
-        if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
-          soft(
-            bundle.warnings,
-            "book-procedure duration matches service",
-            Math.round((endMs - startMs) / 60_000) === durationMinutes,
-            `expected ${durationMinutes}m got ${Math.round((endMs - startMs) / 60_000)}m`,
-          );
-        }
-      }
+      assertBookingInterval("book-procedure stored meeting", meeting, expectedDuration);
       console.log("✓ book-procedure: service", service.id, "meeting", meetingId);
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {

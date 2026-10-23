@@ -4,6 +4,29 @@ import type { ILLMConnector } from "../../types.js";
 import { createBookingTurnInterpreter } from "../booking-turn-interpreter.js";
 
 describe("createBookingTurnInterpreter open name field", () => {
+  it("does not let structured model output provide runtime acceptance or catalog identity", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      serviceIntentKind: "book_highlighted",
+    });
+    let schema: { safeParse: (value: unknown) => { success: boolean } } | undefined;
+    const llm = {
+      bindRoutingTools: (value: typeof schema) => {
+        schema = value;
+        return { invoke };
+      },
+    } as unknown as ILLMConnector;
+    const interpret = createBookingTurnInterpreter(llm);
+
+    await expect(interpret({ rawText: "Could you book this one?", faqHighlightOpen: true }))
+      .resolves.toEqual({ serviceIntent: { kind: "book_highlighted" } });
+    expect(schema?.safeParse({
+      serviceIntentKind: "book_highlighted",
+      accepted: true,
+      serviceId: "model-minted-id",
+    }).success)
+      .toBe(false);
+  });
+
   it("submits a name only when the model sets firstName; empty omit re-asks", async () => {
     const invoke = vi.fn();
     const llm = {

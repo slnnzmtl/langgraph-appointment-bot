@@ -3,7 +3,7 @@
  * Command idempotency — not event sourcing.
  */
 
-import type { CatalogChip } from "./session.js";
+import type { CatalogChip, CatalogRow } from "./session.js";
 
 export type BookingEffect =
   | {
@@ -126,6 +126,8 @@ export type EffectResult =
       contactId?: string;
       /** True when CRM missingFields is empty after the write. */
       crmComplete?: boolean;
+      /** Allowlisted CRM readback for verified update_contact writes. */
+      contact?: Record<string, unknown>;
     }
   | {
       effectId: string;
@@ -152,8 +154,8 @@ export type EffectResult =
       effectId: string;
       kind: "catalog";
       outcome: "ok" | "error" | "empty";
-      /** Allowlisted catalog rows only (id + display name). */
-      services?: Array<{ id: string; name: string }>;
+      /** Allowlisted catalog rows only. */
+      services?: CatalogRow[];
       /**
        * Current keyboard page from the family selector / FAQ grouping helper.
        * Present only on a real list_services correlation — not a synthesized page.

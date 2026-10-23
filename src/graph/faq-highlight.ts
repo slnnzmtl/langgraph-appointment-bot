@@ -3,7 +3,7 @@
  * Keeps supervisor off agent-loop prepare modules.
  */
 
-import { DEFAULT_MENU_NO_VISITS } from "../shared/clinic-constants.js";
+import { BOOKING_OFFER_MENU } from "../shared/clinic-constants.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { UnderstoodBookingTurn } from "./booking-domain/turn.js";
 import type { InteractionChoice, PendingInteraction } from "./booking/booking-session.js";
@@ -14,14 +14,11 @@ export type FaqHighlightedService = {
   serviceName?: string;
 };
 
-/** Always offer book + browse; never drop «Записатись» when the patient has visits. */
-export const FAQ_HIGHLIGHT_REPLY_BUTTONS = [
-  DEFAULT_MENU_NO_VISITS[0],
-  DEFAULT_MENU_NO_VISITS[1],
-] as const;
+/** Keep the original service-offer labels; accepting the FAQ row starts booking once. */
+export const FAQ_HIGHLIGHT_REPLY_BUTTONS = BOOKING_OFFER_MENU;
 
 const FAQ_HIGHLIGHT_BOOK_HINT_UK =
-  "Щоб записатися на цю послугу, натисніть «Записатись».";
+  "Бажаєте записатися на цю процедуру?";
 
 /** FAQ-owned single-chip highlight (informational until explicit book). */
 export const faqHighlightChoice = (
@@ -93,7 +90,7 @@ export type ResolveBookHighlightedOptions = {
 };
 
 /**
- * Promote book_highlighted → catalog_service when the id is on the current list.
+ * Promote explicit book_highlighted → accepted catalog_service only when the id is on the current list.
  * Missing/stale rows must clear the highlight (supervisor FINISH), not reopen FAQ chips.
  */
 export const resolveBookHighlightedPromotion = (
@@ -119,6 +116,7 @@ export const resolveBookHighlightedPromotion = (
             kind: "catalog_service",
             serviceId: row.id,
             ...(row.name != null ? { serviceName: row.name } : {}),
+            accepted: true,
           },
         },
       },

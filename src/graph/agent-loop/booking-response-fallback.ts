@@ -54,6 +54,8 @@ const CLARIFICATION_UK: Record<string, string> = {
     "Знайдено кілька контактів за цим номером. Уточніть, будь ласка, у клініці.",
   contact_write_failed:
     "Не вдалося зберегти контактні дані. Спробуйте, будь ласка, трохи пізніше.",
+  contact_write_incomplete:
+    "Контакт збережено, але даних поки недостатньо для запису. Перевірте, будь ласка, ім’я та прізвище у клініці.",
   contact_lookup_failed:
     "Не вдалося перевірити номер. Вкажіть, будь ласка, телефон ще раз.",
   availability_failed:
@@ -100,6 +102,8 @@ const CLARIFICATION_EN: Partial<Record<string, string>> = {
     "I could not verify the number. Please send your phone again.",
   contact_write_failed:
     "I could not save your contact details. Please try again in a moment.",
+  contact_write_incomplete:
+    "Your contact update was saved, but the booking details are still incomplete. Please check your name with the clinic.",
   reschedule_same_slot:
     "Please choose a different time; this visit is already scheduled for that slot.",
   phone_occupied:

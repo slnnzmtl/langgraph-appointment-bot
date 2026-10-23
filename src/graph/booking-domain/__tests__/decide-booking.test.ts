@@ -346,6 +346,161 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("saves an accepted missing name to an owned CRM contact before booking", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-1" });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Ada",
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "lastName",
+      value: "Lovelace",
+    });
+    const result = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: { firstName: "Ada" },
+    });
+    expect(result.decision.pendingEffect?.effect).toEqual({
+      kind: "update_contact",
+      payload: { contactId: "owned-1", lastName: "Lovelace" },
+    });
+  });
+
+  it("collects the remaining accepted name before repairing a nameless owned contact", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });
+    draft = reduceBookingDraft(draft, {
+      type: "contact_field_submitted",
+      field: "firstName",
+      value: "Ada",
+    });
+
+    const result = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: {},
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.decision.card).toMatchObject({ kind: "contact_field", field: "lastName" });
+  });
+
+  it("updates all accepted names on an owned nameless contact before meeting confirmation", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "firstName", value: "Ada" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "lastName", value: "Lovelace" });
+
+    const collecting = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: {},
+    });
+    const write = collecting.decision.pendingEffect;
+    expect(write?.effect).toEqual({
+      kind: "update_contact",
+      payload: { contactId: "owned-blank", firstName: "Ada", lastName: "Lovelace" },
+    });
+    draft = apply(draft, collecting.events);
+    const confirmed = decideBooking(draft, {
+      source: "effect_result",
+      result: {
+        effectId: write!.id,
+        kind: "contact_write",
+        outcome: "updated",
+        contactId: "owned-blank",
+        crmComplete: true,
+      },
+    }, { ...READ_MODELS, ownedContact: {} });
+    expect(confirmed.decision.pendingEffect?.effect.kind).toBe("create_meeting");
+  });
+
+  it("does not advance to meeting confirmation when owned-contact update fails", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "firstName", value: "Ada" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "lastName", value: "Lovelace" });
+    const collecting = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: {},
+    });
+    const write = collecting.decision.pendingEffect;
+    draft = apply(draft, collecting.events);
+    const failed = decideBooking(draft, {
+      source: "effect_result",
+      result: {
+        effectId: write!.id,
+        kind: "contact_write",
+        outcome: "failed",
+      },
+    }, { ...READ_MODELS, ownedContact: {} });
+    expect(failed.decision.pendingEffect?.effect.kind).not.toBe("create_meeting");
+    expect(failed.decision.reason).toBe("contact_write_failed");
+  });
+
+  it("accepts only trusted explicit catalog booking and continues to requested dates", () => {
+    const result = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: {
+          kind: "catalog_service",
+          serviceId: "svc-peel",
+          serviceName: "Medium peel",
+          durationMinutes: 75,
+          accepted: true,
+        },
+        scheduleIntent: { kind: "date_and_time", date: "2026-10-24", time: "13:00" },
+        note: { kind: "answer", value: "forehead" },
+        contactFacts: { firstName: "Ada" },
+      },
+    }, READ_MODELS);
+    expect(result.events).toContainEqual(expect.objectContaining({
+      type: "service_selected",
+      accepted: true,
+      service: expect.objectContaining({ id: "svc-peel", durationMinutes: 75 }),
+    }));
+    expect(result.events).toContainEqual({ type: "note_status", status: "answered", value: "forehead" });
+    expect(result.events).toContainEqual({ type: "contact_field_submitted", field: "firstName", value: "Ada" });
+    expect(result.decision.pendingEffect?.effect).toMatchObject({
+      kind: "present_availability",
+      queryKind: "exact",
+      date: "2026-10-24",
+      preferredTime: "13:00",
+      durationMinutes: 75,
+    });
+  });
+
+  it("keeps ordinary catalog selections behind service confirmation", () => {
+    const result = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: { kind: "catalog_service", serviceId: "svc-peel", serviceName: "Medium peel" },
+      },
+    }, READ_MODELS);
+    expect(result.events).toContainEqual(expect.objectContaining({ type: "service_selected", accepted: false }));
+    expect(result.decision.card).toMatchObject({ kind: "service_confirm", serviceId: "svc-peel" });
+  });
+
+  it("keeps the replacement gate for an explicitly accepted FAQ service", () => {
+    const result = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: {
+          kind: "catalog_service",
+          serviceId: "svc-peel",
+          durationMinutes: 75,
+          accepted: true,
+        },
+      },
+    }, {
+      ...READ_MODELS,
+      plannedMeetings: [{ id: "existing-1", name: "Consultation" }],
+    });
+    expect(result.decision.card).toMatchObject({ kind: "visit_select", stage: "replacement" });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.events).toContainEqual(expect.objectContaining({ type: "service_selected", accepted: true }));
+  });
+
   it("book-with-visit offers REPLACE visit_select instead of consultation", () => {
     const meeting = {
       id: "meeting-1",

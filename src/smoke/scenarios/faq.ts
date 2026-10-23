@@ -24,6 +24,7 @@ import {
 import type { SoftWarning, SmokeScenario } from "../types.js";
 import { prepareFreshContact } from "./booking-helpers.js";
 import {
+  assertProcedureOffer,
   drillToProcedureOffer,
   expectFamilyCatalogTurn,
   loadCatalogServiceRows,
@@ -435,7 +436,7 @@ export const offerPriceScenario: SmokeScenario = {
     return withSession(ctx, "offer-price", telegramId, async (session, warnings) => {
       await openBookingOffer(session, "offer-price");
       const offer = await drillToProcedureOffer(session, "offer-price");
-      expectInteraction("offer-price", offer.state.pendingInteraction?.kind, "service_confirm");
+      assertProcedureOffer("offer-price", offer);
 
       const price = await session.say("Скільки коштує?");
       expectButtons("offer-price after price", price.buttons, [...BOOKING_OFFER_MENU]);

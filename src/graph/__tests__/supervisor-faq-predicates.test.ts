@@ -1,5 +1,5 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createEmptyBookingDraft } from "../booking/booking-draft.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
@@ -157,7 +157,7 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
     expect(Object.prototype.hasOwnProperty.call(result, "bookingDraft")).toBe(false);
   });
 
-  it("no-AI finalize unique highlight is informational with Записатись", () => {
+  it("no-AI finalize unique highlight retains the original offer labels", () => {
     const reply = tryFaqNoAiFinalize(
       supervisorState({
         pendingInteraction: {
@@ -189,9 +189,9 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
     expect(reply).not.toBeNull();
     expect(reply?.replyText).toContain("Пілінг серединний");
     expect(reply?.replyText).toContain("Середня глибина");
-    expect(reply?.replyText).toMatch(/Записатись/);
+    expect(reply?.replyText).toContain("Бажаєте записатися");
     expect(reply?.replyText).not.toMatch(/Який варіант вам підходить/);
-    expect(reply?.replyButtons).toEqual(["Записатись", "Послуги"]);
+    expect(reply?.replyButtons).toEqual(["Так", "Обрати іншу процедуру"]);
     expect(
       Object.prototype.hasOwnProperty.call(reply?.patch ?? {}, "bookingDraft"),
     ).toBe(false);
@@ -275,7 +275,7 @@ describe("FAQ prepare/finalize never assign bookingDraft", () => {
     });
     expect(reply.replyText).toContain("Пілінг серединний");
     expect(reply.replyText).not.toMatch(/Який варіант вам підходить/);
-    expect(reply.replyButtons).toEqual(["Записатись", "Послуги"]);
+    expect(reply.replyButtons).toEqual(["Так", "Обрати іншу процедуру"]);
   });
 });
 
@@ -314,6 +314,31 @@ describe("FAQ highlight book_highlighted promotion", () => {
         kind: "catalog_service",
         serviceId: "svc-botox",
         serviceName: "Botox CRM",
+        accepted: true,
+      },
+    });
+  });
+
+  it("turns explicit book-this prose into accepted canonical catalog identity", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async (input) => interpretBookingTurnDeterministic(input),
+    });
+    const update = await node(supervisorState({
+      messages: [new HumanMessage("book this one")],
+      pendingInteraction: highlightInteraction,
+      servicesContext: {
+        list: [{ id: "svc-botox", name: "Botox CRM", duration: 60 }],
+        fetchedAt: Date.now(),
+      },
+      bookingDraft: null,
+    }));
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: {
+        kind: "catalog_service",
+        serviceId: "svc-botox",
+        serviceName: "Botox CRM",
+        accepted: true,
       },
     });
   });
@@ -361,6 +386,7 @@ describe("FAQ highlight book_highlighted promotion", () => {
         kind: "catalog_service",
         serviceId: "svc-botox",
         serviceName: "Botox CRM",
+        accepted: true,
       },
     });
     expect(update.servicesContext?.list).toHaveLength(1);
@@ -406,7 +432,7 @@ describe("FAQ highlight book_highlighted promotion", () => {
     });
   });
 
-  it("does not start Botox booking when patient says yes without service confirm", async () => {
+  it("accepts Так on the current FAQ offer without a second service confirmation", async () => {
     const node = createClinicSupervisorNode();
     const update = await node(
       supervisorState({
@@ -419,7 +445,55 @@ describe("FAQ highlight book_highlighted promotion", () => {
         bookingDraft: null,
       }),
     );
-    expect(update.next).not.toBe("booking");
-    expect(update.understoodTurn?.serviceIntent?.kind).not.toBe("catalog_service");
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn?.serviceIntent).toMatchObject({
+      kind: "catalog_service", serviceId: "svc-botox", accepted: true,
+    });
+  });
+});
+
+
+describe("FAQ original-label offer navigation", () => {
+  it("Обрати іншу процедуру opens the root catalog without rematching or starting a draft", async () => {
+    const selectCandidates = vi.fn(async () => []);
+    const update = await prepareFaqTurn(supervisorState({
+      messages: [new HumanMessage("Обрати іншу процедуру")],
+      bookingDraft: null,
+      pendingInteraction: {
+        kind: "service_candidate", owner: "faq", utterance: "catalog",
+        choices: [{ id: "svc-mid", label: "Пілінг серединний", serviceIds: ["svc-mid"] }],
+      },
+      servicesContext: {
+        list: [{ id: "svc-mid", name: "Пілінг серединний", duration: 45 }, { id: "svc-other", name: "Інша процедура", duration: 60 }],
+        fetchedAt: Date.now(),
+      },
+    }), {
+      selectCandidates,
+      partitionCandidates: async () => [
+        { label: "Пілінг серединний", serviceIds: ["svc-mid"] },
+        { label: "Інша процедура", serviceIds: ["svc-other"] },
+      ],
+    });
+    expect(selectCandidates).not.toHaveBeenCalled();
+    expect(update).not.toHaveProperty("bookingDraft");
+    expect(update.pendingInteraction).toMatchObject({ kind: "service_candidate", owner: "faq" });
+    expect(update.pendingInteraction?.choices).toHaveLength(2);
+    expect(update.faqSkipLlm).toBe(true);
+  });
+
+  it("Так cannot book a stale highlighted CRM row", async () => {
+    const node = createClinicSupervisorNode();
+    const update = await node(supervisorState({
+      messages: [new HumanMessage("Так")],
+      bookingDraft: null,
+      pendingInteraction: {
+        kind: "service_candidate", owner: "faq", utterance: "catalog",
+        choices: [{ id: "removed", label: "Removed", serviceIds: ["removed"] }],
+      },
+      servicesContext: { list: [{ id: "other", name: "Other", duration: 30 }], fetchedAt: Date.now() },
+    }));
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.understoodTurn).toBeNull();
   });
 });

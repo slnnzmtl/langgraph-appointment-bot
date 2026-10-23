@@ -363,9 +363,52 @@ describe("extractMeetingsFromSearchResult", () => {
   it("reads list array", () => {
     expect(
       extractMeetingsFromSearchResult({
-        list: [{ dateStart: "a", dateEnd: "b" }],
+        list: [{ dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" }],
       }),
-    ).toEqual([{ dateStart: "a", dateEnd: "b" }]);
+    ).toEqual([{ dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" }]);
+  });
+
+  it("accepts date-only reservations through the established Kyiv datetime parser", () => {
+    expect(extractMeetingsFromSearchResult({
+      list: [{ dateStart: "2027-08-10", dateEnd: "2027-08-11" }],
+    })).toEqual([{ dateStart: "2027-08-10", dateEnd: "2027-08-11" }]);
+  });
+
+  it.each([
+    "{bad json",
+    { error: "CRM search failed" },
+    { rows: [] },
+    { meetings: [{ dateStart: "2026-08-10T09:00:00" }] },
+    { total: 2, meetings: [{ dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" }] },
+  ])("rejects malformed or incomplete occupancy: %o", (payload) => {
+    expect(() => extractMeetingsFromSearchResult(payload)).toThrow(/occupancy is unknown/);
+  });
+
+  it("accepts a valid empty occupancy result", () => {
+    expect(extractMeetingsFromSearchResult({ total: 0, meetings: [] })).toEqual([]);
+  });
+
+  it("tolerates truncated reserved-time snapshots and retains returned valid rows", () => {
+    expect(extractMeetingsFromSearchResult({
+      total: 3,
+      list: [{ id: "rt-1", dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" }],
+    }, { toleratePartial: true, skipInvalidRows: true })).toMatchObject([{ id: "rt-1" }]);
+  });
+
+  it("keeps valid reserved-time rows in a mixed-invalid response", () => {
+    expect(extractMeetingsFromSearchResult({
+      list: [
+        { id: "bad", dateStart: "invalid", dateEnd: "also-invalid" },
+        { id: "rt-valid", dateStart: "2026-08-10T09:00:00", dateEnd: "2026-08-10T09:30:00" },
+      ],
+    }, { toleratePartial: true, skipInvalidRows: true })).toMatchObject([{ id: "rt-valid" }]);
+  });
+
+  it("still rejects failed reserved-time responses for the caller's fallback", () => {
+    expect(() => extractMeetingsFromSearchResult(
+      { error: "CReservedTime unavailable" },
+      { toleratePartial: true, skipInvalidRows: true },
+    )).toThrow(/error/);
   });
 
   it("preserves meeting id when present", () => {

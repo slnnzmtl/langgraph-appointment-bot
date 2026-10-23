@@ -27,6 +27,8 @@ import {
   LATER_DATE_LABEL,
 } from "../../shared/clinic-constants.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
+import { jsonErrorMessage } from "../../shared/json-record.js";
+import { kyivLocalIsoToUtcMs, normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
 import type { CallRecord, ScenarioContext, SoftWarning } from "../types.js";
 
 export const WRITE_MCP_TOOLS = [
@@ -485,6 +487,11 @@ export const resolveCreatedMeetingId = async (
   contactId: string,
   calls: TurnResult["calls"],
 ): Promise<string> => {
+  const latestCreate = calls.filter((call) => call.name === "create_meeting").at(-1);
+  const failure = latestCreate?.error ?? jsonErrorMessage(latestCreate?.result);
+  if (failure != null) {
+    throw new SmokeAssertError(`create_meeting failed: ${failure}`);
+  }
   const fromCalls = extractMeetingIdFromCreateCalls(calls);
   if (fromCalls) {
     ctx.cleanup.trackMeeting(fromCalls);
@@ -498,6 +505,39 @@ export const resolveCreatedMeetingId = async (
     ctx.cleanup.trackMeeting(id);
   }
   return ids[0]!;
+};
+
+/** Compare every interval boundary against the independent CRM duration and selected slot. */
+export const assertBookingInterval = (
+  label: string,
+  interval: { dateStart?: unknown; dateEnd?: unknown },
+  expectedDuration: number,
+  expectedSlot?: { dateStart: string; dateEnd: string },
+): void => {
+  if (typeof interval.dateStart !== "string" || typeof interval.dateEnd !== "string") {
+    throw new SmokeAssertError(
+      label + ": missing dateStart/dateEnd",
+    );
+  }
+  let start: string;
+  let end: string;
+  let duration: number;
+  try {
+    start = normalizeLocalIsoDatetime(interval.dateStart);
+    end = normalizeLocalIsoDatetime(interval.dateEnd);
+    duration = (kyivLocalIsoToUtcMs(end) - kyivLocalIsoToUtcMs(start)) / 60_000;
+  } catch {
+    throw new SmokeAssertError(label + ": invalid dateStart/dateEnd");
+  }
+  if (!Number.isFinite(duration) || duration <= 0 || duration !== expectedDuration) {
+    throw new SmokeAssertError(label + ": interval " + duration + "m, CRM duration oracle says " + expectedDuration + "m");
+  }
+  if (expectedSlot != null && (
+    start !== normalizeLocalIsoDatetime(expectedSlot.dateStart)
+    || end !== normalizeLocalIsoDatetime(expectedSlot.dateEnd)
+  )) {
+    throw new SmokeAssertError(label + ": interval differs from the selected slot");
+  }
 };
 
 export const assertNoCreateMeeting = (label: string, calls: TurnResult["calls"]): void => {

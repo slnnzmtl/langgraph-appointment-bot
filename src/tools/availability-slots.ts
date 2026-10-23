@@ -648,45 +648,87 @@ export const findPreviousAvailableSlots = (
   };
 };
 
-export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => {
-  if (typeof raw === "string") {
+export const extractMeetingsFromSearchResult = (
+  raw: unknown,
+  options: { toleratePartial?: boolean; skipInvalidRows?: boolean } = {},
+): BusyMeeting[] => {
+  let value = raw;
+  if (typeof value === "string") {
     try {
-      return extractMeetingsFromSearchResult(JSON.parse(raw) as unknown);
+      value = JSON.parse(value) as unknown;
     } catch {
-      return [];
+      throw new Error("Malformed meeting-search JSON; occupancy is unknown");
     }
   }
-
-  if (!raw || typeof raw !== "object") {
-    return [];
+  if (!value || typeof value !== "object") {
+    throw new Error("Malformed meeting-search result; occupancy is unknown");
   }
 
-  const record = raw as Record<string, unknown>;
+  const record = value as Record<string, unknown>;
+  if (record.error != null) {
+    throw new Error("Meeting-search returned an error; occupancy is unknown");
+  }
   const list = Array.isArray(record.meetings)
     ? record.meetings
     : Array.isArray(record.list)
       ? record.list
-      : Array.isArray(raw)
-        ? raw
-        : [];
+      : Array.isArray(value)
+        ? value
+        : null;
+  if (list == null) {
+    throw new Error("Unsupported meeting-search shape; occupancy is unknown");
+  }
+  const reportedTotal = typeof record.total === "number"
+    ? record.total
+    : typeof record.totalCount === "number"
+      ? record.totalCount
+      : undefined;
+  if (!options.toleratePartial) {
+    if (reportedTotal != null && (!Number.isInteger(reportedTotal) || reportedTotal < list.length)) {
+      throw new Error("Invalid meeting-search total; occupancy is unknown");
+    }
+    if (reportedTotal != null && reportedTotal > list.length) {
+      throw new Error("Incomplete meeting-search result; occupancy is unknown");
+    }
+  }
 
-  const out: BusyMeeting[] = [];
-  for (const item of list) {
-    if (!item || typeof item !== "object") {
-      continue;
+  const meetings: BusyMeeting[] = [];
+  for (const [index, item] of list.entries()) {
+    const meeting = item && typeof item === "object"
+      ? item as Record<string, unknown>
+      : null;
+    if (
+      meeting == null
+      || typeof meeting.dateStart !== "string"
+      || typeof meeting.dateEnd !== "string"
+      || meeting.dateStart.trim().length === 0
+      || meeting.dateEnd.trim().length === 0
+    ) {
+      if (options.skipInvalidRows) continue;
+      const kind = meeting == null ? "Malformed" : "Incomplete";
+      throw new Error(`${kind} meeting-search row ${index}; occupancy is unknown`);
     }
-    const m = item as Record<string, unknown>;
-    if (typeof m.dateStart !== "string" || typeof m.dateEnd !== "string") {
-      continue;
+    const { dateStart, dateEnd } = meeting;
+    let valid = false;
+    try {
+      const startMs = kyivLocalIsoToUtcMs(dateStart);
+      const endMs = kyivLocalIsoToUtcMs(dateEnd);
+      valid = Number.isFinite(startMs) && Number.isFinite(endMs) && startMs < endMs;
+    } catch {
+      valid = false;
     }
-    out.push({
-      dateStart: m.dateStart,
-      dateEnd: m.dateEnd,
-      ...(typeof m.id === "string" ? { id: m.id } : {}),
-      ...(typeof m.status === "string" ? { status: m.status } : {}),
+    if (!valid) {
+      if (options.skipInvalidRows) continue;
+      throw new Error(`Incomplete meeting-search row ${index}; occupancy is unknown`);
+    }
+    meetings.push({
+      dateStart: dateStart as string,
+      dateEnd: dateEnd as string,
+      ...(typeof meeting?.id === "string" ? { id: meeting.id } : {}),
+      ...(typeof meeting?.status === "string" ? { status: meeting.status } : {}),
     });
   }
-  return out;
+  return meetings;
 };
 
 /**

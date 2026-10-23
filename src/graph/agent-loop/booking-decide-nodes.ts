@@ -110,9 +110,6 @@ const ownedContactFromState = (
   const row = identity.contact;
   const firstName = typeof row.firstName === "string" ? row.firstName.trim() : "";
   const lastName = typeof row.lastName === "string" ? row.lastName.trim() : "";
-  if (firstName.length === 0 && lastName.length === 0) {
-    return undefined;
-  }
   return {
     ...(firstName.length > 0 ? { firstName } : {}),
     ...(lastName.length > 0 ? { lastName } : {}),
@@ -408,6 +405,7 @@ type CatalogChipTap =
       kind: "select";
       serviceId: string;
       serviceName?: string;
+      durationMinutes?: number;
     }
   | {
       kind: "page";
@@ -439,11 +437,12 @@ const resolveCatalogChipTap = async (
   }
   if (remaining.length === 1) {
     const serviceId = remaining[0]!;
-    const serviceName = pending.catalogRows?.find((row) => row.id === serviceId)?.name;
+    const row = pending.catalogRows?.find((entry) => entry.id === serviceId);
     return {
       kind: "select",
       serviceId,
-      ...(serviceName != null ? { serviceName } : {}),
+      ...(row?.name != null ? { serviceName: row.name } : {}),
+      ...(row?.durationMinutes != null ? { durationMinutes: row.durationMinutes } : {}),
     };
   }
   const catalogRows = pending.catalogRows ?? [];
@@ -454,7 +453,12 @@ const resolveCatalogChipTap = async (
   if (remainingRows.length <= 1) {
     if (remainingRows.length === 1) {
       const row = remainingRows[0]!;
-      return { kind: "select", serviceId: row.id, serviceName: row.name };
+      return {
+        kind: "select",
+        serviceId: row.id,
+        serviceName: row.name,
+        ...(row.durationMinutes != null ? { durationMinutes: row.durationMinutes } : {}),
+      };
     }
     return { kind: "unmatched" };
   }
@@ -566,6 +570,9 @@ export const createBookingDecideNode = (
             ...(catalogTap.serviceName != null
               ? { serviceName: catalogTap.serviceName }
               : {}),
+            ...(catalogTap.durationMinutes != null
+              ? { durationMinutes: catalogTap.durationMinutes }
+              : {}),
           },
         },
       };
@@ -583,6 +590,24 @@ export const createBookingDecideNode = (
       // HITL resume / effect-only turns: no patient re-interpret at decide.
       // Empty patch re-asks the open requirement when a session exists.
       input = { source: "semantic_patch", patch: {} };
+    }
+
+    if (input.source === "semantic_patch" && input.patch.serviceIntent?.kind === "catalog_service") {
+      const intent = input.patch.serviceIntent;
+      const crmRow = state.servicesContext?.list.find((row) => row.id === intent.serviceId);
+      if (crmRow?.duration != null && Number.isFinite(crmRow.duration) && crmRow.duration > 0) {
+        input = {
+          ...input,
+          patch: {
+            ...input.patch,
+            serviceIntent: {
+              ...intent,
+              ...(intent.serviceName == null ? { serviceName: crmRow.name } : {}),
+              durationMinutes: crmRow.duration,
+            },
+          },
+        };
+      }
     }
 
     let result = decideBooking(workingDraft, input, readModels);

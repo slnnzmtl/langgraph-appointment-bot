@@ -73,6 +73,7 @@ export const projectContactEffects = (input: {
       resolvedContactId == null
       || ((message.name === "link_telegram_to_contact" || message.name === "update_contact")
         && resolvedContactId !== requestedContactId)
+      || (message.name === "update_contact" && record.contactId !== requestedContactId)
     ) {
       continue;
     }
@@ -94,13 +95,22 @@ export const projectContactEffects = (input: {
         }
       : message.name === "link_telegram_to_contact"
         ? { ...previousRow, id: resolvedContactId }
+        : record.success === true
+          ? {
+              ...previousRow,
+              id: resolvedContactId,
+              ...Object.fromEntries(
+                ["firstName", "lastName", "phoneNumber", "cTelegram"].flatMap((field) =>
+                  typeof record[field] === "string" ? [[field, record[field]]] : [],
+                ),
+              ),
+            }
         : {
             ...previousRow,
-            id: resolvedContactId,
-            ...(typeof args.firstName === "string" ? { firstName: args.firstName } : {}),
-            ...(typeof args.lastName === "string" ? { lastName: args.lastName } : {}),
-            ...(typeof args.phoneNumber === "string" ? { phoneNumber: args.phoneNumber } : {}),
           };
+    if (message.name === "update_contact" && record.success !== true) {
+      continue;
+    }
     const ownership = message.name === "create_contact" || message.name === "link_telegram_to_contact"
       ? "telegram" as const
       : previous?.ownership;

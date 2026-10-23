@@ -8,6 +8,9 @@ import { z } from "zod";
 import { compileClinicGraph } from "../compile.js";
 import { acceptedCreateDraft, bookingIntegrationSnapshot } from "./agent-loop-booking-integration-harness.js";
 import type { ClinicAgentDefinition, ILLMConnector } from "../types.js";
+import { createContactTools } from "../../tools/contact-tools.js";
+import type { InterpretBookingTurn } from "../agent-loop/booking-turn-interpreter.js";
+import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 
 const bookingAgent: ClinicAgentDefinition = {
   id: "booking",
@@ -24,7 +27,11 @@ const faqAgent: ClinicAgentDefinition = {
   maxSteps: 4,
 };
 
-const createGraph = (writeResult: (args: Record<string, unknown>) => Promise<string>) => {
+const createGraph = (
+  writeResult: (args: Record<string, unknown>) => Promise<string>,
+  options: { bookingTools?: ReturnType<typeof createContactTools>; interpretBookingTurn?: InterpretBookingTurn } = {},
+) => {
+  const availabilityArgs: Record<string, unknown>[] = [];
   const createMeeting = tool(async (args) => {
     const decision = interrupt({ type: "confirm_booking", draft: args }) as {
       confirmed?: boolean;
@@ -37,19 +44,22 @@ const createGraph = (writeResult: (args: Record<string, unknown>) => Promise<str
     description: "Test-only booking mutation with the production interrupt contract",
     schema: z.object({}).passthrough(),
   });
-  const presentAvailability = tool(async () => JSON.stringify({
-    ...bookingIntegrationSnapshot,
-    serviceId: "svc-1",
-    query: { kind: "exact", date: "2026-09-10", coverageComplete: true },
-  }), {
+  const presentAvailability = tool(async (args) => {
+    availabilityArgs.push(args as Record<string, unknown>);
+    return JSON.stringify({
+      ...bookingIntegrationSnapshot,
+      serviceId: "svc-1",
+      query: { kind: "exact", date: "2026-09-10", coverageComplete: true },
+    });
+  }, {
     name: "present_availability_slots",
     description: "Test availability revalidation",
     schema: z.object({}).passthrough(),
   });
   const checkpointer = new MemorySaver();
-  return compileClinicGraph({
+  const { graph } = compileClinicGraph({
     specialists: { faq: faqAgent, booking: bookingAgent },
-    agentTools: { faq: [], booking: [presentAvailability, createMeeting] },
+    agentTools: { faq: [], booking: [presentAvailability, createMeeting, ...(options.bookingTools ?? [])] },
     agentModel: {
       bindTools: () => ({ invoke: async () => new AIMessage("ok") }),
     } as unknown as BaseChatModel,
@@ -57,12 +67,13 @@ const createGraph = (writeResult: (args: Record<string, unknown>) => Promise<str
       bindRoutingTools: () => ({ invoke: async () => ({ next: "booking" }) }),
       withStructuredOutput: () => ({ invoke: async () => ({ text: "Your appointment was processed." }) }),
     } as unknown as ILLMConnector,
-    interpretBookingTurn: async () => ({}),
+    interpretBookingTurn: options.interpretBookingTurn ?? (async () => ({})),
     assignedUserId: "user-1",
     formatSystemMetadata: () => "META",
     messageHistoryMaxTokens: 6_000,
     checkpointer,
   });
+  return { graph, availabilityArgs };
 };
 
 const readyDraft = () => acceptedCreateDraft({
@@ -96,6 +107,98 @@ const initialState = () => ({
 });
 
 describe("compileClinicGraph booking HITL", () => {
+  it.each(["Так", "Записатись"])("accepts a verified FAQ highlight via %s without a second service confirmation", async (acceptLabel) => {
+    const interpretBookingTurn: InterpretBookingTurn = async (input) =>
+      interpretBookingTurnDeterministic(input);
+    const { graph, availabilityArgs } = createGraph(async () => JSON.stringify({ id: "meeting-1" }), {
+      interpretBookingTurn,
+    });
+    const config = { configurable: { thread_id: "compiled-faq-highlight-book" } };
+    const opened = await graph.invoke({
+      messages: [new HumanMessage(acceptLabel)],
+      bookingDraft: null,
+      bookingSchemaVersion: 2,
+      patientLocale: "uk",
+      pendingInteraction: {
+        kind: "service_candidate",
+        owner: "faq",
+        utterance: "procedure",
+        choices: [{ id: "svc-1", label: "Peel", serviceIds: ["svc-1"] }],
+      },
+      servicesContext: {
+        list: [{ id: "svc-1", name: "Peel CRM", duration: 30 }],
+        fetchedAt: Date.now(),
+      },
+    } as never, config);
+    const checkpoint = await graph.getState(config);
+
+    expect(checkpoint.values.bookingDraft?.serviceAcceptance).toMatchObject({
+      status: "accepted",
+      service: { id: "svc-1", name: "Peel CRM", durationMinutes: 30 },
+    });
+    expect(checkpoint.values.pendingInteraction?.kind).toBe("date_select");
+    expect(checkpoint.values.pendingInteraction?.kind).not.toBe("service_confirm");
+    expect(availabilityArgs[0]).toMatchObject({ durationMinutes: 30 });
+    const toolCalls = opened.agentMessages?.flatMap((message) =>
+      "tool_calls" in message ? message.tool_calls ?? [] : [],
+    ) ?? [];
+    expect(toolCalls.some((call) => call.name === "create_meeting")).toBe(false);
+  });
+
+  it("collects both names, verifies the CRM repair, then opens meeting confirmation", async () => {
+    const contact = {
+      id: "contact-1",
+      phoneNumber: "+380501112233",
+      firstName: "",
+      lastName: "",
+    };
+    const crmCalls: string[] = [];
+    const contactTools = createContactTools({
+      callTool: async (name, args) => {
+        crmCalls.push(name);
+        if (name === "update_entity") {
+          Object.assign(contact, args.data);
+          return "Successfully updated Contact record with ID: contact-1";
+        }
+        if (name === "get_entity") return { ...contact };
+        return { ok: true };
+      },
+    });
+    const interpretBookingTurn: InterpretBookingTurn = async ({ rawText }) =>
+      rawText === "Ada"
+        ? { contactFacts: { firstName: "Ada" } }
+        : rawText === "Lovelace"
+          ? { contactFacts: { lastName: "Lovelace" } }
+          : {};
+    const graph = createGraph(async () => JSON.stringify({ id: "meeting-1", success: true }), {
+      bookingTools: contactTools,
+      interpretBookingTurn,
+    }).graph;
+    const config = { configurable: { thread_id: "compiled-contact-repair" } };
+    const draft = readyDraft();
+    draft.contactDetails = { phoneNumber: contact.phoneNumber };
+
+    const asked = await graph.invoke({
+      messages: [new HumanMessage("Ada")],
+      bookingDraft: draft,
+      bookingSchemaVersion: 2,
+      patientLocale: "en",
+      contactContext: { ownership: "telegram", contacts: [{ ...contact }] },
+      availabilityContext: { ...bookingIntegrationSnapshot, serviceId: "svc-1" },
+    } as never, config);
+    expect(asked.pendingInteraction).toMatchObject({ kind: "contact_field", field: "lastName" });
+    expect(crmCalls).toEqual([]);
+
+    await graph.invoke({ messages: [new HumanMessage("Lovelace")] } as never, config);
+    const checkpoint = await graph.getState(config);
+    expect(crmCalls).toEqual(["update_entity", "get_entity"]);
+    expect(checkpoint.values.contactContext).toMatchObject({
+      ownership: "telegram",
+      contacts: [{ id: "contact-1", firstName: "Ada", lastName: "Lovelace" }],
+    });
+    expect(checkpoint.values.bookingDraft?.pendingEffect?.effect.kind).toBe("create_meeting");
+  });
+
   it("pauses, resumes once on the same checkpoint, consumes the matching effect, and grounds success", async () => {
     const writes: Record<string, unknown>[] = [];
     const { graph } = createGraph(async (args) => {
