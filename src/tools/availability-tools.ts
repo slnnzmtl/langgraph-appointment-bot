@@ -561,7 +561,10 @@ const searchReservedTimes = async (
       select: ["id", "dateStart", "dateEnd"],
       limit: RANGED_MEETINGS_LIMIT,
     });
-    return extractMeetingsFromSearchResult(raw);
+    return extractMeetingsFromSearchResult(raw, {
+      toleratePartial: true,
+      skipInvalidRows: true,
+    });
   } catch {
     return [];
   }

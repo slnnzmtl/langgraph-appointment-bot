@@ -53,6 +53,16 @@ describe("booking clinic-day input", () => {
     )).toEqual({ choice: { choiceId: "2026-10-26T11:00:00" } });
   });
 
+  it("preserves verified Telegram ownership when the contact has no names", () => {
+    const state = clinicState({
+      contactContext: {
+        ownership: "telegram",
+        contacts: [{ id: "contact-empty-names", phoneNumber: "+380501112233" }],
+      },
+    });
+    expect(readModelsFromClinicState(state).ownedContact).toEqual({});
+  });
+
   it("uses Kyiv midnight even when the host timezone is different", () => {
     process.env.TZ = "America/Los_Angeles";
     vi.useFakeTimers();

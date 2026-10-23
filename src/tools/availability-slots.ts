@@ -648,7 +648,10 @@ export const findPreviousAvailableSlots = (
   };
 };
 
-export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => {
+export const extractMeetingsFromSearchResult = (
+  raw: unknown,
+  options: { toleratePartial?: boolean; skipInvalidRows?: boolean } = {},
+): BusyMeeting[] => {
   let value = raw;
   if (typeof value === "string") {
     try {
@@ -680,28 +683,47 @@ export const extractMeetingsFromSearchResult = (raw: unknown): BusyMeeting[] => 
     : typeof record.totalCount === "number"
       ? record.totalCount
       : undefined;
-  if (reportedTotal != null && (!Number.isInteger(reportedTotal) || reportedTotal < list.length)) {
-    throw new Error("Invalid meeting-search total; occupancy is unknown");
-  }
-  if (reportedTotal != null && reportedTotal > list.length) {
-    throw new Error("Incomplete meeting-search result; occupancy is unknown");
+  if (!options.toleratePartial) {
+    if (reportedTotal != null && (!Number.isInteger(reportedTotal) || reportedTotal < list.length)) {
+      throw new Error("Invalid meeting-search total; occupancy is unknown");
+    }
+    if (reportedTotal != null && reportedTotal > list.length) {
+      throw new Error("Incomplete meeting-search result; occupancy is unknown");
+    }
   }
 
-  return list.map((item, index) => {
-    if (!item || typeof item !== "object") {
-      throw new Error(`Malformed meeting-search row ${index}; occupancy is unknown`);
+  const meetings: BusyMeeting[] = [];
+  for (const [index, item] of list.entries()) {
+    const meeting = item && typeof item === "object"
+      ? item as Record<string, unknown>
+      : null;
+    const dateStart = meeting?.dateStart;
+    const dateEnd = meeting?.dateEnd;
+    let valid = typeof dateStart === "string"
+      && typeof dateEnd === "string"
+      && dateStart.trim().length > 0
+      && dateEnd.trim().length > 0;
+    if (valid) {
+      try {
+        valid = kyivLocalIsoToUtcMs(normalizeLocalIsoDatetime(dateStart as string))
+          < kyivLocalIsoToUtcMs(normalizeLocalIsoDatetime(dateEnd as string));
+      } catch {
+        valid = false;
+      }
     }
-    const meeting = item as Record<string, unknown>;
-    if (typeof meeting.dateStart !== "string" || typeof meeting.dateEnd !== "string") {
-      throw new Error(`Incomplete meeting-search row ${index}; occupancy is unknown`);
+    if (!valid) {
+      if (options.skipInvalidRows) continue;
+      const kind = meeting == null ? "Malformed" : "Incomplete";
+      throw new Error(`${kind} meeting-search row ${index}; occupancy is unknown`);
     }
-    return {
-      dateStart: meeting.dateStart,
-      dateEnd: meeting.dateEnd,
-      ...(typeof meeting.id === "string" ? { id: meeting.id } : {}),
-      ...(typeof meeting.status === "string" ? { status: meeting.status } : {}),
-    };
-  });
+    meetings.push({
+      dateStart: dateStart as string,
+      dateEnd: dateEnd as string,
+      ...(typeof meeting?.id === "string" ? { id: meeting.id } : {}),
+      ...(typeof meeting?.status === "string" ? { status: meeting.status } : {}),
+    });
+  }
+  return meetings;
 };
 
 /**

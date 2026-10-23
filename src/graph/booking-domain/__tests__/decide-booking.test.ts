@@ -369,6 +369,58 @@ describe("decideBooking atomic contract", () => {
     });
   });
 
+  it("updates all accepted names on an owned nameless contact before meeting confirmation", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "firstName", value: "Ada" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "lastName", value: "Lovelace" });
+
+    const collecting = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: {},
+    });
+    const write = collecting.decision.pendingEffect;
+    expect(write?.effect).toEqual({
+      kind: "update_contact",
+      payload: { contactId: "owned-blank", firstName: "Ada", lastName: "Lovelace" },
+    });
+    draft = apply(draft, collecting.events);
+    const confirmed = decideBooking(draft, {
+      source: "effect_result",
+      result: {
+        effectId: write!.id,
+        kind: "contact_write",
+        outcome: "updated",
+        contactId: "owned-blank",
+        crmComplete: true,
+      },
+    }, { ...READ_MODELS, ownedContact: {} });
+    expect(confirmed.decision.pendingEffect?.effect.kind).toBe("create_meeting");
+  });
+
+  it("does not advance to meeting confirmation when owned-contact update fails", () => {
+    let draft: BookingDraft | null = draftAtDetailsWithPhone();
+    draft = reduceBookingDraft(draft, { type: "contact_resolved", contactId: "owned-blank" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "firstName", value: "Ada" });
+    draft = reduceBookingDraft(draft, { type: "contact_field_submitted", field: "lastName", value: "Lovelace" });
+    const collecting = decideBooking(draft, { source: "patient_turn", rawText: "" }, {
+      ...READ_MODELS,
+      ownedContact: {},
+    });
+    const write = collecting.decision.pendingEffect;
+    draft = apply(draft, collecting.events);
+    const failed = decideBooking(draft, {
+      source: "effect_result",
+      result: {
+        effectId: write!.id,
+        kind: "contact_write",
+        outcome: "failed",
+      },
+    }, { ...READ_MODELS, ownedContact: {} });
+    expect(failed.decision.pendingEffect?.effect.kind).not.toBe("create_meeting");
+    expect(failed.decision.reason).toBe("contact_write_failed");
+  });
+
   it("book-with-visit offers REPLACE visit_select instead of consultation", () => {
     const meeting = {
       id: "meeting-1",

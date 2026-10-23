@@ -110,9 +110,6 @@ const ownedContactFromState = (
   const row = identity.contact;
   const firstName = typeof row.firstName === "string" ? row.firstName.trim() : "";
   const lastName = typeof row.lastName === "string" ? row.lastName.trim() : "";
-  if (firstName.length === 0 && lastName.length === 0) {
-    return undefined;
-  }
   return {
     ...(firstName.length > 0 ? { firstName } : {}),
     ...(lastName.length > 0 ? { lastName } : {}),

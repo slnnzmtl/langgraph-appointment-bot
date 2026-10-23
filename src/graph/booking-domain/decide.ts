@@ -581,16 +581,16 @@ export const decideBooking = (
     details: BookingContactDetails,
   ): BookingDecision | null => {
     const crmNames = readModels.ownedContact;
-    const missingCrmName = crmNames != null
-      ? (crmNames.firstName == null ? "firstName" : crmNames.lastName == null ? "lastName" : null)
-      : null;
-    if (missingCrmName == null) return null;
-    const value = details[missingCrmName];
-    if (typeof value !== "string" || value.trim().length === 0) return null;
-    return runEffect("run_effect", {
-      kind: "update_contact",
-      payload: { contactId, [missingCrmName]: value.trim() },
-    });
+    if (crmNames == null) return null;
+    const payload: Extract<BookingEffect, { kind: "update_contact" }>["payload"] = { contactId };
+    if (crmNames.firstName == null && details.firstName?.trim()) {
+      payload.firstName = details.firstName.trim();
+    }
+    if (crmNames.lastName == null && details.lastName?.trim()) {
+      payload.lastName = details.lastName.trim();
+    }
+    if (payload.firstName == null && payload.lastName == null) return null;
+    return runEffect("run_effect", { kind: "update_contact", payload });
   };
 
   /** Contact identity ladder. Prefetch may already set contactId (adapter seed). */
@@ -1326,6 +1326,37 @@ export const decideBooking = (
 
     if (result.kind === "contact_write") {
       emit({ type: "effect_cleared" });
+      if (
+        result.outcome === "updated"
+        && result.crmComplete === true
+        && pending?.effect.kind === "update_contact"
+      ) {
+        // The write result is the fresh CRM evidence for this consume hop; the
+        // state prefetch is intentionally stale until the next turn.
+        readModels = {
+          ...readModels,
+          ownedContact: {
+            ...readModels.ownedContact,
+            ...(pending.effect.payload.firstName != null
+              ? { firstName: pending.effect.payload.firstName }
+              : {}),
+            ...(pending.effect.payload.lastName != null
+              ? { lastName: pending.effect.payload.lastName }
+              : {}),
+          },
+        };
+      }
+      if (
+        result.outcome === "updated"
+        && result.crmComplete !== true
+      ) {
+        emitDecision({ kind: "clarification", reason: "contact_write_incomplete" });
+        return ask(
+          "clarification",
+          { kind: "clarification", reason: "contact_write_incomplete" },
+          "contact_write_incomplete",
+        );
+      }
       if (
         (result.outcome === "created"
           || result.outcome === "updated"
