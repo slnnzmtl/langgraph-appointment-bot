@@ -1,6 +1,6 @@
 import type { ClinicRuntime } from "../composition/clinic-runtime.js";
-import type { BookingDraft } from "../graph/booking-draft.js";
-import type { PendingInteraction } from "../graph/booking-session.js";
+import type { BookingDraft } from "../graph/booking/booking-draft.js";
+import type { PendingInteraction } from "../graph/booking/booking-session.js";
 import type { ClinicHandoff } from "../graph/types.js";
 import type { McpCallTool } from "../shared/mcp.js";
 import type { AvailabilityContext } from "../tools/availability-tools.js";

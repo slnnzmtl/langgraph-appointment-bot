@@ -1,4 +1,4 @@
-import type { BookingEvent } from "../booking-draft.js";
+import type { BookingEvent } from "../booking/booking-draft.js";
 import type { CatalogChip } from "./session.js";
 import type { EffectResult, PendingEffect } from "./effects.js";
 import type { UnderstoodBookingTurn } from "./turn.js";
@@ -149,6 +149,8 @@ export type PlannedMeetingReadModel = {
 
 /** CRM / availability read models passed into decideBooking (not a second aggregate). */
 export type BookingReadModels = {
+  /** Clinic-local day fixed once for this booking-node invocation. */
+  clinicDay: string;
   contactContextDirty: boolean;
   bookingContextDirty: boolean;
   availabilityVerified: boolean;

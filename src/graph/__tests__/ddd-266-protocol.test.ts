@@ -2,7 +2,7 @@ import { AIMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 
 import { sanitizeBoundModelToolCalls } from "../agent-loop/tool-call-coercion.js";
-import { resolveCatalogFreeText } from "../catalog-match.js";
+import { resolveCatalogFreeText } from "../catalog/catalog-match.js";
 
 describe("DDD-266 model control protocols", () => {
   it("strips leaked tool markup without adding tool_calls", () => {

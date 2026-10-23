@@ -1,4 +1,4 @@
-import type { BookingAvailabilityScope } from "../graph/booking-draft.js";
+import type { BookingAvailabilityScope } from "../graph/booking/booking-draft.js";
 import { CLINIC_SLOT_MINUTES } from "../shared/clinic-constants.js";
 import {
   alignToAnchors,

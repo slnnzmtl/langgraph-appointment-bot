@@ -6,7 +6,7 @@ import {
 import type { ClinicState } from "../state.js";
 import {
   interpretInteractionReply,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import {
   lastPatientText,
   phoneLookupFailedThisTurn,
@@ -51,8 +51,8 @@ export const routeAfterAgentPrepare = (
   state: ClinicState,
   llmName: string,
   finalizeName: string,
-  bookingDecideName?: string,
   agentId?: string,
+  bookingDecideName?: string,
 ): string => {
   // Explicit book handoff set by prepare (next + understoodTurn).
   if (
@@ -86,10 +86,7 @@ export type RouteAfterAgentToolsOptions = {
   llmName: string;
   toolsName: string;
   mutationFinalizeName?: string;
-  commandPrepareName?: string;
-  noteOrchestratorName?: string;
   finalizeName?: string;
-  faqPrepareName?: string;
 };
 
 export const routeAfterAgentTools = (

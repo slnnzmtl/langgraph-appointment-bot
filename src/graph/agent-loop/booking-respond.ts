@@ -24,8 +24,8 @@ import type {
 } from "../booking-domain/decision.js";
 import {
   renderBookingInteractionMessage,
-} from "../booking-interaction-render.js";
-import { reduceBookingDraft } from "../booking-draft.js";
+} from "../booking/booking-interaction-render.js";
+import { reduceBookingDraft } from "../booking/booking-draft.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { BOOKING_AGENT_ID, type ILLMConnector } from "../types.js";
 import { replyChoicesFromCard } from "./booking-card-choices.js";

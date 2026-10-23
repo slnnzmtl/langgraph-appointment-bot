@@ -1,5 +1,5 @@
-import { CANCEL_CONFIRMATION_UK } from "../shared/clinic-constants.js";
-import { normalizeLocalIsoDatetime } from "../tools/availability-slots.js";
+import { CANCEL_CONFIRMATION_UK } from "../../shared/clinic-constants.js";
+import { normalizeLocalIsoDatetime } from "../../tools/availability-slots.js";
 import type { PendingBookingCommand } from "./booking-draft.js";
 
 export type CancelMeetingRef = {

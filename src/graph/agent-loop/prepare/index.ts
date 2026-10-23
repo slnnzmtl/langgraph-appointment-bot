@@ -3,9 +3,9 @@ import type { ServicesContext } from "../../../tools/service-tools.js";
 import type {
   PartitionServiceCandidates,
   SelectServiceCandidates,
-} from "../../service-resolution.js";
+} from "../../catalog/service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
-import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
+import { stripToolNoiseFromMessages } from "../../context/supervisor-history.js";
 import { prepareFaqTurn } from "./faq.js";
 
 export type CreateFaqPrepareOptions = {

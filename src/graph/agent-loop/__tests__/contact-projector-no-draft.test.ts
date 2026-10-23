@@ -1,7 +1,7 @@
 import { AIMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
-import { createEmptyBookingDraft, reduceBookingDraft } from "../../booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../../booking/booking-draft.js";
 import { projectContactEffects } from "../tool-effects/contact.js";
 
 describe("projectContactEffects CRM-only (no draft writes)", () => {

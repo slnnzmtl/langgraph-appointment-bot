@@ -1,10 +1,10 @@
 import { labelIdFor } from "../../shared/message-content.js";
-import { cancelCommandFromMeeting } from "../cancel-command.js";
+import { cancelCommandFromMeeting } from "../booking/cancel-command.js";
 import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
-} from "../booking-draft.js";
+} from "../booking/booking-draft.js";
 import type { SupervisorIntent } from "../routing.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 

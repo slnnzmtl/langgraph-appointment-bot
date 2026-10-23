@@ -2,9 +2,9 @@
  * Sync catalog page building (cap, uniquify ids, chip shorten). No selector,
  * partition, or service-resolution — safe for booking-domain/decide.
  */
-import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js";
-import { normalizeReplyLabel } from "../shared/message-content.js";
-import type { InteractionChoice } from "./booking-session.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.js";
+import { normalizeReplyLabel } from "../../shared/message-content.js";
+import type { InteractionChoice } from "../booking/booking-session.js";
 
 export const MAX_FAQ_CATALOG_CHOICES = 8;
 /** Safe width for Telegram 2-column reply keyboard labels. */

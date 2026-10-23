@@ -14,11 +14,11 @@ import {
   VISIT_CHANGE_MENU,
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../booking/booking-draft.js";
 import {
   openVisitNoteInteraction,
   visitMeetingChoiceLabel,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import type { ILLMConnector } from "../types.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";

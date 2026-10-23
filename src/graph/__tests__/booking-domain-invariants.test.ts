@@ -8,7 +8,7 @@ import {
   BOOKING_INFORMATIONAL_TOOL_NAMES,
   filterBookingInformationalTools,
 } from "../../tools/index.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../booking/booking-draft.js";
 import { decideBooking } from "../booking-domain/decide.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import {
@@ -23,6 +23,7 @@ describe("atomic booking-domain invariants", () => {
       null,
       { source: "semantic_patch", patch: { serviceIntent: { kind: "consultation" } } },
       {
+        clinicDay: "2026-09-01",
         contactContextDirty: false,
         bookingContextDirty: false,
         availabilityVerified: false,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   CONSULTATION_SERVICE_ID,
@@ -10,12 +10,13 @@ import {
   reduceBookingDraft,
   type BookingDraft,
   type BookingEvent,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import { choiceIdsFromCard } from "../../agent-loop/booking-card-choices.js";
 import { askDecisionFromPendingView, decideBooking } from "../decide.js";
 import type { BookingInput, BookingReadModels } from "../decision.js";
 
 const READ_MODELS: BookingReadModels = {
+  clinicDay: "2026-09-01",
   assignedUserId: "assigned-user-1",
   contactContextDirty: false,
   bookingContextDirty: false,
@@ -58,6 +59,26 @@ const draftAtDetailsWithPhone = (): BookingDraft => {
 };
 
 describe("decideBooking atomic contract", () => {
+  it("is independent of the host clock when clinic day is explicit", () => {
+    const input: BookingInput = {
+      source: "semantic_patch",
+      patch: { serviceIntent: { kind: "consultation" } },
+    };
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:30:00Z"));
+      const winter = decideBooking(null, input, READ_MODELS);
+      vi.setSystemTime(new Date("2026-10-24T23:30:00Z"));
+      const autumn = decideBooking(null, input, READ_MODELS);
+      expect(autumn).toEqual(winter);
+      expect(winter.events.find((event) => event.type === "booking_started")).toMatchObject({
+        bookingAttemptId: expect.stringContaining("20260901"),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns events and a decision, never a modified draft", () => {
     const input: BookingInput = { source: "control", intent: "menu" };
     const result = decideBooking(null, input, READ_MODELS);
@@ -428,6 +449,44 @@ describe("decideBooking atomic contract", () => {
       expect(effect.excludeMeetingIds).toEqual(["meeting-rs"]);
       expect(effect.durationMinutes).toBe(30);
     }
+  });
+
+  it("refuses to confirm a reschedule to the visit's existing local date and time", () => {
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "reschedule_started",
+      meeting: {
+        id: "meeting-rs",
+        name: "Консультація",
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+      },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "service_selected",
+      service: { id: "svc-1", name: "Botox", source: "catalog", durationMinutes: 30 },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, { type: "date_selected", date: "2026-09-10" });
+    draft = reduceBookingDraft(draft, {
+      type: "slot_selected",
+      slot: {
+        dateStart: "2026-09-10T14:00:00",
+        dateEnd: "2026-09-10T14:30:00",
+        label: "10 вер · 14:00",
+      },
+      snapshotId: "snapshot-1",
+    });
+
+    const result = decideBooking(draft, { source: "semantic_patch", patch: {} }, READ_MODELS);
+
+    expect(result.decision).toMatchObject({
+      tag: "ask",
+      intent: "clarification",
+      facts: { clarificationReason: "reschedule_same_slot" },
+      card: { kind: "clarification", reason: "reschedule_same_slot" },
+    });
+    expect(result.decision.pendingEffect).toBeUndefined();
+    expect(result.events.some((event) => event.type === "effect_prepared")).toBe(false);
   });
 
   it("confirming with pendingCommand cancel emits cancel_meeting mutation_confirm", () => {

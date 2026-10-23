@@ -15,9 +15,9 @@ import {
 import { asJsonRecord, committedMeetingEntityId } from "../../shared/json-record.js";
 import { extractRawMessageText } from "../../shared/message-content.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
-import { reduceBookingDraft } from "../booking-draft.js";
-import { closedBookingSessionUpdate } from "../booking-session.js";
-import { tagRuntimeAgentMessage } from "../sub-agent-messages.js";
+import { reduceBookingDraft } from "../booking/booking-draft.js";
+import { closedBookingSessionUpdate } from "../booking/booking-session.js";
+import { tagRuntimeAgentMessage } from "../context/sub-agent-messages.js";
 import { committedCreateOrRescheduleReply } from "./booking-response-fallback.js";
 
 import {

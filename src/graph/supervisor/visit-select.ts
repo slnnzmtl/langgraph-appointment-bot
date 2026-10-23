@@ -7,16 +7,16 @@ import {
   VISIT_DECLINE_REPLY_UK,
 } from "../../shared/clinic-constants.js";
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
-import { attachPrefetchVisits } from "../context-blocks.js";
+import { attachPrefetchVisits } from "../context/context-blocks.js";
 import {
   closedBookingSessionUpdate,
   reduceBookingSession,
   type VisitSelectInteraction,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import {
   renderBookingInteractionMessage,
   replyButtonsForInteraction,
-} from "../booking-interaction-render.js";
+} from "../booking/booking-interaction-render.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { BOOKING_AGENT_ID, FINISH_ROUTE } from "../types.js";
 

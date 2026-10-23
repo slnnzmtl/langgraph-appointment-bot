@@ -6,12 +6,12 @@
 import { HumanMessage } from "@langchain/core/messages";
 
 import { classifyConfirmReply } from "../shared/confirm-reply.js";
-import type { BookingDraft } from "../graph/booking-draft.js";
+import type { BookingDraft } from "../graph/booking/booking-draft.js";
 import { hitlCommandsMatch } from "../graph/hitl-command-match.js";
-import { recoverExpiredConfirmBookingHitl } from "../graph/booking-hitl-recovery.js";
+import { recoverExpiredConfirmBookingHitl } from "../graph/booking/booking-hitl-recovery.js";
 import {
   type PendingInteraction,
-} from "../graph/booking-session.js";
+} from "../graph/booking/booking-session.js";
 import { bookingResponseFallback } from "../graph/agent-loop/booking-response-fallback.js";
 
 export type ConfirmBookingResume =

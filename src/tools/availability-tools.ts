@@ -93,6 +93,13 @@ export const availabilityQueryFromContext = (
   };
 };
 
+export const availabilityCoverageComplete = (
+  context: AvailabilityContext | null | undefined,
+): boolean =>
+  context != null
+  && context.truncated !== true
+  && availabilityQueryFromContext(context)?.coverageComplete !== false;
+
 export const availabilityQueryFromCursor = (
   cursor: AvailabilityCursor | null | undefined,
 ): AvailabilityQuery | undefined => {
@@ -375,6 +382,9 @@ export const tryAvailabilityCacheHit = (
   now: Date = new Date(),
 ): { json: string; kind: "date_list" | "day_slots" } | null => {
   if (!ctx || (ctx.days.length === 0 && !availabilityQueryFromContext(ctx))) {
+    return null;
+  }
+  if (!availabilityCoverageComplete(ctx)) {
     return null;
   }
   if (input.forceRefresh) {
@@ -768,6 +778,30 @@ export const createPresentAvailabilitySlotsTool = (options: {
           ),
           searchReservedTimes(callTool, assignedUserId, meetingFrom, meetingTo),
         ]);
+        if (busy.truncated) {
+          trackEvent("availability_presented", {
+            outcome: "truncated",
+            slot_count: 0,
+            duration_minutes: stepMinutes,
+            direction,
+          });
+          return JSON.stringify({
+            error: "Meeting search truncated",
+            days: [],
+            slots: [],
+            stepMinutes,
+            startIntervalMinutes: CLINIC_SLOT_MINUTES,
+            query: {
+              kind: direction,
+              anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,
+              rangeFrom: meetingFrom,
+              rangeThrough: meetingTo,
+              coverageComplete: false,
+            },
+            truncated: true,
+            ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
+          });
+        }
         const searchedMeetings = busy.meetings;
         const omitDateStarts = startsOfExcludedMeetings(searchedMeetings, excludeIds);
         const meetings = [
@@ -823,10 +857,9 @@ export const createPresentAvailabilitySlotsTool = (options: {
             anchor: direction === "earlier" ? beforeDate : input.afterDate ?? start,
             rangeFrom: searchedFrom,
             rangeThrough: searchedThrough,
-            coverageComplete: !busy.truncated,
+            coverageComplete: true,
           },
           ...(excludeIds?.length ? { excludeMeetingIds: excludeIds } : {}),
-          ...(busy.truncated ? { truncated: true } : {}),
         });
       } catch (error) {
         const message = errorMessage(error);

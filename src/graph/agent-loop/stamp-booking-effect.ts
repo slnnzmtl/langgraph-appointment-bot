@@ -7,7 +7,7 @@ import type {
   AvailabilityContext,
   AvailabilityCursor,
 } from "../../tools/availability-tools.js";
-import type { BookingAvailabilityScope } from "../booking-draft.js";
+import type { BookingAvailabilityScope } from "../booking/booking-draft.js";
 import type { PendingEffect } from "../booking-domain/effects.js";
 
 export const BOOKING_EFFECT_STAMP = "bookingEffectV1" as const;

@@ -12,8 +12,8 @@ import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
-} from "../../booking-draft.js";
-import { CATALOG_FAMILY_SELECTOR_QUERY } from "../../catalog-match.js";
+} from "../../booking/booking-draft.js";
+import { CATALOG_FAMILY_SELECTOR_QUERY } from "../../catalog/catalog-match.js";
 import { interpretBookingTurnDeterministic } from "../../booking-domain/interpret.js";
 import type { InterpretBookingTurnInput } from "../../booking-domain/interpret.js";
 import type { UnderstoodBookingTurn } from "../../booking-domain/turn.js";

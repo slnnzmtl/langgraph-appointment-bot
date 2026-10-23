@@ -21,9 +21,9 @@ import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import type { BookingDecision } from "../../booking-domain/decision.js";
-import type { PendingInteraction } from "../../booking-session.js";
+import type { PendingInteraction } from "../../booking/booking-session.js";
 import type { ILLMConnector } from "../../types.js";
 import { createBookingDecideNode } from "../booking-decide-nodes.js";
 import { createBookingRespondNode } from "../booking-respond.js";
@@ -584,11 +584,7 @@ describe("decide + respond deferred price on availability error", () => {
       },
     });
 
-    const decide = createBookingDecideNode({
-      interpretTurn: async () => {
-        throw new Error("must not re-interpret while effect is open");
-      },
-    });
+    const decide = createBookingDecideNode();
     const decided = await decide({
       messages: [new HumanMessage("ok")],
       agentMessages: [

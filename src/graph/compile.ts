@@ -44,7 +44,7 @@ import { createBookingTurnInterpreter } from "./agent-loop/booking-turn-interpre
 import {
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
-} from "./service-resolution.js";
+} from "./catalog/service-resolution.js";
 import type { AgentPrefetchResult } from "./types.js";
 import { createClinicStateAnnotation, type ClinicState } from "./state.js";
 import {
@@ -224,7 +224,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
           state,
           faqLlm,
           faqFinalize,
-          undefined,
           FAQ_AGENT_ID,
         ),
       {
@@ -262,7 +261,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addNode(
       bookingDecide,
       createBookingDecideNode({
-        interpretTurn: interpretBookingTurn,
         selectCandidates: faqSelectCandidates,
         partitionCandidates: faqPartitionCandidates,
         ...(options.assignedUserId != null

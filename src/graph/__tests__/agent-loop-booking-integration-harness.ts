@@ -1,6 +1,6 @@
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
-import type { BookingDraft } from "../booking-draft.js";
+import type { BookingDraft } from "../booking/booking-draft.js";
 import type { ClinicState } from "../state.js";
 import { type ClinicAgentDefinition } from "../types.js";
 

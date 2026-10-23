@@ -1,16 +1,16 @@
 import { trackEvent } from "../../analytics/track.js";
 import { defaultMenuLabels } from "../../shared/clinic-constants.js";
 import { labelIdFor } from "../../shared/message-content.js";
-import { attachPrefetchVisits } from "../context-blocks.js";
+import { attachPrefetchVisits } from "../context/context-blocks.js";
 import {
   openVisitActionMenuInteraction,
   reduceBookingSession,
   type VisitSelectMeeting,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import {
   renderBookingInteractionMessage,
   replyButtonsForInteraction,
-} from "../booking-interaction-render.js";
+} from "../booking/booking-interaction-render.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import { supervisorFinishReply } from "./visit-select.js";
 

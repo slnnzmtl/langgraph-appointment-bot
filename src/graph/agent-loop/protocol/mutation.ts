@@ -3,7 +3,7 @@ import { BOOKING_CONTACT_REQUIRED_FIELDS } from "../../../tools/contact-tools.js
 import { asJsonRecord, committedMeetingEntityId } from "../../../shared/json-record.js";
 import { extractRawMessageText } from "../../../shared/message-content.js";
 import type { ClinicState } from "../../state.js";
-import { type ReplacementMeeting } from "../../booking-draft.js";
+import { type ReplacementMeeting } from "../../booking/booking-draft.js";
 
 export const MEETING_MUTATION_TOOLS = new Set([
   "create_meeting",

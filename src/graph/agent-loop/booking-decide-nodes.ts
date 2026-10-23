@@ -14,32 +14,36 @@ import {
   type BookingContactField,
   type BookingDraft,
   type BookingEvent,
-} from "../booking-draft.js";
+} from "../booking/booking-draft.js";
 import {
   decideBooking,
 } from "../booking-domain/decide.js";
-import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
+import type { BookingDecision, BookingInput, BookingReadModels } from "../booking-domain/decision.js";
+import { kyivToday } from "../../tools/availability-slots.js";
 import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
 import type { EffectResult } from "../booking-domain/effects.js";
 import type { UnderstoodBookingTurn } from "../booking-domain/turn.js";
-import { CATALOG_FAMILY_SELECTOR_QUERY } from "../catalog-match.js";
-import { resolveFaqCatalogChoices } from "../faq-catalog.js";
+import { CATALOG_FAMILY_SELECTOR_QUERY } from "../catalog/catalog-match.js";
+import { resolveFaqCatalogChoices } from "../catalog/faq-catalog.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   safeSelect,
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
-} from "../service-resolution.js";
+} from "../catalog/service-resolution.js";
 import type { CatalogChip } from "../booking-domain/session.js";
-import type { InteractionChoice } from "../booking-session.js";
+import type { InteractionChoice } from "../booking/booking-session.js";
 import { hasPendingToolCalls } from "../tool-routing.js";
-import { availabilityQueryFromContext } from "../../tools/availability-tools.js";
-import { resolveContactIdentity } from "../contact-command.js";
+import {
+  availabilityCoverageComplete,
+  availabilityQueryFromContext,
+} from "../../tools/availability-tools.js";
+import { resolveContactIdentity } from "./contact-command.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import { choiceIdsFromCard } from "./booking-card-choices.js";
 import {
   effectResultFromToolMessages,
@@ -120,16 +124,21 @@ export const readModelsFromClinicState = (
   options?: { assignedUserId?: string },
 ): BookingReadModels => {
   const availability = state.availabilityContext;
-  const query = availability != null ? availabilityQueryFromContext(availability) : null;
-  const snapshotId = availability != null
+  const verifiedAvailability = availabilityCoverageComplete(availability)
+    ? availability
+    : null;
+  const query = verifiedAvailability != null
+    ? availabilityQueryFromContext(verifiedAvailability)
+    : null;
+  const snapshotId = verifiedAvailability != null
     ? presentationSnapshotId({
-      ...(availability.serviceId != null ? { serviceId: availability.serviceId } : {}),
+      ...(verifiedAvailability.serviceId != null ? { serviceId: verifiedAvailability.serviceId } : {}),
       ...(query?.kind != null ? { queryKind: query.kind } : {}),
       ...(query?.anchor ?? query?.date ?? query?.rangeFrom
         ? { queryAnchor: query.anchor ?? query.date ?? query.rangeFrom }
         : {}),
-      days: availability.days,
-      stepMinutes: availability.stepMinutes,
+      days: verifiedAvailability.days,
+      stepMinutes: verifiedAvailability.stepMinutes,
     })
     : undefined;
   const plannedMeetings = (state.bookingContext?.meetings ?? []).flatMap((meeting) => {
@@ -148,12 +157,13 @@ export const readModelsFromClinicState = (
   const ownedContact = ownedContactFromState(state);
   const assignedUserId = options?.assignedUserId?.trim();
   return {
+    clinicDay: kyivToday(),
     contactContextDirty: state.prefetchDirty === true,
     bookingContextDirty: state.prefetchDirty === true,
-    availabilityVerified: availability != null,
-    ...(availability != null
+    availabilityVerified: verifiedAvailability != null,
+    ...(verifiedAvailability != null
       ? {
-        availabilityDays: availability.days.map((day) => ({
+        availabilityDays: verifiedAvailability.days.map((day) => ({
           date: day.date,
           ...(day.dayLabel != null ? { dayLabel: day.dayLabel } : {}),
           slots: day.slots.map((slot) => ({
@@ -249,8 +259,6 @@ const withOfferedChoices = (
 };
 
 export type CreateBookingDecideNodeOptions = {
-  /** @deprecated Ingress owns interpret; kept for call-site compat. */
-  interpretTurn?: unknown;
   /** Family selector — narrows list_services rows after named_procedure (no stem parsing). */
   selectCandidates?: SelectServiceCandidates;
   /** One-level partitioner for family pages when selector groups are missing. */
@@ -495,7 +503,6 @@ const catalogChoiceIdFromState = (
 export const createBookingDecideNode = (
   options: CreateBookingDecideNodeOptions = {},
 ) => {
-  void options.interpretTurn;
   const selectCandidates = options.selectCandidates;
   const partitionCandidates = options.partitionCandidates;
   const assignedUserId = options.assignedUserId;
@@ -540,67 +547,45 @@ export const createBookingDecideNode = (
       )
       : null;
 
-    let result;
+    let input: BookingInput;
     if (effectResult != null) {
-      result = decideBooking(
-        workingDraft,
-        { source: "effect_result", result: effectResult },
-        readModels,
-      );
+      input = { source: "effect_result", result: effectResult };
     } else if (catalogTap?.kind === "page") {
-      result = decideBooking(
-        workingDraft,
-        {
-          source: "catalog_page",
-          remainingIds: catalogTap.remainingIds,
-          choices: catalogTap.choices,
-        },
-        readModels,
-      );
+      input = {
+        source: "catalog_page",
+        remainingIds: catalogTap.remainingIds,
+        choices: catalogTap.choices,
+      };
     } else if (catalogTap?.kind === "select") {
-      result = decideBooking(
-        workingDraft,
-        {
-          source: "semantic_patch",
-          patch: {
-            serviceIntent: {
-              kind: "catalog_service",
-              serviceId: catalogTap.serviceId,
-              ...(catalogTap.serviceName != null
-                ? { serviceName: catalogTap.serviceName }
-                : {}),
-            },
+      input = {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: {
+            kind: "catalog_service",
+            serviceId: catalogTap.serviceId,
+            ...(catalogTap.serviceName != null
+              ? { serviceName: catalogTap.serviceName }
+              : {}),
           },
         },
-        readModels,
-      );
+      };
     } else if (catalogTap?.kind === "unmatched") {
       // Stale/unoffered chip — fail closed; re-ask the open page.
-      result = decideBooking(
-        workingDraft,
-        { source: "semantic_patch", patch: {} },
-        readModels,
-      );
+      input = { source: "semantic_patch", patch: {} };
     } else if (state.understoodTurn != null) {
       // Ingress already classified this utterance — do not interpret again.
       const patch = enrichPatchWithReadModels(state.understoodTurn, {
         ...state,
         bookingDraft: workingDraft,
       }, readModels);
-      result = decideBooking(
-        workingDraft,
-        { source: "semantic_patch", patch },
-        readModels,
-      );
+      input = { source: "semantic_patch", patch };
     } else {
       // HITL resume / effect-only turns: no patient re-interpret at decide.
       // Empty patch re-asks the open requirement when a session exists.
-      result = decideBooking(
-        workingDraft,
-        { source: "semantic_patch", patch: {} },
-        readModels,
-      );
+      input = { source: "semantic_patch", patch: {} };
     }
+
+    let result = decideBooking(workingDraft, input, readModels);
 
     // Unstamped present_availability: stamp only returns null for that effect.
     // Apply effect_prepared locally, fail-closed consume, project once.

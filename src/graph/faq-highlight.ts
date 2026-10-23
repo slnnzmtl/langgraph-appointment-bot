@@ -6,7 +6,7 @@
 import { DEFAULT_MENU_NO_VISITS } from "../shared/clinic-constants.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { UnderstoodBookingTurn } from "./booking-domain/turn.js";
-import type { InteractionChoice, PendingInteraction } from "./booking-session.js";
+import type { InteractionChoice, PendingInteraction } from "./booking/booking-session.js";
 import type { ReceptionistRoute } from "./receptionist-route.js";
 
 export type FaqHighlightedService = {

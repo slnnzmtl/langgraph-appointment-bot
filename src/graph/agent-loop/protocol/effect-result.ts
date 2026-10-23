@@ -23,7 +23,7 @@ import type {
   InformationalFacts,
   PendingEffect,
 } from "../../booking-domain/effects.js";
-import { classifyPhoneLookupResult } from "../../contact-command.js";
+import { classifyPhoneLookupResult } from "../contact-command.js";
 import { findToolMessageByCallId } from "../../tool-routing.js";
 import { toolNameForBookingEffect } from "../stamp-booking-effect.js";
 import { classifyMeetingMutationToolMessage } from "./mutation.js";

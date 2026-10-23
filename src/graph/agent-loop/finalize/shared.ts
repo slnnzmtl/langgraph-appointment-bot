@@ -18,13 +18,13 @@ import {
   labelIdFor,
 } from "../../../shared/message-content.js";
 import { defaultMenuHasVisit } from "../mutation-finalize.js";
-import type { BookingService } from "../../booking-draft.js";
-import { isFaqCatalogBrowseShortcut } from "../../booking-entry-policy.js";
+import type { BookingService } from "../../booking/booking-draft.js";
+import { isFaqCatalogBrowseShortcut } from "../../booking/booking-entry-policy.js";
 import {
   replyButtonsForInteraction,
   renderBookingInteractionMessage,
-} from "../../booking-interaction-render.js";
-import { renderFaqCatalogReply } from "../../faq-catalog.js";
+} from "../../booking/booking-interaction-render.js";
+import { renderFaqCatalogReply } from "../../catalog/faq-catalog.js";
 import {
   FAQ_HIGHLIGHT_REPLY_BUTTONS,
   faqHighlightedService,
@@ -34,11 +34,11 @@ import {
   consultationService,
   reduceBookingSession,
   type PendingInteraction,
-} from "../../booking-session.js";
+} from "../../booking/booking-session.js";
 import {
   isModelFailureMessage,
   tagRuntimeAgentMessage,
-} from "../../sub-agent-messages.js";
+} from "../../context/sub-agent-messages.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
 import {

@@ -4,7 +4,7 @@
  */
 
 import type { FrozenMutationCommand } from "./booking-domain/session.js";
-import type { BookingDraft } from "./booking-draft.js";
+import type { BookingDraft } from "./booking/booking-draft.js";
 
 /** Normalize a CRM write payload for stable equality (local ISO + sorted keys). */
 export const normalizeCrmCommandPayload = (

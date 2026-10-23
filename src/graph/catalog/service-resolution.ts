@@ -1,12 +1,12 @@
 import { z } from "zod";
 
-import { trackToolError } from "../analytics/track.js";
-import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../shared/clinic-constants.js";
-import type { McpCallTool } from "../shared/mcp.js";
-import { asJsonRecord } from "../shared/json-record.js";
-import type { BookingService } from "./booking-draft.js";
-import type { InteractionChoice, ResolveServiceEffect } from "./booking-session.js";
-import type { ILLMConnector } from "./types.js";
+import { trackToolError } from "../../analytics/track.js";
+import { SERVICE_CANDIDATE_OTHER_LABEL_UK } from "../../shared/clinic-constants.js";
+import type { McpCallTool } from "../../shared/mcp.js";
+import { asJsonRecord } from "../../shared/json-record.js";
+import type { BookingService } from "../booking/booking-draft.js";
+import type { InteractionChoice, ResolveServiceEffect } from "../booking/booking-session.js";
+import type { ILLMConnector } from "../types.js";
 
 export type ServiceResolutionResult =
   | {

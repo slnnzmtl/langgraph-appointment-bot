@@ -5,13 +5,13 @@ import {
   type BaseMessage,
 } from "@langchain/core/messages";
 
-import { getMessageHistoryMaxTokens } from "../shared/message-budget.js";
-import { extractMessageTextContent } from "../shared/message-content.js";
+import { getMessageHistoryMaxTokens } from "../../shared/message-budget.js";
+import { extractMessageTextContent } from "../../shared/message-content.js";
 
 export {
   DEFAULT_MESSAGE_HISTORY_MAX_TOKENS,
   getMessageHistoryMaxTokens,
-} from "../shared/message-budget.js";
+} from "../../shared/message-budget.js";
 
 const MESSAGE_OVERHEAD_TOKENS = 4;
 const TOOL_CALL_OVERHEAD_TOKENS = 20;

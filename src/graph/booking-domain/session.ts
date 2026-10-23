@@ -2,7 +2,7 @@
  * Shared booking-aggregate value types (atomic cutover).
  *
  * The BookingSessionV2 bridge has been removed — booking facts live on
- * {@link import("../booking-draft.js").BookingDraft}. This module only exports
+ * {@link import("../booking/booking-draft.js").BookingDraft}. This module only exports
  * the small value types folded onto the draft (pending waits, slot provenance,
  * frozen mutation commands). Must stay free of LangGraph / LangChain imports.
  */

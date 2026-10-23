@@ -5,12 +5,12 @@ import type { ContactLookupContext } from "../tools/contact-tools.js";
 import type { AvailabilityContext, AvailabilityCursor } from "../tools/availability-tools.js";
 import type { ServicesContext } from "../tools/service-tools.js";
 import type { BookingContext } from "../tools/planned-meetings.js";
-import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
+import { trimMessagesToTokenBudgetSync } from "./context/message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 import type { BookingDecision } from "./booking-domain/decision.js";
 import type { UnderstoodBookingTurn } from "./booking-domain/turn.js";
-import type { BookingDraft } from "./booking-draft.js";
-import type { PendingInteraction } from "./booking-session.js";
+import type { BookingDraft } from "./booking/booking-draft.js";
+import type { PendingInteraction } from "./booking/booking-session.js";
 import type { SupervisorIntent } from "./routing.js";
 import type { ConversationLocale } from "../shared/conversation-locale.js";
 

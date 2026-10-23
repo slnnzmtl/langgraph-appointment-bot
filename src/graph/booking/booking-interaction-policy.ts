@@ -3,7 +3,7 @@
  * Ownership kinds come from booking-session — one list only.
  */
 
-import type { BookingDraft } from "./booking-draft.js";
+import { bookingDraftPhase, type BookingDraft } from "./booking-draft.js";
 import {
   BOOKING_OWNED_INTERACTION_KINDS,
   type PendingInteraction,
@@ -45,8 +45,9 @@ export const bookingTurnNeedsDraftInteraction = (state: {
   if (draft == null || draft.mode === "reschedule") {
     return false;
   }
+  const phase = bookingDraftPhase(draft);
   if (
-    draft.phase === "note"
+    phase === "note"
     || (draft.selectedSlot != null
       && (draft.note.status === "awaiting" || draft.note.status === "unasked"))
   ) {
@@ -54,5 +55,5 @@ export const bookingTurnNeedsDraftInteraction = (state: {
   }
   return draft.serviceAcceptance?.status === "accepted"
     && draft.selectedSlot == null
-    && (draft.phase === "date" || draft.phase === "time");
+    && (phase === "date" || phase === "time");
 };

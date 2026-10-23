@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { reduceBookingDraft, type BookingDraft } from "../../booking-draft.js";
+import { reduceBookingDraft, type BookingDraft } from "../../booking/booking-draft.js";
 import { decideBooking } from "../decide.js";
 import type { BookingReadModels } from "../decision.js";
 
 const emptyReads: BookingReadModels = {
+  clinicDay: "2026-09-01",
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: false,
@@ -481,7 +482,7 @@ describe("deferred turn across catalog + service confirm", () => {
 
 describe("booking_started checkpoint emptiness", () => {
   it("isEmptyLegacyBookingDraft is false when attempt/deferred exist", async () => {
-    const { isEmptyLegacyBookingDraft } = await import("../../booking-draft.js");
+    const { isEmptyLegacyBookingDraft } = await import("../../booking/booking-draft.js");
     const draft = reduceBookingDraft(null, {
       type: "booking_started",
       bookingAttemptId: "attempt_restart",

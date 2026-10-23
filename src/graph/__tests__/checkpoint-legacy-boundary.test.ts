@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createEmptyBookingDraft } from "../booking-draft.js";
+import { createEmptyBookingDraft } from "../booking/booking-draft.js";
 import { classifyCancelTap } from "../supervisor/routing-predicates.js";
 import { supervisorState } from "./supervisor-fixtures.js";
 

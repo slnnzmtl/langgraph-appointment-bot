@@ -7,8 +7,8 @@ import {
   sessionEventFromClassification,
   type ClassifyNoteTurn,
   type NoteTurnClassification,
-} from "../booking-note-turn.js";
-import type { PendingInteraction } from "../booking-session.js";
+} from "../booking/booking-note-turn.js";
+import type { PendingInteraction } from "../booking/booking-session.js";
 
 const visitNote: PendingInteraction = {
   kind: "visit_note",

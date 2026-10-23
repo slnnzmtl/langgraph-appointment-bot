@@ -1,6 +1,6 @@
-import { CONSULTATION_SERVICE_ID } from "../shared/clinic-constants.js";
-import { labelIdFor } from "../shared/message-content.js";
-import type { ServicesContext } from "../tools/service-tools.js";
+import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
+import { labelIdFor } from "../../shared/message-content.js";
+import type { ServicesContext } from "../../tools/service-tools.js";
 import type { BookingDraft, BookingService } from "./booking-draft.js";
 import {
   interpretInteractionReply,
@@ -12,15 +12,15 @@ import {
   resolveCatalogFreeText,
   resolveCatalogLexicalEvidence,
   type CatalogFreeTextResult,
-} from "./catalog-match.js";
-import { resolveFaqCatalogChoices } from "./faq-catalog.js";
-import type { ClinicRoutingDecision, SupervisorIntent } from "./routing.js";
+} from "../catalog/catalog-match.js";
+import { resolveFaqCatalogChoices } from "../catalog/faq-catalog.js";
+import type { ClinicRoutingDecision, SupervisorIntent } from "../routing.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
-} from "./service-resolution.js";
-import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "./types.js";
+} from "../catalog/service-resolution.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
 
 type BookingSessionSnapshot = {
   bookingDraft: BookingDraft | null;

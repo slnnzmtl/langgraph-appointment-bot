@@ -2,12 +2,12 @@ import type { BaseMessage } from "@langchain/core/messages";
 
 import { labelIdFor } from "../../shared/message-content.js";
 import { availabilityCursorFromContext } from "../../tools/availability-tools.js";
-import { reduceBookingDraft, type BookingDraft } from "../booking-draft.js";
+import { reduceBookingDraft, type BookingDraft } from "../booking/booking-draft.js";
 import {
   closedBookingSessionUpdate,
   interpretInteractionReply,
-} from "../booking-session.js";
-import { stripToolNoiseFromMessages } from "../supervisor-history.js";
+} from "../booking/booking-session.js";
+import { stripToolNoiseFromMessages } from "../context/supervisor-history.js";
 import type { ClinicState, ClinicStateUpdate } from "../state.js";
 import type { AgentPrefetchResult } from "../types.js";
 import {

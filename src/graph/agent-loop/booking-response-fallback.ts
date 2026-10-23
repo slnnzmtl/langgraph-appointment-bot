@@ -73,6 +73,8 @@ const CLARIFICATION_UK: Record<string, string> = {
     "Уточніть, будь ласка: скасувати візит чи перенести на інший час?",
   visit_reschedule_ambiguous:
     "Уточніть, будь ласка, який візит перенести.",
+  reschedule_same_slot:
+    "Оберіть, будь ласка, інший час — цей візит уже заплановано на цей слот.",
   no_visit_to_reschedule:
     "Зараз немає запланованого візиту для перенесення.",
 };
@@ -98,6 +100,8 @@ const CLARIFICATION_EN: Partial<Record<string, string>> = {
     "I could not verify the number. Please send your phone again.",
   contact_write_failed:
     "I could not save your contact details. Please try again in a moment.",
+  reschedule_same_slot:
+    "Please choose a different time; this visit is already scheduled for that slot.",
   phone_occupied:
     "This number is linked to another account. Please send a different number.",
 };

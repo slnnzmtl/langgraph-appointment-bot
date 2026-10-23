@@ -4,7 +4,7 @@ import { expect } from "vitest";
 
 import type { ContactLookupContext } from "../../tools/contact-tools.js";
 import type { BookingContext } from "../../tools/planned-meetings.js";
-import type { BookingDraft } from "../booking-draft.js";
+import type { BookingDraft } from "../booking/booking-draft.js";
 import type { ClinicState } from "../state.js";
 
 export const makeListedMeetings = (): BookingContext => ({

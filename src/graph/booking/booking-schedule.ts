@@ -3,13 +3,13 @@ import {
   availabilityQueryFromCursor,
   type AvailabilityContext,
   type AvailabilityCursor,
-} from "../tools/availability-tools.js";
+} from "../../tools/availability-tools.js";
 import {
   resolveBookingScheduleRequest as resolveBaseScheduleRequest,
   type BookingScheduleRequest,
-} from "../shared/booking-schedule.js";
+} from "../../shared/booking-schedule.js";
 import type { BookingDraft } from "./booking-draft.js";
-import type { SelectedBookingSlot } from "./types.js";
+import type { SelectedBookingSlot } from "../types.js";
 
 export type BookingScheduleContext = {
   availabilityContext?: AvailabilityContext | null;

@@ -9,6 +9,7 @@ import type { ServicesContext } from "../../tools/service-tools.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { nextBookingRequirement } from "../booking-domain/requirement.js";
 import { askDecisionFromPendingView } from "../booking-domain/decide.js";
+import { bookingDraftPhase } from "../booking/booking-draft.js";
 import { replyChoicesFromCard } from "../agent-loop/booking-card-choices.js";
 import {
   hasOpenBookingSession,
@@ -22,6 +23,7 @@ import {
   type AgentPrefetchResult,
 } from "../types.js";
 import { kyivToday } from "../../tools/availability-slots.js";
+import { availabilityCoverageComplete } from "../../tools/availability-tools.js";
 import {
   buildSupervisorTurnContext,
   refetchForVisitStatus,
@@ -92,6 +94,7 @@ export const createClinicSupervisorNode = (
   options: CreateClinicSupervisorNodeOptions = {},
 ) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
+    const clinicDay = kyivToday();
     let ctx = await buildSupervisorTurnContext(state, {
       ...(options.prefetch != null ? { prefetch: options.prefetch } : {}),
       ...(options.prefetchTtlMs != null ? { prefetchTtlMs: options.prefetchTtlMs } : {}),
@@ -145,16 +148,17 @@ export const createClinicSupervisorNode = (
       ...(offeredFromCard.length > 0 ? { offeredChoiceIds: offeredFromCard } : {}),
       ...(offeredLabels.length > 0 ? { offeredChoiceLabels: offeredLabels } : {}),
       awaitingNote: ctx.workingDraft?.note.status === "awaiting"
-        || ctx.workingDraft?.phase === "note",
+        || (ctx.workingDraft != null && bookingDraftPhase(ctx.workingDraft) === "note"),
       ...(openContact != null ? { awaitingContactField: openContact } : {}),
       awaitingServiceConfirm: activeView?.card?.kind === "service_confirm",
       ...(faqHighlightOpen ? { faqHighlightOpen: true } : {}),
       activeRequirement: nextBookingRequirement(ctx.workingDraft, {
+        clinicDay,
         contactContextDirty: false,
         bookingContextDirty: false,
-        availabilityVerified: ctx.state.availabilityContext != null,
+        availabilityVerified: availabilityCoverageComplete(ctx.state.availabilityContext),
       }),
-      kyivDate: kyivToday(),
+      kyivDate: clinicDay,
       locale: resolvePatientLocale({
         patientLocale,
         messages: state.messages,

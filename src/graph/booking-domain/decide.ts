@@ -8,7 +8,7 @@ import {
   isConfirmationAffirmation,
   isConfirmationDecline,
 } from "../../shared/message-content.js";
-import { cancelCommandFromMeeting } from "../cancel-command.js";
+import { cancelCommandFromMeeting } from "../booking/cancel-command.js";
 import {
   availabilityRequestFieldsFromDraft,
   effectiveBookingContactDetails,
@@ -22,7 +22,7 @@ import {
   type DeferredInformationalRequest,
   type DeferredScheduleRequest,
   type ReplacementMeeting,
-} from "../booking-draft.js";
+} from "../booking/booking-draft.js";
 import type {
   BookingDecision,
   BookingInput,
@@ -32,7 +32,6 @@ import type {
   BookingViewCard,
   DecideBookingResult,
 } from "./decision.js";
-import { kyivToday } from "../../tools/availability-slots.js";
 import {
   buildCancelMeetingCrmPayload,
   buildCreateMeetingCrmPayload,
@@ -50,7 +49,7 @@ import type { ScheduleIntent, UnderstoodBookingTurn } from "./turn.js";
 import {
   catalogChipsFromInteractionChoices,
   fallbackCatalogPageChoices,
-} from "../catalog-page-choices.js";
+} from "../catalog/catalog-page-choices.js";
 
 const CONTACT_INTENT: Record<"phoneNumber" | "firstName" | "lastName", BookingSemanticIntent> = {
   phoneNumber: "ask_phone",
@@ -103,8 +102,8 @@ const dateFromSchedule = (
   return working?.selectedDate ?? undefined;
 };
 
-const newBookingAttemptId = (version: number): string =>
-  `attempt_v${version}_${kyivToday().replace(/-/g, "")}`;
+const newBookingAttemptId = (version: number, clinicDay: string): string =>
+  `attempt_v${version}_${clinicDay.replace(/-/g, "")}`;
 
 const deferredScheduleFromPatch = (
   patch: UnderstoodBookingTurn,
@@ -480,6 +479,22 @@ export const decideBooking = (
     const w = ctx.working;
     if (w == null) {
       return { tag: "reply", intent: "idle", facts: {}, card: null };
+    }
+    if (
+      action === "reschedule"
+      && w.rescheduleTarget?.dateStart != null
+      && w.selectedSlot != null
+      && localDate(w.selectedSlot.dateStart) === localDate(w.rescheduleTarget.dateStart)
+      && localTime(w.selectedSlot.dateStart) === localTime(w.rescheduleTarget.dateStart)
+    ) {
+      const reason = "reschedule_same_slot";
+      emitDecision({ kind: "clarification", reason });
+      return ask(
+        "clarification",
+        { kind: "clarification", reason },
+        reason,
+        { clarificationReason: reason },
+      );
     }
     // Exact-slot revalidate before freezing a create/reschedule write.
     if (
@@ -1160,7 +1175,7 @@ export const decideBooking = (
         const canSearchEarlier =
           direction !== "earlier"
           && anchor != null
-          && anchor > kyivToday();
+          && anchor > readModels.clinicDay;
         const projected = projectEmptyAvailabilityPresentation(snapshotId, {
           direction,
           canSearchEarlier,
@@ -1455,7 +1470,7 @@ export const decideBooking = (
     if (ctx.working == null && isExplicitBookingStart(patch)) {
       emit({
         type: "booking_started",
-        bookingAttemptId: newBookingAttemptId(0),
+        bookingAttemptId: newBookingAttemptId(0, readModels.clinicDay),
       });
     } else if (
       ctx.working != null
@@ -1464,7 +1479,7 @@ export const decideBooking = (
     ) {
       emit({
         type: "booking_started",
-        bookingAttemptId: newBookingAttemptId(ctx.working.version),
+        bookingAttemptId: newBookingAttemptId(ctx.working.version, readModels.clinicDay),
       });
     }
 
@@ -1477,7 +1492,7 @@ export const decideBooking = (
       const attemptId =
         ctx.working?.bookingAttemptId
         ?? ctx.working?.deferredTurn?.bookingAttemptId
-        ?? newBookingAttemptId(ctx.working?.version ?? 0);
+        ?? newBookingAttemptId(ctx.working?.version ?? 0, readModels.clinicDay);
       const deferred: DeferredBookingTurn = {
         bookingAttemptId: attemptId,
         boundEffectId,

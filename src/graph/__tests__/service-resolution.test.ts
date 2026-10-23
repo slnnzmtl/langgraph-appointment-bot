@@ -11,9 +11,9 @@ import {
   partitionRemainingServiceChoices,
   resolveServiceChange,
   type ServiceCatalogRow,
-} from "../service-resolution.js";
+} from "../catalog/service-resolution.js";
 import type { ILLMConnector } from "../types.js";
-import { buildFaqCatalogChoices, mergeCatalogChoicesToPageCap } from "../faq-catalog.js";
+import { buildFaqCatalogChoices, mergeCatalogChoicesToPageCap } from "../catalog/faq-catalog.js";
 
 const rows: ServiceCatalogRow[] = [
   { id: "svc-consult", name: "Консультація", duration: 30, description: "Primary visit" },

@@ -5,11 +5,11 @@ import {
   CONSULTATION_SERVICE_ID,
   MAIN_MENU_LABEL,
 } from "../../shared/clinic-constants.js";
-import { createEmptyBookingDraft, reduceBookingDraft } from "../booking-draft.js";
+import { createEmptyBookingDraft, reduceBookingDraft } from "../booking/booking-draft.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import {
   openServiceConfirmInteraction,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import { routeUnderstoodTurn } from "../receptionist-route.js";
 import type { ILLMConnector } from "../types.js";
 import {

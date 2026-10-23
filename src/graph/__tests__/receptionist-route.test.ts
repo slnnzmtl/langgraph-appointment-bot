@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { reduceBookingDraft } from "../booking-draft.js";
+import { reduceBookingDraft } from "../booking/booking-draft.js";
 import { routeUnderstoodTurn } from "../receptionist-route.js";
 
 describe("routeUnderstoodTurn", () => {

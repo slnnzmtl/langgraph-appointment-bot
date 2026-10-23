@@ -11,8 +11,8 @@ import {
   nextMissingContactField,
   reduceBookingDraft,
   type BookingEvent,
-} from "../booking-draft.js";
-import { upgradeBookingCheckpoint } from "../booking-session.js";
+} from "../booking/booking-draft.js";
+import { upgradeBookingCheckpoint } from "../booking/booking-session.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import {
   clinicState,

@@ -13,16 +13,16 @@ import {
   SERVICE_CONFIRM_PROCEDURE_EN,
   SERVICE_CONFIRM_PROCEDURE_UK,
   CLINIC_SLOT_MINUTES,
-} from "../shared/clinic-constants.js";
+} from "../../shared/clinic-constants.js";
 import {
   availabilityQueryFromContext,
   type AvailabilityContext,
-} from "../tools/availability-tools.js";
+} from "../../tools/availability-tools.js";
 import {
   formatKyivDayLabel,
   kyivToday,
   shortDayMonthLabel,
-} from "../tools/availability-slots.js";
+} from "../../tools/availability-slots.js";
 import {
   interactionChoiceEquals,
   type AvailabilityRenderSnapshot,
@@ -34,8 +34,8 @@ import {
   presentationSnapshotId,
   projectAvailabilityPresentation,
   projectEmptyAvailabilityPresentation,
-} from "./booking-domain/availability-presentation.js";
-import { catalogChoiceBulletBlock } from "./faq-catalog.js";
+} from "../booking-domain/availability-presentation.js";
+import { catalogChoiceBulletBlock } from "../catalog/faq-catalog.js";
 
 export type InteractionLocale = "uk" | "en";
 

@@ -1,16 +1,16 @@
-import { normalizeClinicPhone } from "../shared/phone.js";
-import { contactMissingFields } from "../tools/contact-tools.js";
-import { getTelegramUserId } from "../tools/telegram-user-context.js";
-import type { ClinicState } from "./state.js";
+import { normalizeClinicPhone } from "../../shared/phone.js";
+import { contactMissingFields } from "../../tools/contact-tools.js";
+import { getTelegramUserId } from "../../tools/telegram-user-context.js";
+import type { ClinicState } from "../state.js";
 import {
   effectiveBookingContactDetails,
   nextMissingContactField,
   type BookingContactDetails,
   type BookingContactField,
   type PhoneLookupEvidence,
-} from "./booking-draft.js";
-import { phoneLookupFailedThisTurn } from "./agent-loop/protocol/contact.js";
-import { toolRanThisTurn } from "./agent-loop/protocol/tape.js";
+} from "../booking/booking-draft.js";
+import { phoneLookupFailedThisTurn } from "./protocol/contact.js";
+import { toolRanThisTurn } from "./protocol/tape.js";
 
 export type ContactIdentityResolution =
   | { kind: "owned"; contactId: string; contact: Record<string, unknown> }

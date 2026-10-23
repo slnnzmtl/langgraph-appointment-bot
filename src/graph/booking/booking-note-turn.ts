@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { isSupervisorOwnedLabel } from "../shared/message-content.js";
-import type { SelectedBookingSlot } from "./types.js";
+import { isSupervisorOwnedLabel } from "../../shared/message-content.js";
+import type { SelectedBookingSlot } from "../types.js";
 import {
   interpretInteractionReply,
   type BookingSessionEvent,

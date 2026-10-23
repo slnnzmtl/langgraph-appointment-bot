@@ -5,7 +5,7 @@ import {
   bookingAvailabilityScope,
   createEmptyBookingDraft,
   reduceBookingDraft,
-} from "../../graph/booking-draft.js";
+} from "../../graph/booking/booking-draft.js";
 import {
   CLINIC_SLOT_MINUTES,
   CONSULTATION_SERVICE_ID,

@@ -3,7 +3,7 @@ import {
   isFaqCatalogBrowseShortcut,
   openCatalogFromFreeText,
   openRootFaqCatalog,
-} from "../../booking-entry-policy.js";
+} from "../../booking/booking-entry-policy.js";
 import {
   faqHighlightChoice,
   faqHighlightedService,
@@ -12,13 +12,13 @@ import {
   interpretInteractionReply,
   reduceBookingSession,
   type PendingInteraction,
-} from "../../booking-session.js";
-import { resolveFaqCatalogChoices } from "../../faq-catalog.js";
+} from "../../booking/booking-session.js";
+import { resolveFaqCatalogChoices } from "../../catalog/faq-catalog.js";
 import {
   FAQ_ROOT_PARTITION_QUERY,
   type PartitionServiceCandidates,
   type SelectServiceCandidates,
-} from "../../service-resolution.js";
+} from "../../catalog/service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import type { ServicesContext } from "../../../tools/service-tools.js";
 import {

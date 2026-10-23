@@ -4,8 +4,8 @@ import {
   bookingDraftCanPresentAvailability,
   createEmptyBookingDraft,
   reduceBookingDraft,
-} from "../booking-draft.js";
-import { restorePendingInteraction } from "../booking-interaction-restore.js";
+} from "../booking/booking-draft.js";
+import { restorePendingInteraction } from "../booking/booking-interaction-restore.js";
 import {
   BOOKING_OWNED_INTERACTION_KINDS,
   clearBookingOwnedInteraction,
@@ -16,7 +16,7 @@ import {
   reduceBookingSession,
   repairInvalidScheduleInteraction,
   type PendingInteraction,
-} from "../booking-session.js";
+} from "../booking/booking-session.js";
 import {
   CONSULTATION_SERVICE_ID,
   INTENT_SKIP_LABEL,

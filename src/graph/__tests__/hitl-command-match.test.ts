@@ -5,7 +5,7 @@ import {
   hitlCommandsMatch,
   normalizeCrmCommandPayload,
 } from "../hitl-command-match.js";
-import type { BookingDraft } from "../booking-draft.js";
+import type { BookingDraft } from "../booking/booking-draft.js";
 import type { FrozenMutationCommand } from "../booking-domain/session.js";
 
 const createPayload = {

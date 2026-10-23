@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
-import { openServiceConfirmInteraction } from "../booking-session.js";
+import { openServiceConfirmInteraction } from "../booking/booking-session.js";
 import type { ClinicState } from "../state.js";
 import type { ClinicAgentDefinition, ClinicSpecialists } from "../types.js";
 

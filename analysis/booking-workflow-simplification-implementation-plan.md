@@ -464,3 +464,7 @@ Pre-existing failures: none. Do not weaken assertions if suite drifts — list n
 ## Explicit non-goals
 
 No second booking specialist, generic workflow engine, event bus, permanent dual-write, CRM writes from the booking LLM, selectable slots without provenance, or removing 0/1 readers before the compatibility window closes.
+
+## Runtime phase-read cleanup (DDD-287)
+
+Runtime interaction policy and DATE/TIME restore now derive stage with `bookingDraftPhase`; checkpoint phase remains written and legacy readers/upgrades stay unchanged. `booking-interaction-restore` intentionally retains `draft.phase === "details"` for fresh Telegram-owned CRM contacts whose missing name fields have not yet been copied into `contactDetails`. `supervisor` uses the derived note stage while preserving the explicit `note.status === "awaiting"` fact. Remaining phase accesses are presentation/telemetry projections or compatibility validation/upgrades, plus `bookingDraftPhase`'s confirming fallback. Removing those requires an explicit schema reader/writer policy and operational scanner evidence; neither is part of this cleanup.

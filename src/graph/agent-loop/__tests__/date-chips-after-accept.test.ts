@@ -7,7 +7,7 @@ import {
   createEmptyBookingDraft,
   reduceBookingDraft,
   type BookingDraft,
-} from "../../booking-draft.js";
+} from "../../booking/booking-draft.js";
 import { hasPendingToolCalls } from "../../tool-routing.js";
 import { createBookingDecideNode } from "../booking-decide-nodes.js";
 import { createBookingRespondNode } from "../booking-respond.js";
@@ -103,11 +103,7 @@ describe("date chips after service accept", () => {
 
   it("Overwrite-clears stale ToolMessages so a recycled effect id stays pending", async () => {
     const staleId = "eff_1_present_availability";
-    const node = createBookingDecideNode({
-      interpretTurn: async () => {
-        throw new Error("decide must not re-interpret");
-      },
-    });
+    const node = createBookingDecideNode();
 
     const update = await node({
       messages: [new HumanMessage("Так")],
@@ -285,11 +281,7 @@ describe("date chips after service accept", () => {
       throw new Error("expected draft");
     }
 
-    const node = createBookingDecideNode({
-      interpretTurn: async () => {
-        throw new Error("must not re-interpret patient text while effect is open");
-      },
-    });
+    const node = createBookingDecideNode();
     const update = await node({
       messages: [new HumanMessage("Так")],
       // Tools returned nothing matching the pending effect id.

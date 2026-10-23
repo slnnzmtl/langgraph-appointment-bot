@@ -1,7 +1,7 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { describe, expect, it } from "vitest";
 
-import { createEmptyBookingDraft } from "../booking-draft.js";
+import { createEmptyBookingDraft } from "../booking/booking-draft.js";
 import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
 import { prepareFaqTurn } from "../agent-loop/prepare/faq.js";
 import { tryFaqNoAiFinalize, applyFaqCatalogAiFinalize } from "../agent-loop/finalize/faq.js";
