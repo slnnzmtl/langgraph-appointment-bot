@@ -22,10 +22,6 @@ describe("projectPendingInteraction", () => {
       kind: "service_confirm" as const,
       serviceId: CONSULTATION_SERVICE_ID,
       choiceIds: ["offer_accept", "offer_choose_other"],
-      labels: {
-        offer_accept: BOOKING_OFFER_MENU[0],
-        offer_choose_other: BOOKING_OFFER_MENU[1],
-      },
     };
     const draft = reduceBookingDraft(createEmptyBookingDraft(), {
       type: "service_selected",
@@ -43,6 +39,28 @@ describe("projectPendingInteraction", () => {
       .toEqual(choiceIdsFromCard(card));
     expect(projected?.kind === "service_confirm" ? projected.choices.map((c) => c.label) : [])
       .toEqual([...BOOKING_OFFER_MENU]);
+  });
+
+  it("localizes service_confirm labels from session locale", () => {
+    const card = {
+      kind: "service_confirm" as const,
+      serviceId: CONSULTATION_SERVICE_ID,
+      choiceIds: ["offer_accept", "offer_choose_other"],
+    };
+    const draft = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: CONSULTATION_SERVICE_ID, source: "catalog" },
+      accepted: false,
+    });
+    const projected = projectPendingInteraction({
+      decision: baseDecision(card),
+      draft,
+      availabilityContext: null,
+      previousInteraction: null,
+      locale: "en",
+    });
+    expect(projected?.kind === "service_confirm" ? projected.choices.map((c) => c.label) : [])
+      .toEqual(["Yes", "Choose another procedure"]);
   });
 
   it("preserves note_skip id from visit_note card", () => {

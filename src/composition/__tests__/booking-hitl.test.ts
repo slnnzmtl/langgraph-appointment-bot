@@ -6,6 +6,18 @@ import {
 } from "../booking-hitl.js";
 import { createEmptyBookingDraft, reduceBookingDraft } from "../../graph/booking-draft.js";
 
+const createCrmPayload = {
+  name: "Консультація - Smoke Tester",
+  dateStart: "2026-10-24T13:00:00",
+  dateEnd: "2026-10-24T13:30:00",
+  assignedUserId: "user-1",
+  parentType: "Contact",
+  parentId: "c-1",
+  contactsIds: ["c-1"],
+  cServicesIds: ["svc-1"],
+  status: "Planned",
+};
+
 const liveDraft = () => {
   let draft = reduceBookingDraft(createEmptyBookingDraft(), {
     type: "service_selected",
@@ -14,17 +26,48 @@ const liveDraft = () => {
   });
   draft = reduceBookingDraft(draft, {
     type: "command_prepared",
-    command: { action: "create", payload: { serviceId: "svc-1" } },
+    command: { action: "create", payload: { ...createCrmPayload } },
   });
   draft = reduceBookingDraft(draft, {
     type: "decision_set",
-    decision: { kind: "mutation_confirm", action: "create", effectId: "eff_1" },
+    decision: {
+      kind: "mutation_confirm",
+      action: "create",
+      effectId: "eff_1",
+      frozenCommand: {
+        action: "create",
+        effectId: "eff_1",
+        payload: { ...createCrmPayload },
+      },
+    },
+  });
+  draft = reduceBookingDraft(draft, {
+    type: "effect_prepared",
+    effect: {
+      id: "eff_1",
+      status: "prepared",
+      effect: {
+        kind: "create_meeting",
+        payload: { ...createCrmPayload },
+      },
+    },
   });
   draft = reduceBookingDraft(draft, {
     type: "choices_offered",
     choiceIds: ["confirm", "decline", "menu"],
   });
   return draft;
+};
+
+const matchingInterrupt = {
+  type: "confirm_booking",
+  draft: {
+    confirmMessage: "Confirm?",
+    command: {
+      action: "create",
+      payload: { ...createCrmPayload },
+    },
+  },
 };
 
 describe("resumeConfirmBookingHitl", () => {
@@ -70,6 +113,65 @@ describe("resumeConfirmBookingHitl", () => {
         action: "create",
         choices: [{ id: "confirm", label: "✅" }],
       },
+      interruptValue: matchingInterrupt,
+    });
+    expect(result.resume).toEqual({ confirmed: true });
+  });
+
+  it("declines confirm when interrupt payload is tampered", () => {
+    const draft = liveDraft();
+    const result = resumeConfirmBookingHitl({
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: draft,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
+      interruptValue: {
+        type: "confirm_booking",
+        draft: {
+          command: {
+            action: "create",
+            payload: { ...createCrmPayload, assignedUserId: "OTHER" },
+          },
+        },
+      },
+    });
+    expect(result.resume).toEqual({ confirmed: false });
+  });
+
+  it("declines confirm when pendingEffect is missing after serialized round-trip", () => {
+    // Simulate a paused checkpoint JSON round-trip where pendingEffect was dropped.
+    const serialized = JSON.parse(JSON.stringify(liveDraft())) as ReturnType<typeof liveDraft>;
+    const withoutEffect = { ...serialized, pendingEffect: null };
+    const result = resumeConfirmBookingHitl({
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: withoutEffect,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
+      interruptValue: matchingInterrupt,
+    });
+    expect(result.resume).toEqual({ confirmed: false });
+  });
+
+  it("confirms after serialized paused checkpoint when effect ids still agree", () => {
+    const serialized = JSON.parse(JSON.stringify(liveDraft())) as ReturnType<typeof liveDraft>;
+    const result = resumeConfirmBookingHitl({
+      text: "",
+      callbackChoiceId: "confirm",
+      bookingDraft: serialized,
+      pendingInteraction: {
+        kind: "mutation_confirm",
+        action: "create",
+        choices: [{ id: "confirm", label: "✅" }],
+      },
+      interruptValue: matchingInterrupt,
     });
     expect(result.resume).toEqual({ confirmed: true });
   });
@@ -92,6 +194,7 @@ describe("resumeConfirmBookingHitl", () => {
         action: "create",
         choices: [],
       },
+      interruptValue: matchingInterrupt,
     });
     expect(result.resume).toEqual({ confirmed: true });
   });

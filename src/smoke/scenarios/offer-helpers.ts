@@ -2,9 +2,11 @@ import {
   BOOKING_OFFER_MENU,
   BOOKING_REPLACE_MENU,
   CONSULTATION_SERVICE_ID,
+  DEFAULT_MENU_NO_VISITS,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import { matchingCatalogRows } from "../../graph/catalog-match.js";
+import { faqHighlightedService } from "../../graph/faq-highlight.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { normalizeReplyLabel } from "../../shared/message-content.js";
 import type { McpCallTool } from "../../shared/mcp.js";
@@ -22,6 +24,24 @@ const WRITE_TOOLS = [
   "cancel_meeting",
   "reschedule_meeting",
 ] as const;
+
+type Pending = TurnResult["state"]["pendingInteraction"];
+
+const isRootCatalogPending = (
+  pending: Pending,
+): pending is Extract<NonNullable<Pending>, { kind: "service_candidate" }> =>
+  pending?.kind === "service_candidate"
+  && (pending.owner === "faq" || pending.owner === "booking");
+
+const BOOK_LABEL = DEFAULT_MENU_NO_VISITS[0];
+
+const requestExplicitBook = async (
+  session: SmokeSession,
+  turn: TurnResult,
+): Promise<TurnResult> =>
+  turn.buttons.includes(BOOK_LABEL)
+    ? session.tap(BOOK_LABEL)
+    : session.say(BOOK_LABEL);
 
 export const isConsultationName = (name: string): boolean =>
   /консультац/i.test(name.trim());
@@ -126,17 +146,18 @@ export const pickFamilyFreeText = (
   return { text: "ботокс", familyIds };
 };
 
-/** Root FAQ catalog opened after a no-service replacement cancel. */
+/** Root catalog opened after a no-service replacement cancel (FAQ or booking-owned). */
 export const assertFaqRootCatalog = (label: string, turn: TurnResult): void => {
   const pending = turn.state.pendingInteraction;
-  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
+  if (!isRootCatalogPending(pending)) {
     throw new SmokeAssertError(
-      `${label}: expected faq service_candidate, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
+      `${label}: expected faq|booking service_candidate, got ${pending?.kind ?? "null"}`,
     );
   }
-  if (pending.consultationDeclined !== true) {
+  // FAQ-owned root after choose-other still marks consultation declined.
+  if (pending.owner === "faq" && pending.consultationDeclined !== true) {
     throw new SmokeAssertError(
-      `${label}: root catalog must set consultationDeclined`,
+      `${label}: FAQ root catalog must set consultationDeclined`,
     );
   }
   if (pending.choices.length === 0) {
@@ -174,14 +195,32 @@ export const selectUniqueProcedureAfterRootCatalog = async (
   procedure: NamedProcedurePick,
   cancelTurn: TurnResult,
 ): Promise<TurnResult> => {
-  assertFaqRootCatalog(label, cancelTurn);
+  // REPLACE after accepting a pending offer continues into DATE/TIME. Browse
+  // away to a root catalog before the unique procedure token.
+  let catalogTurn = cancelTurn;
+  for (let i = 0; i < 4; i += 1) {
+    if (isRootCatalogPending(catalogTurn.state.pendingInteraction)) {
+      break;
+    }
+    if (hasBookingOfferKeyboard(catalogTurn.buttons)) {
+      catalogTurn = await session.tap(BOOKING_OFFER_MENU[1]);
+      continue;
+    }
+    // DATE/TIME or other post-cancel waits — leave booking via services guide.
+    catalogTurn = await session.say("Послуги");
+  }
+  assertFaqRootCatalog(label, catalogTurn);
   let turn = await session.say(procedure.token);
   for (let i = 0; i < 6; i += 1) {
     const pending = turn.state.pendingInteraction;
     if (pending?.kind === "service_confirm" && pending.service.id === procedure.id) {
       return turn;
     }
-    if (pending?.kind === "service_candidate" && pending.owner === "faq") {
+    if (faqHighlightedService(pending) != null) {
+      turn = await requestExplicitBook(session, turn);
+      continue;
+    }
+    if (isRootCatalogPending(pending)) {
       const exact = pending.choices.find(
         (choice) =>
           choice.id !== "other"
@@ -242,9 +281,9 @@ export const expectFamilyCatalogTurn = (
     expectNotCalled(label, turn.calls, [...WRITE_TOOLS]);
     return;
   }
-  if (pending?.kind !== "service_candidate" || pending.owner !== "faq") {
+  if (!isRootCatalogPending(pending)) {
     throw new SmokeAssertError(
-      `${label}: expected faq service_candidate, got ${pending?.kind ?? "null"}/${pending?.kind === "service_candidate" ? pending.owner : "n/a"}`,
+      `${label}: expected faq|booking service_candidate, got ${pending?.kind ?? "null"}`,
     );
   }
   if (pending.choices.length < 2) {
@@ -361,6 +400,37 @@ export const openBookingOffer = async (
   );
 };
 
+/** Drive until REPLACE chips (catalog/offer may precede the date-gate). */
+export const openReplaceOffer = async (
+  session: SmokeSession,
+  label: string,
+  maxTurns = 6,
+): Promise<TurnResult> => {
+  let turn = await session.say("Записатись");
+  for (let i = 0; i < maxTurns; i += 1) {
+    if (hasReplaceKeyboard(turn.buttons)) {
+      return turn;
+    }
+    if (hasBookingOfferKeyboard(turn.buttons)) {
+      turn = turn.buttons.includes(BOOKING_OFFER_MENU[0])
+        ? await session.tap(BOOKING_OFFER_MENU[0])
+        : await session.say(BOOKING_OFFER_MENU[0]);
+      continue;
+    }
+    if (turn.state.pendingInteraction?.kind === "service_candidate") {
+      turn = await session.say("Записатись на консультацію");
+      continue;
+    }
+    if (i === maxTurns - 1) {
+      break;
+    }
+    turn = await session.say("Записатись на консультацію");
+  }
+  throw new SmokeAssertError(
+    `${label}: never opened REPLACE keyboard (buttons=[${turn.buttons.join(" | ") || "none"}] pending=${turn.state.pendingInteraction?.kind ?? "null"})`,
+  );
+};
+
 /**
  * Open «Послуги» with a visit already on file (not «Записатись» — that opens
  * REPLACE before any service is chosen). Accepts consultation BOOKING OFFER or
@@ -423,6 +493,15 @@ export const drillToProcedureOffer = async (
       }
     }
     if (interaction?.kind === "service_candidate") {
+      // Unique remaining CRM id stays FAQ-owned until an explicit book request.
+      const highlighted = faqHighlightedService(interaction);
+      if (
+        highlighted != null
+        && !isConsultationName(highlighted.serviceName ?? interaction.choices[0]?.label ?? "")
+      ) {
+        turn = await requestExplicitBook(session, turn);
+        continue;
+      }
       if (turn.buttons.includes(SERVICE_CANDIDATE_OTHER_LABEL_UK) && i === maxTaps - 1) {
         turn = await session.tap(SERVICE_CANDIDATE_OTHER_LABEL_UK);
         continue;

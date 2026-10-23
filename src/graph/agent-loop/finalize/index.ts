@@ -30,6 +30,7 @@ import {
 import {
   mutationCommittedThisTurn,
   terminalMeetingMutationOutcome,
+  toolRanThisTurn,
 } from "../protocol/index.js";
 import {
   applyFaqCatalogAiFinalize,
@@ -38,7 +39,6 @@ import {
 } from "./faq.js";
 import {
   applyFalseSuccessClaimOverride,
-  applyServiceOfferSynthesis,
   emptyFinalizeReply,
   finalizeAiUpdate,
   lastHandoffFromReply,
@@ -61,8 +61,7 @@ export type FinalizeFaqAiInput = {
 };
 
 /**
- * FAQ AI finalize: pure helpers → immutable FinalizeReply.
- * Does not import or mutate booking bags.
+ * FAQ AI finalize: catalog chips / handoff only — never writes bookingDraft.
  */
 export const finalizeFaqAi = async (
   input: FinalizeFaqAiInput,
@@ -71,10 +70,10 @@ export const finalizeFaqAi = async (
     state,
     agentMessages,
     rawText,
-    yieldTag,
     confirmationCleanup,
     options,
   } = input;
+  void input.yieldTag;
   let reply = input.reply;
 
   const mutationCommitted = mutationCommittedThisTurn(agentMessages);
@@ -85,7 +84,7 @@ export const finalizeFaqAi = async (
     options,
   );
   reply = faqResult.reply;
-  let serviceOfferUpdate = faqResult.serviceOfferUpdate;
+  const serviceOfferUpdate = faqResult.serviceOfferUpdate;
 
   reply = applyFalseSuccessClaimOverride(
     state,
@@ -95,31 +94,21 @@ export const finalizeFaqAi = async (
     mutationCommitted,
   );
 
-  if (yieldTag) {
-    reply = { ...reply, yieldToSupervisor: true };
+  // Hours FAQ closes an open catalog picker (same as close_catalog).
+  let catalogClose: ClinicStateUpdate = {};
+  if (
+    toolRanThisTurn(agentMessages, "get_working_time")
+    && state.pendingInteraction?.kind === "service_candidate"
+  ) {
+    catalogClose = { pendingInteraction: null };
+    reply = { ...reply, replyButtons: [] };
   }
-
-  const synthesis = applyServiceOfferSynthesis(
-    state,
-    FAQ_AGENT_ID,
-    agentMessages,
-    reply,
-    {
-      alreadyBooked: false,
-      slotOfferPresent: false,
-      availabilityInteractionPresent: false,
-      detailsStepActive: false,
-    },
-  );
-  if (Object.keys(synthesis.serviceOfferUpdate).length > 0) {
-    serviceOfferUpdate = synthesis.serviceOfferUpdate;
-  }
-  reply = synthesis.reply;
 
   return {
     ...reply,
     patch: {
       ...serviceOfferUpdate,
+      ...catalogClose,
       ...confirmationCleanup,
       supervisorIntent: null,
       ...reply.patch,
@@ -210,8 +199,10 @@ const createSpecialistFinalizeNode = (
     const {
       text: textWithoutCatalogAction,
     } = extractFaqCatalogAction(rawText);
+    // Strip yield tags from model text; do not use them for routing.
     const { text, buttons: accidentalButtons, yieldToSupervisor: yieldTag } =
       extractReplyButtons(textWithoutCatalogAction);
+    void yieldTag;
 
     let reply: FinalizeReply = {
       ...emptyFinalizeReply(status),
@@ -244,7 +235,7 @@ const createSpecialistFinalizeNode = (
       agentMessages,
       reply,
       rawText,
-      yieldTag,
+      yieldTag: false,
       chatOther,
       confirmationCleanup,
       consumeServiceChangeNotice,
@@ -256,7 +247,6 @@ const createSpecialistFinalizeNode = (
     const replyMessage =
       reply.replyText !== extractMessageTextContent(tagged.content).trim()
         || accidentalButtons.length > 0
-        || yieldTag
         || reply.replySource === "runtime"
         || blockedConfirmationMutation
         ? new AIMessage({

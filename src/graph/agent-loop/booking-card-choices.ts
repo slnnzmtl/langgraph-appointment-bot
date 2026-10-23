@@ -5,12 +5,15 @@
 
 import {
   BOOKING_OFFER_MENU,
+  BOOKING_OFFER_MENU_EN,
   BOOKING_REPLACE_MENU,
+  BOOKING_REPLACE_MENU_EN,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   INTENT_SKIP_LABEL,
   MAIN_MENU_LABEL,
 } from "../../shared/clinic-constants.js";
+import type { ConversationLocale } from "../../shared/conversation-locale.js";
 import type { BookingViewCard } from "../booking-domain/decision.js";
 
 export type BookingReplyChoice = {
@@ -48,32 +51,38 @@ export const choiceIdsFromCard = (card: BookingViewCard | null): string[] => {
   }
 };
 
-/** Default Ukrainian chip label when card.labels / labelById omit the id. */
+/** Default chip label when card.labels / labelById omit the id. */
 const defaultLabelForChoiceId = (
   id: string,
   card: BookingViewCard | null,
+  locale: ConversationLocale,
 ): string => {
+  const replace = locale === "en" ? BOOKING_REPLACE_MENU_EN : BOOKING_REPLACE_MENU;
+  const offer = locale === "en" ? BOOKING_OFFER_MENU_EN : BOOKING_OFFER_MENU;
   // Visit-select decline is REPLACE «Ні, дякую», not HITL ❌.
   if (id === "decline" && card?.kind === "visit_select") {
-    return BOOKING_REPLACE_MENU[1];
+    return replace[1];
   }
   switch (id) {
     case "confirm":
     case "hitl_yes":
       return CONFIRM_YES_LABEL;
     case "cancel_existing":
-      return BOOKING_REPLACE_MENU[0];
+      return replace[0];
     case "decline":
     case "hitl_no":
       return CONFIRM_NO_LABEL;
     case "offer_accept":
-      return BOOKING_OFFER_MENU[0];
+    case "accept":
+      return offer[0];
     case "offer_choose_other":
-      return BOOKING_OFFER_MENU[1];
+    case "choose_other":
+      return offer[1];
     case "menu":
     case "main_menu":
       return MAIN_MENU_LABEL;
     case "note_skip":
+    case "skip":
       return INTENT_SKIP_LABEL;
     default:
       return id;
@@ -83,6 +92,7 @@ const defaultLabelForChoiceId = (
 export const replyChoicesFromCard = (
   card: BookingViewCard | null,
   labelById?: ReadonlyMap<string, string>,
+  locale: ConversationLocale = "uk",
 ): BookingReplyChoice[] => {
   if (card?.kind === "service_candidate") {
     return card.choices.map((chip) => ({
@@ -99,6 +109,6 @@ export const replyChoicesFromCard = (
     id,
     label: labelById?.get(id)
       ?? cardLabels?.[id]
-      ?? defaultLabelForChoiceId(id, card),
+      ?? defaultLabelForChoiceId(id, card, locale),
   }));
 };

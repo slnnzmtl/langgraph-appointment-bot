@@ -8,9 +8,11 @@ import type { BookingContext } from "../tools/planned-meetings.js";
 import { trimMessagesToTokenBudgetSync } from "./message-trimming.js";
 import type { BookingNoteStatus, ClinicHandoff, SelectedBookingSlot } from "./types.js";
 import type { BookingDecision } from "./booking-domain/decision.js";
+import type { UnderstoodBookingTurn } from "./booking-domain/turn.js";
 import type { BookingDraft } from "./booking-draft.js";
 import type { PendingInteraction } from "./booking-session.js";
 import type { SupervisorIntent } from "./routing.js";
+import type { ConversationLocale } from "../shared/conversation-locale.js";
 
 export type ClinicStateAnnotationOptions = {
   messageHistoryMaxTokens: number;
@@ -151,6 +153,23 @@ export const createClinicStateAnnotation = ({
      * Set by the adapter; consumed and cleared by booking__decide.
      */
     inboundChoiceId: Annotation<string | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /**
+     * One-turn ingress interpretation. Supervisor sets; booking__decide consumes
+     * and clears. Avoids a second classification of the same utterance.
+     */
+    understoodTurn: Annotation<UnderstoodBookingTurn | null>({
+      reducer: (left, right) => (right === undefined ? left : right),
+      default: () => null,
+    }),
+    /**
+     * Session patient locale for card projection / composer. Not used by the
+     * booking kernel. Updated from alphabetic patient text; numeric-only replies
+     * leave it unchanged.
+     */
+    patientLocale: Annotation<ConversationLocale | null>({
       reducer: (left, right) => (right === undefined ? left : right),
       default: () => null,
     }),

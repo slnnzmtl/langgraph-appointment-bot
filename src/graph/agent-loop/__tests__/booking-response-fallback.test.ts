@@ -14,6 +14,7 @@ import { visitLabelFromCommand } from "../../../tools/visit-label.js";
 import {
   bookingResponseFallback,
   bookingSuccessText,
+  clarificationCopy,
   committedCreateOrRescheduleReply,
 } from "../booking-response-fallback.js";
 import { replyChoicesFromCard } from "../booking-card-choices.js";
@@ -45,6 +46,17 @@ describe("bookingResponseFallback contact format clarification", () => {
       card: { kind: "contact_field", field: "lastName" },
     });
     expect(text).toBe(BOOKING_LAST_NAME_INVALID_UK);
+  });
+});
+
+describe("clarificationCopy locale", () => {
+  it("uses English copy for common contact clarifications", () => {
+    expect(clarificationCopy("invalid_phone", "en")).toMatch(/recognize the number/i);
+    expect(clarificationCopy("availability_failed", "en")).toMatch(/available times/i);
+  });
+
+  it("falls back to Ukrainian for reasons without an English table entry", () => {
+    expect(clarificationCopy("visit_reschedule_ambiguous", "en")).toMatch(/візит/i);
   });
 });
 

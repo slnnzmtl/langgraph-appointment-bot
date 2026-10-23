@@ -50,6 +50,8 @@ export const PATIENT_FALLBACK_MESSAGE =
 /** Code-owned first identity question once the booking choices are complete. */
 export const BOOKING_PHONE_QUESTION_UK =
   "Для завершення запису надішліть, будь ласка, ваш номер телефону.";
+export const BOOKING_PHONE_QUESTION_EN =
+  "To finish booking, please send your phone number.";
 /** Typed phone failed structural parse — format hint, not a repeated first ask. */
 export const BOOKING_PHONE_INVALID_UK =
   "Не вдалося розпізнати номер. Надішліть у форматі +380XXXXXXXXX або 0XXXXXXXXX.";

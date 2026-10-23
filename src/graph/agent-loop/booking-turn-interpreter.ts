@@ -23,6 +23,7 @@ const bookingTurnClassificationSchema = z.object({
       "catalog_browse",
       "confirm_pending_service",
       "decline_pending_service",
+      "book_highlighted",
     ])
     .optional(),
   serviceQuery: z.string().min(1).max(120).optional(),
@@ -40,6 +41,7 @@ const bookingTurnClassificationSchema = z.object({
   firstName: z.string().min(1).max(48).optional(),
   lastName: z.string().min(1).max(48).optional(),
   informationalQuestion: z.string().min(1).max(240).optional(),
+  faqTopic: z.enum(["hours", "address", "price", "catalog", "other"]).optional(),
   controlKind: z
     .enum([
       "none",
@@ -51,9 +53,14 @@ const bookingTurnClassificationSchema = z.object({
       "return_to_booking",
       "visit_status",
       "visit_cancel",
+      "visit_reschedule",
+      "greeting",
+      "help",
     ])
     .optional(),
-  sideQuestionKind: z.enum(["none", "hours", "address", "price", "catalog"]).optional(),
+  sideQuestionKind: z
+    .enum(["none", "hours", "address", "price", "catalog", "other"])
+    .optional(),
 }).strict();
 
 export type InterpretBookingTurn = (
@@ -75,14 +82,29 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
       return {};
     }
 
+    const offeredLabels = input.offeredChoiceLabels ?? [];
+    const offeredIds = input.offeredChoiceIds ?? [];
+    const offeredPairs = offeredIds.map((id, index) => {
+      const label = offeredLabels[index];
+      return label != null && label.length > 0 ? `${id}=${label}` : id;
+    });
+
     const contextLines = [
       input.awaitingNote === true ? "Open field: visit note (or skip)." : null,
       input.awaitingContactField != null
         ? `Open field: contact ${input.awaitingContactField}.`
         : null,
       input.awaitingServiceConfirm === true ? "Open field: pending service confirmation." : null,
-      input.offeredChoiceIds != null && input.offeredChoiceIds.length > 0
-        ? `Offered choice ids (callback only; do not invent): ${input.offeredChoiceIds.join(", ")}`
+      input.faqHighlightOpen === true
+        ? "Idle FAQ context: one highlighted catalog row is informational until the patient explicitly books it (book_highlighted). Consultation requests stay consultation."
+        : null,
+      input.activeRequirement != null
+        ? `Active booking requirement: ${input.activeRequirement}.`
+        : null,
+      input.kyivDate != null ? `Kyiv date today: ${input.kyivDate}.` : null,
+      input.locale != null ? `Patient locale hint: ${input.locale}.` : null,
+      offeredPairs.length > 0
+        ? `Offered choices (ids and labels; do not invent): ${offeredPairs.join("; ")}`
         : null,
     ].filter((line): line is string => line != null);
 

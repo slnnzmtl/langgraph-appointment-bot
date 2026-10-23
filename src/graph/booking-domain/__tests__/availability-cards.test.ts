@@ -17,6 +17,7 @@ const READ: BookingReadModels = {
   contactContextDirty: false,
   bookingContextDirty: false,
   availabilityVerified: true,
+  assignedUserId: "assigned-user-1",
   availabilitySnapshotId: "snap-1",
   availabilityDays: [
     {
@@ -303,6 +304,47 @@ describe("multi-fact side questions and catalog resolve", () => {
       query: "ботокс",
     });
     expect(decision.events.some((e) => e.type === "service_selected")).toBe(false);
+  });
+
+  it("named_procedure mid catalog browse does not open REPLACE", () => {
+    let draft = createEmptyBookingDraft();
+    draft = reduceBookingDraft(draft, {
+      type: "decision_set",
+      decision: {
+        kind: "service_candidate",
+        query: "catalog",
+        choices: [
+          { id: "family", label: "Сім'я", serviceIds: ["a", "b"] },
+        ],
+      },
+    })!;
+    const decision = decideBooking(
+      draft,
+      {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: { kind: "named_procedure", query: "ботокс" },
+        },
+      },
+      {
+        contactContextDirty: false,
+        bookingContextDirty: false,
+        availabilityVerified: false,
+        plannedMeetings: [
+          {
+            id: "m-old",
+            name: "Консультація",
+            dateStart: "2026-10-23T11:00:00",
+            dateEnd: "2026-10-23T11:30:00",
+          },
+        ],
+      },
+    );
+    expect(decision.decision.card?.kind).not.toBe("visit_select");
+    expect(decision.decision.pendingEffect?.effect).toEqual({
+      kind: "list_services",
+      query: "ботокс",
+    });
   });
 
   it("catalog effect with one row selects that service", () => {

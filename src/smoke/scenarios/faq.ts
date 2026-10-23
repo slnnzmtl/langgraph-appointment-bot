@@ -14,6 +14,7 @@ import {
   SmokeAssertError,
   soft,
 } from "../assert.js";
+import { writeTelegramId } from "../env.js";
 import {
   createSmokeSession,
   installCallToolRecorder,
@@ -21,6 +22,7 @@ import {
   type TurnResult,
 } from "../harness.js";
 import type { SoftWarning, SmokeScenario } from "../types.js";
+import { prepareFreshContact } from "./booking-helpers.js";
 import {
   drillToProcedureOffer,
   expectFamilyCatalogTurn,
@@ -244,19 +246,25 @@ export const faqChooseOtherScenario: SmokeScenario = {
   tier: "invoke",
   run: async (ctx) =>
     withSession(ctx, "faq-choose-other", ctx.env.telegramIdA, async (session, warnings) => {
-      await openBookingOffer(session, "faq-choose-other");
+      const offer = await openBookingOffer(session, "faq-choose-other");
       const catalog = await session.tap(BOOKING_OFFER_MENU[1]);
 
       const interaction = catalog.state.pendingInteraction;
       expectInteraction("faq-choose-other", interaction?.kind, "service_candidate");
-      if (interaction?.kind === "service_candidate" && interaction.owner !== "faq") {
+      if (
+        interaction?.kind === "service_candidate"
+        && interaction.owner !== "faq"
+        && interaction.owner !== "booking"
+      ) {
         throw new SmokeAssertError(
-          `faq-choose-other: expected service_candidate.owner=faq, got ${interaction.owner ?? "undefined"}`,
+          `faq-choose-other: expected service_candidate.owner faq|booking, got ${interaction.owner ?? "undefined"}`,
         );
       }
-      if (!catalog.calls.some(isCServiceSearch)) {
+      // Kernel-owned choose-other may reuse catalog evidence from the offer turn.
+      const catalogSearches = [...offer.calls, ...catalog.calls].filter(isCServiceSearch);
+      if (catalogSearches.length === 0) {
         throw new SmokeAssertError(
-          `faq-choose-other: expected search_entity(cService), got [${catalog.calls.map((c) => c.name).join(",") || "none"}]`,
+          `faq-choose-other: expected search_entity(cService) on offer or choose-other, got [${catalog.calls.map((c) => c.name).join(",") || "none"}]`,
         );
       }
       expectNotCalled("faq-choose-other catalog", catalog.calls, [...WRITE_TOOLS]);
@@ -344,8 +352,12 @@ export const faqCatalogCloseScenario: SmokeScenario = {
 export const faqFamilyFreeTextScenario: SmokeScenario = {
   name: "faq-family-free-text",
   tier: "invoke",
-  run: async (ctx) =>
-    withSession(ctx, "faq-family-free-text", ctx.env.telegramIdA, async (session, warnings) => {
+  run: async (ctx) => {
+    // Fresh id: known telegram may already have a visit, and idle «запиши на …»
+    // correctly opens REPLACE instead of catalog chips.
+    const telegramId = writeTelegramId("faq-family");
+    await prepareFreshContact(ctx, telegramId);
+    return withSession(ctx, "faq-family-free-text", telegramId, async (session, warnings) => {
       const catalogRows = await loadCatalogServiceRows(ctx.callTool, "faq-family-free-text");
       const family = pickFamilyFreeText(catalogRows, "faq-family-free-text");
 
@@ -353,9 +365,12 @@ export const faqFamilyFreeTextScenario: SmokeScenario = {
       const catalog = await session.tap(BOOKING_OFFER_MENU[1]);
       const root = catalog.state.pendingInteraction;
       expectInteraction("faq-family-free-text catalog", root?.kind, "service_candidate");
-      if (root?.kind !== "service_candidate" || root.owner !== "faq") {
+      if (
+        root?.kind !== "service_candidate"
+        || (root.owner !== "faq" && root.owner !== "booking")
+      ) {
         throw new SmokeAssertError(
-          `faq-family-free-text: expected faq service_candidate after choose-other, got ${root?.kind ?? "null"}`,
+          `faq-family-free-text: expected faq|booking service_candidate after choose-other, got ${root?.kind ?? "null"}/${root?.kind === "service_candidate" ? root.owner : "n/a"}`,
         );
       }
       const rootChoiceIds = root.choices.map((choice) => choice.id);
@@ -405,14 +420,19 @@ export const faqFamilyFreeTextScenario: SmokeScenario = {
           ? bookBotox.state.pendingInteraction.choices.length
           : 0,
       );
-    }),
+    });
+  },
 };
 
 export const offerPriceScenario: SmokeScenario = {
   name: "offer-price",
   tier: "invoke",
-  run: async (ctx) =>
-    withSession(ctx, "offer-price", ctx.env.telegramIdA, async (session, warnings) => {
+  run: async (ctx) => {
+    // Fresh telegram id: SMOKE_KNOWN_TELEGRAM_ID may already have a Planned visit,
+    // which correctly opens REPLACE after Так instead of date chips.
+    const telegramId = writeTelegramId("offer-price");
+    await prepareFreshContact(ctx, telegramId);
+    return withSession(ctx, "offer-price", telegramId, async (session, warnings) => {
       await openBookingOffer(session, "offer-price");
       const offer = await drillToProcedureOffer(session, "offer-price");
       expectInteraction("offer-price", offer.state.pendingInteraction?.kind, "service_confirm");
@@ -440,5 +460,6 @@ export const offerPriceScenario: SmokeScenario = {
         );
       }
       console.log("✓ offer-price: procedure offer → Скільки коштує → Так advances to slots");
-    }),
+    });
+  },
 };

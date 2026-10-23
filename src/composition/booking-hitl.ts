@@ -7,6 +7,7 @@ import { HumanMessage } from "@langchain/core/messages";
 
 import { classifyConfirmReply } from "../shared/confirm-reply.js";
 import type { BookingDraft } from "../graph/booking-draft.js";
+import { hitlCommandsMatch } from "../graph/hitl-command-match.js";
 import { recoverExpiredConfirmBookingHitl } from "../graph/booking-hitl-recovery.js";
 import {
   type PendingInteraction,
@@ -32,6 +33,11 @@ export type ResumeConfirmBookingHitlInput = {
   bookingUpdate?: Record<string, unknown>;
   /** Exact callback_data choice id when the patient tapped an inline button. */
   callbackChoiceId?: string;
+  /**
+   * Paused LangGraph confirm_booking interrupt value. Required for identity
+   * match before confirmed:true; missing → decline.
+   */
+  interruptValue?: unknown;
 };
 
 const asMutationConfirm = (
@@ -148,6 +154,11 @@ export const resumeConfirmBookingHitl = (
   }
 
   if (live && (confirmedViaCallback || confirmedViaTap)) {
+    // Full CRM command + effect id must match the paused interrupt.
+    const draft = asBookingDraft(input.bookingDraft);
+    if (!hitlCommandsMatch(draft, input.interruptValue)) {
+      return { resume: { confirmed: false }, update: bookingUpdate };
+    }
     return { resume: { confirmed: true }, update: bookingUpdate };
   }
   if (live && (declinedViaCallback || declinedViaTap)) {

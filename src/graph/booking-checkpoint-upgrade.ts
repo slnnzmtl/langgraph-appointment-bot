@@ -195,7 +195,11 @@ const hasBlankTargetId = (draft: BookingDraft): boolean => {
   return false;
 };
 
-/** Create payload must match canonical service, contact, date, and slot. */
+/**
+ * Create payload must match canonical service, contact, date, and slot.
+ * Accepts tool-arg shape (`contactId` / `serviceId`) and CRM write shape
+ * (`parentId` / `contactsIds` / `cServicesIds`) frozen on HITL.
+ */
 const createPayloadMatchesDraft = (
   draft: BookingDraft,
   payload: Record<string, unknown>,
@@ -208,16 +212,35 @@ const createPayloadMatchesDraft = (
   const slotOk = draft.selectedSlot != null
     && isValidSlot(draft.selectedSlot)
     && !slotRequiresMatchingDate(draft);
-  return (draft.mode === "create" || draft.mode === "replace")
-    && accepted
-    && dateOk
-    && slotOk
-    && noteOk
-    && contactId != null
-    && payload.contactId === contactId
-    && payload.serviceId === serviceId
-    && payload.dateStart === draft.selectedSlot!.dateStart
-    && payload.dateEnd === draft.selectedSlot!.dateEnd;
+  if (
+    !(draft.mode === "create" || draft.mode === "replace")
+    || !accepted
+    || !dateOk
+    || !slotOk
+    || !noteOk
+    || contactId == null
+    || serviceId == null
+  ) {
+    return false;
+  }
+  if (
+    payload.dateStart !== draft.selectedSlot!.dateStart
+    || payload.dateEnd !== draft.selectedSlot!.dateEnd
+  ) {
+    return false;
+  }
+  // Tool-arg shape (kernel effect / legacy checkpoints).
+  if (payload.contactId === contactId && payload.serviceId === serviceId) {
+    return true;
+  }
+  // CRM write shape (interrupt / frozenCommand).
+  const contactsIds = Array.isArray(payload.contactsIds) ? payload.contactsIds : [];
+  const cServicesIds = Array.isArray(payload.cServicesIds) ? payload.cServicesIds : [];
+  return payload.parentId === contactId
+    && contactsIds.length === 1
+    && contactsIds[0] === contactId
+    && cServicesIds.length === 1
+    && cServicesIds[0] === serviceId;
 };
 
 /**

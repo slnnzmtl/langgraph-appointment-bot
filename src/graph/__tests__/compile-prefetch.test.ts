@@ -237,22 +237,9 @@ describe("compileClinicGraph prefetch once", () => {
           invoke: async () => ({ next: "booking" }),
         }),
       } as ILLMConnector,
-      loadSupervisorPrompt: () => "STATIC",
       formatSystemMetadata: () => "META",
       messageHistoryMaxTokens: 6_000,
       bookingPrefetchCallTool: callTool,
-      classifyNoteTurn: async ({ patientText }) => {
-        const normalized = patientText.trim().toLowerCase();
-        if (
-          normalized === "продовжити без коментаря"
-          || normalized === "без коментаря"
-          || normalized === "skip"
-          || normalized === "ні"
-        ) {
-          return { kind: "note_skipped" as const };
-        }
-        return { kind: "note_provided" as const };
-      },
       ...(extra?.prefetchTtlMs != null ? { prefetchTtlMs: extra.prefetchTtlMs } : {}),
     });
 

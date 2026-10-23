@@ -28,12 +28,12 @@ export const {
   isVisitStatusSignal,
   isPrefetchExpired,
   PREFETCH_TTL_MS,
-  shouldContinueInBooking,
-  shouldContinueInFaq,
-  shouldRouteProcedureBrowseToFaq,
-  shouldStayInFaqCatalog,
-  stickyContinueAgentId,
+  classifyCancelTap,
+  isGreetingOrMainMenuLine,
 } = await import("../supervisor.js");
+
+export { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
+export { routeUnderstoodTurn, hasOpenBookingSession } from "../receptionist-route.js";
 
 export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicState => ({
   messages: [],
@@ -58,6 +58,8 @@ export const supervisorState = (overrides: Partial<ClinicState> = {}): ClinicSta
   faqSkipLlm: false,
   bookingDecision: null,
   inboundChoiceId: null,
+  understoodTurn: null,
+  patientLocale: null,
   ...overrides,
 });
 

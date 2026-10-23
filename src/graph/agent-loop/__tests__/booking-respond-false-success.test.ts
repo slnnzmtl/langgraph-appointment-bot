@@ -1,3 +1,4 @@
+import { AIMessage, HumanMessage, ToolMessage } from "@langchain/core/messages";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -16,9 +17,15 @@ import {
   defaultMenuLabels,
 } from "../../../shared/clinic-constants.js";
 import { setTrackEventForTests } from "../../../analytics/track.js";
+import {
+  createEmptyBookingDraft,
+  reduceBookingDraft,
+  type BookingDraft,
+} from "../../booking-draft.js";
 import type { BookingDecision } from "../../booking-domain/decision.js";
 import type { PendingInteraction } from "../../booking-session.js";
 import type { ILLMConnector } from "../../types.js";
+import { createBookingDecideNode } from "../booking-decide-nodes.js";
 import { createBookingRespondNode } from "../booking-respond.js";
 import { replyChoicesFromCard } from "../booking-card-choices.js";
 
@@ -234,6 +241,61 @@ describe("booking__respond card copy + markup", () => {
       "11 вер",
       OTHER_DATE_LABEL,
     ]);
+  });
+
+  it("prefixes verified price on present_dates regardless of intent and clears stash", async () => {
+    const invoke = vi.fn(async () => ({ text: "should not be used" }));
+    const node = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({ invoke }),
+      } as unknown as ILLMConnector,
+    });
+    const card = {
+      kind: "date_select" as const,
+      snapshotId: "snap-1",
+      choiceIds: ["2026-09-10", "other_date"],
+      labels: {
+        "2026-09-10": "10 вер",
+        other_date: OTHER_DATE_LABEL,
+      },
+    };
+    const pending: PendingInteraction = {
+      kind: "date_select",
+      snapshot: {
+        snapshotId: "snap-1",
+        days: [
+          {
+            date: "2026-09-10",
+            displayLabel: "10 вер",
+            slotSummaries: ["14:00"],
+            slots: [],
+          },
+        ],
+      },
+      choices: [
+        { id: "2026-09-10", label: "10 вер" },
+        { id: "other_date", label: OTHER_DATE_LABEL },
+      ],
+    };
+    const update = await node({
+      bookingDecision: {
+        tag: "ask",
+        intent: "present_dates",
+        facts: {
+          servicePrice: "1200",
+          serviceName: "Botox",
+        },
+        card,
+      },
+      pendingInteraction: pending,
+      bookingDraft: {
+        pendingReplyFacts: { servicePrice: "1200", serviceName: "Botox" },
+      },
+    } as never);
+
+    expect(invoke).not.toHaveBeenCalled();
+    expect(update.lastHandoff?.replyText).toMatch(/^Вартість Botox становить 1200 грн\./);
+    expect(update.bookingDraft?.pendingReplyFacts ?? null).toBeNull();
   });
 
   it("prefixes price facts then listed TIME copy and keeps hour chips", async () => {
@@ -493,6 +555,89 @@ describe("replyChoicesFromCard offer labels", () => {
       INTENT_SKIP_LABEL,
       MAIN_MENU_LABEL,
     ]);
+  });
+});
+
+describe("decide + respond deferred price on availability error", () => {
+  it("merges stash then ships English price and failure copy", async () => {
+    const effectId = "eff_price_avail_err";
+    let draft: BookingDraft | null = reduceBookingDraft(createEmptyBookingDraft(), {
+      type: "service_selected",
+      service: { id: "svc-botox", name: "Botox", source: "catalog" },
+      accepted: true,
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "reply_facts_set",
+      facts: { servicePrice: "1200", serviceName: "Botox" },
+    });
+    draft = reduceBookingDraft(draft, {
+      type: "effect_prepared",
+      effect: {
+        id: effectId,
+        expectedRevision: 2,
+        effect: {
+          kind: "present_availability",
+          queryKind: "exact",
+          date: "2026-10-24",
+        },
+        status: "executing",
+      },
+    });
+
+    const decide = createBookingDecideNode({
+      interpretTurn: async () => {
+        throw new Error("must not re-interpret while effect is open");
+      },
+    });
+    const decided = await decide({
+      messages: [new HumanMessage("ok")],
+      agentMessages: [
+        new AIMessage({
+          content: "",
+          tool_calls: [{
+            id: "other",
+            name: "list_services",
+            args: {},
+            type: "tool_call",
+          }],
+        }),
+        new ToolMessage({
+          content: JSON.stringify({ list: [] }),
+          tool_call_id: "other",
+          name: "list_services",
+        }),
+      ],
+      bookingDraft: draft,
+      pendingInteraction: null,
+      availabilityContext: null,
+      inboundChoiceId: null,
+      patientLocale: "en",
+    } as never);
+
+    expect(decided.bookingDecision?.reason).toBe("availability_failed");
+    expect(decided.bookingDecision?.facts?.clarificationReason).toBe("availability_failed");
+    expect(decided.bookingDecision?.facts?.servicePrice).toBe("1200");
+    expect(decided.bookingDraft?.pendingReplyFacts?.servicePrice).toBe("1200");
+
+    const respond = createBookingRespondNode({
+      llm: {
+        bindRoutingTools: () => ({
+          invoke: async () => ({ text: "should not be used" }),
+        }),
+      } as unknown as ILLMConnector,
+    });
+    const replied = await respond({
+      bookingDecision: decided.bookingDecision,
+      pendingInteraction: decided.pendingInteraction,
+      bookingDraft: decided.bookingDraft,
+      patientLocale: "en",
+      messages: [new HumanMessage("What is the price?")],
+    } as never);
+
+    const text = replied.lastHandoff?.replyText ?? "";
+    expect(text).toMatch(/The price of Botox is 1200 UAH\./);
+    expect(text).toMatch(/could not check available times/i);
+    expect(replied.bookingDraft?.pendingReplyFacts ?? null).toBeNull();
   });
 });
 

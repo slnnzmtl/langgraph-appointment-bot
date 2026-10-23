@@ -1,4 +1,4 @@
-import { FAQ_AGENT_ID } from "../types.js";
+import { BOOKING_AGENT_ID, FAQ_AGENT_ID } from "../types.js";
 import {
   hasPendingToolCalls,
   lastMessageRequestsTools,
@@ -6,7 +6,6 @@ import {
 import type { ClinicState } from "../state.js";
 import {
   interpretInteractionReply,
-  interactionChoiceEquals,
 } from "../booking-session.js";
 import {
   lastPatientText,
@@ -24,9 +23,7 @@ export const routeAfterAgentLlm = (
   maxSteps: number,
   toolsName: string,
   finalizeName: string,
-  _commandPrepareName?: string,
 ): string => {
-  void _commandPrepareName;
   if (state.stepCount >= maxSteps) {
     return finalizeName;
   }
@@ -38,25 +35,37 @@ export const routeAfterAgentLlm = (
   return finalizeName;
 };
 
+export type RouteAfterAgentPrepareOptions = {
+  llmName: string;
+  finalizeName: string;
+  /** Optional booking decide node for explicit-book handoffs from FAQ prepare. */
+  bookingDecideName?: string;
+  agentId?: string;
+};
+
 /**
- * FAQ prepare → llm or finalize. Booking prepare was deleted; booking-only
- * planner projection branches are gone.
+ * FAQ prepare → booking (explicit handoff only), finalize (chips), or llm.
+ * One routing mechanism — callers must not also return Command(goto).
  */
 export const routeAfterAgentPrepare = (
   state: ClinicState,
   llmName: string,
-  _commandPrepareName?: string,
-  _noteOrchestratorName?: string,
-  finalizeName?: string,
+  finalizeName: string,
+  bookingDecideName?: string,
   agentId?: string,
 ): string => {
-  void _commandPrepareName;
-  void _noteOrchestratorName;
-  const isFaqPrepare = agentId === FAQ_AGENT_ID;
-  // FAQ chips: exact chip taps skip LLM. Newly produced chips/confirm from prepare
-  // set faqSkipLlm — do not infer from utterance equality or CRM stems.
+  // Explicit book handoff set by prepare (next + understoodTurn).
   if (
-    finalizeName
+    bookingDecideName != null
+    && state.next === BOOKING_AGENT_ID
+    && state.understoodTurn != null
+  ) {
+    return bookingDecideName;
+  }
+
+  // FAQ chips: exact chip taps / newly produced chips skip LLM.
+  if (
+    agentId === FAQ_AGENT_ID
     && state.pendingInteraction?.kind === "service_candidate"
     && state.pendingInteraction.owner === "faq"
   ) {
@@ -67,25 +76,6 @@ export const routeAfterAgentPrepare = (
     );
     if (chipMatch.kind === "choice" || state.faqSkipLlm) {
       return finalizeName;
-    }
-  }
-  // Graph-owned service_confirm from FAQ prepare. Do not skip when accepting («Так»).
-  if (
-    finalizeName
-    && isFaqPrepare
-    && state.pendingInteraction?.kind === "service_confirm"
-    && state.bookingDraft?.serviceAcceptance?.status === "pending"
-    && state.bookingDraft.replacement == null
-  ) {
-    const bookText = lastPatientText(state);
-    const offerMatch = interpretInteractionReply(
-      state.pendingInteraction,
-      bookText,
-    );
-    if (!(offerMatch.kind === "choice" && interactionChoiceEquals(offerMatch.choiceId, "accept"))) {
-      if (state.faqSkipLlm) {
-        return finalizeName;
-      }
     }
   }
 

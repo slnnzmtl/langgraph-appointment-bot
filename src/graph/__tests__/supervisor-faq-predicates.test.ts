@@ -1,573 +1,425 @@
-import { AIMessage, HumanMessage, SystemMessage } from "@langchain/core/messages";
-import { Command, Overwrite } from "@langchain/langgraph";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { HumanMessage } from "@langchain/core/messages";
+import { describe, expect, it } from "vitest";
 
-import {
-  ABANDON_BOOKING_REPLY_UK,
-  CONSULTATION_SERVICE_ID,
-  DEFAULT_MENU_HAS_VISITS,
-  DEFAULT_MENU_NO_VISITS,
-  INTENT_SKIP_LABEL,
-  MAIN_MENU_LABEL,
-  RETURN_TO_BOOKING_LABEL_UK,
-  VISIT_CHANGE_MENU,
-  VISIT_DECLINE_REPLY_UK,
-} from "../../shared/clinic-constants.js";
 import { createEmptyBookingDraft } from "../booking-draft.js";
+import { interpretBookingTurnDeterministic } from "../booking-domain/interpret.js";
+import { prepareFaqTurn } from "../agent-loop/prepare/faq.js";
+import { tryFaqNoAiFinalize, applyFaqCatalogAiFinalize } from "../agent-loop/finalize/faq.js";
+import { emptyFinalizeReply } from "../agent-loop/finalize/shared.js";
+import { routeUnderstoodTurn } from "../receptionist-route.js";
 import {
-  openVisitNoteInteraction,
-  visitMeetingChoiceLabel,
-} from "../booking-session.js";
-import type { ILLMConnector } from "../types.js";
-import {
-  specialists,
   createClinicSupervisorNode,
   faqCatalogPending,
-  serviceConfirmPending,
-  shouldRouteProcedureBrowseToFaq,
-  shouldStayInFaqCatalog,
-  stickyContinueAgentId,
   supervisorState,
 } from "./supervisor-fixtures.js";
 
-const unwrapCommandUpdate = <T extends Record<string, unknown>>(result: unknown): T => {
-  if (result instanceof Command) {
-    return (result.update ?? {}) as T;
-  }
-  return result as T;
-};
-
-
-describe("shouldRouteProcedureBrowseToFaq", () => {
-  it.each(["20 октября", "20.10", "2026-10-20"])(
-    "is false for a supported date format after a consultation offer (%s)", (date) => {
-      expect(
-        shouldRouteProcedureBrowseToFaq(
-          supervisorState({
-            pendingInteraction: serviceConfirmPending,
-            lastHandoff: {
-              agentId: "booking",
-              agentName: "Booking",
-              status: "ok",
-              replyText: "Підібрати вільний час на консультацію?",
-              replyButtons: ["Так", "Обрати іншу процедуру"],
-            },
-            messages: [
-              new AIMessage("Підібрати вільний час на консультацію?"),
-              new HumanMessage(date),
-            ],
-          }),
-        ),
-      ).toBe(false);
-    },
-  );
-
-  it("defers free-text procedure names after a consultation offer to the model", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: serviceConfirmPending,
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Підібрати вільний час на консультацію?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Підібрати вільний час на консультацію?"),
-            new HumanMessage("запиши на ботулінотерапію"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("is false after Так to a consultation offer", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: serviceConfirmPending,
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Підібрати вільний час на консультацію?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Підібрати вільний час на консультацію?"),
-            new HumanMessage("Так"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("is false after a book-this-procedure offer when they name a day", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: {
-            ...serviceConfirmPending,
-            service: { id: "svc-botox", name: "Botox", source: "catalog" },
-          },
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Бажаєте записатися на цю процедуру?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Бажаєте записатися на цю процедуру?"),
-            new HumanMessage("2 жовтня"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("defers free-text family names after a FAQ book-this-procedure offer to the model", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: {
-            ...serviceConfirmPending,
-            service: { id: "svc-botox", name: "Botox", source: "catalog" },
-          },
-          lastHandoff: {
-            agentId: "faq",
-            agentName: "FAQ",
-            status: "ok",
-            yieldToSupervisor: true,
-            replyText: "Бажаєте записатися на цю процедуру?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Чудово, обрано: Ботулінотерапія Botox, Disport 1 зона.\n\nБажаєте записатися на цю процедуру?"),
-            new HumanMessage("на ліполітики запиши"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("is false for visit-change paraphrases after a consultation offer", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: serviceConfirmPending,
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Підібрати вільний час на консультацію?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Підібрати вільний час на консультацію?"),
-            new HumanMessage("перенеси будь ласка"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("is false for a phone number after a consultation offer", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Підібрати вільний час на консультацію?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Підібрати вільний час на консультацію?"),
-            new HumanMessage("+380501112233"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("is false for English tomorrow after a consultation offer", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: serviceConfirmPending,
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Підібрати вільний час на консультацію?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Підібрати вільний час на консультацію?"),
-            new HumanMessage("tomorrow"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it("defers multi-line free text after a consultation offer to the model", () => {
-    expect(
-      shouldRouteProcedureBrowseToFaq(
-        supervisorState({
-          pendingInteraction: serviceConfirmPending,
-          lastHandoff: {
-            agentId: "booking",
-            agentName: "Booking",
-            status: "ok",
-            replyText: "Підібрати вільний час на консультацію?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
-          },
-          messages: [
-            new AIMessage("Підібрати вільний час на консультацію?"),
-            new HumanMessage("запиши на ботулінотерапію\nдякую"),
-          ],
-        }),
-      ),
-    ).toBe(false);
-  });
-
-  it.each(["НІ", "ні", "no", "не треба"] as const)(
-    "is true for bare decline %s on a consultation offer",
-    (label) => {
-      expect(
-        shouldRouteProcedureBrowseToFaq(
-          supervisorState({
-            pendingInteraction: serviceConfirmPending,
-            lastHandoff: {
-              agentId: "booking",
-              agentName: "Booking",
-              status: "ok",
-              replyText: "Підібрати вільний час на консультацію?",
-              replyButtons: ["Так", "Обрати іншу процедуру"],
-            },
-            messages: [
-              new AIMessage("Підібрати вільний час на консультацію?"),
-              new HumanMessage(label),
-            ],
-          }),
-        ),
-      ).toBe(true);
-      expect(
-        stickyContinueAgentId(
-          supervisorState({
-            pendingInteraction: serviceConfirmPending,
-            lastHandoff: {
-              agentId: "booking",
-              agentName: "Booking",
-              status: "ok",
-              replyText: "Підібрати вільний час на консультацію?",
-              replyButtons: ["Так", "Обрати іншу процедуру"],
-            },
-            messages: [
-              new AIMessage("Підібрати вільний час на консультацію?"),
-              new HumanMessage(label),
-            ],
-          }),
-        ),
-      ).toBeNull();
-    },
-  );
-
-  it.each(["Обрати іншу процедуру", "Choose another procedure"] as const)(
-    "is true for choose_other chip %s despite SUPERVISOR_OWNED",
-    (label) => {
-      expect(
-        shouldRouteProcedureBrowseToFaq(
-          supervisorState({
-            pendingInteraction: {
-              ...serviceConfirmPending,
-              service: { id: "svc-peel", name: "Пілінг поверхневий", source: "catalog" },
-              choices: [
-                { id: "accept", label: label === "Choose another procedure" ? "Yes" : "Так" },
-                { id: "choose_other", label },
-              ],
-            },
-            lastHandoff: {
-              agentId: "faq",
-              agentName: "FAQ",
-              status: "ok",
-              yieldToSupervisor: true,
-              replyText: "Бажаєте записатися на цю процедуру?",
-              replyButtons: [
-                label === "Choose another procedure" ? "Yes" : "Так",
-                label,
-              ],
-            },
-            messages: [
-              new AIMessage("Бажаєте записатися на цю процедуру?"),
-              new HumanMessage(label),
-            ],
-          }),
-        ),
-      ).toBe(true);
-    },
-  );
-
-  it("skips the LLM and routes to faq after Обрати іншу процедуру on service_confirm", async () => {
-    const invoke = vi.fn();
-    const supervisorLlm = {
-      bindRoutingTools: vi.fn(() => ({ invoke })),
-    } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
+describe("FAQ catalog via interpret + routeUnderstoodTurn", () => {
+  it("catalog_browse without session is faq_capability", () => {
+    const patch = interpretBookingTurnDeterministic({
+      rawText: "Послуги",
     });
-
-    const update = await node(
-      supervisorState({
-        pendingInteraction: {
-          ...serviceConfirmPending,
-          service: { id: "svc-peel", name: "Пілінг поверхневий", source: "catalog" },
-        },
-        lastHandoff: {
-          agentId: "faq",
-          agentName: "FAQ",
-          status: "ok",
-          yieldToSupervisor: true,
-          replyText: "Бажаєте записатися на цю процедуру?",
-          replyButtons: ["Так", "Обрати іншу процедуру"],
-        },
-        messages: [
-          new AIMessage("Бажаєте записатися на цю процедуру?"),
-          new HumanMessage("Обрати іншу процедуру"),
-        ],
-      }),
-    );
-
-    expect(invoke).not.toHaveBeenCalled();
-    expect(update).toMatchObject({
-      next: "faq",
-      lastHandoff: null,
-      availabilityContext: null,
-      bookingDraft: null,
-      pendingInteraction: null,
-    });
+    expect(routeUnderstoodTurn(patch, null).kind).toBe("faq_capability");
   });
 
-  it("routes clarifying free text via model intent=faq while keeping service_confirm", async () => {
-    const invoke = vi.fn();
-    const supervisorLlm = {
-      bindRoutingTools: vi.fn(() => ({ invoke })),
-    } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({ next: "FINISH", intent: "faq", reply: "Орієнтовна ціна…" });
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
+  it("choose_other on service_confirm is decline_pending_service → booking", () => {
+    const patch = interpretBookingTurnDeterministic({
+      rawText: "Обрати іншу процедуру",
+      awaitingServiceConfirm: true,
+      offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+      offeredChoiceLabels: ["Так", "Обрати іншу процедуру"],
     });
-    const procedureOffer = {
-      ...serviceConfirmPending,
-      service: {
-        id: "svc-hyper",
-        name: "Лікування гіпергідрозу",
-        source: "catalog" as const,
-      },
+    expect(patch).toEqual({
+      serviceIntent: { kind: "decline_pending_service" },
+    });
+    const draft = createEmptyBookingDraft();
+    draft.serviceAcceptance = {
+      status: "pending",
+      service: { id: "svc-1", name: "Ботікс", source: "catalog" },
     };
-
-    const update = await node(
-      supervisorState({
-        pendingInteraction: procedureOffer,
-        lastHandoff: {
-          agentId: "faq",
-          agentName: "FAQ",
-          status: "ok",
-          yieldToSupervisor: true,
-          replyText: "Бажаєте записатися на цю процедуру?",
-          replyButtons: ["Так", "Обрати іншу процедуру"],
-        },
-        messages: [
-          new AIMessage(
-            "Чудово, обрано: Лікування гіпергідрозу.\n\nБажаєте записатися на цю процедуру?",
-          ),
-          new HumanMessage("Скільки коштує"),
-        ],
-      }),
-    );
-
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(update.next).toBe("faq");
+    expect(routeUnderstoodTurn(patch, draft).kind).toBe("booking");
   });
 
-  it("routes named booking free text via the supervisor LLM (no visit → faq)", async () => {
-    const invoke = vi.fn();
-    const supervisorLlm = {
-      bindRoutingTools: vi.fn(() => ({ invoke })),
-    } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({ next: "faq", intent: "faq" });
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
+  it("address idleFaq routes to faq_capability", () => {
+    const patch = interpretBookingTurnDeterministic({
+      rawText: "Адреса",
     });
-
-    const update = await node(
-      supervisorState({
-        pendingInteraction: serviceConfirmPending,
-        lastHandoff: {
-          agentId: "booking",
-          agentName: "Booking",
-          status: "ok",
-          replyText: "Підібрати вільний час на консультацію?",
-          replyButtons: ["Так", "Обрати іншу процедуру"],
-        },
-        messages: [
-          new AIMessage("Підібрати вільний час на консультацію?"),
-          new HumanMessage("запиши на ботулінотерапію"),
-        ],
-      }),
-    );
-
-    expect(invoke).toHaveBeenCalledOnce();
-    expect(update.next).toBe("faq");
+    expect(patch.idleFaq?.topic).toBe("address");
+    expect(routeUnderstoodTurn(patch, null).kind).toBe("faq_capability");
   });
 });
 
-describe("shouldStayInFaqCatalog", () => {
-  const openFaqCatalogState = () =>
-    supervisorState({
+describe("FAQ prepare/finalize never assign bookingDraft", () => {
+  it("prepare multi-id page only updates pendingInteraction", async () => {
+    const state = supervisorState({
+      messages: [new HumanMessage("Сім'я")],
       pendingInteraction: {
         kind: "service_candidate",
         owner: "faq",
-        utterance: "ботулінотерапія",
+        utterance: "catalog",
         choices: [
-          { id: "svc-d", label: "Disport", serviceIds: ["svc-d"] },
-          { id: "svc-n", label: "Nabota", serviceIds: ["svc-n"] },
-          { id: "svc-b", label: "Botox", serviceIds: ["svc-b"] },
+          {
+            id: "family",
+            label: "Сім'я",
+            serviceIds: ["svc-a", "svc-b"],
+          },
         ],
       },
-      lastHandoff: {
-        agentId: "faq",
-        agentName: "FAQ",
-        status: "ok",
-        replyText: "Який препарат вас цікавить?",
-        replyButtons: ["Disport", "Nabota", "Botox"],
+      servicesContext: {
+        list: [
+          { id: "svc-a", name: "A", duration: 30 },
+          { id: "svc-b", name: "B", duration: 30 },
+          { id: "svc-c", name: "C", duration: 30 },
+        ],
+        fetchedAt: Date.now(),
       },
-      messages: [
-        new AIMessage("Який препарат вас цікавить?"),
-        new HumanMessage("запиши на ботокс"),
+      bookingDraft: null,
+    });
+    const result = await prepareFaqTurn(state, {
+      partitionCandidates: async () => [
+        { label: "A / B", serviceIds: ["svc-a", "svc-b"] },
       ],
     });
-
-  it("keeps free text in FAQ while FAQ-owned catalog interaction is open", () => {
-    expect(shouldStayInFaqCatalog(openFaqCatalogState())).toBe(true);
+    expect(result).not.toHaveProperty("kind");
+    if (!("kind" in result)) {
+      expect(Object.prototype.hasOwnProperty.call(result, "bookingDraft")).toBe(false);
+      expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    }
   });
 
-  it.each(["main menu", "MAIN MENU", "головне меню"])(
-    "leaves FAQ catalog for typed %s",
-    (line) => {
-      expect(
-        shouldStayInFaqCatalog(
-          supervisorState({
-            ...openFaqCatalogState(),
-            messages: [
-              new AIMessage("Який препарат вас цікавить?"),
-              new HumanMessage(line),
-            ],
-          }),
-        ),
-      ).toBe(false);
-      expect(
-        stickyContinueAgentId(
-          supervisorState({
-            ...openFaqCatalogState(),
-            messages: [
-              new AIMessage("Який препарат вас цікавить?"),
-              new HumanMessage(line),
-            ],
-          }),
-        ),
-      ).toBeNull();
-    },
-  );
-
-  it("stickyContinueAgentId returns faq before the session-close FAQ route", () => {
-    expect(stickyContinueAgentId(openFaqCatalogState())).toBe("faq");
-  });
-
-  it("is false when FAQ yielded a book-this-procedure offer", () => {
-    expect(
-      shouldStayInFaqCatalog(
-        supervisorState({
-          lastHandoff: {
-            agentId: "faq",
-            agentName: "FAQ",
-            status: "ok",
-            yieldToSupervisor: true,
-            replyText: "Бажаєте записатися на цю процедуру?",
-            replyButtons: ["Так", "Обрати іншу процедуру"],
+  it("prepare unique remaining from multi-choice opens FAQ highlight without bookingDraft", async () => {
+    const state = supervisorState({
+      messages: [new HumanMessage("Пілінг серединний")],
+      pendingInteraction: {
+        kind: "service_candidate",
+        owner: "faq",
+        utterance: "catalog",
+        choices: [
+          {
+            id: "g-mid",
+            label: "Пілінг серединний",
+            serviceIds: ["svc-mid"],
           },
-          messages: [
-            new AIMessage("Бажаєте записатися на цю процедуру?"),
-            new HumanMessage("на ліполітики запиши"),
+          {
+            id: "g-surf",
+            label: "Пілінг поверхневий",
+            serviceIds: ["svc-surf"],
+          },
+        ],
+      },
+      servicesContext: {
+        list: [
+          { id: "svc-mid", name: "Пілінг серединний", duration: 45 },
+          { id: "svc-surf", name: "Пілінг поверхневий", duration: 30 },
+        ],
+        fetchedAt: Date.now(),
+      },
+      bookingDraft: null,
+    });
+    const result = await prepareFaqTurn(state);
+    expect(result).not.toHaveProperty("kind");
+    expect(Object.prototype.hasOwnProperty.call(result, "bookingDraft")).toBe(false);
+    expect(result.pendingInteraction?.kind).toBe("service_candidate");
+    expect(result.pendingInteraction).toMatchObject({
+      owner: "faq",
+      choices: [{ id: "svc-mid", serviceIds: ["svc-mid"] }],
+    });
+    expect(result.faqSkipLlm).toBe(true);
+    expect(result.understoodTurn).toBeUndefined();
+    expect(result.next).toBeUndefined();
+  });
+
+  it("prepare re-tap of unique highlight is idempotent", async () => {
+    const highlight = {
+      kind: "service_candidate" as const,
+      owner: "faq" as const,
+      utterance: "catalog",
+      choices: [
+        {
+          id: "svc-mid",
+          label: "Пілінг серединний",
+          serviceIds: ["svc-mid"],
+        },
+      ],
+    };
+    const result = await prepareFaqTurn(
+      supervisorState({
+        messages: [new HumanMessage("Пілінг серединний")],
+        pendingInteraction: highlight,
+        servicesContext: {
+          list: [{ id: "svc-mid", name: "Пілінг серединний", duration: 45 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(result.pendingInteraction).toBe(highlight);
+    expect(result.faqSkipLlm).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(result, "bookingDraft")).toBe(false);
+  });
+
+  it("no-AI finalize unique highlight is informational with Записатись", () => {
+    const reply = tryFaqNoAiFinalize(
+      supervisorState({
+        pendingInteraction: {
+          kind: "service_candidate",
+          owner: "faq",
+          utterance: "catalog",
+          choices: [
+            {
+              id: "svc-mid",
+              label: "Пілінг серединний",
+              serviceIds: ["svc-mid"],
+            },
           ],
-        }),
-      ),
+        },
+        bookingDraft: null,
+        servicesContext: {
+          list: [
+            {
+              id: "svc-mid",
+              name: "Пілінг серединний",
+              duration: 45,
+              description: "Середня глибина",
+            },
+          ],
+          fetchedAt: Date.now(),
+        },
+      }),
+    );
+    expect(reply).not.toBeNull();
+    expect(reply?.replyText).toContain("Пілінг серединний");
+    expect(reply?.replyText).toContain("Середня глибина");
+    expect(reply?.replyText).toMatch(/Записатись/);
+    expect(reply?.replyText).not.toMatch(/Який варіант вам підходить/);
+    expect(reply?.replyButtons).toEqual(["Записатись", "Послуги"]);
+    expect(
+      Object.prototype.hasOwnProperty.call(reply?.patch ?? {}, "bookingDraft"),
     ).toBe(false);
   });
 
-  it("supervisor sticky-routes catalog free text without clearing pendingInteraction", async () => {
-    const invoke = vi.fn();
-    const supervisorLlm = {
-      bindRoutingTools: vi.fn(() => ({ invoke })),
-    } as unknown as ILLMConnector;
-    invoke.mockResolvedValue({ next: "booking", reply: "should not be used" });
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-    });
-    const catalogPending = openFaqCatalogState().pendingInteraction;
-
-    const update = await node(openFaqCatalogState());
-
-    expect(invoke).not.toHaveBeenCalled();
-    expect(update.next).toBe("faq");
-    expect(update.lastHandoff).toBeNull();
-    // Sticky path omits pendingInteraction — session-close must not null it.
-    expect(unwrapCommandUpdate(update).pendingInteraction).toBeUndefined();
-    expect(catalogPending?.kind).toBe("service_candidate");
-  });
-
-  it("typed main menu leaves FAQ catalog and renders the main menu", async () => {
-    const invoke = vi.fn();
-    const supervisorLlm = {
-      bindRoutingTools: vi.fn(() => ({ invoke })),
-    } as unknown as ILLMConnector;
-    const node = createClinicSupervisorNode({
-      specialists,
-      supervisorLlm,
-      loadSupervisorPrompt: () => "STATIC",
-    });
-
-    const update = await node(
+  it("no-AI finalize does not set bookingDraft", () => {
+    const catalog = faqCatalogPending(["A", "B"]);
+    const reply = tryFaqNoAiFinalize(
       supervisorState({
-        ...openFaqCatalogState(),
-        messages: [
-          new AIMessage("Який препарат вас цікавить?"),
-          new HumanMessage("main menu"),
-        ],
+        pendingInteraction: catalog,
+        bookingDraft: null,
+        servicesContext: {
+          list: [
+            { id: "svc-0", name: "A", duration: 30 },
+            { id: "svc-1", name: "B", duration: 30 },
+          ],
+          fetchedAt: Date.now(),
+        },
       }),
     );
+    expect(reply).not.toBeNull();
+    expect(
+      Object.prototype.hasOwnProperty.call(reply?.patch ?? {}, "bookingDraft"),
+    ).toBe(false);
+    expect(reply?.yieldToSupervisor).toBe(false);
+    expect(reply?.replyText).toMatch(/Який варіант вам підходить/);
+  });
 
-    expect(invoke).not.toHaveBeenCalled();
-    expect(update.next).toBe("FINISH");
-    expect(update.lastHandoff?.replyButtons).toEqual([...DEFAULT_MENU_NO_VISITS]);
-    const reply = String(update.lastHandoff?.replyText ?? "");
-    expect(reply).toContain("Привіт! Я ШІ-асистент");
-    expect(reply).toContain("Чим можу допомогти?");
-    expect(unwrapCommandUpdate(update).pendingInteraction).toBeNull();
+  it("AI catalog finalize does not write bookingDraft on root open", async () => {
+    const { reply, serviceOfferUpdate } = await applyFaqCatalogAiFinalize(
+      supervisorState({
+        pendingInteraction: null,
+        bookingDraft: null,
+        servicesContext: {
+          list: [
+            { id: "svc-a", name: "Ботокс лоб", duration: 30 },
+            { id: "svc-b", name: "Ботокс очі", duration: 30 },
+          ],
+          fetchedAt: Date.now(),
+        },
+      }),
+      emptyFinalizeReply("ok"),
+      "open catalog\n<faq_catalog_action>open_catalog</faq_catalog_action>",
+      {
+        partitionCandidates: async () => [
+          { label: "Ботокс", serviceIds: ["svc-a", "svc-b"] },
+        ],
+      },
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(serviceOfferUpdate, "bookingDraft"),
+    ).toBe(false);
+    expect(reply.yieldToSupervisor).toBe(false);
+  });
+
+  it("AI unique open_catalog renders informational highlight not a picker", async () => {
+    const { reply, serviceOfferUpdate } = await applyFaqCatalogAiFinalize(
+      supervisorState({
+        pendingInteraction: null,
+        bookingDraft: null,
+        servicesContext: {
+          list: [
+            { id: "svc-mid", name: "Пілінг серединний", duration: 45 },
+          ],
+          fetchedAt: Date.now(),
+        },
+      }),
+      emptyFinalizeReply("ok"),
+      [
+        "Ось про пілінг",
+        '<faq_catalog_action action="open_catalog" query="Пілінг серединний"/>',
+      ].join("\n"),
+    );
+    expect(
+      Object.prototype.hasOwnProperty.call(serviceOfferUpdate, "bookingDraft"),
+    ).toBe(false);
+    expect(serviceOfferUpdate.pendingInteraction).toMatchObject({
+      kind: "service_candidate",
+      owner: "faq",
+      choices: [{ id: "svc-mid", serviceIds: ["svc-mid"] }],
+    });
+    expect(reply.replyText).toContain("Пілінг серединний");
+    expect(reply.replyText).not.toMatch(/Який варіант вам підходить/);
+    expect(reply.replyButtons).toEqual(["Записатись", "Послуги"]);
   });
 });
 
+describe("FAQ highlight book_highlighted promotion", () => {
+  const highlightInteraction = {
+    kind: "service_candidate" as const,
+    owner: "faq" as const,
+    utterance: "botox",
+    choices: [
+      {
+        id: "svc-botox",
+        label: "Botox",
+        serviceIds: ["svc-botox"],
+      },
+    ],
+  };
+
+  it("promotes book_highlighted to catalog_service when the CRM row is current", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("book this one")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: {
+          list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: {
+        kind: "catalog_service",
+        serviceId: "svc-botox",
+        serviceName: "Botox CRM",
+      },
+    });
+  });
+
+  it("clears stale highlight and replies when the CRM row is missing", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("book this one")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: {
+          list: [{ id: "svc-other", name: "Other", duration: 30 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toMatch(/каталозі|catalog/i);
+    expect(update.understoodTurn).toBeNull();
+  });
+
+  it("refetches catalog and promotes book_highlighted when servicesContext was absent", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
+      loadServices: async () => ({
+        list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+        fetchedAt: Date.now(),
+      }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Записатись")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: null,
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: {
+        kind: "catalog_service",
+        serviceId: "svc-botox",
+        serviceName: "Botox CRM",
+      },
+    });
+    expect(update.servicesContext?.list).toHaveLength(1);
+  });
+
+  it("does not claim catalog removal when servicesContext is absent and refetch fails", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "book_highlighted" } }),
+      loadServices: async () => null,
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Записатись")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: null,
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("FINISH");
+    expect(update.pendingInteraction).toBeNull();
+    expect(update.lastHandoff?.replyText).toMatch(/перевірити|verify/i);
+    expect(update.lastHandoff?.replyText).not.toMatch(/більше не|no longer/i);
+  });
+
+  it("routes consultation to booking without promoting Botox on FAQ highlight", async () => {
+    const node = createClinicSupervisorNode({
+      interpretTurn: async () => ({ serviceIntent: { kind: "consultation" } }),
+    });
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Хочу консультацію")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: {
+          list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).toBe("booking");
+    expect(update.understoodTurn).toEqual({
+      serviceIntent: { kind: "consultation" },
+    });
+  });
+
+  it("does not start Botox booking when patient says yes without service confirm", async () => {
+    const node = createClinicSupervisorNode();
+    const update = await node(
+      supervisorState({
+        messages: [new HumanMessage("Так")],
+        pendingInteraction: highlightInteraction,
+        servicesContext: {
+          list: [{ id: "svc-botox", name: "Botox CRM", duration: 30 }],
+          fetchedAt: Date.now(),
+        },
+        bookingDraft: null,
+      }),
+    );
+    expect(update.next).not.toBe("booking");
+    expect(update.understoodTurn?.serviceIntent?.kind).not.toBe("catalog_service");
+  });
+});

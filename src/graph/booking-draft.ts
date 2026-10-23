@@ -75,6 +75,32 @@ export type RequestedBookingTime = {
   status: "pending" | "unavailable";
 };
 
+/** Unverified schedule request retained across catalog / service-confirm messages. */
+export type DeferredScheduleRequest = {
+  date?: string;
+  preferredTime?: string;
+  relative?: "nearest" | "earlier" | "later";
+};
+
+/** Unverified informational side question retained with a deferred schedule. */
+export type DeferredInformationalRequest = {
+  question: string;
+  topic: "hours" | "address" | "price" | "catalog" | "other";
+};
+
+/**
+ * Consume-once remainder of a compound booking turn.
+ * Survives catalog selection and service confirmation for the same bookingAttemptId.
+ * Cleared on abandon, explicit service replacement, or incompatible evidence.
+ */
+export type DeferredBookingTurn = {
+  bookingAttemptId: string;
+  /** In-flight effect this remainder waits on; null while a catalog/confirm card is open. */
+  boundEffectId: string | null;
+  schedule?: DeferredScheduleRequest;
+  informational?: DeferredInformationalRequest;
+};
+
 export type PendingBookingCommand = {
   action: BookingMode | "cancel";
   payload: Record<string, unknown>;
@@ -137,11 +163,42 @@ export type BookingDraft = {
    * Callbacks not in this set are rejected; reply-keyboard labels are never matched.
    */
   offeredChoiceIds?: string[] | null;
+  /**
+   * Stable id for this create/reschedule attempt. Set by booking_started.
+   * Survives catalog selection before a service is accepted.
+   */
+  bookingAttemptId?: string | null;
+  /**
+   * Unverified schedule / informational remainder for this attempt.
+   * Never stores a verified slot.
+   */
+  deferredTurn?: DeferredBookingTurn | null;
+  /**
+   * One-shot: REPLACE cancel completed and the composer should acknowledge
+   * before the next catalog / service step. Cleared when consumed.
+   */
+  replaceCancelAck?: boolean | null;
+  /**
+   * One-shot verified reply facts (e.g. deferred price) carried across an effect
+   * chain until booking__respond prefixes them and clears.
+   */
+  pendingReplyFacts?: {
+    servicePrice?: string;
+    serviceName?: string;
+    serviceId?: string;
+    hours?: string;
+    address?: string;
+  } | null;
 };
 
 export type BookingEvent =
   | { type: "service_selected"; service: BookingService; accepted?: boolean; turn?: number }
   | { type: "service_accepted"; turn?: number }
+  /**
+   * Drop the current service ladder (date/slot/note/deferred/reply facts) without
+   * abandoning the booking attempt — used before applying this-turn switch facts.
+   */
+  | { type: "service_invalidated" }
   | { type: "date_selected"; date: string }
   | { type: "schedule_requested"; date: string; preferredTime?: string }
   | {
@@ -168,9 +225,27 @@ export type BookingEvent =
   | { type: "cancel_existing_requested"; command: PendingBookingCommand }
   | { type: "cancel_existing_completed" }
   | { type: "cancel_existing_declined" }
+  | { type: "replace_cancel_ack_cleared" }
   | { type: "slot_invalidated"; keepDate?: boolean }
   | { type: "draft_abandoned" }
   | { type: "draft_resumed" }
+  /** Open a create session before service selection (compound book turn). */
+  | { type: "booking_started"; bookingAttemptId: string }
+  | {
+      type: "deferred_turn_set";
+      deferred: DeferredBookingTurn;
+    }
+  | {
+      type: "deferred_turn_cleared";
+      reason: "consumed" | "superseded" | "abandoned" | "incompatible" | "replaced";
+    }
+  | {
+      type: "deferred_turn_bound";
+      boundEffectId: string | null;
+    }
+  | {
+      type: "deferred_informational_consumed";
+    }
   // Schema-2 atomic cutover: pending effect + decision + slot provenance.
   | { type: "effect_prepared"; effect: PendingEffect }
   | { type: "effect_status"; status: PendingEffectStatus }
@@ -183,7 +258,12 @@ export type BookingEvent =
       evidence?: SlotAvailabilityEvidence | null;
     }
   | { type: "choices_offered"; choiceIds: string[] }
-  | { type: "choices_cleared" };
+  | { type: "choices_cleared" }
+  | {
+      type: "reply_facts_set";
+      facts: NonNullable<BookingDraft["pendingReplyFacts"]>;
+    }
+  | { type: "reply_facts_cleared" };
 
 /**
  * Patient-submit name normalize: trim only. Preserve submitted casing.
@@ -475,7 +555,11 @@ export const isEmptyLegacyBookingDraft = (
   && draft.note?.value == null
   && draft.pendingCommand == null
   && draft.rescheduleTarget == null
-  && draft.replacement == null;
+  && draft.replacement == null
+  && (draft.bookingAttemptId == null || draft.bookingAttemptId === "")
+  && draft.deferredTurn == null
+  && draft.pendingEffect == null
+  && draft.pendingDecision == null;
 
 /** True when selectedSlot may drive progression (runtime-stamped with evidence). */
 const draftHasVerifiedSlot = (draft: BookingDraft): boolean => {
@@ -571,6 +655,9 @@ export const createEmptyBookingDraft = (): BookingDraft => ({
   slotEvidence: null,
   pendingEffect: null,
   offeredChoiceIds: null,
+  bookingAttemptId: null,
+  deferredTurn: null,
+  pendingReplyFacts: null,
 });
 
 const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">): BookingDraft => ({
@@ -578,7 +665,10 @@ const withVersion = (draft: BookingDraft, update: Omit<BookingDraft, "version">)
   version: draft.version + 1,
 });
 
-const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => ({
+const clearDownstream = (
+  draft: BookingDraft,
+  options?: { clearDeferred?: boolean; preserveNote?: boolean },
+): Omit<BookingDraft, "version"> => ({
   ...draft,
   phase: "service",
   selectedDate: null,
@@ -586,11 +676,18 @@ const clearDownstream = (draft: BookingDraft): Omit<BookingDraft, "version"> => 
   slotProvenance: null,
   slotEvidence: null,
   requestedTime: null,
-  note: { status: "unasked" },
+  // First catalog selection keeps a compound-turn note; explicit service switch resets it.
+  note: options?.preserveNote === true ? draft.note : { status: "unasked" },
   pendingCommand: null,
   pendingDecision: null,
   rescheduleTarget: draft.rescheduleTarget ?? null,
   replacement: null,
+  // Explicit replacement of an accepted/pending service clears deferred requests
+  // and one-shot reply facts from the previous service.
+  // First catalog selection keeps them for the same bookingAttemptId.
+  ...(options?.clearDeferred === true
+    ? { deferredTurn: null, pendingReplyFacts: null }
+    : {}),
 });
 
 const slotDate = (slot: SelectedBookingSlot): string => slot.dateStart.slice(0, 10);
@@ -600,6 +697,13 @@ const hasCompletedNote = (draft: BookingDraft): boolean =>
 
 const openFromNull = (event: BookingEvent): BookingDraft | null => {
   switch (event.type) {
+    case "booking_started": {
+      const opened: BookingDraft = {
+        ...createEmptyBookingDraft(),
+        bookingAttemptId: event.bookingAttemptId,
+      };
+      return { ...opened, phase: bookingDraftPhase(opened), version: 1 };
+    }
     case "service_selected": {
       const acceptance: ServiceAcceptance = {
         status: event.accepted ? "accepted" : "pending",
@@ -641,6 +745,15 @@ const openFromNull = (event: BookingEvent): BookingDraft | null => {
           meeting: event.meeting,
           status: "offered",
         },
+        version: 1,
+      };
+    }
+    // After draft_abandoned (e.g. decline_pending_service → list_services), reopen
+    // a bare create draft so the pending effect is not dropped on null.
+    case "effect_prepared": {
+      return {
+        ...createEmptyBookingDraft(),
+        pendingEffect: event.effect,
         version: 1,
       };
     }
@@ -693,7 +806,12 @@ export const reduceBookingDraft = (
           }),
         });
       }
-      const reset = clearDownstream(draft);
+      // Replacing a different service clears deferred; first selection keeps it.
+      const reset = clearDownstream(draft, {
+        clearDeferred: existing != null,
+        // First selection (no prior service) keeps compound-turn note/contact facts.
+        preserveNote: existing == null,
+      });
       const acceptance: ServiceAcceptance = {
         status: event.accepted ? "accepted" : "pending",
         service: event.service,
@@ -722,6 +840,22 @@ export const reduceBookingDraft = (
         },
       } satisfies Omit<BookingDraft, "version">;
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
+    }
+    case "service_invalidated": {
+      // Keep bookingAttemptId / contact; drop service ladder + deferred + reply facts.
+      const reset = clearDownstream(draft, {
+        clearDeferred: true,
+        preserveNote: false,
+      });
+      return withVersion(draft, {
+        ...reset,
+        serviceAcceptance: null,
+        phase: bookingDraftPhase({
+          ...reset,
+          serviceAcceptance: null,
+          version: draft.version,
+        }),
+      });
     }
     case "date_selected": {
       if (
@@ -813,7 +947,9 @@ export const reduceBookingDraft = (
       return withVersion(draft, { ...next, phase: bookingDraftPhase({ ...next, version: draft.version }) });
     }
     case "note_status": {
-      if (draft.mode === "reschedule" || draft.selectedSlot == null) {
+      // Reschedule never collects a visit note. Compound book turns may stash a
+      // note before a slot exists; the note ladder still asks after slot when unasked.
+      if (draft.mode === "reschedule") {
         return draft;
       }
       const next = {
@@ -1006,6 +1142,7 @@ export const reduceBookingDraft = (
           mode: "create" as const,
           pendingCommand: null,
           replacement: null,
+          replaceCancelAck: true,
         };
         return withVersion(draft, {
           ...cleared,
@@ -1020,8 +1157,11 @@ export const reduceBookingDraft = (
         replacement: draft.replacement
           ? { ...draft.replacement, status: "create_pending" }
           : null,
+        replaceCancelAck: true,
       });
     }
+    case "replace_cancel_ack_cleared":
+      return withVersion(draft, { ...draft, replaceCancelAck: null });
     case "cancel_existing_declined":
       // The existing appointment is still active; never leave a ready create
       // draft behind or the graph will immediately replay Already booked.
@@ -1050,6 +1190,56 @@ export const reduceBookingDraft = (
       return withVersion(draft, { ...draft, phase: bookingDraftPhase(draft) });
     case "draft_abandoned":
       return null;
+    case "booking_started": {
+      // Already open: refresh attempt id only when none exists yet.
+      if (draft.bookingAttemptId != null && draft.bookingAttemptId.length > 0) {
+        return draft;
+      }
+      return withVersion(draft, {
+        ...draft,
+        bookingAttemptId: event.bookingAttemptId,
+      });
+    }
+    case "deferred_turn_set":
+      return withVersion(draft, {
+        ...draft,
+        deferredTurn: event.deferred,
+        bookingAttemptId: draft.bookingAttemptId ?? event.deferred.bookingAttemptId,
+      });
+    case "deferred_turn_cleared":
+      if (draft.deferredTurn == null) {
+        return draft;
+      }
+      return withVersion(draft, { ...draft, deferredTurn: null });
+    case "deferred_turn_bound": {
+      if (draft.deferredTurn == null) {
+        return draft;
+      }
+      return withVersion(draft, {
+        ...draft,
+        deferredTurn: {
+          ...draft.deferredTurn,
+          boundEffectId: event.boundEffectId,
+        },
+      });
+    }
+    case "deferred_informational_consumed": {
+      if (draft.deferredTurn == null) {
+        return draft;
+      }
+      const { informational: _removed, ...rest } = draft.deferredTurn;
+      if (rest.schedule == null) {
+        return withVersion(draft, { ...draft, deferredTurn: null });
+      }
+      return withVersion(draft, {
+        ...draft,
+        deferredTurn: {
+          bookingAttemptId: rest.bookingAttemptId,
+          boundEffectId: rest.boundEffectId,
+          schedule: rest.schedule,
+        },
+      });
+    }
     case "effect_prepared":
       return withVersion(draft, { ...draft, pendingEffect: event.effect });
     case "effect_status": {
@@ -1101,5 +1291,12 @@ export const reduceBookingDraft = (
       });
     case "choices_cleared":
       return withVersion(draft, { ...draft, offeredChoiceIds: null });
+    case "reply_facts_set":
+      return withVersion(draft, {
+        ...draft,
+        pendingReplyFacts: { ...event.facts },
+      });
+    case "reply_facts_cleared":
+      return withVersion(draft, { ...draft, pendingReplyFacts: null });
   }
 };

@@ -1,4 +1,5 @@
 import {
+  BOOKING_OFFER_MENU,
   CONFIRM_NO_LABEL,
   CONFIRM_YES_LABEL,
   CONSULTATION_SERVICE_ID,
@@ -18,6 +19,7 @@ import {
   openBookingSession,
   prepareFreshContact,
 } from "./booking-helpers.js";
+import { openBookingOffer } from "./offer-helpers.js";
 import type { CallRecord, SmokeScenario } from "../types.js";
 
 /** MCP writes that must never run in this read-only booking invoke smoke. */
@@ -60,8 +62,10 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
     await prepareFreshContact(ctx, telegramId);
     const bundle = openBookingSession(ctx, "booking-free-text-typed-slot", telegramId);
     try {
-      const opened = await bundle.session.say(
-        "Доброго дня. Можливо записатися на прийом?",
+      // Receptionist may open catalog first; drive to consultation BOOKING OFFER.
+      const opened = await openBookingOffer(
+        bundle.session,
+        "booking-free-text-typed-slot",
       );
       expectInteraction(
         "booking-free-text-typed-slot open",
@@ -84,10 +88,15 @@ export const bookingFreeTextTypedSlotScenario: SmokeScenario = {
       );
       assertNoWrites("booking-free-text-typed-slot open", opened.calls);
 
-      const accepted = await bundle.session.say("Так");
+      const acceptLabel = opened.buttons.includes(BOOKING_OFFER_MENU[0])
+        ? BOOKING_OFFER_MENU[0]
+        : "Так";
+      const accepted = opened.buttons.includes(acceptLabel)
+        ? await bundle.session.tap(acceptLabel)
+        : await bundle.session.say(acceptLabel);
       if (accepted.state.bookingDraft?.serviceAcceptance?.status !== "accepted") {
         throw new SmokeAssertError(
-          "booking-free-text-typed-slot: service was not accepted after Так",
+          `booking-free-text-typed-slot: service was not accepted after ${acceptLabel} (pending=${accepted.state.pendingInteraction?.kind ?? "null"} status=${accepted.state.bookingDraft?.serviceAcceptance?.status ?? "null"})`,
         );
       }
       if (accepted.state.bookingDraft == null) {

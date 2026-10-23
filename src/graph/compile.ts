@@ -41,7 +41,6 @@ import {
   createBookingRespondNode,
 } from "./agent-loop/booking-respond.js";
 import { createBookingTurnInterpreter } from "./agent-loop/booking-turn-interpreter.js";
-import { createNoteTurnClassifier } from "./booking-note-classifier.js";
 import {
   createServiceCandidatePartitioner,
   createServiceCandidateSelector,
@@ -81,20 +80,19 @@ export type CompileClinicGraphOptions = {
   agentModel: BaseChatModel;
   agentModelName?: string;
   supervisorLlm: ILLMConnector;
-  loadSupervisorPrompt: () => string;
-  buildSupervisorDynamicContext?: () => string;
   formatSystemMetadata: (date: Date, options?: { runtimeAgent?: string }) => string;
   messageHistoryMaxTokens: number;
   checkpointer?: BaseCheckpointSaver;
+  /** Optional Gemini context cache for the FAQ LLM only (not supervisor). */
   contextCache?: SupervisorContextCacheOptions;
   /** When set, supervisor prefetches Telegram contact and planned meetings. */
   bookingPrefetchCallTool?: McpCallTool;
   /** Override checkpoint prefetch TTL (default PREFETCH_TTL_MS). */
   prefetchTtlMs?: number;
-  /** Injected note-turn classifier (tests / legacy FAQ helpers). */
-  classifyNoteTurn?: ReturnType<typeof createNoteTurnClassifier>;
   /** Injected booking turn interpreter (tests). */
   interpretBookingTurn?: ReturnType<typeof createBookingTurnInterpreter>;
+  /** Espo assigned user for create_meeting HITL CRM command freeze. */
+  assignedUserId?: string;
 };
 
 const assertClinicSpecialists = (specialists: ClinicSpecialists): void => {
@@ -152,19 +150,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     ...(loadServices != null ? { loadServices } : {}),
   };
 
-  const supervisorNode = createClinicSupervisorNode({
-    specialists: options.specialists,
-    supervisorLlm: options.supervisorLlm,
-    loadSupervisorPrompt: options.loadSupervisorPrompt,
-    ...(options.buildSupervisorDynamicContext
-      ? { buildSupervisorDynamicContext: options.buildSupervisorDynamicContext }
-      : {}),
-    ...(prefetch ? { prefetch } : {}),
-    prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
-    ...(options.contextCache ? { contextCache: options.contextCache } : {}),
-    ...(loadServices != null ? { loadServices } : {}),
-  });
-
   const faqPrepare = FAQ_PREPARE;
   const faqLlm = FAQ_LLM;
   const faqTools = FAQ_TOOLS;
@@ -193,6 +178,13 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   const interpretBookingTurn = options.interpretBookingTurn
     ?? createBookingTurnInterpreter(options.supervisorLlm);
 
+  const supervisorNodeWithIngress = createClinicSupervisorNode({
+    ...(prefetch ? { prefetch } : {}),
+    prefetchTtlMs: options.prefetchTtlMs ?? PREFETCH_TTL_MS,
+    interpretTurn: interpretBookingTurn,
+    ...(loadServices != null ? { loadServices } : {}),
+  });
+
   const supervisorRoutes: Record<
     ClinicRouteId,
     typeof END | typeof FAQ_PREPARE | typeof BOOKING_DECIDE
@@ -203,8 +195,11 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
   };
 
   const compiled = new StateGraph(stateAnnotation)
-    .addNode("supervisor", supervisorNode)
-    .addNode(faqPrepare, createFaqPrepareNode(faqCatalogOptions))
+    .addNode("supervisor", supervisorNodeWithIngress)
+    .addNode(
+      faqPrepare,
+      createFaqPrepareNode(faqCatalogOptions),
+    )
     .addNode(
       faqLlm,
       createAgentLlmNode({
@@ -224,12 +219,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addConditionalEdges(
       faqPrepare,
       (state: ClinicState) =>
+        // Idle unique chips no longer hand off here; explicit book promotes in supervisor.
         routeAfterAgentPrepare(
           state,
           faqLlm,
-          undefined,
-          undefined,
           faqFinalize,
+          undefined,
           FAQ_AGENT_ID,
         ),
       {
@@ -270,6 +265,9 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
         interpretTurn: interpretBookingTurn,
         selectCandidates: faqSelectCandidates,
         partitionCandidates: faqPartitionCandidates,
+        ...(options.assignedUserId != null
+          ? { assignedUserId: options.assignedUserId }
+          : {}),
       }),
     )
     .addNode(bookingTools, createAgentToolsNode(bookingToolList, BOOKING_AGENT_ID))
@@ -283,17 +281,12 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addConditionalEdges(
       bookingDecide,
       (state: ClinicState) => {
-        // REPLACE cancel with no accepted service: decide sets next=faq.
-        if (state.next === FAQ_AGENT_ID) {
-          return faqPrepare;
-        }
         if (hasPendingToolCalls(state.agentMessages)) {
           return bookingTools;
         }
         return bookingRespond;
       },
       {
-        [faqPrepare]: faqPrepare,
         [bookingTools]: bookingTools,
         [bookingRespond]: bookingRespond,
       },

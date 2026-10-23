@@ -1,3 +1,4 @@
+import { Overwrite } from "@langchain/langgraph";
 import type { ServicesContext } from "../../../tools/service-tools.js";
 import type {
   PartitionServiceCandidates,
@@ -5,8 +6,7 @@ import type {
 } from "../../service-resolution.js";
 import type { ClinicState, ClinicStateUpdate } from "../../state.js";
 import { stripToolNoiseFromMessages } from "../../supervisor-history.js";
-import { Overwrite } from "@langchain/langgraph";
-import { isReplaceCancelCreateDraft, prepareFaqTurn } from "./faq.js";
+import { prepareFaqTurn } from "./faq.js";
 
 export type CreateFaqPrepareOptions = {
   partitionCandidates?: PartitionServiceCandidates;
@@ -22,16 +22,18 @@ const wipeAgentTape = (state: ClinicState): ClinicStateUpdate => ({
   stepCount: 0,
 });
 
+/**
+ * FAQ prepare node. Always returns a state update; routing to llm / finalize /
+ * booking is owned solely by routeAfterAgentPrepare (no Command dual-route).
+ */
 export const createFaqPrepareNode = (
   options?: CreateFaqPrepareOptions,
 ) =>
   async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const faqUpdate = await prepareFaqTurn(state, options);
-    // REPLACE cancel continue: keep cancel_meeting ToolMessage so FAQ finalize
-    // can prefix «Запис скасовано.» (wipe would erase the committed ack).
-    const keepCancelTape = isReplaceCancelCreateDraft(state);
     return {
-      ...(keepCancelTape ? { stepCount: 0 } : wipeAgentTape(state)),
+      ...wipeAgentTape(state),
       ...faqUpdate,
     };
   };
+

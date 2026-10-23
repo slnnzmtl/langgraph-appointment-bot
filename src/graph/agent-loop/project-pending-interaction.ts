@@ -9,6 +9,10 @@ import {
   MAIN_MENU_LABEL,
   SERVICE_CONFIRM_CHOOSE_OTHER_ALIASES,
 } from "../../shared/clinic-constants.js";
+import {
+  bookingOfferLabels,
+  type ConversationLocale,
+} from "../../shared/conversation-locale.js";
 import type { AvailabilityContext } from "../../tools/availability-tools.js";
 import type { BookingDraft } from "../booking-draft.js";
 import type { BookingDecision, BookingViewCard } from "../booking-domain/decision.js";
@@ -30,6 +34,18 @@ const choicesFromIds = (
     label: labels?.[id] ?? id,
   }));
 
+const serviceConfirmLabels = (
+  locale: ConversationLocale,
+  cardLabels?: Record<string, string>,
+): Record<string, string> => {
+  const offer = bookingOfferLabels(locale);
+  return {
+    offer_accept: cardLabels?.offer_accept ?? offer.acceptLabel,
+    offer_choose_other: cardLabels?.offer_choose_other ?? offer.chooseOtherLabel,
+    ...cardLabels,
+  };
+};
+
 const snapshotFromAvailability = (
   context: AvailabilityContext | null,
   snapshotId: string,
@@ -49,6 +65,7 @@ const projectCard = (
   card: BookingViewCard,
   draft: BookingDraft | null,
   availabilityContext: AvailabilityContext | null,
+  locale: ConversationLocale,
 ): PendingInteraction | null => {
   switch (card.kind) {
     case "service_confirm": {
@@ -60,7 +77,10 @@ const projectCard = (
           ...(service?.name != null ? { name: service.name } : {}),
           source: service?.source ?? "catalog",
         },
-        choices: choicesFromIds(card.choiceIds, card.labels).map((choice) =>
+        choices: choicesFromIds(
+          card.choiceIds,
+          serviceConfirmLabels(locale, card.labels),
+        ).map((choice) =>
           choice.id === "offer_choose_other"
             ? {
               ...choice,
@@ -162,6 +182,8 @@ export type ProjectPendingInteractionInput = {
   draft: BookingDraft | null;
   availabilityContext: AvailabilityContext | null;
   previousInteraction: PendingInteraction | null;
+  /** Session locale for localized chip labels (kernel stays language-neutral). */
+  locale?: ConversationLocale;
 };
 
 /**
@@ -171,7 +193,13 @@ export type ProjectPendingInteractionInput = {
 export const projectPendingInteraction = (
   input: ProjectPendingInteractionInput,
 ): PendingInteraction | null => {
-  const { decision, draft, availabilityContext, previousInteraction } = input;
+  const {
+    decision,
+    draft,
+    availabilityContext,
+    previousInteraction,
+    locale = "uk",
+  } = input;
   if (decision.card == null) {
     // Keep open chips while an effect/HITL tool round-trip runs (list_services,
     // availability, …). Clearing here dropped visit_note/DATE/TIME mid-fetch.
@@ -189,5 +217,5 @@ export const projectPendingInteraction = (
     }
     return previousInteraction;
   }
-  return projectCard(decision.card, draft, availabilityContext);
+  return projectCard(decision.card, draft, availabilityContext, locale);
 };

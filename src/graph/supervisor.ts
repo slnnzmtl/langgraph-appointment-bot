@@ -11,12 +11,10 @@ export {
 } from "./supervisor/node.js";
 export { isPrefetchExpired } from "./supervisor/context.js";
 export {
-  isVisitChangeRouteLabel,
-  shouldContinueInBooking,
-  shouldContinueInFaq,
-  shouldContinueInSpecialist,
-  shouldRouteProcedureBrowseToFaq,
-  shouldStayInFaqCatalog,
-  stickyContinueAgentId,
+  classifyCancelTap,
+  isGreetingOrMainMenuLine,
+  isDayOrTimeReply,
+  isOtherDateReply,
+  isPendingRescheduleSelection,
 } from "./supervisor/routing-predicates.js";
 export { isVisitStatusSignal } from "./supervisor/visit-status.js";

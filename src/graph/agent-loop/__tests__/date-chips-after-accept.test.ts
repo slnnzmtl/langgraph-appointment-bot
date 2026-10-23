@@ -104,9 +104,9 @@ describe("date chips after service accept", () => {
   it("Overwrite-clears stale ToolMessages so a recycled effect id stays pending", async () => {
     const staleId = "eff_1_present_availability";
     const node = createBookingDecideNode({
-      interpretTurn: async () => ({
-        serviceIntent: { kind: "confirm_pending_service" },
-      }),
+      interpretTurn: async () => {
+        throw new Error("decide must not re-interpret");
+      },
     });
 
     const update = await node({
@@ -129,6 +129,7 @@ describe("date chips after service accept", () => {
         }),
       ],
       bookingDraft: draftPendingConsult(),
+      understoodTurn: { serviceIntent: { kind: "confirm_pending_service" } },
       pendingInteraction: {
         kind: "service_confirm",
         serviceId: CONSULTATION_SERVICE_ID,

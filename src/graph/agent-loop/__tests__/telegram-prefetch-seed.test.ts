@@ -90,7 +90,7 @@ describe("seedDraftFromTelegramPrefetch", () => {
 describe("createBookingDecideNode telegram prefetch seed", () => {
   it("goes to create HITL without asking phone when telegram CRM is complete", async () => {
     // Empty patient text → decideFromRequirement (seed already applied).
-    const node = createBookingDecideNode();
+    const node = createBookingDecideNode({ assignedUserId: "assigned-user-1" });
     const update = await node({
       messages: [new HumanMessage("")],
       agentMessages: [],

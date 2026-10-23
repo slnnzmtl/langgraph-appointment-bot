@@ -80,19 +80,19 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
         awaitingContactField: "phoneNumber",
       }),
     ).toEqual({});
-    // Main-menu label is control, not a format error (phone or name).
+    // Main-menu label is control even on open contact fields (no routing LLM).
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Головне меню",
         awaitingContactField: "firstName",
       }),
-    ).toEqual({});
+    ).toEqual({ controlIntent: { kind: "main_menu" } });
     expect(
       interpretBookingTurnDeterministic({
         rawText: "Головне меню",
         awaitingContactField: "phoneNumber",
       }),
-    ).toEqual({});
+    ).toEqual({ controlIntent: { kind: "main_menu" } });
     // Structured LLM applies a clear firstName; hedges yield no name patch.
     expect(
       normalizeBookingTurnClassification(
@@ -172,6 +172,116 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
         offeredChoiceIds: ["offer_accept", "offer_choose_other"],
       }).serviceIntent,
     ).toEqual({ kind: "decline_pending_service" });
+  });
+
+  it("resolves session accept callback against kernel offer_accept ids", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Так",
+        callbackChoiceId: "accept",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+        offeredChoiceLabels: ["Так", "Обрати іншу процедуру"],
+      }).serviceIntent,
+    ).toEqual({ kind: "confirm_pending_service" });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Обрати іншу процедуру",
+        callbackChoiceId: "choose_other",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: ["offer_accept", "offer_choose_other"],
+      }).serviceIntent,
+    ).toEqual({ kind: "decline_pending_service" });
+  });
+
+  it("maps book this one to book_highlighted only when FAQ highlight is open", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "book this one",
+        faqHighlightOpen: true,
+      }),
+    ).toEqual({ serviceIntent: { kind: "book_highlighted" } });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "book this one",
+      }),
+    ).toEqual({});
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Записатись",
+        faqHighlightOpen: true,
+      }),
+    ).toEqual({ serviceIntent: { kind: "book_highlighted" } });
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "Записатись",
+      }),
+    ).toEqual({ serviceIntent: { kind: "consultation" } });
+  });
+
+  it("keeps consultation and yes separate from book_highlighted on FAQ highlight", () => {
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "consultation" },
+        { rawText: "I want a consultation", faqHighlightOpen: true },
+      ).serviceIntent,
+    ).toEqual({ kind: "consultation" });
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "confirm_pending_service" },
+        { rawText: "yes", faqHighlightOpen: true },
+      ).serviceIntent,
+    ).toBeUndefined();
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "confirm_pending_service" },
+        {
+          rawText: "Так",
+          faqHighlightOpen: true,
+          awaitingServiceConfirm: true,
+        },
+      ).serviceIntent,
+    ).toEqual({ kind: "confirm_pending_service" });
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "book_highlighted" },
+        { rawText: "book this one", faqHighlightOpen: true },
+      ).serviceIntent,
+    ).toEqual({ kind: "book_highlighted" });
+
+    expect(
+      normalizeBookingTurnClassification(
+        { serviceIntentKind: "book_highlighted" },
+        { rawText: "book this one", faqHighlightOpen: false },
+      ).serviceIntent,
+    ).toBeUndefined();
+  });
+
+  it("rejects unoffered accept callback even while awaitingServiceConfirm", () => {
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "",
+        callbackChoiceId: "accept",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: [],
+      }),
+    ).toEqual({});
+
+    expect(
+      interpretBookingTurnDeterministic({
+        rawText: "",
+        callbackChoiceId: "offer_accept",
+        awaitingServiceConfirm: true,
+        offeredChoiceIds: [],
+      }),
+    ).toEqual({});
   });
 
   it("keeps an open offer when free text invents catalog/decline", () => {
