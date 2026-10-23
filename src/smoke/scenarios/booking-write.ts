@@ -65,6 +65,26 @@ import {
 const PRICE_HINT = /грн|\d/i;
 const VISIT_NOTE_TEXT = "Турбує сухість шкіри на обличчі";
 
+const assertServiceDurationOracle = async (
+  ctx: Parameters<SmokeScenario["run"]>[0],
+  scenarioName: string,
+  service: { id: string; durationMinutes?: number },
+): Promise<number> => {
+  const catalogRows = await loadCatalogServiceRows(ctx.callTool, `${scenarioName} duration oracle`);
+  const expectedDuration = catalogRows.find((row) => row.id === service.id)?.duration;
+  if (typeof expectedDuration !== "number" || !Number.isFinite(expectedDuration) || expectedDuration <= 0) {
+    throw new SmokeAssertError(
+      `${scenarioName}: independently fetched CRM service ${service.id} has invalid duration ${String(expectedDuration)}`,
+    );
+  }
+  if (service.durationMinutes !== expectedDuration) {
+    throw new SmokeAssertError(
+      `${scenarioName}: selected service duration ${String(service.durationMinutes)}m, CRM oracle says ${expectedDuration}m`,
+    );
+  }
+  return expectedDuration;
+};
+
 const hhmmFromLocalIso = (dateStart: string): string | null => {
   const match = /T(\d{2}:\d{2})/.exec(dateStart);
   return match?.[1] ?? null;
@@ -464,19 +484,7 @@ export const replaceProcedureScenario: SmokeScenario = {
         );
       }
       const service = interaction.service;
-      const catalogRows = await loadCatalogServiceRows(ctx.callTool, "book-procedure duration oracle");
-      const catalogService = catalogRows.find((row) => row.id === service.id);
-      const expectedDuration = catalogService?.duration;
-      if (typeof expectedDuration !== "number" || !Number.isFinite(expectedDuration) || expectedDuration <= 0) {
-        throw new SmokeAssertError(
-          `book-procedure: independently fetched CRM service ${service.id} has invalid duration ${String(expectedDuration)}`,
-        );
-      }
-      if (service.durationMinutes !== expectedDuration) {
-        throw new SmokeAssertError(
-          `book-procedure: selected service duration ${String(service.durationMinutes)}m, CRM oracle says ${expectedDuration}m`,
-        );
-      }
+      await assertServiceDurationOracle(ctx, "replace-procedure", service);
       if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
         throw new SmokeAssertError(
           `replace-procedure: expected non-consultation service id, got ${service.id}`,
@@ -1187,19 +1195,7 @@ export const bookProcedureScenario: SmokeScenario = {
         );
       }
       const service = interaction.service;
-      const catalogRows = await loadCatalogServiceRows(ctx.callTool, "book-procedure duration oracle");
-      const catalogService = catalogRows.find((row) => row.id === service.id);
-      const expectedDuration = catalogService?.duration;
-      if (typeof expectedDuration !== "number" || !Number.isFinite(expectedDuration) || expectedDuration <= 0) {
-        throw new SmokeAssertError(
-          `book-procedure: independently fetched CRM service ${service.id} has invalid duration ${String(expectedDuration)}`,
-        );
-      }
-      if (service.durationMinutes !== expectedDuration) {
-        throw new SmokeAssertError(
-          `book-procedure: selected service duration ${String(service.durationMinutes)}m, CRM oracle says ${expectedDuration}m`,
-        );
-      }
+      const expectedDuration = await assertServiceDurationOracle(ctx, "book-procedure", service);
       if (!service.id || service.id === CONSULTATION_SERVICE_ID) {
         throw new SmokeAssertError(
           `book-procedure: expected non-consultation service id, got ${service.id}`,
