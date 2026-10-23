@@ -363,10 +363,7 @@ describe("contact lookup consume-once (kernel)", () => {
 
 describe("createBookingDecideNode mainBook + contact fail-closed", () => {
   it("exact Записатись via understoodTurn opens consultation confirm", async () => {
-    const interpretTurn = async () => {
-      throw new Error("interpreter must not run at decide");
-    };
-    const node = createBookingDecideNode({ interpretTurn });
+    const node = createBookingDecideNode();
     const update = await node({
       messages: [new HumanMessage("Записатись")],
       agentMessages: [],
@@ -415,11 +412,7 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
     }
     expect(draft.phase).toBe("details");
 
-    const node = createBookingDecideNode({
-      interpretTurn: async () => {
-        throw new Error("interpreter must not run at decide");
-      },
-    });
+    const node = createBookingDecideNode();
     const update = await node({
       messages: [new HumanMessage("Smoke")],
       agentMessages: [],
@@ -476,11 +469,7 @@ describe("createBookingDecideNode mainBook + contact fail-closed", () => {
       ...draftAwaitingLookup(phone),
       pendingEffect: pending,
     };
-    const node = createBookingDecideNode({
-      interpretTurn: async () => {
-        throw new Error("must not re-interpret while effect is open");
-      },
-    });
+    const node = createBookingDecideNode();
     const update = await node({
       messages: [new HumanMessage(phone)],
       agentMessages: [],

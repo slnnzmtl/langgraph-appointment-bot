@@ -18,7 +18,7 @@ import {
 import {
   decideBooking,
 } from "../booking-domain/decide.js";
-import type { BookingDecision, BookingReadModels } from "../booking-domain/decision.js";
+import type { BookingDecision, BookingInput, BookingReadModels } from "../booking-domain/decision.js";
 import { kyivToday } from "../../tools/availability-slots.js";
 import { presentationSnapshotId } from "../booking-domain/availability-presentation.js";
 import type { EffectResult } from "../booking-domain/effects.js";
@@ -251,8 +251,6 @@ const withOfferedChoices = (
 };
 
 export type CreateBookingDecideNodeOptions = {
-  /** @deprecated Ingress owns interpret; kept for call-site compat. */
-  interpretTurn?: unknown;
   /** Family selector — narrows list_services rows after named_procedure (no stem parsing). */
   selectCandidates?: SelectServiceCandidates;
   /** One-level partitioner for family pages when selector groups are missing. */
@@ -497,7 +495,6 @@ const catalogChoiceIdFromState = (
 export const createBookingDecideNode = (
   options: CreateBookingDecideNodeOptions = {},
 ) => {
-  void options.interpretTurn;
   const selectCandidates = options.selectCandidates;
   const partitionCandidates = options.partitionCandidates;
   const assignedUserId = options.assignedUserId;
@@ -542,67 +539,45 @@ export const createBookingDecideNode = (
       )
       : null;
 
-    let result;
+    let input: BookingInput;
     if (effectResult != null) {
-      result = decideBooking(
-        workingDraft,
-        { source: "effect_result", result: effectResult },
-        readModels,
-      );
+      input = { source: "effect_result", result: effectResult };
     } else if (catalogTap?.kind === "page") {
-      result = decideBooking(
-        workingDraft,
-        {
-          source: "catalog_page",
-          remainingIds: catalogTap.remainingIds,
-          choices: catalogTap.choices,
-        },
-        readModels,
-      );
+      input = {
+        source: "catalog_page",
+        remainingIds: catalogTap.remainingIds,
+        choices: catalogTap.choices,
+      };
     } else if (catalogTap?.kind === "select") {
-      result = decideBooking(
-        workingDraft,
-        {
-          source: "semantic_patch",
-          patch: {
-            serviceIntent: {
-              kind: "catalog_service",
-              serviceId: catalogTap.serviceId,
-              ...(catalogTap.serviceName != null
-                ? { serviceName: catalogTap.serviceName }
-                : {}),
-            },
+      input = {
+        source: "semantic_patch",
+        patch: {
+          serviceIntent: {
+            kind: "catalog_service",
+            serviceId: catalogTap.serviceId,
+            ...(catalogTap.serviceName != null
+              ? { serviceName: catalogTap.serviceName }
+              : {}),
           },
         },
-        readModels,
-      );
+      };
     } else if (catalogTap?.kind === "unmatched") {
       // Stale/unoffered chip — fail closed; re-ask the open page.
-      result = decideBooking(
-        workingDraft,
-        { source: "semantic_patch", patch: {} },
-        readModels,
-      );
+      input = { source: "semantic_patch", patch: {} };
     } else if (state.understoodTurn != null) {
       // Ingress already classified this utterance — do not interpret again.
       const patch = enrichPatchWithReadModels(state.understoodTurn, {
         ...state,
         bookingDraft: workingDraft,
       }, readModels);
-      result = decideBooking(
-        workingDraft,
-        { source: "semantic_patch", patch },
-        readModels,
-      );
+      input = { source: "semantic_patch", patch };
     } else {
       // HITL resume / effect-only turns: no patient re-interpret at decide.
       // Empty patch re-asks the open requirement when a session exists.
-      result = decideBooking(
-        workingDraft,
-        { source: "semantic_patch", patch: {} },
-        readModels,
-      );
+      input = { source: "semantic_patch", patch: {} };
     }
+
+    let result = decideBooking(workingDraft, input, readModels);
 
     // Unstamped present_availability: stamp only returns null for that effect.
     // Apply effect_prepared locally, fail-closed consume, project once.

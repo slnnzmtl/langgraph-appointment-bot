@@ -584,11 +584,7 @@ describe("decide + respond deferred price on availability error", () => {
       },
     });
 
-    const decide = createBookingDecideNode({
-      interpretTurn: async () => {
-        throw new Error("must not re-interpret while effect is open");
-      },
-    });
+    const decide = createBookingDecideNode();
     const decided = await decide({
       messages: [new HumanMessage("ok")],
       agentMessages: [

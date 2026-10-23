@@ -261,7 +261,6 @@ export const compileClinicGraph = (options: CompileClinicGraphOptions) => {
     .addNode(
       bookingDecide,
       createBookingDecideNode({
-        interpretTurn: interpretBookingTurn,
         selectCandidates: faqSelectCandidates,
         partitionCandidates: faqPartitionCandidates,
         ...(options.assignedUserId != null
