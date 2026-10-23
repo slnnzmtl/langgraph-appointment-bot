@@ -107,7 +107,7 @@ const initialState = () => ({
 });
 
 describe("compileClinicGraph booking HITL", () => {
-  it("accepts a verified FAQ highlight and opens dates without a second service confirmation", async () => {
+  it.each(["Так", "Записатись"])("accepts a verified FAQ highlight via %s without a second service confirmation", async (acceptLabel) => {
     const interpretBookingTurn: InterpretBookingTurn = async (input) =>
       interpretBookingTurnDeterministic(input);
     const { graph, availabilityArgs } = createGraph(async () => JSON.stringify({ id: "meeting-1" }), {
@@ -115,7 +115,7 @@ describe("compileClinicGraph booking HITL", () => {
     });
     const config = { configurable: { thread_id: "compiled-faq-highlight-book" } };
     const opened = await graph.invoke({
-      messages: [new HumanMessage("Записатись")],
+      messages: [new HumanMessage(acceptLabel)],
       bookingDraft: null,
       bookingSchemaVersion: 2,
       patientLocale: "uk",

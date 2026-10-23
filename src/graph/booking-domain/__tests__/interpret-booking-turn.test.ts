@@ -307,3 +307,24 @@ describe("normalizeBookingTurnClassification (structured LLM)", () => {
     ).toEqual({ kind: "decline_pending_service" });
   });
 });
+
+
+describe("original FAQ offer labels", () => {
+  it.each(["Так", "Yes"])("accepts %s only against the current highlighted row", (rawText) => {
+    expect(interpretBookingTurnDeterministic({ rawText, faqHighlightOpen: true }))
+      .toEqual({ serviceIntent: { kind: "book_highlighted" } });
+    expect(interpretBookingTurnDeterministic({ rawText }))
+      .toEqual({});
+  });
+
+  it("chooses another procedure through FAQ browse, not HITL decline", () => {
+    expect(interpretBookingTurnDeterministic({ rawText: "Обрати іншу процедуру", faqHighlightOpen: true }))
+      .toEqual({ serviceIntent: { kind: "catalog_browse" } });
+  });
+
+  it("still rejects unoffered callbacks even with a FAQ offer open", () => {
+    expect(interpretBookingTurnDeterministic({
+      rawText: "Так", callbackChoiceId: "offer_accept", offeredChoiceIds: ["svc-1"], faqHighlightOpen: true,
+    })).toEqual({});
+  });
+});

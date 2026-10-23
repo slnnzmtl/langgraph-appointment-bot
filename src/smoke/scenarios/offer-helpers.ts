@@ -2,7 +2,6 @@ import {
   BOOKING_OFFER_MENU,
   BOOKING_REPLACE_MENU,
   CONSULTATION_SERVICE_ID,
-  DEFAULT_MENU_NO_VISITS,
   SERVICE_CANDIDATE_OTHER_LABEL_UK,
 } from "../../shared/clinic-constants.js";
 import { matchingCatalogRows } from "../../graph/catalog/catalog-match.js";
@@ -14,7 +13,7 @@ import {
   SERVICES_CONTEXT_MAX_ROWS,
   type ServicesContext,
 } from "../../tools/service-tools.js";
-import { expectNotCalled, SmokeAssertError } from "../assert.js";
+import { expectButtons, expectNotCalled, SmokeAssertError } from "../assert.js";
 import type { SmokeSession, TurnResult } from "../harness.js";
 
 const WRITE_TOOLS = [
@@ -32,16 +31,6 @@ const isRootCatalogPending = (
 ): pending is Extract<NonNullable<Pending>, { kind: "service_candidate" }> =>
   pending?.kind === "service_candidate"
   && (pending.owner === "faq" || pending.owner === "booking");
-
-const BOOK_LABEL = DEFAULT_MENU_NO_VISITS[0];
-
-const requestExplicitBook = async (
-  session: SmokeSession,
-  turn: TurnResult,
-): Promise<TurnResult> =>
-  turn.buttons.includes(BOOK_LABEL)
-    ? session.tap(BOOK_LABEL)
-    : session.say(BOOK_LABEL);
 
 export const isConsultationName = (name: string): boolean =>
   /консультац/i.test(name.trim());
@@ -226,7 +215,7 @@ export const selectUniqueProcedureAfterRootCatalog = async (
       return turn;
     }
     if (faqHighlightedService(pending) != null) {
-      turn = await requestExplicitBook(session, turn);
+      turn = await session.tap(BOOKING_OFFER_MENU[0]);
       continue;
     }
     if (isRootCatalogPending(pending)) {
@@ -473,90 +462,61 @@ export const openServicesEntryWithVisit = async (
   );
 };
 
-/** Drill FAQ catalog to a unique non-consultation service. */
-const drillToProcedure = async (
+/** A booking-owned service_confirm and an FAQ-owned unique row are both valid offers. */
+export const assertProcedureOffer = (label: string, turn: TurnResult): string => {
+  const pending = turn.state.pendingInteraction;
+  const service = pending?.kind === "service_confirm"
+    ? { serviceId: pending.service.id, serviceName: pending.service.name }
+    : faqHighlightedService(pending);
+  if (service == null || service.serviceId === CONSULTATION_SERVICE_ID || isConsultationName(service.serviceName ?? "")) {
+    throw new SmokeAssertError(label + ": expected a unique non-consultation offer, got " + (pending?.kind ?? "null"));
+  }
+  expectButtons(label + " service offer", turn.buttons, [...BOOKING_OFFER_MENU]);
+  return service.serviceId;
+};
+
+/** Stop before the one explicit acceptance, regardless of catalog ownership. */
+export const drillToProcedureOffer = async (
   session: SmokeSession,
   label: string,
   maxTaps = 8,
-  /** When set, resume from this turn (catalog or offer) instead of tapping «Обрати іншу». */
   start?: TurnResult,
-  stopAtHighlight = false,
 ): Promise<TurnResult> => {
-  let turn: TurnResult;
-  if (start != null) {
-    turn = hasBookingOfferKeyboard(start.buttons)
-      ? await session.tap(BOOKING_OFFER_MENU[1])
-      : start;
-  } else {
-    turn = await session.tap(BOOKING_OFFER_MENU[1]);
-  }
+  let turn = start ?? await session.snapshot();
   for (let i = 0; i < maxTaps; i += 1) {
     const interaction = turn.state.pendingInteraction;
     if (interaction?.kind === "service_confirm") {
-      if (!isConsultationName(interaction.service.name ?? "")) {
+      if (interaction.service.id !== CONSULTATION_SERVICE_ID && !isConsultationName(interaction.service.name ?? "")) {
+        assertProcedureOffer(label, turn);
         return turn;
       }
-      // Consultation confirm mid-drill — choose other again.
-      if (turn.buttons.includes(BOOKING_OFFER_MENU[1])) {
-        turn = await session.tap(BOOKING_OFFER_MENU[1]);
-        continue;
-      }
+      turn = await session.tap(BOOKING_OFFER_MENU[1]);
+      continue;
     }
     if (interaction?.kind === "service_candidate") {
-      // Unique remaining CRM id stays FAQ-owned until an explicit book request.
       const highlighted = faqHighlightedService(interaction);
-      if (
-        highlighted != null
-        && !isConsultationName(highlighted.serviceName ?? interaction.choices[0]?.label ?? "")
-      ) {
-        if (stopAtHighlight) {
+      if (highlighted != null) {
+        if (highlighted.serviceId !== CONSULTATION_SERVICE_ID && !isConsultationName(highlighted.serviceName ?? "")) {
+          assertProcedureOffer(label, turn);
           return turn;
         }
-        turn = await requestExplicitBook(session, turn);
+        turn = await session.tap(BOOKING_OFFER_MENU[1]);
         continue;
       }
       if (turn.buttons.includes(SERVICE_CANDIDATE_OTHER_LABEL_UK) && i === maxTaps - 1) {
         turn = await session.tap(SERVICE_CANDIDATE_OTHER_LABEL_UK);
         continue;
       }
-      const next = interaction.choices.find(
-        (choice) =>
-          choice.id !== "other"
-          && choice.id !== "return_to_booking"
-          && !isConsultationName(choice.label)
-          && turn.buttons.includes(choice.label),
+      const choices = interaction.choices.filter((choice) =>
+        choice.id !== "other" && choice.id !== "return_to_booking" && turn.buttons.includes(choice.label),
       );
-      const fallback = interaction.choices.find(
-        (choice) =>
-          choice.id !== "other"
-          && choice.id !== "return_to_booking"
-          && turn.buttons.includes(choice.label),
-      );
-      const pick = next ?? fallback;
-      if (pick) {
+      const pick = choices.find((choice) => !isConsultationName(choice.label)) ?? choices[0];
+      if (pick != null) {
         turn = await session.tap(pick.label);
         continue;
       }
     }
     break;
   }
-  throw new SmokeAssertError(
-    `${label}: never reached non-consultation service_confirm (pending=${turn.state.pendingInteraction?.kind ?? "null"})`,
-  );
+  throw new SmokeAssertError(label + ": never reached a non-consultation offer (pending=" + (turn.state.pendingInteraction?.kind ?? "null") + ")");
 };
-
-/** FAQ-origin flows inspect the unique highlight before the explicit Book tap. */
-export const drillToProcedureHighlight = (
-  session: SmokeSession,
-  label: string,
-  maxTaps = 8,
-  start?: TurnResult,
-): Promise<TurnResult> => drillToProcedure(session, label, maxTaps, start, true);
-
-/** Booking-owned offer path used when a real service-confirm wait is required. */
-export const drillToProcedureOffer = (
-  session: SmokeSession,
-  label: string,
-  maxTaps = 8,
-  start?: TurnResult,
-): Promise<TurnResult> => drillToProcedure(session, label, maxTaps, start, false);

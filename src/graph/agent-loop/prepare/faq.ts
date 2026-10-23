@@ -144,7 +144,7 @@ export const prepareFaqTurn = async (
       if (faqUiProduced(session.pendingInteraction)) {
         update.faqSkipLlm = true;
       }
-    } else if (patientText.length > 0) {
+    } else if (patientText.length > 0 && !isFaqCatalogBrowseShortcut(patientText, interaction)) {
       const rematch = await ensureServicesContext(
         state.servicesContext,
         options?.loadServices,

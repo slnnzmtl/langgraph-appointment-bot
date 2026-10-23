@@ -10,7 +10,6 @@ import {
   VISIT_CHANGE_MENU,
 } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { faqHighlightedService } from "../../graph/faq-highlight.js";
 import { runWithTelegramUserId } from "../../tools/telegram-user-context.js";
 import {
   expectButtons,
@@ -52,7 +51,8 @@ import {
 } from "./booking-helpers.js";
 import { claimsOutcome } from "../../shared/outcome-claims.js";
 import {
-  drillToProcedureHighlight,
+  assertProcedureOffer,
+  drillToProcedureOffer,
   openServicesEntryWithVisit,
   expectFamilyCatalogTurn,
   loadCatalogServiceRows,
@@ -497,26 +497,21 @@ export const replaceProcedureScenario: SmokeScenario = {
         bundle.session,
         "replace-procedure",
       );
-      const highlightTurn = await drillToProcedureHighlight(
+      const highlightTurn = await drillToProcedureOffer(
         bundle.session,
         "replace-procedure",
         8,
         servicesTurn,
       );
-      const highlighted = faqHighlightedService(highlightTurn.state.pendingInteraction);
-      if (highlighted == null || highlighted.serviceId === CONSULTATION_SERVICE_ID) {
-        throw new SmokeAssertError(
-          `replace-procedure: expected a unique FAQ service highlight, got ${highlightTurn.state.pendingInteraction?.kind ?? "null"}`,
-        );
-      }
+      const offeredServiceId = assertProcedureOffer("replace-procedure", highlightTurn);
       const bookTurn = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
       const service = bookTurn.state.bookingDraft?.serviceAcceptance?.service;
       if (
         bookTurn.state.bookingDraft?.serviceAcceptance?.status !== "accepted"
-        || service?.id !== highlighted.serviceId
+        || service?.id !== offeredServiceId
       ) {
         throw new SmokeAssertError(
-          `replace-procedure: Book did not accept highlighted service ${highlighted.serviceId}`,
+          `replace-procedure: Так did not accept offered service ${offeredServiceId}`,
         );
       }
       await assertServiceDurationOracle(ctx, "replace-procedure", service);
@@ -525,7 +520,7 @@ export const replaceProcedureScenario: SmokeScenario = {
         || bookTurn.state.pendingInteraction.stage !== "replacement"
       ) {
         throw new SmokeAssertError(
-          `replace-procedure: expected visit_select/replacement after Book, got ${bookTurn.state.pendingInteraction?.kind ?? "null"}/${bookTurn.state.pendingInteraction?.kind === "visit_select" ? bookTurn.state.pendingInteraction.stage : "n/a"}`,
+          `replace-procedure: expected visit_select/replacement after Так, got ${bookTurn.state.pendingInteraction?.kind ?? "null"}/${bookTurn.state.pendingInteraction?.kind === "visit_select" ? bookTurn.state.pendingInteraction.stage : "n/a"}`,
         );
       }
       expectButtons("replace-procedure REPLACE", bookTurn.buttons, [...BOOKING_REPLACE_MENU]);
@@ -1215,21 +1210,16 @@ export const bookProcedureScenario: SmokeScenario = {
     const bundle = openBookingSession(ctx, "book-procedure", telegramId);
     try {
       await openBookingOffer(bundle.session, "book-procedure");
-      const highlightTurn = await drillToProcedureHighlight(bundle.session, "book-procedure");
-      const highlighted = faqHighlightedService(highlightTurn.state.pendingInteraction);
-      if (highlighted == null || highlighted.serviceId === CONSULTATION_SERVICE_ID) {
-        throw new SmokeAssertError(
-          `book-procedure: expected a unique FAQ service highlight, got ${highlightTurn.state.pendingInteraction?.kind ?? "null"}`,
-        );
-      }
+      const highlightTurn = await drillToProcedureOffer(bundle.session, "book-procedure");
+      const offeredServiceId = assertProcedureOffer("book-procedure", highlightTurn);
       const booked = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
       const service = booked.state.bookingDraft?.serviceAcceptance?.service;
       if (
         booked.state.bookingDraft?.serviceAcceptance?.status !== "accepted"
-        || service?.id !== highlighted.serviceId
+        || service?.id !== offeredServiceId
       ) {
         throw new SmokeAssertError(
-          `book-procedure: Book did not accept highlighted service ${highlighted.serviceId}`,
+          `book-procedure: Так did not accept offered service ${offeredServiceId}`,
         );
       }
       const expectedDuration = await assertServiceDurationOracle(ctx, "book-procedure", service);
@@ -1238,10 +1228,10 @@ export const bookProcedureScenario: SmokeScenario = {
         && booked.state.pendingInteraction?.kind !== "time_select"
       ) {
         throw new SmokeAssertError(
-          `book-procedure: expected date/time selection immediately after Book, got ${booked.state.pendingInteraction?.kind ?? "null"}`,
+          `book-procedure: expected date/time selection immediately after Так, got ${booked.state.pendingInteraction?.kind ?? "null"}`,
         );
       }
-      expectNoButtons("book-procedure after Book", booked.buttons, [...BOOKING_OFFER_MENU]);
+      expectNoButtons("book-procedure after Так", booked.buttons, [...BOOKING_OFFER_MENU]);
       expectNotCalled("book-procedure before final confirmation", booked.calls, ["create_meeting", "cancel_meeting", "reschedule_meeting"]);
       await driveUntilMutationConfirm(bundle, {
         phone,

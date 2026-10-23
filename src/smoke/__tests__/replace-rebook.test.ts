@@ -12,12 +12,17 @@ import { interpretBookingTurnDeterministic } from "../../graph/booking-domain/in
 import type { ClinicSpecialists, ILLMConnector } from "../../graph/types.js";
 import { CONSULTATION_SERVICE_ID } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
-import { replaceRebookScenario } from "../scenarios/booking-write.js";
+import { bookProcedureScenario, replaceProcedureScenario, replaceRebookScenario } from "../scenarios/booking-write.js";
 
 // Real scenario, graph, adapter, tools and interrupts; only CRM and LLM are fixtures.
-it.each(["success", "rejected", "lost-duration", "stored-duration", "stored-service"] as const)(
-  "replace-rebook preserves independent service/interval evidence: %s",
-  async (mode) => {
+it.each([
+  ...(["success", "rejected", "lost-duration", "stored-duration", "stored-service"] as const)
+    .map((mode) => ({ scenario: replaceRebookScenario, mode })),
+  { scenario: bookProcedureScenario, mode: "success" as const },
+  { scenario: replaceProcedureScenario, mode: "success" as const },
+])(
+  "$scenario.name preserves independent service/interval evidence: $mode",
+  async ({ scenario, mode }) => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-10-23T19:28:00Z"));
     const services = [
@@ -135,7 +140,7 @@ it.each(["success", "rejected", "lost-duration", "stored-duration", "stored-serv
       shutdownAdapters: adapters.shutdown,
     };
     try {
-      const running = replaceRebookScenario.run({
+      const running = scenario.run({
         runtime, callTool: (name, args) => adapters.callTool(name, args),
         cleanup: { trackMeeting: () => {}, trackContact: () => {}, run: async () => {} },
         supportsDeleteEntity: false, writesAllowed: true,
@@ -154,10 +159,13 @@ it.each(["success", "rejected", "lost-duration", "stored-duration", "stored-serv
         return;
       }
       await running;
-      expect(writes).toHaveLength(2);
-      expect(writes[0]).toMatchObject({ dateStart: "2026-10-24T14:30:00", dateEnd: "2026-10-24T15:00:00" });
-      expect(writes[1]).toMatchObject({ dateStart: "2026-10-26T11:00:00", dateEnd: "2026-10-26T12:00:00", cServicesIds: [procedure.id] });
-      expect(meetings.map((meeting) => meeting.status)).toEqual(["Not Held", "Planned"]);
+      const isReplacement = scenario.name !== "book-procedure";
+      expect(writes).toHaveLength(isReplacement ? 2 : 1);
+      if (isReplacement) {
+        expect(writes[0]).toMatchObject({ dateStart: "2026-10-24T14:30:00", dateEnd: "2026-10-24T15:00:00" });
+      }
+      expect(writes.at(-1)).toMatchObject({ dateStart: "2026-10-26T11:00:00", dateEnd: "2026-10-26T12:00:00", cServicesIds: [procedure.id] });
+      expect(meetings.map((meeting) => meeting.status)).toEqual(isReplacement ? ["Not Held", "Planned"] : ["Planned"]);
     } finally {
       vi.useRealTimers();
     }

@@ -280,9 +280,16 @@ export const interpretBookingTurnDeterministic = (
     return globalLabelPatch;
   }
 
-  // Idle FAQ highlight: explicit book-this prose (not confirm_pending_service).
-  if (input.faqHighlightOpen === true && isBookHighlightedPhrase(raw)) {
-    return { serviceIntent: { kind: "book_highlighted" } };
+  // The FAQ row uses the same original offer labels, but acceptance promotes it
+  // directly to booking rather than opening another service-confirm card.
+  if (input.faqHighlightOpen === true) {
+    const label = labelIdFor(raw);
+    if (label === "offerAccept" || isBookHighlightedPhrase(raw)) {
+      return { serviceIntent: { kind: "book_highlighted" } };
+    }
+    if (label === "offerChooseOther") {
+      return { serviceIntent: { kind: "catalog_browse" } };
+    }
   }
 
   // Free prose is not classified here — caller must use the structured LLM.

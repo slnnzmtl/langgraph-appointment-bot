@@ -94,7 +94,7 @@ export const createBookingTurnInterpreter = (llm: ILLMConnector): InterpretBooki
         : null,
       input.awaitingServiceConfirm === true ? "Open field: pending service confirmation." : null,
       input.faqHighlightOpen === true
-        ? "Idle FAQ context: one highlighted catalog row is informational until the patient explicitly books it (book_highlighted). Consultation requests stay consultation."
+        ? "Idle FAQ context: one highlighted catalog row offers Так / Обрати іншу процедуру. Accepting it or explicitly booking it means book_highlighted; choosing another means catalog_browse. Consultation requests stay consultation."
         : null,
       input.activeRequirement != null
         ? `Active booking requirement: ${input.activeRequirement}.`
