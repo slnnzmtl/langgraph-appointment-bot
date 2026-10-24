@@ -788,12 +788,63 @@ export const replaceNamedProcedureScenario: SmokeScenario = {
         );
       }
 
+      // Service acceptance must consume the deferred price question and then
+      // query availability for the original exact date/time. Stop before slot
+      // selection and the separate create HITL.
+      const accepted = await bundle.session.tap(BOOKING_OFFER_MENU[0]);
+      const acceptedDraft = accepted.state.bookingDraft;
+      if (
+        acceptedDraft?.serviceAcceptance?.status !== "accepted"
+        || acceptedDraft.serviceAcceptance.service.id !== procedure.id
+      ) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: service acceptance did not select ${procedure.id}`,
+        );
+      }
+      const priceLookup = accepted.calls.find((call) =>
+        call.name === "get_entity"
+        && call.args.entityType === "cService"
+        && call.args.entityId === procedure.id,
+      );
+      if (priceLookup == null || priceLookup.error != null || priceLookup.result == null) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: accepted service did not successfully look up price for ${procedure.id}`,
+        );
+      }
+      const availabilityQueries = accepted.calls.filter((call) => call.name === "search_meetings");
+      if (!availabilityQueries.some((call) =>
+        call.args.dateFrom === "2026-11-02" && call.args.dateTo === "2026-11-02",
+      )) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: availability was not queried for 2026-11-02; bounds=${JSON.stringify(availabilityQueries.map((call) => ({ dateFrom: call.args.dateFrom, dateTo: call.args.dateTo })))}`,
+        );
+      }
+      if (
+        acceptedDraft.selectedDate !== "2026-11-02"
+        || acceptedDraft.requestedTime?.value !== "13:00"
+      ) {
+        throw new SmokeAssertError(
+          `replace-named-procedure: requested schedule not applied after acceptance: date=${acceptedDraft.selectedDate ?? "none"}, time=${acceptedDraft.requestedTime?.value ?? "none"}`,
+        );
+      }
+      const verifiedQuery = accepted.state.availabilityContext?.query;
+      if (verifiedQuery?.kind !== "exact" || verifiedQuery.date !== "2026-11-02") {
+        throw new SmokeAssertError(
+          `replace-named-procedure: availability snapshot does not verify exact date 2026-11-02: ${JSON.stringify(verifiedQuery)}`,
+        );
+      }
+      if (accepted.calls.some((call) => call.name === "create_meeting")) {
+        throw new SmokeAssertError(
+          "replace-named-procedure: service acceptance also created the meeting before its separate approval",
+        );
+      }
+
       console.log(
         "✓ replace-named-procedure: cancelled",
         oldId,
-        "and continued service",
-        selected.id,
-        "with deferred date/time and price; separate create approval remains required",
+        "looked up price for",
+        procedure.id,
+        "and queried availability for 2026-11-02 at 13:00; create remains separately confirmed",
       );
       return { warnings: bundle.warnings, turns: bundle.session.turns };
     } finally {
