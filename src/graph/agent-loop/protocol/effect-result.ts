@@ -7,6 +7,7 @@ import type { BaseMessage } from "@langchain/core/messages";
 import { asJsonRecord } from "../../../shared/json-record.js";
 import { extractRawMessageText } from "../../../shared/message-content.js";
 import {
+  availabilityCoverageComplete,
   normalizePresentAvailabilityResult,
 } from "../../../tools/availability-tools.js";
 import {
@@ -187,7 +188,7 @@ export const effectResultFromToolMessages = (
       return { effectId: expectedEffectId, kind: "availability", outcome: "error" };
     }
     const availability = normalizePresentAvailabilityResult(body);
-    if (availability == null) {
+    if (availability == null || !availabilityCoverageComplete(availability)) {
       return { effectId: expectedEffectId, kind: "availability", outcome: "error" };
     }
     const days = availability.days.map((day) => ({

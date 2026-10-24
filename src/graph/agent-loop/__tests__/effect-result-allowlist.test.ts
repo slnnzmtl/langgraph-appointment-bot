@@ -290,3 +290,38 @@ describe("effectResultFromToolMessages verified Contact update", () => {
     expect(incomplete).toMatchObject({ kind: "contact_write", outcome: "updated", crmComplete: false });
   });
 });
+
+
+describe("availability effect completeness", () => {
+  const pending: PendingEffect = {
+    id: "eff_availability",
+    expectedRevision: 1,
+    effect: { kind: "present_availability", args: { direction: "exact", date: "2026-10-25" } },
+    status: "executing",
+  };
+  const body = (overrides: Record<string, unknown> = {}) => JSON.stringify({
+    days: [{ date: "2026-10-25", slots: [{ id: "s1", label: "10:00", dateStart: "2026-10-25T10:00:00", dateEnd: "2026-10-25T10:30:00" }] }],
+    query: { kind: "exact", date: "2026-10-25", coverageComplete: true },
+    ...overrides,
+  });
+  const consume = (content: string) => effectResultFromToolMessages([
+    new ToolMessage({
+      content,
+      tool_call_id: pending.id,
+      name: "present_availability_slots",
+    }),
+  ], pending);
+
+  it.each([
+    ["nonempty truncated response", body({ truncated: true })],
+    ["nonempty incomplete query", body({ query: { kind: "exact", date: "2026-10-25", coverageComplete: false } })],
+    ["both incomplete markers", body({ truncated: true, query: { kind: "exact", date: "2026-10-25", coverageComplete: false } })],
+    ["incomplete empty response", body({ days: [], truncated: true })],
+  ])("rejects %s as trusted availability", (_name, content) => {
+    expect(consume(content)).toMatchObject({ kind: "availability", outcome: "error" });
+  });
+
+  it("accepts complete empty responses as a trustworthy empty result", () => {
+    expect(consume(body({ days: [] }))).toMatchObject({ kind: "availability", outcome: "empty" });
+  });
+});
