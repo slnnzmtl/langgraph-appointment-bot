@@ -173,7 +173,7 @@ Smoke drives the real graph through `handleGraphTextTurn` (same path as Telegram
 
 - Catalog (`list_services`): grouped summary; **no prices** in the tool payload or reply. Closes with a consultation offer («Так» / «Обрати іншу процедуру»). «Обрати іншу процедуру» drills the catalog one level per message (FAQ), then offers to book that procedure.
 - Pricing: `get_service` for the matched service only; quote only what the user asked for.
-- USD → UAH: when CRM `priceCurrency` is USD, `get_service` fetches `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) and attaches `priceUah`; FAQ quotes it only if the user asks in UAH (FX failure → native USD, no invented rates).
+- UAH-only prices: when CRM `priceCurrency` is USD, `get_service` converts it using `usd.uah` from [currency-api](https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json) before returning `{ price: <converted amount>, currency: "UAH" }`. Native UAH prices pass through unchanged. Source USD amounts and alternate CRM price fields never enter the tool result. Invalid/missing currency, malformed prices, or FX failure (5-second timeout) return a sanitized error, never a source-currency fallback. FAQ and booking share this tool contract.
 
 ## Booking tools
 
@@ -212,7 +212,7 @@ Default visit is **Консультація** unless the patient is sure about a
 2. Known Telegram user: booking skips phone/name after `cTelegram` lookup (details only after a slot if CRM fields are missing)
 3. Incomplete CRM contact (missing firstName/lastName/phone): collect them at book time, then `update_contact` before confirm
 4. Unknown user: asks phone/name after a slot, create/link writes `cTelegram`
-5. FAQ: hours/services from CRM; catalog has no prices; UAH ask on a USD service uses `priceUah`. «Послуги» → consultation offer; «Обрати іншу процедуру» drills one catalog level per message
+5. FAQ: hours/services from CRM; catalog has no prices; all service price answers use the UAH-only `get_service.price` (conversion failure → unavailable, never raw USD). «Послуги» → consultation offer; «Обрати іншу процедуру» drills one catalog level per message
 6. «Записатись» offers consultation («Так» / «Обрати іншу процедуру») before dates
 7. Pick a date shortcut, then a time shortcut (or type a slot time from the agent's text list)
 8. Tap ✅ to book; ❌ cancels without CRM write. Typing after the card (e.g. `так`) is handled by the agent re-calling the tool with `confirmationGiven: true`. A second Planned or Confirmed visit is refused until the first is cancelled (REPLACE shortcuts: cancel then book the new slot — never reschedule in that conflict). Success message includes service, Ukrainian when, address + Maps, and «Мій запис»

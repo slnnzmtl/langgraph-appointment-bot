@@ -248,7 +248,7 @@ describe("service-tools", () => {
       (t) => t.name === "get_service",
     );
     const result = await tool!.invoke({ serviceId: "svc-1" });
-    expect(JSON.parse(result)).toEqual({ error: "MCP down" });
+    expect(JSON.parse(result)).toEqual({ error: "Service information is unavailable. Please try again later." });
   });
 
   it("get_service keeps name, description, price, currency, and medications", async () => {
@@ -285,6 +285,7 @@ describe("service-tools", () => {
     });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => ({
+      ok: true,
       json: async () => ({ usd: { uah: 41.2 } }),
     })) as typeof fetch;
 
@@ -300,9 +301,8 @@ describe("service-tools", () => {
       expect(parsed).toEqual({
         name: "Ботулінотерапія Nabota FULL FACE",
         description: "Full-face botox",
-        price: 200,
-        currency: "USD",
-        priceUah: 8240,
+        price: 8240,
+        currency: "UAH",
         medications: ["Nabota", "Lidocaine"],
       });
     } finally {
@@ -337,6 +337,7 @@ describe("service-tools", () => {
     });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => ({
+      ok: true,
       json: async () => ({ usd: { uah: 41.2 } }),
     })) as typeof fetch;
 
@@ -351,18 +352,18 @@ describe("service-tools", () => {
       >;
       expect(parsed).toEqual({
         name: "Ботулінотерапія Nabota FULL FACE",
-        price: 200,
-        currency: "USD",
-        priceUah: 8240,
+        price: 8240,
+        currency: "UAH",
       });
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
 
-  it("get_service attaches priceUah for USD services", async () => {
+  it("get_service exposes only the converted UAH price for USD services", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async () => ({
+      ok: true,
       json: async () => ({ usd: { uah: 41.2 } }),
     })) as typeof fetch;
 
@@ -380,7 +381,7 @@ describe("service-tools", () => {
         string,
         unknown
       >;
-      expect(parsed.priceUah).toBe(4120);
+      expect(parsed).toEqual({ name: "Біоревіталізація", price: 4120, currency: "UAH" });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -405,7 +406,7 @@ describe("service-tools", () => {
         string,
         unknown
       >;
-      expect(parsed.priceUah).toBeUndefined();
+      expect(parsed).toEqual({ name: "Консультація", price: 400, currency: "UAH" });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       globalThis.fetch = originalFetch;

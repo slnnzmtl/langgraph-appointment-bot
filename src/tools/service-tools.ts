@@ -152,24 +152,11 @@ const compactListServicesResult = (result: unknown): unknown => {
   return compact;
 };
 
-/** Keep FAQ-relevant get_service fields; drop CRM audit and relation metadata. */
-const compactGetServiceResult = (result: unknown): unknown => {
-  let value: unknown = result;
-  if (typeof value === "string") {
-    try {
-      value = JSON.parse(value) as unknown;
-    } catch {
-      return result;
-    }
-  }
-
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return result;
-  }
-
-  const record = value as Record<string, unknown>;
-  if (typeof record.error === "string") {
-    return result;
+/** Only UAH prices may cross the tool boundary into model/checkpoint context. */
+const compactGetServiceResult = async (result: unknown): Promise<Record<string, unknown>> => {
+  const record = asJsonRecord(result);
+  if (record == null || record.error != null) {
+    return { error: "Service information is unavailable. Please try again later." };
   }
 
   const compact: Record<string, unknown> = {};
@@ -180,13 +167,35 @@ const compactGetServiceResult = (result: unknown): unknown => {
     compact.description = record.description.trim();
   }
   if (record.price !== undefined && record.price !== null) {
-    compact.price = record.price;
-  }
-  if (typeof record.priceCurrency === "string") {
-    compact.currency = record.priceCurrency;
-  }
-  if (record.priceUah !== undefined && record.priceUah !== null) {
-    compact.priceUah = record.priceUah;
+    let price = typeof record.price === "number"
+      ? record.price
+      : typeof record.price === "string" && record.price.trim().length > 0
+        ? Number(record.price)
+        : NaN;
+    const currency = typeof record.priceCurrency === "string"
+      ? record.priceCurrency.trim().toUpperCase()
+      : null;
+    const unavailable = { error: "Service price in UAH is unavailable. Please try again later." };
+    if (!Number.isFinite(price) || price < 0 || (currency !== "USD" && currency !== "UAH")) {
+      return unavailable;
+    }
+    if (currency === "USD") {
+      try {
+        const response = await fetch(USD_UAH_URL, { signal: AbortSignal.timeout(5000) });
+        if (!response.ok) return unavailable;
+        const json = asJsonRecord(await response.json());
+        const rate = asJsonRecord(json?.usd)?.uah;
+        if (typeof rate !== "number" || !Number.isFinite(rate) || rate <= 0) {
+          return unavailable;
+        }
+        price = Math.round(price * rate);
+        if (!Number.isFinite(price)) return unavailable;
+      } catch {
+        return unavailable;
+      }
+    }
+    compact.price = price;
+    compact.currency = "UAH";
   }
 
   const names = record.medicationsNames;
@@ -256,43 +265,15 @@ export const createReadTools = (options: ReadToolsOptions): StructuredToolInterf
           entityType: "cService",
           entityId: input.serviceId,
         });
-        let entity: unknown = result;
-        if (typeof entity === "string") {
-          try {
-            entity = JSON.parse(entity) as unknown;
-          } catch {
-            return toToolResult(result);
-          }
-        }
-        if (entity && typeof entity === "object" && !Array.isArray(entity)) {
-          const record = entity as Record<string, unknown>;
-          const price = record.price;
-          if (
-            record.priceCurrency === "USD" &&
-            typeof price === "number" &&
-            Number.isFinite(price)
-          ) {
-            try {
-              const response = await fetch(USD_UAH_URL);
-              const json = (await response.json()) as { usd?: { uah?: unknown } };
-              const rate = json.usd?.uah;
-              if (typeof rate === "number" && Number.isFinite(rate)) {
-                record.priceUah = Math.round(price * rate);
-              }
-            } catch {
-              // Keep CRM entity unchanged when FX lookup fails.
-            }
-          }
-        }
-        return toToolResult(compactGetServiceResult(entity));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return JSON.stringify({ error: message });
+        return toToolResult(await compactGetServiceResult(result));
+      } catch {
+        // Upstream errors may contain raw CRM prices; never forward them.
+        return JSON.stringify({ error: "Service information is unavailable. Please try again later." });
       }
     },
     {
       name: "get_service",
-      description: "Get a single clinic service by id from EspoCRM.",
+      description: "Get a single clinic service by id from EspoCRM. Prices are already converted to UAH; quote price directly. If unavailable, do not guess a price.",
       schema: z.object({
         serviceId: z.string().min(1).describe("cService entity id"),
       }),
