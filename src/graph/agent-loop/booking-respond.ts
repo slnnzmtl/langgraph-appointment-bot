@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { AIMessage } from "@langchain/core/messages";
 
 import { trackEvent } from "../../analytics/track.js";
 import {
@@ -35,6 +36,7 @@ import {
   clarificationCopy,
 } from "./booking-response-fallback.js";
 import { defaultMenuHasVisit } from "./mutation-finalize.js";
+import { tagRuntimeAgentMessage } from "../context/sub-agent-messages.js";
 
 /** Code-owned side-question sentence(s) from allowlisted facts only. */
 const sideQuestionFactPrefix = (
@@ -116,17 +118,29 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
   });
   const agentName = options.agentName ?? "booking";
 
+  // Keep durable conversation history aligned with the handoff Telegram sends.
+  // Booking replies are runtime-authored and do not pass through specialist finalize.
+  const replyUpdate = (
+    replyText: string,
+    status: "ok" | "empty",
+    replyButtons: string[] = [],
+    extra: ClinicStateUpdate = {},
+  ): ClinicStateUpdate => ({
+    ...extra,
+    messages: [tagRuntimeAgentMessage(new AIMessage(replyText), BOOKING_AGENT_ID)],
+    lastHandoff: {
+      agentId: BOOKING_AGENT_ID,
+      agentName,
+      status,
+      replyText,
+      replyButtons,
+    },
+  });
+
   return async (state: ClinicState): Promise<ClinicStateUpdate> => {
     const decision = (state as ClinicState & ClosedDecisionChannel).bookingDecision;
     if (decision == null) {
-      return {
-        lastHandoff: {
-          agentId: BOOKING_AGENT_ID,
-          agentName,
-          status: "empty",
-          replyText: bookingResponseFallback({ intent: "idle" }),
-        },
-      };
+      return replyUpdate(bookingResponseFallback({ intent: "idle" }), "empty");
     }
 
     const locale = resolvePatientLocale(state);
@@ -157,16 +171,9 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           );
           break;
       }
-      return {
-        bookingDecision: null,
-        lastHandoff: {
-          agentId: BOOKING_AGENT_ID,
-          agentName,
-          status: "ok",
-          replyText: bookingSuccessText(decision.facts),
-          replyButtons: [...defaultMenuLabels(hasVisit)],
-        },
-      };
+      return replyUpdate(bookingSuccessText(decision.facts), "ok", [
+        ...defaultMenuLabels(hasVisit),
+      ], { bookingDecision: null });
     }
 
     // HITL leave / ❌ — same main-menu exit as supervisor (no LLM).
@@ -175,16 +182,9 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
         state.agentMessages ?? [],
         state.bookingContext,
       );
-      return {
-        bookingDecision: null,
-        lastHandoff: {
-          agentId: BOOKING_AGENT_ID,
-          agentName,
-          status: "ok",
-          replyText: MAIN_MENU_GREETING_UK,
-          replyButtons: [...defaultMenuLabels(hasVisit)],
-        },
-      };
+      return replyUpdate(MAIN_MENU_GREETING_UK, "ok", [
+        ...defaultMenuLabels(hasVisit),
+      ], { bookingDecision: null });
     }
 
     // Open cards: matching pendingInteraction is the sole listed-copy path.
@@ -245,34 +245,18 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
           type: "reply_facts_cleared",
         });
       }
-      return {
+      return replyUpdate(replyText, "ok", replyButtons, {
         bookingDecision: null,
         ...(draftWorking !== state.bookingDraft
           ? { bookingDraft: draftWorking }
           : {}),
-        lastHandoff: {
-          agentId: BOOKING_AGENT_ID,
-          agentName,
-          status: "ok",
-          replyText,
-          replyButtons,
-        },
-      };
+      });
     }
 
     // Open effects belong in decide→tools, not here. Belt-and-suspenders if
     // routing regresses: never ask for a date/time with an empty keyboard.
     if (decision.tag === "effect") {
-      return {
-        bookingDecision: null,
-        lastHandoff: {
-          agentId: BOOKING_AGENT_ID,
-          agentName,
-          status: "ok",
-          replyText: PATIENT_FALLBACK_MESSAGE,
-          replyButtons: [],
-        },
-      };
+      return replyUpdate(PATIENT_FALLBACK_MESSAGE, "ok", [], { bookingDecision: null });
     }
 
     // Card-less intents: model may help, but never ship outcome claims.
@@ -322,15 +306,6 @@ export const createBookingRespondNode = (options: CreateBookingRespondOptions) =
       text = bookingResponseFallback({ intent: "idle" });
     }
 
-    return {
-      bookingDecision: null,
-      lastHandoff: {
-        agentId: BOOKING_AGENT_ID,
-        agentName,
-        status: "ok",
-        replyText: text,
-        replyButtons,
-      },
-    };
+    return replyUpdate(text, "ok", replyButtons, { bookingDecision: null });
   };
 };
