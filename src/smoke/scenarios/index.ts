@@ -27,6 +27,12 @@ import {
   offerPriceScenario,
 } from "./faq.js";
 import { identityScenario } from "./identity.js";
+import {
+  faqPriceUahScenario,
+  faqPriceUahUnavailableScenario,
+  offerPriceUahScenario,
+  offerPriceUahUnavailableScenario,
+} from "./pricing-uah.js";
 import { reminderWebhookScenario } from "./reminder-webhook.js";
 import { supervisorMenuScenario } from "./supervisor-menu.js";
 
@@ -39,6 +45,10 @@ export const ALL_SCENARIOS: SmokeScenario[] = [
   faqChooseOtherScenario,
   faqFamilyFreeTextScenario,
   offerPriceScenario,
+  faqPriceUahScenario,
+  faqPriceUahUnavailableScenario,
+  offerPriceUahScenario,
+  offerPriceUahUnavailableScenario,
   supervisorMenuScenario,
   identityScenario,
   bookingFreeTextTypedSlotScenario,

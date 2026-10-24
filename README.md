@@ -152,10 +152,12 @@ pnpm smoke -- --write     # live booking lifecycle (SMOKE_ALLOW_WRITES=1; refuse
 # It never uses SMOKE_KNOWN_TELEGRAM_ID. Pre-clean/update refuse non-smoke contacts.
 pnpm smoke -- --all       # deterministic + invoke + write
 pnpm smoke -- --only=faq-hours,book-new-contact
+pnpm smoke -- --invoke --only=faq-price-uah,faq-price-uah-unavailable,offer-price-uah,offer-price-uah-unavailable
+# Pricing smokes read the exact Botox/Disport 1-zone CRM record; graph MCP access is read-allowlisted. FX calls to the currency endpoint alone are pinned to 43.27 UAH/USD.
 pnpm dev     # boot runtime; start Telegram polling when TELEGRAM_BOT_TOKEN is set
 ```
 
-Smoke drives the real graph through `handleGraphTextTurn` (same path as Telegram). Hard asserts cover graph state and MCP calls; reply text is soft. Write scenarios create Contacts/Meetings under dedicated smoke telegram ids and soft-cancel (or `delete_entity` when available) in cleanup.
+Smoke drives the real graph through `handleGraphTextTurn` (same path as Telegram). Hard asserts cover graph state and MCP calls; reply text is soft except in the UAH pricing scenarios, which require the exact converted quote, inspect model-visible `get_service` ToolMessages, and block non-read CRM calls before forwarding. Write scenarios create Contacts/Meetings under dedicated smoke telegram ids and soft-cancel (or `delete_entity` when available) in cleanup.
 
 ## Layout
 
