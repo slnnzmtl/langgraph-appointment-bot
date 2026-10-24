@@ -990,9 +990,15 @@ export const decideBooking = (
 
     if (result.kind === "catalog") {
       emit({ type: "effect_cleared" });
-      // Keep deferred requests across catalog pages; unbind the finished effect.
-      if (ctx.working?.deferredTurn != null) {
-        emit({ type: "deferred_turn_bound", boundEffectId: null });
+      // Keep schedule/price across catalog pages, but consume the service query
+      // once its result has been received.
+      const deferredTurn = ctx.working?.deferredTurn;
+      if (deferredTurn != null) {
+        const { serviceQuery: _serviceQuery, ...remainder } = deferredTurn;
+        emit({
+          type: "deferred_turn_set",
+          deferred: { ...remainder, boundEffectId: null },
+        });
       }
       // Node already narrowed via family selector when list_services had a query.
       // Kernel only consumes the allowlisted rows (never re-stems the utterance).
@@ -1110,8 +1116,23 @@ export const decideBooking = (
           if (ctx.working?.serviceAcceptance?.status === "accepted") {
             return decideFromRequirement();
           }
-          // No accepted service — kernel opens catalog (no FAQ ownership handoff).
-          return runEffect("run_effect", { kind: "list_services" });
+          // Continue the original bounded request after cancellation. Keep
+          // cancel-first semantics; the old visit is already Not Held here.
+          const deferred = ctx.working?.deferredTurn;
+          const effect = preparePendingEffect({
+            kind: "list_services",
+            ...(deferred?.serviceQuery != null ? { query: deferred.serviceQuery } : {}),
+          });
+          if (deferred != null) {
+            emit({ type: "deferred_turn_bound", boundEffectId: effect.id });
+          }
+          return {
+            tag: "effect",
+            intent: "run_effect",
+            facts: {},
+            card: null,
+            pendingEffect: effect,
+          };
         }
         const facts: BookingVerifiedFacts = { action: result.action };
         if (w != null && result.action !== "cancel") {
@@ -1526,7 +1547,10 @@ export const decideBooking = (
     const storeDeferredFromPatch = (boundEffectId: string | null): void => {
       const schedule = deferredScheduleFromPatch(patch);
       const informational = deferredInformationalFromPatch(patch);
-      if (schedule == null && informational == null) {
+      const serviceQuery = patch.serviceIntent?.kind === "named_procedure"
+        ? patch.serviceIntent.query
+        : undefined;
+      if (schedule == null && informational == null && serviceQuery == null) {
         return;
       }
       const attemptId =
@@ -1536,6 +1560,7 @@ export const decideBooking = (
       const deferred: DeferredBookingTurn = {
         bookingAttemptId: attemptId,
         boundEffectId,
+        ...(serviceQuery != null ? { serviceQuery } : {}),
         ...(schedule != null ? { schedule } : {}),
         ...(informational != null ? { informational } : {}),
       };
@@ -1547,6 +1572,9 @@ export const decideBooking = (
         const merged: DeferredBookingTurn = {
           bookingAttemptId: attemptId,
           boundEffectId,
+          ...(serviceQuery ?? existing.serviceQuery
+            ? { serviceQuery: serviceQuery ?? existing.serviceQuery }
+            : {}),
           ...(mergedSchedule != null ? { schedule: mergedSchedule } : {}),
           ...(mergedInfo != null ? { informational: mergedInfo } : {}),
         };
@@ -1693,6 +1721,7 @@ export const decideBooking = (
       if (!browsingCatalog && ctx.working?.replacement == null) {
         const existing = firstPlannedMeeting();
         if (existing != null) {
+          storeDeferredFromPatch(null);
           return askReplacementOffer(existing);
         }
       }

@@ -97,6 +97,8 @@ export type DeferredBookingTurn = {
   bookingAttemptId: string;
   /** In-flight effect this remainder waits on; null while a catalog/confirm card is open. */
   boundEffectId: string | null;
+  /** Bounded CRM catalog query for a named booking waiting behind cancel-first. */
+  serviceQuery?: string;
   schedule?: DeferredScheduleRequest;
   informational?: DeferredInformationalRequest;
 };
@@ -1236,6 +1238,7 @@ export const reduceBookingDraft = (
         deferredTurn: {
           bookingAttemptId: rest.bookingAttemptId,
           boundEffectId: rest.boundEffectId,
+          ...(rest.serviceQuery != null ? { serviceQuery: rest.serviceQuery } : {}),
           schedule: rest.schedule,
         },
       });
