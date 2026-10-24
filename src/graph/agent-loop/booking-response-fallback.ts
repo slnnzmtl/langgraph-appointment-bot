@@ -47,6 +47,8 @@ const SAFETY_UK: Partial<Record<BookingSemanticIntent, string>> = {
 };
 
 const CLARIFICATION_UK: Record<string, string> = {
+  service_price_unavailable:
+    "Зараз вартість послуги недоступна. Спробуйте, будь ласка, трохи пізніше.",
   expired_confirmation:
     "Підтвердження втратило чинність. Підтвердіть ще раз після оновлення слотів.",
   phone_occupied: BOOKING_PHONE_OCCUPIED_UK,
@@ -82,6 +84,8 @@ const CLARIFICATION_UK: Record<string, string> = {
 };
 
 const CLARIFICATION_EN: Partial<Record<string, string>> = {
+  service_price_unavailable:
+    "The service price is currently unavailable. Please try again later.",
   availability_failed:
     "I could not check available times. Please try again in a moment.",
   need_service:

@@ -1,3 +1,6 @@
+import { isBaseMessage } from "@langchain/core/messages";
+import { extractRawMessageText } from "../../shared/message-content.js";
+
 import { BOOKING_OFFER_MENU } from "../../shared/clinic-constants.js";
 import { asJsonRecord } from "../../shared/json-record.js";
 import { SmokeAssertError, expectButtons, expectNotCalled } from "../assert.js";
@@ -82,7 +85,11 @@ export const observeModelFacingGetService = (runtime: Parameters<SmokeScenario["
     const original = tool.invoke;
     tool.invoke = async (...args: Parameters<typeof tool.invoke>) => {
       const result = await original.apply(tool, args);
-      outputs.push(typeof result === "string" ? result : JSON.stringify(result));
+      // ToolNode calls invoke with a ToolCall, so LangChain returns a ToolMessage.
+      // Inspect its content, not its serialized constructor/metadata envelope.
+      outputs.push(isBaseMessage(result) && result.getType() === "tool"
+        ? extractRawMessageText(result.content)
+        : typeof result === "string" ? result : JSON.stringify(result));
       return result;
     };
     return () => { tool.invoke = original; };

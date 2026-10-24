@@ -924,6 +924,9 @@ export const decideBooking = (
     if (result.kind === "informational") {
       emit({ type: "effect_cleared" });
       const facts: BookingVerifiedFacts = {};
+      if (pending?.effect.kind === "get_service" && result.outcome === "error") {
+        facts.clarificationReason = "service_price_unavailable";
+      }
       const f = result.facts;
       if (f?.hours != null) facts.hours = f.hours;
       if (f?.address != null) facts.address = f.address;

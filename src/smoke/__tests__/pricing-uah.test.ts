@@ -1,3 +1,7 @@
+import { AIMessage, ToolMessage } from "@langchain/core/messages";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
+import { tool } from "@langchain/core/tools";
+import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
 import { SmokeAssertError } from "../assert.js";
@@ -30,6 +34,35 @@ describe("UAH-only pricing smoke contracts", () => {
     observer.restore();
     expect(await tool.invoke()).toContain('"price":4327');
     expect(observer.outputs).toHaveLength(1);
+  });
+
+  it.each([
+    { unavailable: false, payload: { name: "Botox", price: 4327, currency: "UAH" } },
+    { unavailable: true, payload: { error: "Service price in UAH is unavailable. Please try again later." } },
+  ])("reads ToolMessage.content through a real ToolNode (unavailable=$unavailable)", async ({ unavailable, payload }) => {
+    const body = JSON.stringify(payload);
+    const serviceTool = tool(async () => body, {
+      name: "get_service", description: "Service fixture", schema: z.object({ serviceId: z.string() }),
+    });
+    // Compile the node before installing the observer, as the runtime does.
+    const node = new ToolNode([serviceTool], { handleToolErrors: false });
+    const originalInvoke = serviceTool.invoke;
+    const runtime = {
+      getBootstrap: () => ({ agentTools: { faq: [serviceTool], booking: [serviceTool] } }),
+    } as never;
+    const observer = observeModelFacingGetService(runtime);
+    try {
+      const result = await node.invoke({ messages: [new AIMessage({ content: "", tool_calls: [
+        { id: "call_100", name: "get_service", args: { serviceId: fixture.id }, type: "tool_call" },
+      ] })] });
+      expect(result.messages[0]).toBeInstanceOf(ToolMessage);
+      expect(result.messages[0]!.content).toBe(body);
+      expect(observer.outputs).toEqual([body]);
+      assertModelFacingPrice("real-tool-node", observer.outputs, fixture, unavailable);
+    } finally {
+      observer.restore();
+    }
+    expect(serviceTool.invoke).toBe(originalInvoke);
   });
 
   it("accepts only the normalized model-facing UAH payload", () => {
