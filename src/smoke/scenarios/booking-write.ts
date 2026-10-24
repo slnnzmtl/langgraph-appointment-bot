@@ -54,11 +54,9 @@ import {
   assertProcedureOffer,
   drillToProcedureOffer,
   openServicesEntryWithVisit,
-  expectFamilyCatalogTurn,
   loadCatalogServiceRows,
   openBookingOffer,
   openReplaceOffer,
-  pickFamilyFreeText,
   pickUniqueNamedProcedure,
   selectUniqueProcedureAfterRootCatalog,
 } from "./offer-helpers.js";
