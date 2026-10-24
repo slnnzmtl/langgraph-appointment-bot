@@ -209,14 +209,14 @@ export const shortenFaqChoiceLabels = (
     ? sharedPrefix
     : "";
   const textLabels = names.map((name) => shortFaqTextLabel(name, stripPrefix));
-  const shortened = ensureUniqueChipLabels(textLabels);
+  const shortened = textLabels.map((label) => truncateLabel(label, MAX_FAQ_CHIP_LABEL_LENGTH));
   // If aesthetic truncation collapses distinct CRM rows (e.g. Botox/Nabota
   // with a shared long prefix and suffix), show their canonical names instead
   // of presenting a misleading `(2)` identity. Only truly identical names need
   // numeric disambiguation.
   const shortenedUnique = new Set(shortened.map(normalizeReplyLabel)).size === shortened.length;
   const chipLabels = shortenedUnique
-    ? shortened
+    ? ensureUniqueChipLabels(textLabels)
     : ensureUniqueChipLabels(names, Math.max(...names.map((name) => name.length)));
   return choices.map((choice, index) => {
     const text = textLabels[index]!;
