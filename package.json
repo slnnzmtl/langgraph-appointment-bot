@@ -12,7 +12,7 @@
     "dev": "pnpm --filter @personal-assistant/llm-gemini build && tsx watch src/index.ts",
     "smoke": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/smoke.ts",
     "test": "vitest run",
-    "test:all": "pnpm -r test",
+    "test:all": "pnpm -r --include-workspace-root test",
     "scan:booking-checkpoints": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/scripts/scan-booking-checkpoints.ts",
     "eval:booking-note": "pnpm --filter @personal-assistant/llm-gemini build && tsx src/scripts/eval-booking-note.ts",
     "start": "node dist/index.js",
