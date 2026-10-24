@@ -394,7 +394,7 @@ Rules:
 - Catalog/service browse ("show services", "do you have laser?") may set catalog_browse or faqTopic catalog.
 - greeting = hello/thanks with no task. help = what can you do. Neither abandons an open booking.
 - human_handoff only when the patient explicitly asks for a human/operator/admin (not for a service name that contains "оператор").
-- Names only when the open field is firstName/lastName AND the message is clearly answering with that name.
+- Names only when the open field is firstName/lastName, or a compound explicit booking start clearly supplies them; never infer from a hedge.
 - Notes only when awaiting a visit note AND the message is clearly a note (not a schedule/service/control ask).
 - abandon = leave an unfinished booking wizard (date/time/phone/service steps) without writing CRM. Cancelling a listed/planned visit is visit_cancel — not abandon.
 - visit_cancel = cancel an existing planned visit. visit_reschedule = move an existing visit. Ambiguous "I can't make it" without choosing cancel vs reschedule → visit_cancel so the bot can clarify.
@@ -486,31 +486,28 @@ export const normalizeBookingTurnClassification = (
     || (raw.serviceIntentKind === "catalog_browse" && raw.scheduleKind != null
       && raw.scheduleKind !== "none");
 
-  // Names/notes only when the open field matches — or on an explicit book start.
+  // Accumulate independently supplied contact facts. A valid phone must not
+  // suppress names explicitly included in the same booking-start turn.
+  const contactFacts: NonNullable<UnderstoodBookingTurn["contactFacts"]> = {};
   if (input.awaitingContactField === "firstName" && raw.firstName != null) {
-    patch.contactFacts = { ...(patch.contactFacts ?? {}), firstName: raw.firstName };
-  } else if (input.awaitingContactField === "lastName" && raw.lastName != null) {
-    patch.contactFacts = { ...(patch.contactFacts ?? {}), lastName: raw.lastName };
-  } else if (input.awaitingContactField === "phoneNumber" && raw.phoneNumber != null) {
+    contactFacts.firstName = raw.firstName;
+  }
+  if (input.awaitingContactField === "lastName" && raw.lastName != null) {
+    contactFacts.lastName = raw.lastName;
+  }
+  if (input.awaitingContactField === "phoneNumber" && raw.phoneNumber != null) {
     const phone = normalizeClinicPhone(raw.phoneNumber);
-    if (phone != null) {
-      patch.contactFacts = { ...(patch.contactFacts ?? {}), phoneNumber: phone };
-    }
+    if (phone != null) contactFacts.phoneNumber = phone;
   } else if (raw.phoneNumber != null && input.awaitingContactField == null) {
     const phone = normalizeClinicPhone(raw.phoneNumber);
-    if (phone != null) {
-      patch.contactFacts = { ...(patch.contactFacts ?? {}), phoneNumber: phone };
-    }
-  } else if (
-    explicitBookingStart
-    && input.awaitingContactField == null
-    && (raw.firstName != null || raw.lastName != null)
-  ) {
-    patch.contactFacts = {
-      ...(patch.contactFacts ?? {}),
-      ...(raw.firstName != null ? { firstName: raw.firstName } : {}),
-      ...(raw.lastName != null ? { lastName: raw.lastName } : {}),
-    };
+    if (phone != null) contactFacts.phoneNumber = phone;
+  }
+  if (explicitBookingStart && input.awaitingContactField == null) {
+    if (raw.firstName != null) contactFacts.firstName = raw.firstName;
+    if (raw.lastName != null) contactFacts.lastName = raw.lastName;
+  }
+  if (Object.keys(contactFacts).length > 0) {
+    patch.contactFacts = contactFacts;
   }
 
   if (input.awaitingNote === true || explicitBookingStart) {

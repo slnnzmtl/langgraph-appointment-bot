@@ -327,4 +327,22 @@ describe("original FAQ offer labels", () => {
       rawText: "Так", callbackChoiceId: "offer_accept", offeredChoiceIds: ["svc-1"], faqHighlightOpen: true,
     })).toEqual({});
   });
+  it("accumulates names alongside an independently supplied phone on booking start", () => {
+    const patch = normalizeBookingTurnClassification(
+      {
+        serviceIntentKind: "named_procedure",
+        serviceQuery: "Botox",
+        phoneNumber: "+380501112233",
+        firstName: "Іван",
+        lastName: "Петренко",
+      },
+      { rawText: "Book Botox, Ivan Petrenko, +380501112233" },
+    );
+    expect(patch.contactFacts).toEqual({
+      phoneNumber: "+380501112233",
+      firstName: "Іван",
+      lastName: "Петренко",
+    });
+  });
+
 });
