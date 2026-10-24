@@ -314,16 +314,17 @@ describe("buildFaqCatalogChoices", () => {
     expect(choices[1]!.label).toContain("(2)");
   });
 
-  it("disambiguates chips that collide after middle truncation (Botox vs Nabota)", () => {
+  it("keeps distinguishing brands visible when middle truncation would collide", () => {
     const choices = shortenFaqChoiceLabels(buildFaqCatalogChoices([
       { id: "a", name: "Ботулінотерапія Botox, Disport FULL FACE+шия" },
       { id: "b", name: "Ботулінотерапія Nabota, Disport FULL FACE+шия" },
     ]));
-    expect(choices[0]!.label).not.toBe(choices[1]!.label);
-    expect(choices[0]!.label.startsWith("Ботулінотерапія")).toBe(true);
-    expect(choices[1]!.label.startsWith("Ботулінотерапія")).toBe(true);
-    expect(choices[0]!.label).toMatch(/FULL FACE\+шия$/);
-    expect(choices[1]!.label).toMatch(/FULL FACE\+шия \(2\)$/);
+    expect(choices[0]!.label).toContain("Botox");
+    expect(choices[1]!.label).toContain("Nabota");
+    expect(choices[0]!.label).not.toContain("(2)");
+    expect(choices[1]!.label).not.toContain("(2)");
+    expect(new Set(choices.map((choice) => normalizeReplyLabel(choice.label))).size).toBe(2);
+    expect(choices.map((choice) => choice.id)).toEqual(["a", "b"]);
   });
 
   it("keeps final chip labels unique when a later base matches an earlier suffix", () => {

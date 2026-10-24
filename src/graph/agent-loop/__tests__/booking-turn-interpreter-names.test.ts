@@ -134,4 +134,29 @@ describe("createBookingTurnInterpreter open name field", () => {
 
     expect(invoke).toHaveBeenCalledTimes(3);
   });
+  it("retains phone and both names from one explicit compound booking turn", async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      serviceIntentKind: "named_procedure",
+      serviceQuery: "Botox",
+      scheduleKind: "date_and_time",
+      scheduleDate: "2026-11-02",
+      scheduleTime: "13:00",
+      phoneNumber: "+380501112233",
+      firstName: "Іван",
+      lastName: "Петренко",
+      sideQuestionKind: "price",
+    });
+    const llm = {
+      bindRoutingTools: () => ({ invoke }),
+    } as unknown as ILLMConnector;
+    const interpret = createBookingTurnInterpreter(llm);
+    await expect(interpret({ rawText: "Book Botox on Nov 2 at 13:00, I'm Ivan Petrenko, +380501112233; price?" }))
+      .resolves.toMatchObject({
+        serviceIntent: { kind: "named_procedure", query: "Botox" },
+        scheduleIntent: { kind: "date_and_time", date: "2026-11-02", time: "13:00" },
+        contactFacts: { phoneNumber: "+380501112233", firstName: "Іван", lastName: "Петренко" },
+        informationalQuestion: "price",
+      });
+  });
+
 });

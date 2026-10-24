@@ -501,6 +501,44 @@ describe("decideBooking atomic contract", () => {
     expect(result.events).toContainEqual(expect.objectContaining({ type: "service_selected", accepted: true }));
   });
 
+  it("retains a named schedule and price request across cancel-first replacement", () => {
+    const first = decideBooking(null, {
+      source: "semantic_patch",
+      patch: {
+        serviceIntent: { kind: "named_procedure", query: "Botox" },
+        scheduleIntent: { kind: "date_and_time", date: "2026-10-24", time: "13:00" },
+        informationalQuestion: "price",
+        faqTopic: "price",
+      },
+    }, {
+      ...READ_MODELS,
+      plannedMeetings: [{ id: "existing-1", name: "Consultation" }],
+    });
+    expect(first.decision.card).toMatchObject({ kind: "visit_select", stage: "replacement" });
+    let draft = apply(null, first.events)!;
+    expect(draft.deferredTurn).toMatchObject({
+      serviceQuery: "Botox",
+      schedule: { date: "2026-10-24", preferredTime: "13:00" },
+      informational: { topic: "price" },
+    });
+
+    const cancel = decideBooking(draft, {
+      source: "semantic_patch",
+      patch: { choice: { choiceId: "cancel_existing" } },
+    }, READ_MODELS);
+    draft = apply(draft, cancel.events)!;
+    const cancelEffectId = draft.pendingEffect!.id;
+    const continued = decideBooking(draft, {
+      source: "effect_result",
+      result: { effectId: cancelEffectId, kind: "mutation", action: "cancel", outcome: "committed" },
+    }, READ_MODELS);
+    expect(continued.decision.pendingEffect?.effect).toEqual({ kind: "list_services", query: "Botox" });
+    expect(continued.events).toContainEqual(expect.objectContaining({
+      type: "deferred_turn_bound",
+      boundEffectId: continued.decision.pendingEffect?.id,
+    }));
+  });
+
   it("book-with-visit offers REPLACE visit_select instead of consultation", () => {
     const meeting = {
       id: "meeting-1",
