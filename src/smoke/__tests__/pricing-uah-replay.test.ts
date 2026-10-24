@@ -61,7 +61,7 @@ it.each([faqPriceUahScenario, faqPriceUahUnavailableScenario, offerPriceUahScena
         if (last instanceof ToolMessage && last.name === "get_service") {
           const payload = JSON.parse(String(last.content));
           return new AIMessage(payload.error
-            ? "Зараз вартість недоступна. Спробуйте пізніше."
+            ? "На жаль, зараз я не бачу актуальної ціни на цю послугу. Можу передати запитання адміністратору або підказати щось інше?"
             : "Вартість становить " + payload.price + " грн.");
         }
         return new AIMessage({ content: "", tool_calls: [

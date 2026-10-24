@@ -121,7 +121,11 @@ export const assertModelFacingPrice = (label: string, outputs: string[], fixture
 
 export const assertQuote = (label: string, reply: string, fixture: PriceFixture, unavailable: boolean): void => {
   if (unavailable) {
-    if (!/не доступ|недоступ|не вдалося визначити|уточнити вартість|price unavailable/i.test(reply)
+    // Accept natural paraphrases, not just the deterministic fallback wording.
+    // Keep missing-price language within one clause so unrelated failures do not qualify.
+    const statesUnavailable = /не доступ|недоступ|не вдалося визначити|уточнити вартість|price unavailable/iu.test(reply)
+      || /не (?:бачу|маю|знаю)[^.!?;\n]{0,60}(?:цін|варт)|(?:цін|варт)[^.!?;\n]{0,60}невідом|price[^.!?;\n]{0,40}unavailable/iu.test(reply);
+    if (!statesUnavailable
       || /\d[\d\s\u00a0,.]*\s*(?:грн|uah|usd|\$)/iu.test(reply)) {
       throw new SmokeAssertError(`${label}: expected a clear unavailable-price answer with no quoted amount; got: ${reply}`);
     }

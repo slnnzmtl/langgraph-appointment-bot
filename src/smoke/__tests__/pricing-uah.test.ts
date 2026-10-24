@@ -91,6 +91,25 @@ describe("UAH-only pricing smoke contracts", () => {
     mustFail(() => assertQuote("test", "Вартість становить 100 USD.", fixture, false));
   });
 
+  it.each([
+    "На жаль, зараз я не бачу актуальної ціни на цю послугу. Можу передати запитання адміністратору або підказати щось інше?",
+    "Зараз не маю актуальної вартості цієї послуги.",
+    "Актуальна ціна зараз невідома.",
+    "The service price is currently unavailable. Please try again later.",
+  ])("accepts an unavailable-price paraphrase: %s", (reply) => {
+    expect(() => assertQuote("test", reply, fixture, true)).not.toThrow();
+    mustFail(() => assertQuote("test", reply + " Вартість 100 грн.", fixture, true));
+    mustFail(() => assertQuote("test", reply + " Вартість 100 USD.", fixture, true));
+  });
+
+  it.each([
+    "Не бачу вільних слотів. Вартість уточнимо пізніше.",
+    "Можу передати запитання адміністратору?",
+    "Чудово, обрано послугу. Бажаєте записатися?",
+  ])("rejects a reply that does not clearly say pricing is unavailable: %s", (reply) => {
+    mustFail(() => assertQuote("test", reply, fixture, true));
+  });
+
   it("requires a clear unavailable result and rejects invented or source-price fallbacks", () => {
     expect(() => assertModelFacingPrice(
       "test", ['{"error":"Service price in UAH is unavailable. Please try again later."}'], fixture, true,
