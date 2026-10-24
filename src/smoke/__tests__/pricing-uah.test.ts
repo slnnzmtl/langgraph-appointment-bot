@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { SmokeAssertError } from "../assert.js";
-import { assertModelFacingPrice, assertQuote } from "../scenarios/pricing-uah.js";
+import { assertModelFacingPrice, assertQuote, observeModelFacingGetService } from "../scenarios/pricing-uah.js";
 
 const fixture = {
   id: "botox-one-zone",
@@ -16,6 +16,22 @@ const mustFail = (run: () => void): void => {
 };
 
 describe("UAH-only pricing smoke contracts", () => {
+  it("observes the tool result passed to the model, including shared FAQ/booking tool instances", async () => {
+    const tool = {
+      name: "get_service",
+      invoke: async () => '{"name":"Botox","price":4327,"currency":"UAH"}',
+    };
+    const runtime = {
+      getBootstrap: () => ({ agentTools: { faq: [tool], booking: [tool] } }),
+    } as never;
+    const observer = observeModelFacingGetService(runtime);
+    expect(await tool.invoke()).toContain('"price":4327');
+    expect(observer.outputs).toEqual(['{"name":"Botox","price":4327,"currency":"UAH"}']);
+    observer.restore();
+    expect(await tool.invoke()).toContain('"price":4327');
+    expect(observer.outputs).toHaveLength(1);
+  });
+
   it("accepts only the normalized model-facing UAH payload", () => {
     expect(() => assertModelFacingPrice("test", ['{"name":"Botox","price":4327,"currency":"UAH"}'], fixture, false)).not.toThrow();
   });

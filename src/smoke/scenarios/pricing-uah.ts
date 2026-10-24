@@ -71,15 +71,26 @@ const guardWrites = (adapters: { callTool: (name: string, args: Record<string, u
   return () => { adapters.callTool = original; };
 };
 
-const collectGetServiceToolMessages = async (session: { threadId: string }, runtime: Parameters<SmokeScenario["run"]>[0]["runtime"]): Promise<string[]> => {
-  const state = await runtime.getGraph().getState({ configurable: { thread_id: session.threadId } });
-  const messages = (state.values as { messages?: unknown[] }).messages ?? [];
-  return messages.flatMap((message) => {
-    if (!message || typeof message !== "object") return [];
-    const item = message as { name?: unknown; getType?: () => string; content?: unknown };
-    if (item.getType?.() !== "tool" || item.name !== "get_service") return [];
-    return [typeof item.content === "string" ? item.content : JSON.stringify(item.content)];
+export const observeModelFacingGetService = (runtime: Parameters<SmokeScenario["run"]>[0]["runtime"]): {
+  outputs: string[];
+  restore: () => void;
+} => {
+  const outputs: string[] = [];
+  const tools = runtime.getBootstrap().agentTools;
+  const getServiceTools = [...new Set(Object.values(tools).flat().filter((tool) => tool.name === "get_service"))];
+  const restores = getServiceTools.map((tool) => {
+    const original = tool.invoke;
+    tool.invoke = async (...args: Parameters<typeof tool.invoke>) => {
+      const result = await original.apply(tool, args);
+      outputs.push(typeof result === "string" ? result : JSON.stringify(result));
+      return result;
+    };
+    return () => { tool.invoke = original; };
   });
+  if (getServiceTools.length === 0) {
+    throw new SmokeAssertError("pricing-uah: runtime has no get_service tool to observe");
+  }
+  return { outputs, restore: () => { for (const restore of restores) restore(); } };
 };
 
 export const assertModelFacingPrice = (label: string, outputs: string[], fixture: PriceFixture, unavailable: boolean): void => {
@@ -147,7 +158,9 @@ const makeScenario = (name: string, path: "faq" | "offer", unavailable = false):
     const restoreGuard = guardWrites(adapters);
     const fx = scopedFx(unavailable ? "unavailable" : "success");
     const recorder = installCallToolRecorder(adapters, ctx.cleanup);
+    let observer: ReturnType<typeof observeModelFacingGetService> | undefined;
     try {
+      observer = observeModelFacingGetService(ctx.runtime);
       const fixture = await loadTarget(ctx.callTool);
       const telegramId = writeTelegramId(name);
       const session = createSmokeSession(ctx.runtime, { telegramId, scenario: name, recorder, cleanup: ctx.cleanup });
@@ -173,13 +186,13 @@ const makeScenario = (name: string, path: "faq" | "offer", unavailable = false):
         throw new SmokeAssertError(`${name}: get_service did not fetch the exact target CRM id`);
       }
       expectNotCalled(name, turn.calls, [...WRITE_TOOLS]);
-      const toolOutputs = await collectGetServiceToolMessages(session, ctx.runtime);
-      assertModelFacingPrice(name, toolOutputs, fixture, unavailable);
+      assertModelFacingPrice(name, observer.outputs, fixture, unavailable);
       assertQuote(name, turn.reply, fixture, unavailable);
       if (fx.requests() === 0) throw new SmokeAssertError(`${name}: target USD price did not trigger the scoped FX lookup`);
       console.log(`✓ ${name}: service=${fixture.id}, source=${fixture.sourcePrice} USD, expected=${unavailable ? "unavailable" : `${fixture.expectedUah} UAH`}, writes=0`);
       return { turns: session.turns };
     } finally {
+      observer?.restore();
       recorder.restore();
       fx.restore();
       restoreGuard();
